@@ -1198,6 +1198,8 @@ if (credJson) {
 
 #### `host.httpFetch(url, options?) -> Promise<HttpResponse>`
 
+`httpFetch(url, { signal })` accepts a host-local `AbortSignal`. A pre-aborted signal starts no request; abort cancels the Rust request while waiting for headers or collecting the body and rejects with `AbortError`. Unloading the plugin also cancels its active HTTP requests. Signals never cross IPC/HTTP: the host sends a generated UUID and a plugin-scoped cancel command. Requests without a signal keep the same response contract.
+
 Make an HTTP request. Non-2xx status codes are returned normally (not thrown as errors). **Requires `"net:http"` capability.**
 
 Plugins can only fetch URLs matching their manifest's `allowedUrls` patterns. A manifest declaring `net:http` with empty or omitted `allowedUrls` is rejected. An empty list never grants unrestricted access, including localhost or private destinations.
@@ -2107,3 +2109,4 @@ No live write or desktop-load verification is implied by recorded-fixture tests.
 ### Settings startup is not a plugin capability
 
 Plugin-scoped settings do not confer host account, executable or provider-login authority. Runtime shortcut-ID publication is metadata, not permission to invoke authentication or arbitrary commands. The host [startup contract](backend/settings-startup.md) documents typed GitHub enumeration and Ego human-login owner workflows; these do not grant plugins host authentication authority.
+Jira and GitLab expose a default project in their schema-driven plugin settings page. Jira uses a project ID; GitLab accepts a project path or ID. A project saved for an account in Tasks setup takes precedence. The default applies after the plugin reloads; empty means no fallback project. Account bindings remain in `data/work-items.json`, while these defaults use the settings service in `data/config.json`.

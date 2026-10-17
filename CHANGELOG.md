@@ -226,9 +226,47 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - Show native terminal ego provider recovery with phase, attempt, next-retry countdown and a Force retry control; notify managed parents on recovery entry and exit (#1902-7010).
 
+### Fixed
+
+- Restore Edge spoken replies after the service migration with the new endpoint and the live-verified existing v1 GEC handshake (#1952-bf91).
+
+- Recover failed mobile views after a server outage through automatic or manual retry, without false empty/setup states, raw network errors or desktop restart advice (#1930-f4c2).
+- Exclude projected suggestion rows from copied terminal selections, including scrollback selections, remove the duplicate blank separator around an omitted suggestion block, and classify the full received viewport (#1935-eedd).
+
+- Apply asynchronous AI Chat session option offers before the first prompt so model and mode settings become available, without stale offer snapshots reverting a confirmed selection (#1918-2ea3).
+- Close AI Chat tabs with the middle mouse button through the normal guarded close path (#1922-8027).
+- Align AI Chat Stop, Park and Send controls with the input (#1925-9e69).
+- Stop a running AI Chat turn with Escape while preserving drafts and dismissing open Find even from the composer (#1926-458a).
+
+- Remove the green answer rail and its inset from AI Chat replies; retain terminal Chat cards and real blockquotes (#1920-700e).
+
+- Attach AI Chat clipboard images when an empty text flavor accompanies the PNG (#1919-f93d).
+
+- Keep the Settings shell visible during plugin catalogue and value reads, and identify plugin pages in a separate navigation group with source IDs (#1927-9649).
+
+- Retain bounded, metadata-only slow-refresh, UI-freeze and heartbeat-gap evidence across ring overflow and restart. Add an anonymized count-based replay input builder; original real-stall reproduction remains unproven (#1638-c94c).
+
+- Keep ego attachment grants after `run` and `resume` so direct launches accept their prompt (#1833).
+
+- Cancel Jira URL resolution end to end, including shared plugin HTTP header and body reads (#1756-4d42).
+
+- Grant Gemini session attachment trust without a folder prompt or global settings changes. Grant ego PTY attachments read-only access in confined sandbox modes (#1833-aa60).
+
+- Add conditional atomic Ego settings batches, executable paths and base-only write-only provider auth actions (#1907-0f9f).
+
+- Refresh expanded file-browser folders after Finder moves, copies, confirmed directory transfers and remote uploads (#1905-c1ed).
+
+- Recognize `💬` answers at the start of Markdown list items in the CLI grid, Answers view and Chat view, without including unmarked sibling items (#1904-9eef).
+
+- Fix urgent managed ego mail falling back as an unknown agent type; queue only an inbox notice without interrupting active tools (#1901-9b6b).
+
+- Fix cache keepalive draft preservation with guarded backend submissions and complete question-state replay on plugin load.
+
+### Added
 - Delete saved AI Chat conversations from the Conversations list with named confirmation and ACP capability gating (#1917).
 
 - Pin AI Chat repository context per conversation and show its configured name color, including parent repository colors for linked worktrees without changing draft parking (#1924-12be).
+- Configure Jira and GitLab default projects in schema-driven plugin settings; explicit account projects retain precedence (#1756-4d42).
 - Diagnose empty or off-screen mobile resume shells through the backend log ring without reloading the page (#1900-5ff6).
 - Preserve a bounded mobile lifecycle trail across reloads and send prior abnormal-document evidence automatically to the backend log ring; acknowledge HTTP 204 log writes so later mobile warnings are not lost. The reported iPhone grey-screen cause remains under investigation (#1900-5ff6).
 - Bind GitHub Work review threads and PR actions to the selected account through core policy, with desktop and HTTP parity (#1693-a816).
