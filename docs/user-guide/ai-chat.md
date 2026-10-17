@@ -42,7 +42,7 @@ with the error. The Copy action beside a user message stays on one line.
 
 The header contains the conversation title picker, **New**, **⋯**, and window controls. The tab strip appears only when two or more tabs are open. **⋯** contains labelled session settings, pause/resume, compact, fork, new-conversation options, and deletion actions. Capability and busy-state restrictions still apply.
 
-The model and repository share a small line below the input. Repository pinning stays on that line. Process titles and tool disclosures share one line; failed calls expand automatically. Suggested replies appear only under the latest answer. Loaded history does not show execution durations measured from the view mount.
+The model and repository share a small line below the input. Repository pinning stays on that line. Process titles and tool disclosures share one line; failed groups and calls stay collapsed until you open them, with a red dot and Failed label. Suggested replies appear only under the latest answer. Loaded history does not show execution durations measured from the view mount.
 
 ## Tables
 
