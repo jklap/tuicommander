@@ -4711,6 +4711,7 @@ pub(crate) fn get_config_defaults(
 ) -> ConfigDefaults {
     let mut agents = AgentsConfig::default();
     migrate_codex_bypass(&mut agents);
+    crate::launch_instructions::migrate_additions(&mut agents);
     ConfigDefaults {
         app: AppConfig::default(),
         notifications: NotificationConfig::default(),
