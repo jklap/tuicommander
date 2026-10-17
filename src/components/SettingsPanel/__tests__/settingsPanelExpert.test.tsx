@@ -5,7 +5,7 @@ import { mockInvoke } from "../../../__tests__/mocks/tauri";
 
 vi.mock("../../../stores/settings", () => ({
 	settingsStore: {
-		state: { ide: "vscode", font: "JetBrains Mono", defaultFontSize: 12 },
+		state: { ide: "vscode", font: "JetBrains Mono", defaultFontSize: 12, customLaunchers: [] },
 		setIde: vi.fn(),
 		setFont: vi.fn(),
 		isAiChatEnabled: vi.fn().mockReturnValue(false),
@@ -78,7 +78,11 @@ vi.mock("../settingsSearchIndex", async (importOriginal) => {
 import { uiStore } from "../../../stores/ui";
 import { SettingsPanel } from "../SettingsPanel";
 
-const DEFAULTS = { app: { osc52_clipboard: true }, notifications: {}, agent_settings: {} };
+const DEFAULTS = {
+	app: { osc52_clipboard: true, background: { webview_unload_minutes: 10 } },
+	notifications: {},
+	agent_settings: {},
+};
 
 const searchInput = (container: HTMLElement) => container.querySelector("nav input[type='text']") as HTMLInputElement;
 const expertSwitch = (container: HTMLElement) =>

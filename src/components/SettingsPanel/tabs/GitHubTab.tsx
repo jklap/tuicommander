@@ -478,7 +478,7 @@ export const GitHubTab: Component = () => {
 			<SettingPageHeader
 				title="Git & GitHub"
 				description="Manage accounts, monitoring, and defaults for your repositories."
-				scope="Application"
+				scope="Application defaults"
 				breadcrumb="Workspace / Git & GitHub"
 			/>
 			<SectionCard title="GitHub Authentication">

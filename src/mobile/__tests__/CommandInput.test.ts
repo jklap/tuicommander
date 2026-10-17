@@ -275,3 +275,8 @@ describe("CommandInput iOS auto-zoom prevention", () => {
 		expect(tsx).toContain('inputmode="text"');
 	});
 });
+
+// Catches: the output scroll control returning to the composer beside Send.
+it("keeps the jump control out of the command composer", () => {
+	expect(tsx).not.toContain('aria-label="Scroll to bottom"');
+});

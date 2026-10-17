@@ -453,3 +453,5 @@ Terminal selection copy, AI Chat answer buttons (desktop and mobile), and the An
 ### Spaces at terminal wrap points
 
 Mobile CLI output and session text reads preserve spaces when text wraps at the terminal margin. A word split across two terminal rows remains one word. Explicit line breaks remain separate. The mobile client uses exact wrap information from current backends; older backends retain the previous text reflow behavior. Chat reads the agent transcript separately and does not rebuild text from terminal rows.
+
+On mobile, scroll back in CLI or Chat to show the floating down-arrow at the bottom-right of output, above the key bar. Tap it to return to the latest output without sending terminal input. The button hides at the bottom and stays outside the composer.

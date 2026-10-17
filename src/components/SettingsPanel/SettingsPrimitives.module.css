@@ -1,4 +1,5 @@
-.pageHeader { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; margin-bottom: 20px; }
+.pageHeaderBlock { margin-bottom: 24px; }
+.pageHeader { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; margin-bottom: 0; }
 .pageHeader > div, .listText { min-width: 0; }
 .pageHeader h2 { margin: 0 0 8px; font-size: 20px; font-weight: 600; }
 .pageHeader p, .card p, .listRow p, .empty p, .status p { margin: 4px 0 0; color: var(--fg-secondary); line-height: 1.5; overflow-wrap: anywhere; }
