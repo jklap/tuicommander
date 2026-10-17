@@ -2837,6 +2837,8 @@ Command boundaries and user prompt ticks retain their physical row after capped 
 
 ## Headless Telegram channel
 
+Without an explicit registration, allowlisted text reaches the latest-connected
+live AI Chat peer. Explicit registration always has priority over that fallback.
 Any MCP-bound TUIC agent opts in with `telegram register`; one volatile
 registration replaces the previous agent with one native notice. It ends on
 MCP session end, PTY close, foreground-agent exit or daemon restart.

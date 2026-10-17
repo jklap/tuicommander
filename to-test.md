@@ -2395,6 +2395,9 @@ Needs an iPhone (iOS 16.4+, 18.4+ preferred), the desktop TUICommander running a
 
 - [ ] Mobile CLI and Chat: scroll back to show the key-bar down-arrow above Send, tap to resume latest output, and manually return to bottom to hide it (#1975-4a38).
 
+## Telegram AI Chat fallback (#1983-1b47)
+
+- [ ] After Boss restarts the Rust backend (`make dev` or a release rebuild), send an allowed Telegram message with AI Chat connected and no explicit Telegram registration. Check receipt, delivery to ego and its final reply on the phone. Connect two chats: the latest-connected chat is the fallback, not the selected tab. Connect the second chat while the first is answering phone mail: the first reply must still arrive, and later mail must reach the second chat. Register another agent: it must retain ownership. With neither registration nor a connected AI Chat, check the no-agent instruction. This needs Boss's restart; Rust does not hot-reload.
 - [ ] [VISUAL] #1981-0caf: Capture the session header at 390 px, 430 px, and 834 px in Commander and Paper. Confirm COORDINATOR is readable, CLI/Chat stays direct, phone voice/tasks are in More, and tablet controls stay direct. The local headless capture timed out before producing images; the Mac screen was locked.
 
 - [ ] [VISUAL] #1982-ee68: After the backend rebuild, capture the same tab-separated Claude Edit in Chat at 390 px in Commander and Paper. Expand tool activity and its edit; confirm full-width old/new backgrounds, aligned columns and horizontal scrolling. From phone CLI tap Read file edits in Chat, then CLI; verify terminal history and draft remain intact, with CLI following the latest output. Includes Rust projection changes, so Boss must restart make dev or rebuild release when ready; no Rust hot reload.
