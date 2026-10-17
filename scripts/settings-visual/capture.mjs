@@ -23,7 +23,13 @@ for(let ready=0;ready<100;ready++){if(await ev("!!document.querySelector('[data-
 if(state==='long-text')await ev(`(()=>{const c=document.querySelector('[data-settings-content]');const label=c.querySelector('label');label?.append(' — Long translated configuration label that must wrap without overlapping its help badge or control');const input=[...c.querySelectorAll('input')].find(e=>e.type==='text');if(input)input.value='/workspace/long-repository-name/long-profile-name/long-configuration-value';})()`);
 if(state==='nested')await ev(`(()=>{[...document.querySelectorAll('button')].find(e=>e.textContent==='Add folder')?.click();})()`);
 if(state==='launcher-editor')await ev(`(()=>{[...document.querySelectorAll('button')].find(e=>e.textContent==='Add launcher')?.click();})()`);
-if(state==='stale'){await ev(`(()=>{const input=document.querySelector('[data-settings-content] input[type=text]');input.focus();input.value='https://changed.example.test';input.dispatchEvent(new Event('input',{bubbles:true}));input.blur();})()`);await new Promise(r=>setTimeout(r,150));}
+if(state==='stale'){
+ await ev(`(()=>{const input=document.querySelector('[data-settings-content] input[type=text]');input.focus();input.select();})()`);
+ await send('Input.insertText',{text:'https://changed.example.test'});
+ await send('Input.dispatchKeyEvent',{type:'keyDown',key:'Tab',code:'Tab',windowsVirtualKeyCode:9});
+ await send('Input.dispatchKeyEvent',{type:'keyUp',key:'Tab',code:'Tab',windowsVirtualKeyCode:9});
+ await new Promise(r=>setTimeout(r,150));
+}
 let metrics;try{metrics=await ev(`(()=>{const content=document.querySelector('[data-settings-content]');return {title:document.title,text:document.body.innerText,content:content?{clientWidth:content.clientWidth,scrollWidth:content.scrollWidth,clientHeight:content.clientHeight,scrollHeight:content.scrollHeight}:null,calls:window.auditCalls}})()`);}catch(e){metrics={evaluationError:e.message};}
 const name=tab.split(':')[0]+'-'+theme+'-'+width+'-'+state;const png=[];
 if(metrics.content){const count=Math.ceil(metrics.content.scrollHeight/Math.max(metrics.content.clientHeight-40,1));for(let i=0;i<count;i++){await ev(`document.querySelector('[data-settings-content]').scrollTop=${i*(metrics.content.clientHeight-40)}`);await new Promise(r=>setTimeout(r,40));const p=dir+'png/'+name+'-'+i+'.png';const shot=await send('Page.captureScreenshot',{format:'png'});await writeFile(p,Buffer.from(shot.data,'base64'));png.push(p);}}
