@@ -782,3 +782,122 @@ async fn read_in_preexisting_acp_turn_still_gets_no_reply_notice() {
     assert_eq!(finals(&server), ["L’agente ha terminato senza rispondere"]);
     assert!(!reactions(&server).iter().any(|reaction| reaction == "👨‍💻"));
 }
+
+// Catches: a live AI Chat peer is ignored unless it explicitly registers for Telegram.
+#[tokio::test]
+async fn telegram_routes_to_the_active_ai_chat_agent() {
+    let (_dir, paths) = setup();
+    let server = FakeServer::start(vec![]).await;
+    let mut runtime = super::tests::outbound_tests::runtime(paths, server.address).await;
+    runtime.clear_registration();
+    runtime
+        .state
+        .config
+        .write()
+        .ai_chat_peer_ids
+        .insert("/chat".into(), PEER.into());
+    let journal = runtime.state.acp.test_peer_journal(PEER);
+    assert!(runtime.registration.is_none());
+    let delivered = runtime.deliver(mail(7)).await.unwrap();
+    assert_eq!(
+        delivered["accepted"], true,
+        "connected AI Chat must receive phone mail"
+    );
+    read(&runtime).await;
+    let (turn, _) = start(&journal, true);
+    append(&journal, turn, chunk("AI Chat reply"));
+    let seq = append(
+        &journal,
+        turn,
+        Event::TurnSettled {
+            stop_reason: v1::StopReason::EndTurn,
+            usage: None,
+        },
+    );
+    drain(&runtime, seq).await;
+    runtime.tick().await;
+    assert_eq!(finals(&server), ["AI Chat reply"]);
+    assert!(
+        runtime.registration.is_none(),
+        "fallback must not take over registration"
+    );
+}
+
+// Catches: an AI Chat fallback steals an explicitly registered agent's channel.
+#[tokio::test]
+async fn telegram_registered_owner_wins_over_ai_chat() {
+    let (_dir, paths) = setup();
+    let server = FakeServer::start(vec![]).await;
+    let mut runtime = super::tests::outbound_tests::runtime(paths, server.address).await;
+    let other = "22222222-2222-4222-8222-222222222222";
+    runtime
+        .state
+        .config
+        .write()
+        .ai_chat_peer_ids
+        .insert("/other".into(), other.into());
+    let _journal = runtime.state.acp.test_peer_journal(other);
+    assert_eq!(runtime.deliver(mail(7)).await.unwrap()["accepted"], true);
+    assert_eq!(runtime.requests[0].peer, PEER);
+    assert_eq!(runtime.registered_peer(), Some(PEER));
+    assert!(
+        runtime
+            .state
+            .agent_inbox
+            .get(other)
+            .is_none_or(|inbox| inbox.is_empty())
+    );
+    assert!(finals(&server).is_empty());
+}
+
+// Catches: hash-map iteration chooses an arbitrary AI Chat instead of the latest connection.
+#[tokio::test]
+async fn telegram_latest_connected_ai_chat_wins_without_registration() {
+    let (_dir, paths) = setup();
+    let server = FakeServer::start(vec![]).await;
+    let mut runtime = super::tests::outbound_tests::runtime(paths, server.address).await;
+    runtime.clear_registration();
+    let _first = runtime.state.acp.test_peer_journal(PEER);
+    let other = "22222222-2222-4222-8222-222222222222";
+    let _latest = runtime.state.acp.test_peer_journal(other);
+    runtime
+        .state
+        .config
+        .write()
+        .ai_chat_peer_ids
+        .insert("/first".into(), PEER.into());
+    runtime.state.config.write().ai_chat_launches.insert(
+        "latest-chat".into(),
+        crate::acp_chat::ChatLaunch {
+            executable: "ego".into(),
+            profile: String::new(),
+            workspace: crate::test_support::test_temp_root(),
+            peer_id: other.into(),
+        },
+    );
+    assert_eq!(runtime.deliver(mail(7)).await.unwrap()["accepted"], true);
+    assert_eq!(runtime.requests[0].peer, other);
+    assert!(runtime.registration.is_none());
+    assert!(finals(&server).is_empty());
+}
+
+// Catches: saved chat identities without a live connection suppress the no-agent response.
+#[tokio::test]
+async fn telegram_no_agent_reply_requires_no_live_owner_or_chat() {
+    let (_dir, paths) = setup();
+    let server = FakeServer::start(vec![]).await;
+    let mut runtime = super::tests::outbound_tests::runtime(paths, server.address).await;
+    runtime.clear_registration();
+    runtime
+        .state
+        .config
+        .write()
+        .ai_chat_peer_ids
+        .insert("/offline".into(), PEER.into());
+    assert_eq!(runtime.deliver(mail(7)).await.unwrap()["accepted"], false);
+    assert_eq!(
+        finals(&server),
+        ["No agent is listening. Ask an agent in TUICommander to register for Telegram."]
+    );
+    assert!(runtime.requests.is_empty());
+}

@@ -26,6 +26,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Restyle Workspace Settings with section cards, aligned terminal and Git fields, and action-first shortcut rows while preserving existing behavior.
 - Bound `tuic bg` completion command labels to one line and 120 characters; keep the full command before job output in the log (#1950-43b7).
 ### Fixed
+- Route Telegram messages to the latest-connected live AI Chat when no agent has explicitly registered; keep explicit ownership authoritative (#1983-1b47).
 - Let gated HTTP and IPC settings edits confirm and commit through the existing human dialog; keep HTTP approvals stable across TCP ports and require approval for tunnel forward-list replacement (#1787-4778).
 - Omit hidden answer markers when copying terminal selections or AI Chat answers, including mobile and the Answers view. (#1963-c7f6)
 - Restore contextual help for repository Design Mode and automation scripts in Settings (#1946-5de3).

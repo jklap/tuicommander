@@ -377,7 +377,7 @@ impl Runtime {
     }
 
     pub(super) async fn stream_tick(&mut self) {
-        let registered = self.registered_peer().map(str::to_owned);
+        let registered = self.recipient_peer();
         for i in 0..self.requests.len() {
             if self.requests[i].completed.is_some() {
                 self.reaction(i).await;

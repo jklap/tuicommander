@@ -66,12 +66,12 @@ impl Runtime {
         })
     }
     pub fn live(&self, peer: &str, pty: &str, epoch: u64) -> bool {
-        self.registered_peer() == Some(peer) && live(&self.state, peer, pty, epoch)
+        self.recipient_peer().as_deref() == Some(peer) && live(&self.state, peer, pty, epoch)
     }
     pub fn current(&self) -> Result<(String, u64), Error> {
         let pty = self
             .state
-            .live_pty_for_peer(self.registered_peer().ok_or(Error::NotRegistered)?)
+            .live_pty_for_peer(&self.recipient_peer().ok_or(Error::NotRegistered)?)
             .ok_or(Error::State)?;
         let state = self
             .state
@@ -110,7 +110,7 @@ impl Runtime {
             .to_session
             .get(sid)
             .map(|entry| entry.value().clone());
-        if self.registered_peer() != Some(caller)
+        if self.recipient_peer().as_deref() != Some(caller)
             || bound
                 .as_deref()
                 .and_then(|peer| self.state.resolve_peer_ref_checked(peer).ok().flatten())
@@ -122,6 +122,9 @@ impl Runtime {
         match input {
             Input::Register {} => unreachable!(),
             Input::Unregister {} => {
+                if self.registered_peer() != Some(caller) {
+                    return Err(Error::NotRegistered);
+                }
                 self.clear_registration();
                 Ok(json!({"registered":false}))
             }
@@ -251,7 +254,7 @@ impl Runtime {
             .is_ok_and(|result| result == Value::Bool(true));
         self.stage("received");
         let text = envelope["text"].as_str();
-        let Some(peer) = self.registered_peer() else {
+        let Some(peer) = self.recipient_peer() else {
             self.state
                 .telegram_recent
                 .lock()
@@ -346,7 +349,7 @@ impl Runtime {
         }
         let Some(pty) = self
             .state
-            .live_pty_for_peer(self.registered_peer().unwrap_or_default())
+            .live_pty_for_peer(&self.recipient_peer().unwrap_or_default())
         else {
             return;
         };
@@ -354,7 +357,7 @@ impl Runtime {
             if let Some(request) = self.requests.iter().find(|r| {
                 r.completed.is_none()
                     && r.working
-                    && r.peer == self.registered_peer().unwrap_or_default()
+                    && r.peer == self.recipient_peer().unwrap_or_default()
             }) && let AppEvent::ProgressRecorded { payload, .. } = &event
             {
                 if payload["entry"]["type"] == "done" {
