@@ -663,3 +663,7 @@ Update desktop `TerminalChatView.tsx` and mobile `useSessionChatView.tsx` throug
 wakes must use the existing `useSessions` SSE subscription, not another stream.
 Host hints, file navigation and desktop search may differ; binding, cursor resets,
 visibility lifecycle and transcript scrolling must remain shared.
+
+### Settings startup workflows
+
+When changing published Settings startup discovery, authentication workflows or recovery, keep `docs/backend/settings-startup.md` synchronized with the action schema/owner services. Update the API/Tauri references, backend config/GitHub/MCP docs, frontend store state semantics, user Settings/GitHub/AI Chat/remote guides, plugin authority boundaries, FEATURES and SPEC. Catalogue inventory completeness must not be presented as proof of live onboarding or UI parity.

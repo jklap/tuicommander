@@ -1193,3 +1193,7 @@ The shared settings facade publishes `{section, generation, persisted, applied}`
 Controls carry Rust catalogue IDs, including raw inputs, dynamic sound rows, composite record editors, platform and expert branches. Shared selects derive static options from descriptors. The typed All settings inspector covers writable scalar/string-list descriptors, with concrete stable-key paths and explicit machine/instance/repository/profile targets. It uses shared settings_action reads and revision-checked edits; it never edits arbitrary JSON. Existing owner workflows retain credentials and structured records. Per-ID exclusion ledgers require review; CircleCI/corrections catalogue ownership and transient PR-filter persistence are tracked by 1991-bd88, 1992-d4fa and 1993-e7af.
 
 Frontend plugin shortcut IDs publish runtime metadata through the shared action endpoint. Registration/unload/reconnect update the current set without durable writes. Plugin-action choice discovery remains unavailable until publication. Source parity and renderer tests are authored; batch/runtime acceptance is recorded separately from implementation.
+
+## Settings startup contract status (#1790-1011)
+
+Published workflows and recovery are documented in `docs/backend/settings-startup.md`. Step 10 is not complete: native catalogue coverage does not prove account enumeration, schema-only Ego interactive login, live authentication or refused/expired/conflicting/partial-apply integration. Ego login remains a separate owner follow-up after feature freeze, not an implicit terminal fallback.

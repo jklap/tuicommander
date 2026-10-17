@@ -1036,3 +1036,7 @@ Existing input/output device enumeration returns the same device objects on succ
 `force_retry_provider_recovery_command(sessionId)` submits `/retry` once through the
 shared ego recovery transaction. It refuses a non-empty tracked composer and returns
 the error to the caller. HTTP equivalent: `POST /sessions/{id}/force-retry`.
+
+## Settings startup ownership
+
+`settings_action` shares its envelope and recovery behavior with HTTP and MCP; native caller trust does not bypass owner CAS or human confirmation. [Settings startup workflows](../backend/settings-startup.md) distinguishes published GitHub operations, configured Ego settings/readback and the unpublished interactive Ego-login boundary.

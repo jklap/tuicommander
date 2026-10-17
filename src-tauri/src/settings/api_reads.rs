@@ -61,6 +61,8 @@ impl Settings {
                 .map_err(|_| Error::new(store, "store_failed"))?
             }
             "github_accounts" => {
+                // DEFERRED (2026-10-17) — account enumeration needs an owner-approved list
+                // contract; keyed catalogue reads do not expose the whole account/auth document.
                 if *target != Target::Machine {
                     return Err(Error::new(store, "not_found"));
                 }

@@ -4705,6 +4705,47 @@ export const settingsCatalogue = {
       ],
       "confirmationClass": "ordinary"
     },
+    "github_accounts.auth.source": {
+      "id": "github_accounts.auth.source",
+      "store": "github_accounts",
+      "owner": "machine",
+      "area": "github_accounts",
+      "group": "auth",
+      "order": 4,
+      "path": "/auth/source",
+      "labelKey": "settings.catalogue.github_accounts.auth.source.label",
+      "helpKey": "settings.catalogue.github_accounts.auth.source.help",
+      "label": "source",
+      "schema": {
+        "type": "string",
+        "enum": [
+          "env",
+          "oauth",
+          "pat",
+          "none"
+        ]
+      },
+      "nullable": false,
+      "availability": {
+        "status": "available"
+      },
+      "choices": {
+        "kind": "static",
+        "values": [
+          "env",
+          "oauth",
+          "pat",
+          "none"
+        ]
+      },
+      "sensitivity": "public",
+      "apply": "live",
+      "effect": "Reports the runtime GitHub credential source without revealing credentials.",
+      "operations": [
+        "get"
+      ],
+      "confirmationClass": "ordinary"
+    },
     "github_bindings.bindings.{key}.account_id": {
       "id": "github_bindings.bindings.{key}.account_id",
       "store": "github_bindings",

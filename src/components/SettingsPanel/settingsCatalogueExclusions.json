@@ -12,6 +12,7 @@
   "ego.credentials.{key}": "Read-only owner credential status; authentication remains in the configured Ego's login flow.",
   "github_accounts.accounts.{id}.credential": "Write-only credential managed by verified cloud-device or enterprise-PAT account workflows in GitHubTab, not a raw transaction.",
   "github_accounts.accounts.{id}.id": "Read-only stable account identity owned by GitHub account creation/removal.",
+  "github_accounts.auth.source": "Read-only runtime credential provenance from the GitHub owner; account/login workflows select the source, not an editable source-kind preference.",
   "keybindings.bindings.{action}.action": "Read-only action identity; built-in actions and frontend plugin registrations define it.",
   "pane_layout.root": "Structured pane geometry is controlled by the split-pane UI and existing layout owner, not an opaque JSON Settings editor.",
   "preferences.tasks_view_preferences.{key}": "Serialized TaskViewPreference envelope owned by Tasks view controls and ui.ts; a free-text field would be an opaque JSON editor.",

@@ -3181,3 +3181,7 @@ Durable settings-facade writes publish a value-free process-local generation to 
 ### Catalogue-backed Settings inspection
 
 Settings includes a typed All settings expert inspector with explicit owner/path binding, revision-checked single-field edits, dirty-draft preservation and human confirmation recovery. Native controls expose catalogue identities, shared enums use owner metadata and search includes inspector descriptors. General exposes index-memory, attachment-size and WebView-unload resource limits. Per-ID ledgers document separate domain/legacy/read-only controls; CircleCI/corrections ownership and transient PR-filter persistence remain follow-ups.
+
+### Assisted Settings startup: published boundary
+
+[Startup workflow documentation](backend/settings-startup.md) covers GitHub device/Enterprise actions, read-only credential-source provenance and configured Ego settings/readback, with explicit owner revisions, human confirmation and partial-persistence recovery. Complete schema-only authentication onboarding is not claimed: account enumeration and interactive Ego login remain documented publication gaps.

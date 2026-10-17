@@ -650,3 +650,7 @@ Reads show owner state and a revision. Save changes only that field with its rea
 General also exposes content-index memory budget, attachment byte limit and background WebView unload delay as expert resource controls. Enum-backed shared selects use catalogue values while retaining their existing readable labels. Search includes the inspector descriptors.
 
 The explicit source ledgers distinguish read-only identities, derived credentials, legacy snapshots and separate domain controls. CircleCI credentials and dictation corrections still use owners outside the catalogue (1991-bd88, 1992-d4fa). Global/repository PR visibility filters remain transient pending 1993-e7af; their presence is not a durable-persistence guarantee.
+
+## Assisted startup
+
+The [Settings startup contract](../backend/settings-startup.md) describes discoverable GitHub device/Enterprise workflows and Ego settings/readback. Interactive Ego login still requires the human AI Chat Settings workflow and has no published Settings login action. Native inventory completeness does not mean every onboarding or live UI check is complete.

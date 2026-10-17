@@ -2,6 +2,10 @@
 /// Compiled as a const so it's zero-cost at runtime.
 pub const PLUGIN_DOCS: &str = r###"# TUICommander Plugin Development Reference
 
+## Settings startup authority
+
+Plugin-scoped settings do not confer host account, executable or provider-login authority. Runtime shortcut-ID publication is metadata, not permission to invoke authentication or arbitrary commands. The host startup contract documents the separate owner workflows and current publication limits (docs/backend/settings-startup.md).
+
 ## Installation
 
 Create directory `{id}/` containing `manifest.json` + `main.js` under the platform plugins path:

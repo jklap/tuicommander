@@ -328,3 +328,7 @@ Use **Follow task** in an item detail to follow comments locally; use **Unfollow
 GitHub provides a full normal-comment count, so an increase is detected even beyond the first page. Jira and GitLab provide paged comment entries: newly observed comments notify when their creation time is newer than the prior baseline, or when a previously unseen comment ID shares its latest timestamp. Unloaded pages, unseen review sources and items that are not refreshed cannot produce a notice. Editing a comment or loading older history does not notify. No Linear provider is shipped, so it is not covered.
 
 GitHub logins created before Projects v2 support must sign in again to consent to `read:project`. Existing credentials are not upgraded automatically; a Projects read can return `INSUFFICIENT_SCOPES` until reauthorization.
+
+## Setup through Settings MCP
+
+After you enable the Settings MCP tool in trusted UI, an assistant can discover the published GitHub owner actions. Cloud setup uses device login; you authenticate on GitHub, and the assistant follows the returned flow state and poll interval. Enterprise PAT setup verifies the host/account before storage. A pending or expired flow is not a connected account. [Settings startup workflows](../backend/settings-startup.md#github) documents current discovery gaps; the assistant must not claim that every account or ambient credential source is discoverable through Settings alone.

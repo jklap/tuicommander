@@ -1721,3 +1721,7 @@ Native Settings controls carry stable catalogue IDs. `settingsCatalogue.ts` is g
 `settingsControlExclusions.json` records outside-catalogue controls. `settingsCatalogueExclusions.json` records per-ID read-only, derived, legacy and separately controlled fields. Source extraction checks both inventory directions, including platform/expert branches and finite sound rows. Runtime renderer tests check descriptor identities and callbacks. These checks do not establish live runtime convergence by themselves.
 
 While a frontend keybinding sync lifetime is active, it publishes its current plugin action IDs through `publish_plugin_keybinding_actions` on `settings_action`. Registration, unload and reconnect update the process-local list; discovery combines it with built-ins. Before publication, choices are unavailable rather than falsely empty. Publishing does not save overrides or emit a durable settings change.
+
+### Startup owner boundaries
+
+[Settings startup workflows](settings-startup.md) documents the published configuration/authentication boundary. App launch preferences select the configured Ego executable, profile and workspace; Ego owns its user/profile configuration. A GitHub environment, OAuth or PAT credential source is provenance, not a writable PAT field. A settings generation is not a CAS revision, and successful persistence is not proof that a runtime effect applied.

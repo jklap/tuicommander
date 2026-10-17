@@ -3279,3 +3279,7 @@ Rows returned by session `format=log` output and the `format=log|text` WebSocket
 ### Frontend shortcut metadata publication
 
 `POST /settings/action` and IPC `settings_action` accept `{action:"publish_plugin_keybinding_actions",actions:["plugin:pluginId:commandId"]}`. IDs are validated and bounded; the newest frontend publication replaces the process-local set. This is runtime metadata, not configuration persistence. It returns persisted=false/applied=true and does not emit settings-changed. Existing host-issued caller guards apply. Explicit keybinding choice refresh reads this set with built-in actions.
+
+## Settings startup and recovery
+
+The published Settings startup sequence and current GitHub/Ego publication limits are documented in [Settings startup workflows](../backend/settings-startup.md). Device-login status is not authentication success; owner revisions, confirmation proposals and persisted-but-unapplied outcomes require their distinct recovery paths. Do not substitute a legacy HTTP command for an action absent from the Settings schema.
