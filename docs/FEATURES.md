@@ -3186,3 +3186,10 @@ Typed `set_token` and `clear_token` actions share the existing token owner acros
 MCP, IPC and HTTP. Readback reports stored presence only (`set`, `unset`,
 `unavailable`), never a secret. Git & GitHub keeps its effective-source status;
 removing a stored token leaves environment and CircleCI CLI fallbacks unchanged.
+
+### Durable managed-child launch
+
+- MCP `agent launch`, HTTP `POST /agents/launch`, and IPC `managed_agent_launch` share an idempotent transaction.
+- Select/create a workspace, pin a stable name, link a registered parent, and choose keep-open in one request.
+- Durable launch handles survive lost replies; conflicting retries and uncertain partial creation fail explicitly without a second PTY or fallback checkout.
+- Receipts separate creation, prompt submission, native readiness, blocked state and warm-artifact status.

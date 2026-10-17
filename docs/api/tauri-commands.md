@@ -1049,3 +1049,7 @@ or `operation:{action:"clear_token"}`. Both actions use the existing CircleCI
 owner; replies contain only token presence. Clearing the stored token does not
 remove `CIRCLE_TOKEN` or the CircleCI CLI configuration. The Git & GitHub page
 continues to show the effective token source. No transport returns the token.
+
+### Managed launch transaction
+
+`managed_agent_launch(request: object) -> object` creates or reads a durable managed-child launch. It shares validation, journal and execution with `POST /agents/launch` and MCP `agent action=launch`. See [HTTP API](http-api.md#durable-managed-agent-launch) for the request, receipt and retry contract. The explicit registered parent, stable name and keep-open policy are set before the prompt can run.

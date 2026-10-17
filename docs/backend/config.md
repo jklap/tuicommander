@@ -1717,3 +1717,7 @@ The shared settings facade assigns a process-local monotonic generation after a 
 Frontend readers subscribe once per window and reread their section through non-saving read/apply paths. They advance the acknowledged baseline together with the rendered state, retain dirty fields, report same-field conflicts, cancel obsolete queued writes and discard stale in-flight reads. Reconnect clears generation high-water marks and rereads active sections because a restarted process starts a new counter. Mirrored events retain their connection identity and cannot reload local-machine settings.
 
 Legacy desktop and HTTP save adapters for notifications, preferences, repository settings/defaults, prompts, agents, keybindings and pane layout use the same publisher without changing owner signatures. State-bearing registration, plugin and upstream save paths also publish. Remaining legacy credential/auth writers without this state context are tracked in #1989-22fe; they do not yet provide complete cross-client invalidation.
+
+### Managed launch journal
+
+`managed-launches.sqlite` in the app data directory retains managed launch identities and request digests. It does not store prompt or environment bodies. Records remain as idempotency tombstones across process restarts; they do not imply the PTY survived. Use the same `launch_id` to inspect an old launch, never a new key to retry an uncertain creation.

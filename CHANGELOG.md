@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+- Durable keyed managed-child launches across MCP, HTTP and IPC, with explicit workspace, parent, stable name, hold-open policy and retry-safe receipts (#2006-f5a1).
+
 - Keep marker-projected terminal frames incremental: repaint dirty display rows and changed projection slots instead of clearing the whole canvas (#2003-f218).
 
 - Keep quoted answer markers in Claude and Codex prompt echoes out of the answer gutter and Answers view, including long prompts above the viewport lookback, while preserving blank-separated indented answers (#1389-3a47).

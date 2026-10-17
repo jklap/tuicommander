@@ -667,7 +667,9 @@ async fn dispatch_mcp_tool_call_with_context(
             {
                 return result;
             }
-            if action == "wait" && !addr.ip().is_loopback() {
+            if action == "launch" {
+                super::launch_transaction::execute(state, addr, args).await
+            } else if action == "wait" && !addr.ip().is_loopback() {
                 serde_json::json!({
                     "error": "Inter-agent messaging is restricted to localhost connections"
                 })

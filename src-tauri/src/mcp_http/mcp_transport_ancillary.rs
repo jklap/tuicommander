@@ -1393,6 +1393,9 @@ fn launch_workflow_effect(
         &format!("Workflow {:?}", package.role),
         &package.prompt,
         &worktree,
+        &format!("workflow:{}", run.id),
+        &attempt.id,
+        true,
     );
     if let Some(error) = spawned.get("error").and_then(serde_json::Value::as_str) {
         if let Ok(failed) = store.command(

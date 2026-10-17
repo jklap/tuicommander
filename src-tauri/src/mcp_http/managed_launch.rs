@@ -1,9 +1,11 @@
 //! Common managed-agent assembly; callers retain their own authorization fences.
-use super::mcp_transport_session_agent::{handle_agent_with_parent_cwd, handle_session};
+use super::mcp_transport_session_agent::handle_session;
 use crate::state::AppState;
 use serde_json::{Value, json};
 use std::{net::SocketAddr, sync::Arc};
 
+/// Compatibility projection for existing run bindings. All creation and policy
+/// now lives in the keyed transaction; call only from a blocking worker.
 pub(super) fn launch(
     state: &Arc<AppState>,
     addr: SocketAddr,
@@ -12,17 +14,49 @@ pub(super) fn launch(
     name: &str,
     prompt: &str,
     workspace: &str,
+    owner_scope: &str,
+    idempotency_key: &str,
+    keep_open: bool,
 ) -> Value {
-    handle_agent_with_parent_cwd(
-        state,
-        addr,
-        &json!({
-            "action":"spawn", "agent_type":profile, "name":name,
-            "prompt":prompt, "cwd":workspace,
-        }),
-        origin,
-        None,
-    )
+    let parent = origin.and_then(|origin| {
+        state
+            .mcp
+            .to_session
+            .get(origin)
+            .map(|entry| entry.value().clone())
+    });
+    let request = json!({
+        "idempotency_key":idempotency_key,
+        "parent_session_id":parent.as_deref().unwrap_or(owner_scope),
+        "name":name, "keep_open":keep_open,
+        "workspace":{"existing_path":workspace},
+        "spawn":{"agent_type":profile, "prompt":prompt},
+    });
+    let runtime = match tokio::runtime::Handle::try_current() {
+        Ok(runtime) => runtime,
+        Err(error) => {
+            return json!({"error":format!("Managed launch requires the runtime worker: {error}")});
+        }
+    };
+    let receipt = runtime.block_on(async {
+        if parent.is_some() {
+            super::launch_transaction::execute(state, addr, &request).await
+        } else {
+            super::launch_transaction::execute_owned(state, addr, &request).await
+        }
+    });
+    if receipt.get("error").is_some() {
+        return receipt;
+    }
+    if receipt["stage"] == "blocked" || receipt["live"] != true {
+        return json!({"error":receipt["reason"], "launch_id":receipt["launch_id"]});
+    }
+    let mut child = receipt["child"].as_object().map(|value| Value::Object(value.clone())).unwrap_or_else(|| {
+        let session = receipt["session_id"].as_str().unwrap_or_default();
+        json!({"session_id":session, "task_id":state.tasks.live_ids_for_session(session).first(), "name":name})
+    });
+    child["launch_id"] = receipt["launch_id"].clone();
+    child
 }
 
 /// A definition names a saved run configuration, never an implicit CLI fallback.
@@ -32,6 +66,7 @@ pub(crate) fn launch_named(
     name: &str,
     prompt: &str,
     workspace: &str,
+    run_id: &str,
 ) -> Result<Value, String> {
     let config = crate::config::load_agents_config();
     if !config.agents.values().any(|agent| {
@@ -52,6 +87,9 @@ pub(crate) fn launch_named(
         name,
         prompt,
         workspace,
+        &format!("automation:{run_id}"),
+        run_id,
+        true,
     );
     if let Some(error) = spawned["error"].as_str() {
         return Err(error.into());

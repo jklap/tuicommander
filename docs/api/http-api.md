@@ -3288,3 +3288,28 @@ or `operation:{action:"clear_token"}`. Both actions use the existing CircleCI
 owner; replies contain only token presence. Clearing the stored token does not
 remove `CIRCLE_TOKEN` or the CircleCI CLI configuration. The Git & GitHub page
 continues to show the effective token source. No transport returns the token.
+
+### Durable managed-agent launch
+
+`POST /agents/launch` (localhost only) and IPC `managed_agent_launch { request }` use the same Rust transaction as MCP `agent action=launch`. Send:
+
+```json
+{
+  "idempotency_key": "story-worker-1",
+  "parent_session_id": "<registered-peer-uuid>",
+  "name": "worker-1",
+  "keep_open": true,
+  "workspace": {"existing_path": "/absolute/checkout"},
+  "spawn": {"agent_type": "claude", "prompt": "Perform the task"}
+}
+```
+
+For a new workspace use `workspace: {repo_path, branch, base_ref?}`. No fallback checkout is used after a refusal. `spawn` accepts the existing MCP spawn options; do not put `cwd`, `name`, `keep_open`, `action`, `parent_session_id` or `idempotency_key` inside it. These values belong to the transaction. Model, account and local brief policy remain caller-owned.
+
+The receipt includes `launch_id`, reserved `session_id`, `stage`, `status`, `live`, `prompt_delivery`, `ready`, `reason`, `workspace_path`, `warm_artifacts`, and the original `child` spawn response when available. Read it with `{launch_id}` on the same endpoint, or repeat the identical creation request. Keys are scoped to the explicit parent identity. A changed request under the same key returns `idempotency_conflict`. Retain the key across connection loss; do not generate a new key to retry.
+
+`status` is `created`, `prompt_delivered`, `ready` or `blocked`. `prompt_delivery=delivered` proves argv handoff or successful queued PTY submission, not model acceptance. `ready` additionally requires the native Ready-screen adapter and the shared idle/completed session projection. Terminal movement or silence alone is insufficient. Deferred prompt timeouts and questions report blocked; the initial prompt stays queued and a retry never re-enqueues it. Warm-artifact readiness is a separate observation, not a promise that copying or setup has finished before the child starts.
+
+The journal in the app data directory, `managed-launches.sqlite`, persists request digests and resource identities, not prompt/environment bodies. Its checkpoints precede workspace and PTY creation. A crash in an uncertain creation window returns blocked rather than attempting that side effect again. A retained live child is recovered by its reserved identity; missing delivery metadata stays unknown. An exited child or server restart never causes the same key to create a replacement. Journal records are not expired: they are retry tombstones, unlike the process-lifetime `task_id` in a child response. On uncertain workspace creation inspect the requested repository/branch before a separate, explicitly chosen launch.
+
+Native automation and workflow run bindings also use this transaction through `managed_launch`: automation run IDs and workflow attempt IDs provide stable keys, with an in-process run-owner scope when no peer parent exists. No synthetic peer is registered. Run-owned children use the same pinned-name and explicit keep-open path as MCP children; the existing run controller still owns cancellation and completion. The unkeyed public `spawn` compatibility action continues to use the same low-level PTY spawn implementation.
