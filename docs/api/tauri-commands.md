@@ -1054,6 +1054,14 @@ owner; replies contain only token presence. Clearing the stored token does not
 remove `CIRCLE_TOKEN` or the CircleCI CLI configuration. The Git & GitHub page
 continues to show the effective token source. No transport returns the token.
 
+MCP passthrough calls use the same native inbox/output byte-budget validator and
+snapshot pager as `POST /mcp` and HTTP MCP-compatible output; no separate IPC
+paging implementation is added. See [the paging contract](../backend/mcp-http.md#compact-inventories-and-byte-bounded-response-snapshots).
+
+Output snapshot references issued through IPC MCP passthrough and HTTP
+MCP-compatible output intentionally share local `ipc` scope for the same
+target. They are not authorization tokens; endpoint admission is unchanged.
+
 ### Frame workload evidence
 
 `save_frame_workload(recording: String) -> Result<String, String>` writes bounded schema-v1 live grid workload JSON through the same serialized blocking-pool writer as `POST /debug/frame-workload`. Returns the instance-local capture path. It does not enable capture.

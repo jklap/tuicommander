@@ -9,6 +9,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Added
 
 - Publish typed Settings account enumeration and configured Ego interactive login start/status, with human terminal authentication and separate credential readback (#1790-1011).
+- Add three guided Smart Prompts for issue-to-draft-PR, incoming PR review and authorized bounded-fix configuration, with prerequisite stops and an end-to-end setup guide; the live GitHub pilot remains pending (#2012-72ff).
 
 - Add an opt-in bounded terminal frame-workload recorder, rotated capture files and grid-paint replay timing for future WebView stall evidence; this does not replace the missing real-stall replay (#1638-c94c).
 - Publish read-only GitHub credential-source provenance and document GitHub/Ego startup ownership, confirmation and recovery; interactive Ego login and account enumeration remain explicit onboarding gaps (#1790-1011).
