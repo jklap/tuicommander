@@ -73,6 +73,7 @@ import {
 	useMachine,
 } from "./agentConfigContext";
 import { LaunchInstructionsEditor } from "./LaunchInstructionsEditor";
+import { LaunchModuleSettings } from "./LaunchModuleSettings";
 
 const ALL_AGENT_TYPES = AGENT_TYPES.filter((t): t is AgentType => t !== "git" && t !== "api");
 
@@ -1226,19 +1227,20 @@ const AgentRow: Component<{
 
 					<Show when={LAUNCH_INSTRUCTION_AGENTS.includes(props.agentType) && settingsExpertStore.launchInstructions()}>
 						{(defaults) => (
-							<LaunchInstructionsEditor
-								id={`launch-instructions-${props.agentType}`}
-								label={`Launch instructions for ${agent().name}`}
-								value={configStore.getAgentLaunchInstructions(props.agentType)}
-								fallback={launchPreview()?.effective_text[props.agentType]}
-								inheritanceLabel={
-									configStore.getLaunchInstructions() === undefined ? "Uses default" : "Inherits from global"
-								}
-								customizeLabel={`Customize for ${agent().name}`}
-								resetLabel="Use global"
-								requiredMarkers={defaults().required_markers}
-								onSave={(text) => void configStore.setAgentLaunchInstructions(props.agentType, text)}
-							/>
+							<>
+								<LaunchModuleSettings agentType={props.agentType} />
+								<LaunchInstructionsEditor
+									id={`launch-instructions-${props.agentType}`}
+									label={`Launch instructions for ${agent().name}`}
+									value={configStore.getAgentLaunchInstructions(props.agentType)}
+									fallback={launchPreview()?.effective_text[props.agentType]}
+									inheritanceLabel="Generated modules and global additions"
+									customizeLabel={`Add instructions for ${agent().name}`}
+									resetLabel="Clear agent additions"
+									requiredMarkers={defaults().required_markers}
+									onSave={(text) => void configStore.setAgentLaunchInstructions(props.agentType, text)}
+								/>
+							</>
 						)}
 					</Show>
 
@@ -1453,6 +1455,9 @@ export const AgentsTab: Component<AgentsTabProps> = (props) => {
 							agents: {
 								agents: JSON.parse(JSON.stringify(activeStore().state.agents)),
 								launch_instructions: activeStore().getLaunchInstructions(),
+								launch_modules: JSON.parse(JSON.stringify(activeStore().state.launch_modules)),
+								launch_instructions_disabled: activeStore().state.launch_instructions_disabled,
+								launch_additions_migrated: true,
 							},
 							intent_tab_title: machine() ? undefined : settingsStore.state.intentTabTitle,
 							suggest_followups: machine() ? undefined : settingsStore.state.suggestFollowups,
@@ -1567,17 +1572,20 @@ export const AgentsTab: Component<AgentsTabProps> = (props) => {
 
 							<Show when={settingsExpertStore.launchInstructions()}>
 								{(defaults) => (
-									<LaunchInstructionsEditor
-										id="launch-instructions-global"
-										label="Launch instructions"
-										value={activeStore().getLaunchInstructions()}
-										fallback={launchPreview()?.default_text}
-										inheritanceLabel="Uses default"
-										customizeLabel="Customize"
-										resetLabel="Reset to default"
-										requiredMarkers={defaults().required_markers}
-										onSave={(text) => void activeStore().setLaunchInstructions(text)}
-									/>
+									<>
+										<LaunchModuleSettings />
+										<LaunchInstructionsEditor
+											id="launch-instructions-global"
+											label="Launch instructions"
+											value={activeStore().getLaunchInstructions()}
+											fallback={launchPreview()?.default_text}
+											inheritanceLabel="Generated modules"
+											customizeLabel="Add instructions"
+											resetLabel="Clear global additions"
+											requiredMarkers={defaults().required_markers}
+											onSave={(text) => void activeStore().setLaunchInstructions(text)}
+										/>
+									</>
 								)}
 							</Show>
 

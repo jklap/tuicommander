@@ -2382,3 +2382,5 @@ continues to show the effective token source. No transport returns the token.
 `GET /config/defaults` and `POST /config/defaults` are shared machine routes on
 both the desktop server and `tuic-remote`. The POST previews draft agent settings
 without saving them and uses the same authentication as other machine config routes.
+
+Launch-capable Claude, Codex, Grok, OpenCode, Goose, pi and ego clients receive playbook obligations from generated launch files, not again from MCP initialize instructions. MCP keeps tool discovery and live repository/session/peer state. Unrecognized clients retain the existing MCP marker, submit, worktree and progress fallback.

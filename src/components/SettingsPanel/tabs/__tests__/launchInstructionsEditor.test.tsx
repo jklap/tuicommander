@@ -45,30 +45,28 @@ describe("LaunchInstructionsEditor", () => {
 	it("catches implicit customization and reset freezing the inherited text", () => {
 		const { getByRole, queryByRole, getByText, onSave } = renderEditor(undefined);
 		fireEvent.click(getByRole("button", { name: "Customize for Claude" }));
-		expect(onSave).toHaveBeenLastCalledWith(DEFAULT);
-		expect((getByRole("textbox") as HTMLTextAreaElement).value).toBe(DEFAULT);
+		expect(onSave).toHaveBeenLastCalledWith("");
+		expect((getByRole("textbox") as HTMLTextAreaElement).value).toBe("");
 		fireEvent.click(getByText("Use global"));
 		expect(onSave).toHaveBeenLastCalledWith(undefined);
 		expect(queryByRole("textbox")).toBeNull();
 	});
 
-	it("warns, naming the marker, when an edit drops the suggest line — and still saves it", () => {
-		// Catches: removing the suggest: line saves silently without a warning that names the marker.
-		const { textarea, onSave, queryByRole, getByRole } = renderEditor(DEFAULT);
+	it("catches additions being required to duplicate generated markers", () => {
+		// Catches: user additions being rejected unless they copy generated markers.
+		const { textarea, onSave, queryByRole } = renderEditor(DEFAULT);
 		expect(queryByRole("alert")).toBeNull();
 		const edited = DEFAULT.split("\n")
 			.filter((line) => !line.includes("suggest:"))
 			.join("\n");
 		fireEvent.input(textarea, { target: { value: edited } });
-		const alert = getByRole("alert");
-		expect(alert.textContent).toContain("suggest:");
-		expect(alert.textContent).not.toContain("intent:");
+		expect(queryByRole("alert")).toBeNull();
 		fireEvent.blur(textarea);
 		expect(onSave).toHaveBeenCalledWith(edited);
 	});
 
-	it("treats an empty text as 'off', without a marker warning", () => {
-		// Catches: the documented way to turn injection off shown as a broken text.
+	it("catches empty additions being treated as missing markers", () => {
+		// Catches: empty additions being incorrectly shown as invalid instructions.
 		const { textarea, onSave, queryByRole } = renderEditor(DEFAULT);
 		fireEvent.input(textarea, { target: { value: "" } });
 		expect(queryByRole("alert")).toBeNull();

@@ -60,7 +60,8 @@ impl Store for AgentsSettingsStore {
     }
 
     fn read(&self) -> Result<Value, Failure> {
-        self.file.read()
+        self.file
+            .read_with(crate::launch_instructions::migrate_additions)
     }
 
     async fn refresh_choices(&self, resolver: &str, path: &str) -> Result<Vec<Value>, Failure> {
@@ -164,11 +165,7 @@ fn launch_instruction_defaults_with(
     agents: &AgentsConfig,
 ) -> crate::config::LaunchInstructionsDefaults {
     crate::config::LaunchInstructionsDefaults {
-        default_text: crate::launch_instructions::default_text(
-            app.intent_tab_title,
-            app.suggest_followups,
-        )
-        .replace("{VER}", env!("CARGO_PKG_VERSION")),
+        default_text: crate::launch_instructions::effective_text(app, agents, ""),
         required_markers: crate::launch_instructions::REQUIRED_MARKERS.to_vec(),
         effective_text: crate::launch_instructions::AGENTS
             .into_iter()
@@ -209,11 +206,15 @@ mod launch_preview_tests {
         let preview = launch_instruction_defaults_with(&app, &agents);
         assert!(!preview.effective_text["codex"].contains("intent:"));
         agents.launch_instructions = Some("global {VER}".into());
-        assert_eq!(
-            launch_instruction_defaults_with(&app, &agents).effective_text["claude"],
-            format!("global {}", env!("CARGO_PKG_VERSION"))
+        assert!(
+            launch_instruction_defaults_with(&app, &agents).effective_text["claude"]
+                .ends_with(&format!("global {}", env!("CARGO_PKG_VERSION")))
         );
-        agents.agents.get_mut("claude").unwrap().launch_instructions = Some(String::new());
+        agents
+            .agents
+            .get_mut("claude")
+            .unwrap()
+            .launch_instructions_disabled = true;
         assert_eq!(
             launch_instruction_defaults_with(&app, &agents).effective_text["claude"],
             ""

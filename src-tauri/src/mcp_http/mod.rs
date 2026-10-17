@@ -3401,9 +3401,11 @@ mod tests {
                     .await
                     .unwrap();
                 let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
-                assert_eq!(
-                    json["launch_instructions"]["effective_text"]["claude"],
-                    "REMOTE DRAFT"
+                assert!(
+                    json["launch_instructions"]["effective_text"]["claude"]
+                        .as_str()
+                        .unwrap()
+                        .ends_with("REMOTE DRAFT")
                 );
             }
         }

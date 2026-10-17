@@ -348,6 +348,14 @@ pub(super) fn resolve_agent_type(client_name: Option<&str>) -> Option<&'static s
         Some("amp")
     } else if name.contains("goose") {
         Some("goose")
+    } else if name.contains("opencode") {
+        Some("opencode")
+    } else if name.contains("grok") {
+        Some("grok")
+    } else if name == "pi" || name.starts_with("pi-") {
+        Some("pi")
+    } else if name.contains("ego") {
+        Some("ego")
     } else {
         None
     }

@@ -50,6 +50,7 @@ vi.mock("../../../../plugins/pluginLoader", () => ({
 
 import { AGENTS, type AgentsConfig, LIMITED_SUPPORT_LABEL } from "../../../../agents";
 import { agentConfigsStore } from "../../../../stores/agentConfigs";
+import { appLogger } from "../../../../stores/appLogger";
 import { settingsExpertStore } from "../../../../stores/settingsExpert";
 import { uiStore } from "../../../../stores/ui";
 import { AgentsTab } from "../AgentsTab";
@@ -341,9 +342,11 @@ describe("AgentsTab expert controls", () => {
 
 // The real machine registry hydrates from transport; only the external IO is held.
 describe("launch preview machine ownership", () => {
+	beforeEach(() => vi.spyOn(appLogger, "error").mockImplementation(() => undefined));
 	let settleLoad: (() => void) | undefined;
 	afterEach(() => {
 		settleLoad?.();
+		vi.restoreAllMocks();
 		settingsExpertStore._resetForTests();
 	});
 	it.each(["delayed", "failed"])("catches stale local preview during %s remote hydration", async (outcome) => {
@@ -374,20 +377,21 @@ describe("launch preview machine ownership", () => {
 		const [machine, setMachine] = createSignal<string>();
 		const view = render(() => <AgentsTab connectionId={machine()} />);
 		await waitFor(() => expect(view.getByText("LOCAL PREVIEW")).toBeTruthy());
-		expect((view.getByRole("button", { name: "Customize" }) as HTMLButtonElement).disabled).toBe(false);
+		expect((view.getByRole("button", { name: "Add instructions" }) as HTMLButtonElement).disabled).toBe(false);
 		setMachine(`preview-${outcome}`);
 		await waitFor(() => expect(remoteRpc).toHaveBeenCalledWith("load_agents_config", {}, `preview-${outcome}`));
 		expect(view.queryByText("LOCAL PREVIEW")).toBeNull();
-		expect((view.getByRole("button", { name: "Customize" }) as HTMLButtonElement).disabled).toBe(true);
+		expect((view.getByRole("button", { name: "Add instructions" }) as HTMLButtonElement).disabled).toBe(true);
 		if (outcome === "failed") {
 			rejectLoad(new Error("remote offline"));
 			await waitFor(() => expect(view.container.textContent).toContain("remote offline"));
+			expect(appLogger.error).toHaveBeenCalledWith("config", "Failed to hydrate agent configs", expect.any(Error));
 			expect(view.queryByText("LOCAL PREVIEW")).toBeNull();
-			expect((view.getByRole("button", { name: "Customize" }) as HTMLButtonElement).disabled).toBe(true);
+			expect((view.getByRole("button", { name: "Add instructions" }) as HTMLButtonElement).disabled).toBe(true);
 		} else {
 			resolveLoad({ agents: {} });
 			await waitFor(() => expect(view.getByText("REMOTE PREVIEW")).toBeTruthy());
-			expect((view.getByRole("button", { name: "Customize" }) as HTMLButtonElement).disabled).toBe(false);
+			expect((view.getByRole("button", { name: "Add instructions" }) as HTMLButtonElement).disabled).toBe(false);
 		}
 	});
 });

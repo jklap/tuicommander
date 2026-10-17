@@ -1401,7 +1401,7 @@ GET /config/defaults
 
 Both methods are available on the desktop server and the authenticated remote daemon.
 `POST /config/defaults` returns the same shape with launch instruction previews
-for a draft. The body is `{ "agents": <AgentsConfig>, "intent_tab_title": true,
+for a draft, including module switches and append-only additions in `agents`. The body is `{ "agents": <AgentsConfig>, "intent_tab_title": true,
 "suggest_followups": true }`. Both marker flags are optional; omitted flags use
 the server's current app config. No values are saved. The `launch_instructions`
 section contains a resolved `default_text`, `required_markers`, and an
