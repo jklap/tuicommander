@@ -221,8 +221,6 @@ it("types an opened ego free-text answer into its waiting modal instead of requi
 			data: "Run the parser checks",
 		}),
 	);
-	await waitFor(() =>
-		expect(rpc).toHaveBeenCalledWith("write_pty", { sessionId: "ego-free-text", data: "\r" }),
-	);
+	await waitFor(() => expect(rpc).toHaveBeenCalledWith("write_pty", { sessionId: "ego-free-text", data: "\r" }));
 	expect(rpc.mock.calls.some(([command]) => command === "submit_agent_reply")).toBe(false);
 });
