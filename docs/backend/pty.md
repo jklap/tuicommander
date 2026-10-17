@@ -425,6 +425,13 @@ its highlighted `❯ N. option` row must not act as a composer cutoff. The
 agent-specific choice parser publishes its navigation contract through
 `SessionState.choice_prompt.selection_mode`.
 
+The HTTP and log-WebSocket screen trim also retains an active Claude `/resume`
+modal, including populated and no-match search states. Its title, search field,
+and final search/cancel footer identify the presentation boundary. Search-box
+borders and the selected session are not composer chrome. This exception does
+not change the shared bottom-zone cutoff used by output and state parsers.
+A retained modal above a later ready composer does not disable normal trimming.
+
 ```rust
 impl VtLogBuffer {
     fn new(rows: u16, cols: u16, capacity: usize) -> Self  // Create with terminal size

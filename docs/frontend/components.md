@@ -222,6 +222,9 @@ session mounted and opens `FilesScreen` with the entry’s original checkout roo
 scrolled up or touching the output, it retains the loaded rows instead of
 evicting the content being read. Older-history pages extend that reading window.
 The next log update after following resumes restores the 500-line tail.
+The backend preserves the full Claude `/resume` modal in both the initial HTTP
+screen and log-WebSocket frames, including session rows and no-match results;
+the mobile view does not reconstruct the picker from transcript text.
 
 Terminal ego single-choice questions use the header question action to toggle the existing `ChoicePromptOverlay`. Full titles and option labels wrap within its scrollable overlay. Opening is explicit; the terminal keeps its full height. The composer uses the backend navigation selection mode and its existing in-flight guard to submit only once.
 

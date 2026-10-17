@@ -327,6 +327,8 @@ navigate to it and submit it; the app uses Claude's arrow-and-Enter contract.
 If a Claude picker appears only in the CLI output, use the key bar's Up/Down
 and Tab buttons to navigate it, then Enter to select. Navigation does not send
 or replace a typed answer in the mobile composer.
+Claude `/resume` also keeps its session list and search results visible in CLI
+view. Use Up/Down and Enter to select a session, or Esc to close the picker.
 The backend update requires a TUICommander restart before it reaches an
 already-running development instance.
 Remote HTTP/MCP workers respect **Silence orchestration completions** even after

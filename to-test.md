@@ -1,3 +1,8 @@
+## Mobile Claude pickers (1971-5834 / 1972-128e) — Rust restart required
+
+- [ ] After Boss manually restarts `make dev` or installs `make build`, open a throwaway Claude terminal in the mobile CLI view. Verify `/resume` shows its session rows and search results, then use key-bar Up/Down and Enter to resume one. The awaiting AskUserQuestion arrows must move selection without changing a local answer draft. The isolated headless regression and capture evidence do not load the Rust fix into the running desktop app.
+- [ ] Capture mobile screenshots of the populated `/resume` list and a moved AskUserQuestion selection after macOS is unlocked. The coordinator authorized skipping these captures while the screen was locked; no screenshot was claimed.
+
 ## Managed injection recovery (1957-38c1) — Rust restart required
 
 - [ ] Run a full fake-agent delayed-echo E2E in an isolated headless test instance with a real PTY. Delay the fake agent's composer echo after Enter to force uncertain injection, queue a later BG DONE wake, then render a fresh stable empty ego composer. Verify the later wake reaches the fake agent once without replaying the earlier uncertain payload, raw input returns a bounded uncertainty error while the reader is stalled, and close terminates the stalled session. Use the recorded ego composer fixtures for screen semantics; the existing recording-writer regression is not this process-level E2E. Do not use Boss's instance or sessions. This check remains unverified.
