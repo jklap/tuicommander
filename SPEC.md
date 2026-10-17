@@ -1099,6 +1099,13 @@ Shared wake (B6, #1807-4f1f): `session_wake::ensure_live` serializes durable res
 
 ## Mobile Claude terminal Chat view
 
+Phone sessions offer a direct **Read file edits in Chat** action while CLI is
+active. The terminal stays mounted. Chat edit tool disclosures render bounded
+old/new blocks, preserve tabs with four-space tab stops and scroll long lines
+horizontally. Claude Edit projection retains diff content through tool completion;
+failed calls remain labelled failed, not represented as applied edits.
+
+
 Claude PTY sessions offer CLI / Chat in the existing mobile header. The shared
 `TerminalChatTranscript` owns rendering, visibility-paused keepalive and backend
 unavailability. Mobile injects wakes from `useSessions`; it opens no additional
