@@ -5843,6 +5843,35 @@ mod tests {
         );
     }
 
+    /// Catches a stale main branch hiding work already integrated into the configured trunk.
+    #[test]
+    fn worktree_lifecycle_stale_main_must_not_override_configured_develop() {
+        let (_temp, repo, _) = workspace_fixture();
+        git_cmd(&repo)
+            .args(["branch", "-m", "develop"])
+            .run()
+            .unwrap();
+        git_cmd(&repo).args(["branch", "main"]).run().unwrap();
+        git_cmd(&repo)
+            .args(["checkout", "-b", "feature/session"])
+            .run()
+            .unwrap();
+        set_branch_base(&repo.to_string_lossy(), "feature/session", "develop").unwrap();
+        let worktree = add_worktree(&repo, "feature/integrated");
+        commit_file(&worktree, "feature.txt", "completed work\n");
+        git_cmd(&repo)
+            .args(["branch", "-f", "develop", "feature/integrated"])
+            .run()
+            .unwrap();
+
+        let status = inspect_workspace_lifecycle(&repo, "feature/integrated");
+        assert_eq!(
+            status.commit_status,
+            WorkspaceCommitStatus::Merged,
+            "integrated into configured develop, not stale main: {status:?}"
+        );
+    }
+
     /// Catches remote HEAD or configured base overriding the conventional trunk.
     #[test]
     fn default_branch_prefers_main_then_master_before_remote_head() {
