@@ -1,6 +1,6 @@
 //! Published facade integration; external authentication is never simulated as successful.
 use super::{api, policy::Caller};
-use serde_json::json;
+use serde_json::{Value, json};
 
 // Catches: the published GitHub envelope bypassing cloud policy or dropping owner readback.
 #[tokio::test]
@@ -8,11 +8,34 @@ async fn startup_github_workflows_preserve_cloud_policy_and_readback() {
     let (_dir, _guard, state) = super::accounts_tests::isolated();
     let account = crate::github_account::GitHubAccount::github_com_named("startup-viewer");
     crate::github_account::add_account_record(account, Some("startup-private-canary")).unwrap();
+    let described = api::execute(
+        &state,
+        json!({"action":"describe","store":"github_accounts"}),
+        Caller::native(),
+    )
+    .await;
+    let operations = published_owner_operations(&described["actions"], "github_accounts").unwrap();
+    let listed = api::execute(
+        &state,
+        json!({
+            "action":"perform","target":{"kind":"machine"},"store":"github_accounts",
+            "operation":{"action":published_operation(operations, "list_accounts")}
+        }),
+        Caller::native(),
+    )
+    .await;
+    let account_id = listed["accounts"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|account| account["id"] == "startup-viewer")
+        .unwrap()["id"]
+        .clone();
     let reply = api::execute(
         &state,
         json!({
             "action":"perform","target":{"kind":"machine"},"store":"github_accounts",
-            "operation":{"action":"set_label","id":"startup-viewer","label":"Startup account"}
+            "operation":{"action":published_operation(operations, "set_label"),"id":account_id,"label":"Startup account"}
         }),
         Caller::native(),
     )
@@ -28,7 +51,7 @@ async fn startup_github_workflows_preserve_cloud_policy_and_readback() {
     assert_eq!(account["secret"], json!({"status":"set"}));
     let denied = api::execute(&state, json!({
         "action":"perform","target":{"kind":"machine"},"store":"github_accounts",
-        "operation":{"action":"add_enterprise","host":"https://github.com","label":"Must not exist","token":"startup-pat-canary"}
+        "operation":{"action":published_operation(operations, "add_enterprise"),"host":"https://github.com","label":"Must not exist","token":"startup-pat-canary"}
     }), Caller::native()).await;
     assert_eq!(denied["error"]["code"], "auth_required", "{denied}");
     for action in ["cloud_login_status", "complete_cloud_login"] {
@@ -36,7 +59,7 @@ async fn startup_github_workflows_preserve_cloud_policy_and_readback() {
             &state,
             json!({
                 "action":"perform","target":{"kind":"machine"},"store":"github_accounts",
-                "operation":{"action":action,"flow_id":"unknown-startup-flow"}
+                "operation":{"action":published_operation(operations, action),"flow_id":"unknown-startup-flow"}
             }),
             Caller::native(),
         )
@@ -207,6 +230,21 @@ async fn startup_discovers_account_enumeration_and_interactive_ego_login() {
     assert_eq!(missing["error"]["code"], "not_found", "{missing}");
 }
 
+// Resolve the exact action constant, not a substring in descriptions or another owner.
+fn published_operation<'a>(schema: &'a Value, action: &str) -> &'a Value {
+    fn find<'a>(schema: &'a Value, action: &str) -> Option<&'a Value> {
+        if schema["properties"]["action"]["const"] == action {
+            return Some(&schema["properties"]["action"]["const"]);
+        }
+        match schema {
+            Value::Array(values) => values.iter().find_map(|value| find(value, action)),
+            Value::Object(values) => values.values().find_map(|value| find(value, action)),
+            _ => None,
+        }
+    }
+    find(schema, action).unwrap_or_else(|| panic!("unpublished operation: {action}"))
+}
+
 fn published_owner_operations<'a>(
     value: &'a serde_json::Value,
     store: &str,
@@ -232,12 +270,25 @@ fn published_owner_operations<'a>(
 async fn startup_ego_login_binds_authority_and_reads_credentials_after_exit() {
     let (_dir, _guard, _state) = super::accounts_tests::isolated();
     let fixture = super::ego_fixture::fixture();
-    let get = json!({"action":"get","target":{"kind":"machine"},"store":"ego","paths":["/model"]});
+    let described = api::execute(
+        &fixture.state,
+        json!({"action":"describe","store":"ego"}),
+        Caller::native(),
+    )
+    .await;
+    let model = described["fields"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|field| field["path"] == "/model")
+        .unwrap();
+    let operations = published_owner_operations(&described["actions"], "ego").unwrap();
+    let get = json!({"action":"get","target":{"kind":"machine"},"store":model["store"],"paths":[model["path"]]});
     let snapshot = api::execute(&fixture.state, get, Caller::native()).await;
     let request = |provider: &str, revision: &serde_json::Value| {
         json!({
             "action":"perform","target":{"kind":"machine"},"store":"ego","expectedRevision":revision,
-            "operation":{"action":"begin_login","provider":provider}
+            "operation":{"action":published_operation(operations, "begin_login"),"provider":provider}
         })
     };
     let rejected = api::execute(
@@ -275,7 +326,7 @@ async fn startup_ego_login_binds_authority_and_reads_credentials_after_exit() {
     }
     let status = json!({
         "action":"perform","target":{"kind":"machine"},"store":"ego","expectedRevision":snapshot["revision"],
-        "operation":{"action":"login_status","flow_id":started["flowId"]}
+        "operation":{"action":published_operation(operations, "login_status"),"flow_id":started["flowId"]}
     });
     let completed = loop {
         let reply = api::execute(&fixture.state, status.clone(), Caller::native()).await;
