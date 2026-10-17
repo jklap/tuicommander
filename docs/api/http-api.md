@@ -3219,6 +3219,16 @@ No live write or desktop-load verification is implied by recorded-fixture tests.
 
 POST `/settings/action` accepts the Rust-generated settings envelope directly, identical to IPC `settings_action` request and MCP settings arguments. It requires local or authenticated access. Describe is bounded to 128 fields per page. Owner edits require explicit target and expectedRevision; structured errors contain no input values. The owner inventory is complete; the same gate rejects future unresolved gaps. Typed workflows use `{action:"perform",target:{kind:"machine"},store,operation}`. The store selects the Rust operation DTO: github_accounts, ego (also expectedRevision), upstreams, connections, telegram, and voice in dictation builds. Dynamic-choice describe/refresh uses target, store and paths; catalogue describe uses bounded filters instead.
 
+Gated HTTP and IPC edits return `confirmation_required` with `proposalId` and do not write.
+Replay the exact original edit with `approval: "<proposalId>"` and `confirm: true`.
+The same request opens the existing all-client human confirmation dialog, waits for the
+answer, and, only after approval, commits the exact edit under its original caller.
+A decline, expiry, changed edit, caller mismatch or reused approval cannot commit.
+HTTP proposal identity uses the source IP, not the ephemeral TCP port; every request
+still requires local or authenticated access. MCP callers can continue to use
+`ui action=confirm proposalId=...` followed by an exact replay with `approval`.
+Tunnel forward lists, including empty replacements, require confirmation like tunnel ports.
+
 ### Audio choice availability (#1908-c327, #1909-0d24)
 
 Existing input/output device enumeration returns the same device objects on success, including a successful empty array. Backend enumeration failure now returns an error rather than an empty array. Internal settings choice refresh reuses those owners; cache-only describe and typed voice asset actions are not new public routes in this change. The settings transport cutover remains separate.

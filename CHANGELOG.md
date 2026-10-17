@@ -21,6 +21,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Restyle Workspace Settings with section cards, aligned terminal and Git fields, and action-first shortcut rows while preserving existing behavior.
 - Bound `tuic bg` completion command labels to one line and 120 characters; keep the full command before job output in the log (#1950-43b7).
 ### Fixed
+- Let gated HTTP and IPC settings edits confirm and commit through the existing human dialog; keep HTTP approvals stable across TCP ports and require approval for tunnel forward-list replacement (#1787-4778).
 - Restore contextual help for repository Design Mode and automation scripts in Settings (#1946-5de3).
 - Resolve worktree lifecycle bases for repositories without main/master, and explain when no base branch is available (#1961-bab6).
 - Prevent auto-standby from stranding foreground shell jobs; wake the recorded stopped group and retain a full timeout window after remote input, output viewing, or disconnect (#1962-4182).

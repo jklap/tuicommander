@@ -20,6 +20,14 @@ pub(super) async fn settings_action(
     if let Err(response) = require_local_or_auth(&addr, auth.is_some()) {
         return response.into_response();
     }
-    Json(api::execute(&state, request, Caller::http(format!("http:{addr}"), true)).await)
-        .into_response()
+    // A browser may replay its proposal on another TCP connection from the same client.
+    Json(
+        api::execute(
+            &state,
+            request,
+            Caller::http(format!("http:{}", addr.ip()), true),
+        )
+        .await,
+    )
+    .into_response()
 }

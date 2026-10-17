@@ -56,7 +56,8 @@ pub fn request_schema() -> Value {
     let mut schema = super::catalogue::schema::<Action>();
     fn approval(schema: &mut Value) {
         if let Some(properties) = schema.get_mut("properties").and_then(Value::as_object_mut) {
-            properties.insert("approval".into(), json!({"type":"string","description":"Opaque, one-use approval from ui confirm proposalId; bound to this exact request and caller."}));
+            properties.insert("approval".into(), json!({"type":"string","description":"Opaque, one-use proposal approval; bound to this exact request and caller."}));
+            properties.insert("confirm".into(), json!({"type":"boolean","description":"With approval=proposalId, ask the human through the existing confirmation dialog, then replay this exact edit in the same request."}));
         }
         for key in ["anyOf", "oneOf"] {
             if let Some(variants) = schema.get_mut(key).and_then(Value::as_array_mut) {
@@ -256,8 +257,33 @@ pub(crate) async fn execute(state: &Arc<AppState>, mut input: Value, caller: Cal
             None => None,
             _ => return Err(Error::new("settings", "invalid_type")),
         };
-        let action =
+        let confirm = input
+            .as_object_mut()
+            .and_then(|input| input.remove("confirm"));
+        let confirm = match confirm {
+            Some(Value::Bool(value)) => value,
+            None => false,
+            _ => return Err(Error::new("settings", "invalid_type")),
+        };
+        let action: Action =
             serde_json::from_value(input).map_err(|_| Error::new("settings", "invalid_type"))?;
+        if confirm {
+            let id = approval
+                .as_deref()
+                .ok_or_else(|| Error::new("settings", "invalid_type"))?;
+            if !matches!(
+                &action,
+                Action::Transaction(
+                    Request::Set { .. } | Request::Reset { .. } | Request::Patch { .. }
+                )
+            ) {
+                return Err(Error::new("settings", "invalid_type"));
+            }
+            let result = crate::mcp_http::confirm_settings(state, &caller, id, None).await;
+            if result["confirmed"] != true {
+                return Err(Error::new("settings", "confirmation_denied"));
+            }
+        }
         let settings = state
             .settings_api
             .get_or_try_init(|| async { Settings::new(state.clone()) })

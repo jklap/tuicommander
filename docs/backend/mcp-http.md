@@ -2343,6 +2343,16 @@ No live write or desktop-load verification is implied by recorded-fixture tests.
 
 MCP access requires settings_mcp_enabled, enabled only by trusted UI; legacy config enablement grants no settings authority. MCP mutations remain loopback-only. HTTP retains local-or-authenticated access and IPC retains native host trust. Exposure proposals use ui confirm proposalId and an exact replay with approval. Secrets remain write-only. Owner transactions and perform remain unavailable while the native inventory gap ledger is nonempty; describe reports inventoryComplete.
 
+Gated HTTP and IPC edits return `confirmation_required` with `proposalId` and do not write.
+Replay the exact original edit with `approval: "<proposalId>"` and `confirm: true`.
+The same request opens the existing all-client human confirmation dialog, waits for the
+answer, and, only after approval, commits the exact edit under its original caller.
+A decline, expiry, changed edit, caller mismatch or reused approval cannot commit.
+HTTP proposal identity uses the source IP, not the ephemeral TCP port; every request
+still requires local or authenticated access. MCP callers can continue to use
+`ui action=confirm proposalId=...` followed by an exact replay with `approval`.
+Tunnel forward lists, including empty replacements, require confirmation like tunnel ports.
+
 `session action=force_retry` is a blocking, localhost-only terminal control.
 It resolves the normal session address, requires a live ego recovery snapshot
 and an empty tracked composer, serializes input and submits `/retry` once via
