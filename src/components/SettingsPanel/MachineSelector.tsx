@@ -31,6 +31,7 @@ export const MachineSelector: Component<MachineSelectorProps> = (props) => {
 			<div class={s.group}>
 				<label for="machine-selector">{props.label ?? "Machine"}</label>
 				<Select
+					data-non-setting="Select the machine whose settings are displayed"
 					id="machine-selector"
 					class={s.input}
 					value={props.value ?? ""}

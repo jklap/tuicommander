@@ -1,4 +1,5 @@
 import { type Component, createEffect, createSignal, For, Show, untrack } from "solid-js";
+import type { SettingId } from "../../../services/settingsCatalogue";
 import { reportSettingsConflicts } from "../../../services/settingsRefresh";
 import s from "../Settings.module.css";
 import a from "./AgentsTab.module.css";
@@ -15,6 +16,7 @@ export function missingMarkers(text: string, required: readonly string[]): strin
  */
 export const LaunchInstructionsEditor: Component<{
 	id: string;
+	settingId: SettingId;
 	label: string;
 	value: string | undefined;
 	fallback: string;
@@ -40,6 +42,7 @@ export const LaunchInstructionsEditor: Component<{
 				{props.label}
 			</label>
 			<textarea
+				data-setting-id={props.settingId}
 				id={props.id}
 				class={`${a.formInput} ${a.mono}`}
 				rows={10}
@@ -64,6 +67,7 @@ export const LaunchInstructionsEditor: Component<{
 			</Show>
 			<Show when={props.value !== undefined}>
 				<button
+					data-setting-id={props.settingId}
 					type="button"
 					class={a.smallBtn}
 					onClick={() => {

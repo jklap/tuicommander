@@ -22,7 +22,10 @@ export function RepositoryActions(props: {
 						)}
 					</p>
 					<div class={r.teamActions}>
-						<button onClick={props.onExport}>
+						<button
+							data-non-setting="Export the current repository preferences through the existing team-config workflow"
+							onClick={props.onExport}
+						>
 							{t("settings.copyToProject.button", "Copy settings to .tuic.json")}
 						</button>
 					</div>
@@ -34,7 +37,11 @@ export function RepositoryActions(props: {
 					scope={props.path}
 					consequence="Clear repository overrides, including script overrides, and return to inherited defaults. Repository identity and its Design Mode URL are retained."
 				>
-					<button class={s.footerReset} onClick={props.onReset}>
+					<button
+						data-non-setting="Reset this repository owner overrides; retain repository identity"
+						class={s.footerReset}
+						onClick={props.onReset}
+					>
 						{t("settings.resetToDefaults", "Reset to Defaults")}
 					</button>
 				</DangerZone>

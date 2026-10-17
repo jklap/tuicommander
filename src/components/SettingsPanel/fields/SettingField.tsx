@@ -1,9 +1,12 @@
 import { type Component, createUniqueId, type JSX, Show } from "solid-js";
+import { type SettingId, settingHint, settingLabel } from "../../../services/settingsCatalogue";
 import { ContextualHelp } from "../ContextualHelp";
 import s from "../Settings.module.css";
 
 export interface SettingFieldProps {
 	label: string;
+	settingId?: SettingId;
+	"data-setting-id"?: string;
 	hint?: string;
 	error?: string;
 	help?: JSX.Element;
@@ -24,15 +27,20 @@ export const SettingField: Component<
 		<Show
 			when={props.row}
 			fallback={
-				<div class={s.group}>
+				<div class={s.group} data-setting-id={props.settingId ?? props["data-setting-id"]}>
 					<div class={s.helpLabel}>
-						<label for={id}>{props.label}</label>
-						{props.help || <ContextualHelp label={props.label} hint={props.hint} />}
+						<label for={id}>{settingLabel(props.settingId, props.label)}</label>
+						{props.help || (
+							<ContextualHelp
+								label={settingLabel(props.settingId, props.label)}
+								hint={settingHint(props.settingId, props.hint)}
+							/>
+						)}
 					</div>
 					{props.children(id, descriptionId(), descriptionId)}
-					<Show when={props.hint}>
+					<Show when={settingHint(props.settingId, props.hint)}>
 						<p id={`${id}-hint`} class={s.hint}>
-							{props.hint}
+							{settingHint(props.settingId, props.hint)}
 						</p>
 					</Show>
 					<Show when={props.error}>
@@ -43,15 +51,20 @@ export const SettingField: Component<
 				</div>
 			}
 		>
-			<div class={s.settingRow}>
+			<div class={s.settingRow} data-setting-id={props.settingId ?? props["data-setting-id"]}>
 				<div class={s.settingRowText}>
 					<div class={s.helpLabel}>
-						<label for={id}>{props.label}</label>
-						{props.help || <ContextualHelp label={props.label} hint={props.hint} />}
+						<label for={id}>{settingLabel(props.settingId, props.label)}</label>
+						{props.help || (
+							<ContextualHelp
+								label={settingLabel(props.settingId, props.label)}
+								hint={settingHint(props.settingId, props.hint)}
+							/>
+						)}
 					</div>
-					<Show when={props.hint}>
+					<Show when={settingHint(props.settingId, props.hint)}>
 						<p id={`${id}-hint`} class={s.hint}>
-							{props.hint}
+							{settingHint(props.settingId, props.hint)}
 						</p>
 					</Show>
 				</div>
