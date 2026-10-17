@@ -2124,7 +2124,7 @@ path and opens the existing mobile Markdown viewer. Desktop opens and closes
 update the list through SSE; worktree files retain their original checkout.
 
 
-Waiting terminal ego questions show **Input**. Tap the question icon in the session header to open or close the full question and its wrapping options. The card overlays the terminal without reserving rows. Prior suggested actions are hidden while a human answer is pending.
+Waiting terminal ego questions show **Input**, including narrow terminals whose selector footer wraps mid-word. Tap the question icon in the session header to open or close the full question and its wrapping options. Single-choice submits one option; multiple-choice toggles options until **Submit answers**; free-text uses the composer. The card overlays the terminal without reserving rows. Prior suggested actions are hidden while a human answer is pending.
 
 Phone-optimized progressive web app for monitoring AI agents remotely. Separate SolidJS entry point (`src/mobile/`) served by the existing HTTP server at `/mobile`.
 
@@ -2305,6 +2305,7 @@ Unsupported actions are hidden. Menus close on outside tap or Escape and use
 - `font-variant-emoji: text` on output view — forces Unicode symbols (●, ○, ◉) to render as monochrome text glyphs instead of colorful emoji
 
 ### 18.11 Standalone CSS
+- Mobile human replies can answer an awaiting agent even while its shell remains busy and no question was recognized. Recognized native questions keep their direct answer controls. Rejected replies retain the draft and show the backend reason instead of a generic busy message.
 - The mobile composer offers browser dictation directly next to Send (44 px touch targets) when `SpeechRecognition` or `webkitSpeechRecognition` is available. Interim and final speech append to the draft without focusing the textarea or sending; tap again to stop. Editing the draft cancels recognition and keeps the edit exactly; the mic becomes available again when the browser confirms the previous session has ended. Errors also retain the microphone claim until that confirmation, so repeated taps cannot overlap recognition sessions. Late results from the cancelled recording are ignored. Errors keep the draft and show a toast. It uses the configured dictation language, falling back to the browser language for automatic detection. Browser dictation and server hands-free conversation cannot record together.
 - Mobile CLI and Chat output show a down-arrow at the right of the key bar while scrolled back. Tap it to return to the latest output; it hides at the bottom and never sends a terminal key.
 - Mobile Settings → Input → Autocorrect and spellcheck enables keyboard correction and sentence capitalization for the terminal prompt and mobile Chat composers by default. Disable it for literal command entry. The preference stays on this device across reloads; file and code editors keep spellcheck off.

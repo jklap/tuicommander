@@ -782,7 +782,7 @@ The Precheck section includes a default-off stdout context checkbox. It edits
 `precheck.inject_output` through the existing store and shared save API, without
 changing prompt text. Disabling and re-enabling the precheck resets the flag.
 
-The mobile session header uses a handset icon and Start/Stop voice call labels for the two-way voice control. The composer dictation button keeps its microphone icon.
+The mobile session header uses a handset icon and Start/Stop voice call labels for the two-way voice control. The phone More menu uses the same Start/Stop voice call labels. The composer dictation button keeps its microphone icon.
 
 ### Mobile composer browser dictation
 

@@ -83,7 +83,7 @@ describe("mobile managed-agent reply", () => {
 		expect(input.value).toBe("Wait for me");
 	});
 
-	it("explains a busy-agent HTTP rejection without losing the answer", async () => {
+	it("explains an unclaimable waiting composer without calling it busy", async () => {
 		rpc.mockRejectedValueOnce(
 			new HttpRpcError("submit_agent_reply", 409, '{"submitted":false,"reason":"agent_not_ready"}'),
 		);
@@ -96,13 +96,32 @@ describe("mobile managed-agent reply", () => {
 		await waitFor(() =>
 			expect(toastAdd).toHaveBeenCalledWith(
 				"Reply not sent",
-				"The agent is busy. Check the session before retrying.",
+				"The agent is waiting for input. Check its question before retrying.",
 				"error",
 				true,
 			),
 		);
 		expect(input.value).toBe("Wait for me");
 	});
+
+	// Catches: replacing an authoritative refusal detail with a generic busy toast.
+	it.each(["awaiting_input", "selection_required", "agent_not_ready"])(
+		"shows the actual %s refusal while retaining the human answer",
+		async (reason) => {
+			const detail = "This question requires an option selection. Open the question and use its answer controls.";
+			rpc.mockRejectedValueOnce(
+				new HttpRpcError("submit_agent_reply", 409, JSON.stringify({ submitted: false, reason, detail })),
+			);
+			const { container } = render(() => (
+				<CommandInput sessionId="waiting" agentType="ego" awaitingInput managedSession />
+			));
+			const input = container.querySelector("textarea")!;
+			await fireEvent.input(input, { target: { value: "My answer" } });
+			await fireEvent.click(screen.getByRole("button", { name: "Send" }));
+			await waitFor(() => expect(toastAdd).toHaveBeenCalledWith("Reply not sent", detail, "error", true));
+			expect(input.value).toBe("My answer");
+		},
+	);
 
 	it("does not submit the same answer twice while the first receipt is pending", async () => {
 		let finish!: (receipt: { status: string; submitted: boolean; acknowledged: boolean }) => void;

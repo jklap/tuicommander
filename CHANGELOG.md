@@ -6,6 +6,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+- Use Start/Stop voice call labels in the phone More menu, consistent with the tablet header (#1979-89e1, #1981-0caf).
+
+- Allow explicit mobile replies while an agent awaits input without requiring an idle shell; keep recognized question controls and show the actual refusal reason without losing the answer (#1980-47b7).
 - Distinguish mobile two-way voice calls with a handset icon; composer dictation keeps its microphone (#1979-89e1).
 
 - Show readable session names and progress text in mobile push notifications; session links remain unchanged (#1978-9cfe).
@@ -34,6 +37,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Bound `tuic bg` completion command labels to one line and 120 characters; keep the full command before job output in the log (#1950-43b7).
 ### Fixed
 - Apply confirmed username and password changes live in headless Settings without reporting a persisted apply failure or restarting the desktop listener; real listener changes keep their restart contract (#1984-3472).
+
+- Preserve unsent mobile answers when opening an ego question card, and exclude startup/help rows from fresh-session free-text questions (#1980-47b7, #1973-3d1b).
 - Preserve original spaces across terminal soft wraps in MCP text, copied selections, ego questions and mobile CLI output; keep hard line breaks (#1977-063c).
 - Preserve Claude /resume session rows and filtered results in mobile CLI output without widening agent-state parsing (#1971-5834).
 - Forward mobile key-bar arrows and Tab to waiting Claude pickers without overwriting the local answer draft (#1972-128e).
@@ -44,6 +49,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Restore Settings text, enabled action and tooltip contrast on themed surfaces (#1966-514a).
 - Let gated HTTP and IPC settings edits confirm and commit through the existing human dialog; keep HTTP approvals stable across TCP ports and require approval for tunnel forward-list replacement (#1787-4778).
 - Omit hidden answer markers when copying terminal selections or AI Chat answers, including mobile and the Answers view. (#1963-c7f6)
+- Recognize narrow ego question selectors and multiple-choice dialogs on mobile; show free-text question cards and keep checkbox toggles separate from submission (#1973-3d1b).
 - Restore contextual help for repository Design Mode and automation scripts in Settings (#1946-5de3).
 - Resolve worktree lifecycle bases for repositories without main/master, and explain when no base branch is available (#1961-bab6).
 - Prevent auto-standby from stranding foreground shell jobs; wake the recorded stopped group and retain a full timeout window after remote input, output viewing, or disconnect (#1962-4182).
