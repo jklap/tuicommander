@@ -26,6 +26,7 @@ import type { AcpToolCall, AcpToolCallContent } from "../../types/acp";
 import { cx } from "../../utils";
 import { writeClipboard } from "../../utils/clipboard";
 import { handleOpenUrl } from "../../utils/openUrl";
+import { stripAnswerMarkers } from "../../utils/stripAnswerMarkers";
 import { TerminalUserText, terminalAnswerRows, terminalToolTitle } from "../Terminal/chatPresentation";
 import { filePathRegex, matchWebUrls } from "../Terminal/linkProvider";
 import { ANSWER_MARKER_RE, answerBlockRanges, type ChatBlock } from "../Terminal/suggestOverlay";
@@ -104,7 +105,7 @@ const ToolActivity: Component<{
 		return `${seconds.toFixed(1)}s`;
 	};
 	return (
-		<details class={s.toolActivity} open={status() === "Failed"}>
+		<details class={s.toolActivity}>
 			<summary class={s.toolActivitySummary}>
 				<span
 					class={cx(
@@ -143,7 +144,7 @@ const ToolActivity: Component<{
 			<div class={s.toolActivityCalls}>
 				<For each={props.calls()}>
 					{(call) => (
-						<details class={s.toolActivityCall} open={call.status === "failed"}>
+						<details class={s.toolActivityCall}>
 							<summary class={s.toolActivityCallSummary}>
 								{/* Keyed on status so a settled call gets a fresh element: WebKit does not
 								    restyle a closed <details>, so swapping the class there left the
@@ -298,12 +299,16 @@ export interface TranscriptProps {
 	children?: JSX.Element;
 }
 
-const CopyButton: Component<{ label: string; text: string }> = (props) => (
+const CopyButton: Component<{ label: string; text: string; answer?: boolean }> = (props) => (
 	<button
 		type="button"
 		class={s.copyAction}
 		aria-label={props.label}
-		onClick={() => void writeClipboard(props.text).catch((error) => appLogger.error("ai-chat", "Copy failed", error))}
+		onClick={() =>
+			void writeClipboard(props.answer ? stripAnswerMarkers(props.text) : props.text).catch((error) =>
+				appLogger.error("ai-chat", "Copy failed", error),
+			)
+		}
 	>
 		Copy
 	</button>
@@ -852,7 +857,7 @@ export const Transcript: Component<TranscriptProps> = (props) => {
 															/>
 														</Show>
 														<div class={s.replyActions}>
-															<CopyButton label="Copy assistant message" text={agent().text} />
+															<CopyButton label="Copy assistant message" text={agent().text} answer />
 															<Show when={props.canForkAtMessage?.() && agent().messageId}>
 																<button
 																	type="button"

@@ -126,7 +126,7 @@ Durable workflow run storage records event history, pinned graph revisions, node
 
 ## 1. Terminal Management
 
-Adjacent `💬` answer paragraphs share one continuous green left bar without a background tint (Paper uses its darker success green for contrast), including blank rows between them. An unmarked prose paragraph after a blank row ends the answer; an uninterrupted indented continuation stays inside. Lists, tables, quotations and fenced code remain attached to the answer. A non-answer output row or prompt ends the region. The CLI blanks only the marker glyph cells; copy, selection and search keep the original text. Chat uses the same answer extent and strips every paragraph marker.
+Adjacent `💬` answer paragraphs share one continuous green left bar without a background tint (Paper uses its darker success green for contrast), including blank rows between them. An unmarked prose paragraph after a blank row ends the answer; an uninterrupted indented continuation stays inside. Lists, tables, quotations and fenced code remain attached to the answer. A non-answer output row or prompt ends the region. The CLI blanks only the marker glyph cells; selection and search retain their grid coordinates. Clipboard copy removes answer-prefix markers through the same helper used by AI Chat answer buttons (including mobile) and selectable Answers text. Inline emoji and fenced examples stay literal. Chat uses the same answer extent and strips every paragraph marker.
 
 Terminal prompt colours apply to Chat user messages only. The CLI grid retains prompt scrollbar ticks and answers-only prompt grouping without tinting prompt rows.
 
@@ -2845,7 +2845,9 @@ cursor persists; live mint deployment remains pending. See
 [Telegram channel](design/telegram-channel.md).
 ### Telegram Settings
 
-Desktop Settings → Telegram and Mobile Settings → Telegram setup provide token replacement/getMe check, one-use ten-minute pairing or explicit private-chat IDs, read-only registered-agent status, enable and safe status. Desktop and `tuic-remote` share one process-held polling lock; the standby takes over when the owner exits. Settings identifies the connected owner and enables pairing only while connected. Tokens stay in owner-only private files and never return to the UI.
+Mobile Settings does not offer Telegram setup.
+
+Desktop Settings → Telegram provides token replacement/getMe check, one-use ten-minute pairing or explicit private-chat IDs, read-only registered-agent status, enable and safe status. Desktop and `tuic-remote` share one process-held polling lock; the standby takes over when the owner exits. Settings identifies the connected owner and enables pairing only while connected. Tokens stay in owner-only private files and never return to the UI.
 
 Connected daemon notices carry their host identity. MCP confirmation responses and ACP permission/elicitation answers return to that daemon; disconnected questions disappear without changing local connections. AI Chat shows remote questions separately, with their ACP connection identity. Remote GitHub transitions fetch PR data from the repository owner, notify once, and do not run local repository automation. GitHub polling also works on the headless daemon. MCP upstream health refreshes use a separate host snapshot rather than this machine’s editable configuration.
 
