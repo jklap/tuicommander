@@ -147,6 +147,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - Keep ego attachment grants after `run` and `resume` so direct launches accept their prompt (#1833).
 
+- Cancel Jira URL resolution end to end, including shared plugin HTTP header and body reads (#1756-4d42).
+
 - Grant Gemini session attachment trust without a folder prompt or global settings changes. Grant ego PTY attachments read-only access in confined sandbox modes (#1833-aa60).
 
 - Add conditional atomic Ego settings batches, executable paths and base-only write-only provider auth actions (#1907-0f9f).
@@ -163,6 +165,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Delete saved AI Chat conversations from the Conversations list with named confirmation and ACP capability gating (#1917).
 
 - Pin AI Chat repository context per conversation and show its configured name color, including parent repository colors for linked worktrees without changing draft parking (#1924-12be).
+- Configure Jira and GitLab default projects in schema-driven plugin settings; explicit account projects retain precedence (#1756-4d42).
 - Diagnose empty or off-screen mobile resume shells through the backend log ring without reloading the page (#1900-5ff6).
 - Preserve a bounded mobile lifecycle trail across reloads and send prior abnormal-document evidence automatically to the backend log ring; acknowledge HTTP 204 log writes so later mobile warnings are not lost. The reported iPhone grey-screen cause remains under investigation (#1900-5ff6).
 - Bind GitHub Work review threads and PR actions to the selected account through core policy, with desktop and HTTP parity (#1693-a816).

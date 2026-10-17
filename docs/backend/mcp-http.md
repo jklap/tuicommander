@@ -2356,6 +2356,8 @@ still requires local or authenticated access. MCP callers can continue to use
 `ui action=confirm proposalId=...` followed by an exact replay with `approval`.
 Tunnel forward lists, including empty replacements, require confirmation like tunnel ports.
 
+Plugin HTTP fetch and cancel routes use the shared `plugin_http` implementation. The optional `requestId` is scoped to the plugin; cancellation drops the entire request future, including authentication preparation, headers and streamed response body.
+
 `session action=force_retry` is a blocking, localhost-only terminal control.
 It resolves the normal session address, requires a live ego recovery snapshot
 and an empty tracked composer, serializes input and submits `/retry` once via

@@ -2144,6 +2144,10 @@ pub fn build_router(state: Arc<AppState>, remote_auth: bool, mcp_enabled: bool) 
             post(plugin_routes::plugin_http_fetch),
         )
         .route(
+            "/api/plugins/{plugin_id}/http/cancel",
+            post(plugin_routes::plugin_http_cancel),
+        )
+        .route(
             "/api/plugins/{plugin_id}/pty/output",
             get(plugin_routes::plugin_pty_output),
         )

@@ -3128,6 +3128,10 @@ The normal Rust suspension path persists `reason: "idle_hibernate"` before endin
 
 The generated settings contract replaces the legacy MCP config tool and also serves HTTP and IPC. Trusted UI opt-in is independent of legacy config enablement. The resolved inventory enables owner transactions and typed workflows, including connection credential reconciliation scoped to one runtime. The inventory gate remains enforced for future additions.
 
+Plugin HTTP requests accept AbortSignal cancellation through both desktop IPC and HTTP, including response body reads. Jira URL resolution forwards cancellation to every detail request.
+
+Jira and GitLab expose a default project in their schema-driven plugin settings page. Jira uses a project ID; GitLab accepts a project path or ID. A project saved for an account in Tasks setup takes precedence. The default applies after the plugin reloads; empty means no fallback project. Account bindings remain in `data/work-items.json`, while these defaults use the settings service in `data/config.json`.
+
 Mobile outage recovery: one connection banner offers immediate retry, automatic session recovery refreshes failed view loads, and retained mobile views preserve drafts without desktop restart advice (#1930-f4c2).
 
 Settings owner validation covers typed shortcut records and bounded pane geometry. Geometry references existing groups; runtime tab membership and focus are not configurable settings (#1914-cdf6).
