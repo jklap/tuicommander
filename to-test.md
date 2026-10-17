@@ -1,3 +1,7 @@
+## Readable mobile pushes (1978-9cfe) — Rust restart required
+
+- [ ] After Boss restarts `make dev` or installs `make build`, receive an awaiting/progress push from a named session and an unnamed agent session. Confirm readable names and progress text, no UUID/tool JSON in the displayed body, and that tapping opens the correct session. No live desktop restart or phone push was performed by this peer.
+
 ## Settings transport confirmation (1787-4778) — Rust restart required
 
 - [ ] After Boss manually restarts `make dev` or installs `make build`, use an isolated instance. Replay a gated HTTP or native settings edit with its `approval` proposal ID and `confirm: true`; approve the existing dialog and verify persistence. Decline another edit and verify no write. Confirm that replacing tunnel forwards, including an empty list, now asks for approval. No live desktop was restarted by this peer.
