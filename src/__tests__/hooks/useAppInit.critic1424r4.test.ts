@@ -45,6 +45,7 @@ async function boot(handleBranchSelect: () => Promise<void>) {
 			startAutoFetch: vi.fn(),
 			startPrNotificationTimer: vi.fn(),
 			loadFontFromConfig: vi.fn(),
+			startDictationSettingsSync: vi.fn(() => vi.fn()),
 			refreshDictationConfig: vi.fn().mockResolvedValue(undefined),
 			startUserActivityListening: vi.fn(),
 		},

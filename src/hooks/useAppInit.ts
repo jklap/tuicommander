@@ -7,22 +7,27 @@ import { presentAutomationNotice } from "../services/automationNotifications";
 import { persistBackgroundSnapshot } from "../services/backgroundSnapshot";
 import { listenForNativeNoticeClicks } from "../services/nativeNotificationNavigation";
 import { activityStore } from "../stores/activityStore";
+import { startAgentSettingsSync } from "../stores/agentConfigs";
 import { appLogger } from "../stores/appLogger";
 import { type CloseRequest, closeDialogStore } from "../stores/closeDialog";
 import { editorTabsStore } from "../stores/editorTabs";
 import { githubStore } from "../stores/github";
 import { globalWorkspaceStore, MANUAL_SCOPE } from "../stores/globalWorkspace";
+import { keybindingsStore } from "../stores/keybindings";
 import { mdTabsStore, resolveRepoForCwd } from "../stores/mdTabs";
 import { notificationsStore } from "../stores/notifications";
 import { paneLayoutStore } from "../stores/paneLayout";
 import { type ProgressRecordedPayload, progressStore } from "../stores/progress";
+import { promptLibraryStore } from "../stores/promptLibrary";
 import { remoteConnectionsStore } from "../stores/remoteConnections";
+import { repoDefaultsStore } from "../stores/repoDefaults";
 import { repoSettingsStore } from "../stores/repoSettings";
 import { placementWorkspaceFor, repositoriesStore, resolveRepoOwner, resolveRepoPathFor } from "../stores/repositories";
 import { settingsStore } from "../stores/settings";
 import { reconcileTerminalOwnership } from "../stores/terminalOwnership";
 import { terminalsStore } from "../stores/terminals";
 import { toastsStore } from "../stores/toasts";
+import { tunnelsStore } from "../stores/tunnels";
 import { uiStore } from "../stores/ui";
 import { workflowRunSignals } from "../stores/workflowRunSignals";
 import { applyAppTheme, listenForThemeChanges, loadThemes } from "../themes";
@@ -149,6 +154,7 @@ export interface AppInitDeps {
 		startPrNotificationTimer: () => void;
 		loadFontFromConfig: () => void;
 		refreshDictationConfig: () => Promise<void>;
+		startDictationSettingsSync: () => () => void;
 		startUserActivityListening: () => void;
 	};
 	applyPlatformClass: () => string;
@@ -327,8 +333,22 @@ function assignSessionToRepoBranch(
 	}
 }
 
+let settingsSyncGeneration = 0;
+const settingsSyncStops = new Set<() => void>();
+function stopSettingsSync(): void {
+	for (const stop of settingsSyncStops) stop();
+	settingsSyncStops.clear();
+}
+
 /** App initialization: hydrate stores, reconnect PTY sessions, restore state */
 export async function initApp(deps: AppInitDeps) {
+	const settingsGeneration = ++settingsSyncGeneration;
+	stopSettingsSync();
+	window.removeEventListener("beforeunload", stopSettingsSync);
+	window.addEventListener("beforeunload", stopSettingsSync, { once: true });
+	function ownSettingsSync(start: () => () => void): void {
+		if (settingsGeneration === settingsSyncGeneration) settingsSyncStops.add(start());
+	}
 	listenForWorkItemMcpRequests();
 	const navigation = performance.getEntriesByType("navigation")[0] as PerformanceNavigationTiming | undefined;
 	appLogger.info(
@@ -407,6 +427,22 @@ export async function initApp(deps: AppInitDeps) {
 		deps.setStatusInfo("Warning: store(s) failed to load");
 	}
 
+	const { mcpPopupStore } = await import("../stores/mcpPopup");
+	for (const start of [
+		() => mcpPopupStore.startRemoteSync(),
+		() => promptLibraryStore.startRemoteSync(),
+		() => repoSettingsStore.startRemoteSync(),
+		() => remoteConnectionsStore.startRemoteSync(),
+		() => tunnelsStore.startRemoteSync(),
+		() => uiStore.startRemoteSync(),
+		startAgentSettingsSync,
+		() => settingsStore.startRemoteSync(),
+		() => notificationsStore.startRemoteSync(),
+		() => repoDefaultsStore.startRemoteSync(),
+		() => keybindingsStore.startRemoteSync(),
+	])
+		ownSettingsSync(start);
+
 	// Remote machines, at startup rather than when the Settings panel opens.
 	// Hydration used to be owned by RemoteMachinesPanel, so until the user walked
 	// into Settings the store was empty and nothing else could tell a live machine
@@ -454,6 +490,7 @@ export async function initApp(deps: AppInitDeps) {
 
 	// Restore pane layout from disk (terminal tabs will be re-linked during terminal restore)
 	await paneLayoutStore.loadFromDisk();
+	ownSettingsSync(() => paneLayoutStore.startRemoteSync());
 
 	// Remove splash screen now that stores are hydrated — prevents flash of empty
 	// state (e.g. "Add Repository" button) before persisted repos have loaded.
@@ -1177,7 +1214,9 @@ export async function initApp(deps: AppInitDeps) {
 	deps.stores.loadFontFromConfig();
 
 	// Load dictation config from disk
-	deps.stores.refreshDictationConfig();
+	void deps.stores.refreshDictationConfig().then(() => {
+		ownSettingsSync(deps.stores.startDictationSettingsSync);
+	});
 
 	// Start tracking user activity (click/keydown) for PR display timeouts
 	deps.stores.startUserActivityListening();

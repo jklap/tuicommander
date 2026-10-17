@@ -126,7 +126,7 @@ Durable workflow run storage records event history, pinned graph revisions, node
 
 ## 1. Terminal Management
 
-Adjacent `💬` answer paragraphs share one continuous green left bar without a background tint (Paper uses its darker success green for contrast), including blank rows between them. An unmarked prose paragraph after a blank row ends the answer; an uninterrupted indented continuation stays inside. Lists, tables, quotations and fenced code remain attached to the answer. A non-answer output row or prompt ends the region. The CLI blanks only the marker glyph cells; selection and search retain their grid coordinates. Clipboard copy removes answer-prefix markers through the same helper used by AI Chat answer buttons (including mobile) and selectable Answers text. Inline emoji and fenced examples stay literal. Chat uses the same answer extent and strips every paragraph marker.
+Adjacent `💬` answer paragraphs share one continuous green left bar without a background tint (Paper uses its darker success green for contrast), including blank rows between them. An unmarked prose paragraph after a blank row ends the answer; an uninterrupted indented continuation stays inside. The CLI gutter joins separate marked answer sections across internal blank rows and indented section headings when a later marked answer closes the gap. Trailing unmarked prose, unmarked list siblings, tools, prompts and status rows stay outside that gutter; extracted Answers and Chat keep their semantic paragraph boundaries. Lists, tables, quotations and fenced code remain attached to the answer. A non-answer output row or prompt ends the region. The CLI blanks only the marker glyph cells; selection and search retain their grid coordinates. Clipboard copy removes answer-prefix markers through the same helper used by AI Chat answer buttons (including mobile) and selectable Answers text. Inline emoji and fenced examples stay literal. Chat uses the same answer extent and strips every paragraph marker.
 
 Terminal prompt colours apply to Chat user messages only. The CLI grid retains prompt scrollbar ticks and answers-only prompt grouping without tinting prompt rows.
 
@@ -3174,6 +3174,10 @@ Telegram Settings includes a newest-first, process-local log of the last 20 inbo
 Telegram replies now use TUIC-driven receipt (👀), working (👨‍💻), waiting (🤔), answered (👍) and failed (👎) reactions. An ephemeral native draft shows Italian status lines or unapproved agent previews; it refreshes while work continues and the final reply replaces it. Acknowledgement of work requires inbox Read and a new recipient turn. PTY intent/activity and AI Chat assistant chunks share request correlation; finish remains authoritative after draft retirement. Telegram-mail-woken AI Chat turns automatically send their settled assistant text if finish has not answered. Queue and no-reply notices occur at ten minutes and sixty seconds after Read respectively. Restart keeps no request history. Phone rendering requires a live check after the backend restart.
 
 Terminal text fidelity: soft-wrap rows preserve original spaces in session text, mobile CLI output, copied selections and ego question labels; explicit hard breaks remain. Chat uses its separate transcript source.
+
+### Settings MCP live refresh
+
+Durable settings-facade writes publish a value-free process-local generation to desktop and SSE clients. Open settings consumers reread affected sections without saving; dirty edits survive, stale reads are discarded, and reconnect refetches snapshots. Vault-only credential writes and persisted apply failures also invalidate readers. Remote notices remain scoped to their owning connection.
 
 ### CircleCI Settings owner (#1991-bd88)
 

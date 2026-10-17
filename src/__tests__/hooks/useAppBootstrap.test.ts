@@ -29,7 +29,10 @@ vi.mock("@tauri-apps/api/app", () => ({ getVersion: mockGetVersion }));
 vi.mock("../../deep-link-handler", () => ({ initDeepLinkHandler: mockDeepLink }));
 vi.mock("../../invoke", () => ({ invoke: mockInvoke }));
 vi.mock("../../platform", () => ({ applyPlatformClass: vi.fn(() => "macos") }));
-vi.mock("../../transport", () => ({ isTauri: () => mockIsTauri.value }));
+vi.mock("../../transport", () => ({
+	isTauri: () => mockIsTauri.value,
+	subscribeEvents: vi.fn().mockResolvedValue(vi.fn()),
+}));
 vi.mock("../../hooks/useAppInit", () => ({ initApp: mockInitApp }));
 vi.mock("../../hooks/useAutoFetch", () => ({ startAutoFetch: vi.fn() }));
 vi.mock("../../stores/appLogger", () => ({ appLogger: mockLogger }));

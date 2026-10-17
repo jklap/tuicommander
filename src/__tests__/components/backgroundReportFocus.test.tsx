@@ -122,6 +122,7 @@ it("background_report_open_and_update_preserve_terminal_input_focus — catches:
 			startAutoFetch: noop,
 			startPrNotificationTimer: noop,
 			loadFontFromConfig: noop,
+			startDictationSettingsSync: vi.fn(() => vi.fn()),
 			refreshDictationConfig: vi.fn().mockResolvedValue(undefined),
 			startUserActivityListening: noop,
 		},

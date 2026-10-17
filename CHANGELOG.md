@@ -8,6 +8,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - Preserve unrelated repo-root tabs when a worktree is removed or recycled; terminal placement and cleanup follow cwd instead of stale workspace membership (#1999-95b0).
 - Keep the selected workspace's active tab and pane layout consistent when saved tabs are restored to another workspace by cwd (#1999-95b0).
+### Added
+
+- Live Settings refresh after MCP writes, with value-free change generations, dirty-edit preservation and reconnect recovery (#1788-2163).
+- Do not restore ego question badges or notification sounds from answered selectors retained above a newer composer (#1997-eb30).
+
+- Keep the CLI answer gutter continuous across internal blank rows and section headings between marked answers, without including trailing unmarked prose or tool output (#1998-d826).
 
 - Discover and manage the write-only CircleCI credential through the shared Settings owner across MCP, IPC and HTTP (#1991-bd88).
 

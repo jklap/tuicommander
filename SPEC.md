@@ -1201,6 +1201,10 @@ The session detail CLI/Chat projection uses the same TerminalChatTranscript and 
 
 Mobile Settings does not mount or offer Telegram setup. Desktop Settings retains the shared Telegram configuration controls and existing backend transports.
 
+### Settings MCP live refresh contract
+
+The shared settings facade publishes `{section, generation, persisted, applied}` after durable writes, including vault-only and partial-persist outcomes. The monotonic counter is process-local, is never persisted, and does not replace owner CAS revisions or hash credentials. Desktop and SSE carry the same value-free payload. Frontend read/apply coordination preserves dirty intent and acknowledged baselines, suppresses obsolete writes and stale reads, scopes remote events by connection, and refetches active owners after reconnect.
+
 ### CircleCI Settings owner (#1991-bd88)
 
 Settings discovery includes the write-only machine setting `circleci.token`.
