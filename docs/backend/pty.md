@@ -41,6 +41,17 @@ this lifecycle through spawn binding, cleanup, reconnect and session publication
 It fails on the pre-repair revision `1137eeb6f`. This proves a reachable removal
 path, not that this sequence caused the historical incident in story 1673.
 
+## Agent return to the shell
+
+The backend foreground observation transition owns exit cleanup for desktop,
+browser and headless clients. When an observed agent identity is revoked, it
+clears `agent_intent` and `current_task`. If the agent left the alternate screen
+active, the same transition flushes buffered synchronized output and restores the
+primary grid with display-only exit sequences. It marks the frame ticker dirty;
+HTTP terminal-line reads use the restored grid without a mounted desktop view.
+No recovery sequence is written to PTY stdin. A stale foreground observation,
+an unobserved startup preset, or a temporary helper does not trigger cleanup.
+
 ## Session Lifecycle
 
 ```
@@ -344,7 +355,7 @@ Foreground agent detection is shared by the desktop command, HTTP foreground end
 
 A direct agent has no shell to return to. Its identity remains valid while its root lives; a foreground child (including a nested shell, git or an editor) holds unattended submit and mail wake until the root regains the foreground. Missing root role, PID or foreground evidence also holds input. Mirrors without the owning daemon's answer never infer a role. A different discovered agent drops preset provenance. Creation seeds provenance synchronously; delayed lifecycle events cannot re-arm an observed identity.
 
-OS samples receive a generation under the session lock. Older samples cannot overwrite a newer identity or foreground-input hold; screen reclassification also verifies ownership of its generation. Identity changes reclassify the existing terminal screen so a quiet composer does not retain a shell-era cache. The refresh return value is the effective foreground detection, which can differ from the retained startup preset; lifecycle consumers read stored state.
+OS samples receive a generation under the session lock. Older samples cannot overwrite a newer identity or foreground-input hold; screen reclassification also verifies ownership of its generation. Pending shell-exit recovery can finish after a newer observation if both observations still identify no agent; it remains pinned against a newly discovered live agent. Identity changes reclassify the existing terminal screen so a quiet composer does not retain a shell-era cache. The refresh return value is the effective foreground detection, which can differ from the retained startup preset; lifecycle consumers read stored state.
 
 The output reader checks the grid's alternate-screen state for agent sessions. On the first entry per session, it logs a warning with the agent type and detected CLI version. This catches agent versions or launch paths that bypass the native-scrollback launch defaults without spamming on repaints.
 
@@ -953,7 +964,9 @@ The final check also reads current session visibility under that lock, so Show
 invalidates a standby tick selected while the desktop was hidden.
 Disconnect releases only that observer and starts a full standby-timeout grace
 window. HTTP output reads and input also reset remote activity and wake a parked
-session under the same visibility lock. Recent user input blocks standby even if
+session under the same visibility lock. Desktop raw input uses that same activity
+and wake path before writing bytes, so an already parked shell can recover even
+without another tab-visibility transition. Recent user input blocks standby even if
 the parsed shell idle timestamp is older. These activity clocks do not change the
 agent's semantic busy/idle state. Showing the desktop restores saved visibility
 and SIGCONTs only terminals that are visible again.
@@ -1006,6 +1019,30 @@ share one backend transaction. It
 requires an ego recovery snapshot and an empty tracked composer, holds the input
 transaction, and uses the normal agent-aware command writer to submit `/retry`
 once (no automatic retry or queue). See output-parser.md for the wire contract.
+
+### ego transcript Chat view
+
+The foreground ego PID is matched to `lease.pid` in the process-owned
+`EGO_HOME/sessions`; no newest-file fallback is used. A failed environment read
+fails closed rather than selecting the host's default ego store. The configured
+absolute ego executable reads the bound session through the published local
+transcript v1 command, `ego export SESSION --format transcript --after SEQ`.
+No private event-log layout is consumed. Missing binding or an unreadable export
+is returned as `not_bound` so both frontend hosts retain the reason.
+
+`chat_view::View::advance` invokes this incremental source from the existing
+ticker. It checks the header version/session before accepting records, bounds
+each record to one MiB and each export to ten seconds, and keeps the existing
+2000-entry/four-MiB view log. Session-local sequence gaps are valid. Completed
+messages are authoritative; preview deltas are omitted to avoid duplicate full
+answers. Tool starts/results share their item ID. Goal continuations and
+compaction checkpoints are notices rather than human input. Rebinding after
+compaction resets the shared epoch and adapter cursor. No separate follow
+process, channel, ACP connection or browser event stream is added.
+
+The real CLI loopback recording and provenance are in
+`fixtures/chat_view/ego/README.md`. This requires an ego version with the published
+transcript v1 contract; older executables return an unavailable reason.
 
 ### Exact soft-wrap text boundaries
 

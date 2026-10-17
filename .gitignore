@@ -49,10 +49,14 @@ ideas
 benchmarks
 .mdkb
 scripts/*
+!scripts/github-work-live-check.mjs
+!scripts/github-work-live-check.test.mjs
 !scripts/check-mobile-session-chat-layout.mjs
+!scripts/check-mobile-jump-layout.mjs
 !scripts/fixtures/
 scripts/fixtures/*
 !scripts/fixtures/mobile-session-chat-layout.html
+!scripts/fixtures/mobile-jump-layout.html
 !scripts/generate-story-types.py
 !scripts/agent_capture/
 !scripts/replay-oracle.sh

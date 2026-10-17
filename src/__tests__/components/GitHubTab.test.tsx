@@ -83,6 +83,7 @@ const h = vi.hoisted(() => {
 		}
 	});
 	return {
+		events: { handlers: {} as Record<string, (payload: unknown) => void> },
 		rpc,
 		defaultRpc: rpc.getMockImplementation()!,
 		accounts,
@@ -97,7 +98,14 @@ const h = vi.hoisted(() => {
 	};
 });
 
-vi.mock("../../transport", () => ({ rpc: h.rpc, isTauri: () => true }));
+vi.mock("../../transport", () => ({
+	rpc: h.rpc,
+	isTauri: () => true,
+	subscribeEvents: vi.fn(async (handlers) => {
+		h.events.handlers = handlers;
+		return () => {};
+	}),
+}));
 vi.mock("../../stores/repositories", () => ({
 	repositoriesStore: {
 		get state() {
@@ -346,6 +354,19 @@ describe("GitHubTab — CircleCI token", () => {
 	beforeEach(async () => {
 		resetState();
 		GitHubTab = await loadTab();
+	});
+
+	// Catches: a newly merged credential owner staying stale in the open Settings page.
+	it("refreshes CircleCI status after an external settings write without saving a token draft", async () => {
+		const { findByText, getByPlaceholderText } = render(() => <GitHubTab />);
+		await findByText("Not configured");
+		const input = getByPlaceholderText("CircleCI read-only token") as HTMLInputElement;
+		fireEvent.input(input, { target: { value: "unfinished token draft" } });
+		h.circleCiStatus = { configured: true, source: "vault" };
+		h.events.handlers["settings-changed"]({ section: "circleci", generation: 1, persisted: true, applied: true });
+		expect(await findByText("Configured (vault)")).toBeTruthy();
+		expect(input.value).toBe("unfinished token draft");
+		expect(h.rpc).not.toHaveBeenCalledWith("circleci_set_token", expect.anything());
 	});
 
 	it("shows configured status and removes a stored token explicitly", async () => {

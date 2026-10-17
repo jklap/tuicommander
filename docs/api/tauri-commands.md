@@ -1036,3 +1036,16 @@ Existing input/output device enumeration returns the same device objects on succ
 `force_retry_provider_recovery_command(sessionId)` submits `/retry` once through the
 shared ego recovery transaction. It refuses a non-empty tracked composer and returns
 the error to the caller. HTTP equivalent: `POST /sessions/{id}/force-retry`.
+
+### CircleCI credential settings (#1991-bd88)
+
+The machine-scoped `circleci.token` descriptor is write-only. Read
+`{action:"get",target:{kind:"machine"},store:"circleci",paths:["/token"]}`
+through MCP `settings`, IPC `settings_action`, or HTTP `POST /settings/action`.
+Readback returns only `stored.status` and `effective.status`: `set`, `unset`, or
+`unavailable`. It describes the stored TUIC token, not environment or CLI fallbacks.
+Use `{action:"perform",target:{kind:"machine"},store:"circleci",operation:{action:"set_token",token:"..."}}`
+or `operation:{action:"clear_token"}`. Both actions use the existing CircleCI
+owner; replies contain only token presence. Clearing the stored token does not
+remove `CIRCLE_TOKEN` or the CircleCI CLI configuration. The Git & GitHub page
+continues to show the effective token source. No transport returns the token.

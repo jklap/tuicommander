@@ -640,3 +640,11 @@ Settings search includes page titles and shared card controls. Page-title result
 ### Changes made through MCP
 
 An open Settings page refreshes after a durable MCP settings write. Unsaved fields stay in place; if another writer changes the same field, a warning asks you to review your edit before saving again. Incoming changes do not run startup migrations or save the snapshot back to the backend. A reconnected browser rereads its active settings sections, including after a server restart. Remote-machine changes refresh only that machine's editors, not local settings. If a write persisted but its runtime apply failed, Settings still rereads the saved state; the caller must follow the returned recovery action rather than blindly replay the write.
+
+### CircleCI Settings owner (#1991-bd88)
+
+Settings discovery includes the write-only machine setting `circleci.token`.
+Typed `set_token` and `clear_token` actions share the existing token owner across
+MCP, IPC and HTTP. Readback reports stored presence only (`set`, `unset`,
+`unavailable`), never a secret. Git & GitHub keeps its effective-source status;
+removing a stored token leaves environment and CircleCI CLI fallbacks unchanged.

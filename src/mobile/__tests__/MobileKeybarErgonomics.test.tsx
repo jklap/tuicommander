@@ -55,6 +55,30 @@ describe("mobile terminal controls", () => {
 		expect(voice.toggle).toHaveBeenCalledOnce();
 	});
 
+	// Catches: the responsive overflow action loses the call icon or its toggle state.
+	it.each([false, true])("keeps the handset action in More when armed=%s", (armed) => {
+		voice.available = true;
+		voice.armed = armed;
+		render(() => (
+			<SessionDetailScreen
+				subscribeChatWake={() => () => {}}
+				session={{ session_id: "voice-menu", cwd: "/repo", worktree_path: null, worktree_branch: null }}
+				sessionExists
+				onBack={() => {}}
+				onOpenFiles={() => {}}
+			/>
+		));
+		fireEvent.click(screen.getByRole("button", { name: "More session actions" }));
+		const call = screen
+			.getAllByRole("button", { name: armed ? "Stop voice call" : "Start voice call" })
+			.find((button) => !button.closest("header"))!;
+		expect(call.querySelector('svg[aria-hidden="true"]')).not.toBeNull();
+		expect(call.getAttribute("aria-pressed")).toBe(String(armed));
+		fireEvent.click(call);
+		expect(voice.toggle).toHaveBeenCalledOnce();
+		expect(screen.getByRole("button", { name: "More session actions" }).getAttribute("aria-expanded")).toBe("false");
+	});
+
 	it("shows Claude's actual choices without generic Yes or No buttons", () => {
 		const session: SessionInfo = {
 			session_id: "claude-question",

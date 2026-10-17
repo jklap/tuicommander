@@ -313,3 +313,13 @@
     cursor: pointer;
   }
 }
+
+/* Anchor composer sheets above both input and keys, regardless of keybar height. */
+.controls {
+  position: relative;
+  flex-shrink: 0;
+}
+
+.controls > :last-child {
+  position: static;
+}

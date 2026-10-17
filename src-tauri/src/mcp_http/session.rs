@@ -2076,31 +2076,22 @@ use crate::chrome::find_chrome_cutoff;
 /// Borrows: it reports a cutoff and reads nothing else, so taking the rows by
 /// value only forced every caller to clone a screen it already had in hand.
 fn trim_screen_chrome(rows: &[String]) -> TrimResult {
-    // The resume picker owns the screen: its search-box border and highlighted
-    // session are not composer chrome. Keep this presentation exception here;
-    // the shared parser cutoff must still exclude the bottom input zone.
-    let resume_picker = rows
+    // A modal's selection marker and rules are content, not composer chrome.
+    // Its active interaction footer owns the bottom of the screen regardless
+    // of the dialog title. Only presentation uses this rule: parser cutoffs
+    // must still exclude the input zone. A later composer supersedes the footer.
+    let interaction_footer = rows
         .iter()
-        .rposition(|row| {
-            let title = row.trim();
-            title == "Resume session" || title.starts_with("Resume session (")
-        })
-        .is_some_and(|title| {
-            let modal = &rows[title + 1..];
-            modal.iter().any(|row| row.trim_start().starts_with("│ ⌕ "))
-                && modal
-                    .iter()
-                    .any(|row| row.contains("Type to search") || row.contains("Type to Search"))
-                && modal
-                    .iter()
-                    .rev()
-                    .find(|row| !row.trim().is_empty())
-                    .is_some_and(|row| {
-                        row.trim_end().ends_with("Esc to cancel")
-                            || row.trim_end().ends_with("Esc to clear")
-                    })
+        .rev()
+        .find(|row| !row.trim().is_empty())
+        .map(|row| row.trim())
+        .is_some_and(|footer| {
+            (footer.contains("Esc to cancel") || footer.contains("Esc to clear"))
+                && (footer.starts_with("Enter to ")
+                    || footer.starts_with("Esc to ")
+                    || footer.contains(" · "))
         });
-    if resume_picker {
+    if interaction_footer {
         return TrimResult { cutoff: rows.len() };
     }
     let refs: Vec<&str> = rows.iter().map(|s| s.as_str()).collect();
@@ -3779,6 +3770,100 @@ mod tests {
         let mut dismissed = dialog_rows.unwrap();
         dismissed.extend(ready_rows.expect("captured ready composer"));
         assert!(trim_screen_chrome(&dismissed).cutoff < dismissed.len());
+    }
+
+    // Catches: selection markers and modal rules mistaken for composer chrome,
+    // dropping the options from both mobile screen transports.
+    fn assert_captured_mobile_dialog(capture: &[u8], expected: &[&str]) {
+        let capture = crate::pty_capture::decode_capture(capture).expect("real Claude capture");
+        let (rows, cols) = capture.geometry.expect("captured geometry");
+        let mut grid = crate::state::VtLogBuffer::new(rows, cols, 2000);
+        let mut utf8 = crate::state::Utf8ReadBuffer::new();
+        let mut escape = crate::state::EscapeAwareBuffer::new();
+        let mut observed = false;
+        for record in capture.records {
+            if record.direction != crate::pty_capture::CaptureDirection::Output {
+                continue;
+            }
+            let data = utf8.push(&record.data);
+            let data = escape.push(&data);
+            let (clean, _) = crate::state::strip_kitty_sequences(&data);
+            grid.process(clean.as_bytes());
+            let rows = grid.screen_rows();
+            if !expected
+                .iter()
+                .all(|text| rows.iter().any(|row| row.contains(text)))
+            {
+                continue;
+            }
+            observed = true;
+            let visible = &rows[..trim_screen_chrome(&rows).cutoff];
+            let streamed = poll_screen(&grid, 0).screen.expect("log-WS screen");
+            for text in expected {
+                assert!(
+                    visible.iter().any(|row| row.contains(text)),
+                    "HTTP screen lost {text:?}: {visible:#?}"
+                );
+                assert!(
+                    streamed.iter().any(|row| row.text().contains(text)),
+                    "log-WS screen lost {text:?}"
+                );
+            }
+            // Old modal rows retained above a new composer must not bypass trim.
+            let mut dismissed = rows;
+            dismissed.extend([
+                "────────────────────".into(),
+                "❯ ".into(),
+                "────────────────────".into(),
+                "status".into(),
+            ]);
+            assert!(trim_screen_chrome(&dismissed).cutoff < dismissed.len());
+        }
+        assert!(
+            observed,
+            "capture must contain the complete dialog: {expected:?}"
+        );
+    }
+
+    #[test]
+    fn captured_mobile_trust_dialog_keeps_options() {
+        assert_captured_mobile_dialog(
+            include_bytes!("../fixtures/agent_prompts/claude-mobile-startup-1987.tcap"),
+            &[
+                "Security guide",
+                "No, exit",
+                "Yes, I trust this folder",
+                "Enter to confirm",
+            ],
+        );
+    }
+
+    #[test]
+    fn captured_mobile_imports_dialog_keeps_options() {
+        assert_captured_mobile_dialog(
+            include_bytes!("../fixtures/agent_prompts/claude-mobile-startup-1987.tcap"),
+            &[
+                "Allow external CLAUDE.md file imports?",
+                "No, disable external imports",
+                "Yes, allow external imports",
+                "Enter to confirm",
+            ],
+        );
+    }
+
+    #[test]
+    fn captured_mobile_permission_dialog_keeps_options() {
+        assert_captured_mobile_dialog(
+            include_bytes!("../fixtures/agent_prompts/claude-mobile-permission-1987.tcap"),
+            &[
+                "Do you want to proceed?",
+                "1. Yes",
+                "2. Yes, and always allow access to",
+                "3. Yes, and switch to auto mode",
+                "4. No",
+                "Esc to cancel · Tab to amend",
+            ],
+        );
     }
 
     // --- Log-WS screen polling (604-cb45 F14) ---

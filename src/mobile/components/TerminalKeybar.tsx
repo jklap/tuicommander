@@ -8,8 +8,6 @@ import type { ComposerInputKey } from "./syncGuards";
 import styles from "./TerminalKeybar.module.css";
 
 interface TerminalKeybarProps {
-	showScrollToBottom?: boolean;
-	onScrollToBottom?: () => void;
 	sessionId: string;
 	agentType?: string | null;
 	awaitingInput?: boolean;
@@ -197,19 +195,6 @@ export function TerminalKeybar(props: TerminalKeybarProps) {
 					)}
 				</For>
 			</div>
-			<Show when={props.showScrollToBottom}>
-				<button
-					type="button"
-					class={`${styles.key} ${styles.jumpBottom}`}
-					aria-label="Scroll to bottom"
-					onMouseDown={(event) => event.preventDefault()}
-					onClick={() => props.onScrollToBottom?.()}
-				>
-					<svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
-						<path d="M11 4h2v12.17l4.59-4.58L19 13l-7 7-7-7 1.41-1.41L11 16.17z" />
-					</svg>
-				</button>
-			</Show>
 		</div>
 	);
 }

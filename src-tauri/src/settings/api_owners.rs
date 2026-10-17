@@ -12,6 +12,9 @@ pub enum OwnerAction {
     Connections {
         operation: crate::settings::remote::ConnectionCredentialAction,
     },
+    Circleci {
+        operation: crate::settings::circleci::CircleCiAction,
+    },
     Telegram {
         operation: crate::settings::telegram::TelegramAction,
     },
@@ -34,6 +37,7 @@ impl OwnerAction {
         match self {
             Self::GithubAccounts { .. } => "github_accounts",
             Self::Connections { .. } => "connections",
+            Self::Circleci { .. } => "circleci",
             Self::Telegram { .. } => "telegram",
             Self::Upstreams { .. } => "upstreams",
             Self::Ego { .. } => "ego",
@@ -45,7 +49,10 @@ impl OwnerAction {
     // These owner APIs return presence/readback rather than a transaction receipt.
     // Their successful return follows the durable owner write, including vault-only edits.
     pub(super) fn success_is_durable(&self) -> bool {
-        matches!(self, Self::Connections { .. } | Self::Telegram { .. })
+        matches!(
+            self,
+            Self::Connections { .. } | Self::Circleci { .. } | Self::Telegram { .. }
+        )
     }
 }
 
@@ -64,6 +71,9 @@ impl Settings {
                 tokio::task::spawn_blocking(move || owner.perform(operation))
                     .await
                     .map_err(|_| Error::new("connections", "store_failed"))?
+            }
+            OwnerAction::Circleci { operation } => {
+                crate::settings::circleci::perform(operation).await
             }
             OwnerAction::Telegram { operation } => {
                 crate::settings::telegram::TelegramOwnerSettings::default()

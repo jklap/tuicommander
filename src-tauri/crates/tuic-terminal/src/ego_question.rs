@@ -10,10 +10,15 @@ fn footer_end(rows: &[String], expected: &str) -> Option<usize> {
     let expected: String = expected.chars().filter(|ch| !ch.is_whitespace()).collect();
     (0..rows.len()).rev().find(|&start| {
         let mut footer = String::new();
-        for row in rows.iter().skip(start).take(4) {
+        for (offset, row) in rows.iter().skip(start).take(4).enumerate() {
             footer.extend(row.chars().filter(|ch| !ch.is_whitespace()));
             if footer == expected {
-                return true;
+                // The selector footer closes the active surface. Ego can leave
+                // answered selectors above a newer composer after scrolling;
+                // those historical footers must not re-arm awaiting on Enter.
+                return rows[start + offset + 1..]
+                    .iter()
+                    .all(|row| row.trim().is_empty());
             }
             if !expected.starts_with(&footer) {
                 return false;
@@ -211,6 +216,52 @@ mod tests {
             parse_ego_question(&rows(&["Question?", "> 1. First", "3. Third", FOOTER])).is_none()
         );
     }
+    /// Catches: answered selector history reappearing as a question on composer repaint.
+    #[test]
+    fn ego_question_rejects_a_footer_above_newer_output() {
+        for (options, footer) in [
+            (["> 1. First", "  2. Second"], FOOTER),
+            (["> [x] 1. First", "  [ ] 2. Second"], MULTIPLE_FOOTER),
+        ] {
+            for newer in [
+                "◓ Working 1s · Esc to interrupt",
+                "> next prompt",
+                "gpt-6.1-sol · medium",
+            ] {
+                let mut screen = rows(&["Question?", options[0], options[1], footer, ""]);
+                screen.push(newer.to_owned());
+                screen.push(">".to_owned());
+                assert!(
+                    parse_ego_question(&screen).is_none(),
+                    "historical {footer} above {newer}"
+                );
+            }
+        }
+    }
+
+    /// Catches: active wrapped footers being rejected with historical ones.
+    #[test]
+    fn ego_question_keeps_an_active_wrapped_footer_with_blank_tail() {
+        for (options, footer) in [
+            (["> 1. First", "  2. Second"], FOOTER),
+            (["> [x] 1. First", "  [ ] 2. Second"], MULTIPLE_FOOTER),
+        ] {
+            let (left, right) = footer.split_at(17);
+            assert!(
+                parse_ego_question(&rows(&[
+                    "Question?",
+                    options[0],
+                    options[1],
+                    left,
+                    right,
+                    "",
+                    "   ",
+                ]))
+                .is_some()
+            );
+        }
+    }
+
     /// Catches: checkbox state being dropped or interpreted as a single-answer selector.
     #[test]
     fn ego_multiple_question_preserves_checks_and_requires_explicit_submit() {
