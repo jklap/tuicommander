@@ -97,6 +97,19 @@ describe("mobile viewed agent exit", () => {
 		expect(rpc.mock.calls.some(([method]) => method === "submit_agent_reply")).toBe(false);
 	});
 
+	// Catches: a delayed pre-exit GET resurrects question controls after the WS has released the agent.
+	it("late_poll_does_not_restore_question_after_websocket_agent_exit", () => {
+		const view = mount();
+		// GET /sessions captures the question, then the socket delivers agent exit
+		// before that independent HTTP response reaches the phone.
+		const preExitSnapshot = { ...waiting, last_activity_ms: 1 };
+		stream.push({ ...shell, last_activity_ms: 3 });
+		expect(view.queryByRole("button", { name: "Open ego question" })).toBeNull();
+		view.poll(preExitSnapshot);
+		expect(view.queryByRole("button", { name: "Open ego question" })).toBeNull();
+		expect(view.getByLabelText("Terminal logo")).toBeTruthy();
+	});
+
 	// Catches: merging a complete sparse WS snapshot resurrects omitted agent fields from an old poll.
 	it("websocket_shell_snapshot_does_not_restore_omitted_agent_fields", () => {
 		const view = mount();
