@@ -5516,3 +5516,44 @@ async fn settings_gated_changed_replay_does_not_persist() {
         gated_settings_transport_roundtrip(http, true, true).await;
     }
 }
+
+// Catches: scoped remote inventory is dispatched to the output/submit-only proxy.
+#[tokio::test]
+async fn scoped_remote_session_inventory_does_not_use_the_control_proxy() {
+    let state = test_state();
+    let id = uuid::Uuid::new_v4().to_string();
+    state
+        .remote
+        .force_connected_for_test("mint", "http://127.0.0.1:9", None);
+    crate::remote_mirror::store_seed_for_test(
+        &state,
+        "mint",
+        vec![super::super::types::SessionInfo {
+            session_id: id.clone(),
+            alias: Some("pe-3".into()),
+            ..Default::default()
+        }],
+    );
+    for reference in [
+        format!("mint/{id}"),
+        "mint/pe-3".into(),
+        "pe-3".into(),
+        format!("mint/{}", &id[..8]),
+    ] {
+        let rows = handle_mcp_tool_call(
+            &state,
+            "127.0.0.1:12345".parse().unwrap(),
+            "session",
+            &serde_json::json!({"action":"list", "session_id":reference, "compact":true}),
+            None,
+        )
+        .await;
+        assert!(
+            rows.is_array(),
+            "scoped inventory must return the advertised remote session: {rows}"
+        );
+        assert_eq!(rows.as_array().unwrap().len(), 1);
+        assert_eq!(rows[0]["session_id"], id);
+        assert_eq!(rows[0]["connection_id"], "mint");
+    }
+}

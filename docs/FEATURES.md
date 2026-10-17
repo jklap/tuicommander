@@ -3195,6 +3195,14 @@ MCP, IPC and HTTP. Readback reports stored presence only (`set`, `unset`,
 `unavailable`), never a secret. Git & GitHub keeps its effective-source status;
 removing a stored token leaves environment and CircleCI CLI fallbacks unchanged.
 
+### Bounded MCP reads
+
+Session and peer inventories support scoped lookup and `compact=true`, including
+explicit unknown state, activity age and omitted fields. Inbox and terminal
+output support opt-in UTF-8 byte-budget pages with immutable, lossless
+continuations. The envelope counts toward the budget; the inbox cursor advances
+only after the final chunk. HTTP MCP-compatible output shares the same boundary.
+
 ### Opt-in frame workload evidence
 
 The debug frame recorder retains bounded real grid arrivals and immutable paint inputs, dumps on a recovered freeze/long paint or on demand, and replays production grid painting with per-frame timings. It is off by default, requires perfDebug, and stores sensitive terminal content separately from the numeric journal. See [Persistent stall evidence](backend/stall-journal.md). The synthetic smoke fixture is not a real-stall RED.
