@@ -1,4 +1,5 @@
 import { type Component, createEffect, createMemo, For, on, Show } from "solid-js";
+import { stripAnswerMarkers } from "../../utils/stripAnswerMarkers";
 import type { AnswersTurn } from "./answersTurn";
 
 interface AnswersPanelProps {
@@ -78,7 +79,7 @@ export const AnswersPanel: Component<AnswersPanelProps> = (props) => {
 										"border-left": "3px solid var(--answer-rule)",
 									}}
 								>
-									{answer}
+									{stripAnswerMarkers(answer)}
 								</div>
 							)}
 						</For>
