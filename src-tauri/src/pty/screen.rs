@@ -1678,12 +1678,14 @@ pub(super) fn apply_foreground_agent_observation(
     // Use the reader's grid -> silence lock order; future chunks share the cache.
     if identity_changed && let Some(vt) = state.grid.vt_log_buffers.get(session_id) {
         let mut vt = vt.lock();
-        // A newer accepted snapshot owns the cache too. Keep the observation
-        // pinned while recovering the display so an older shell result cannot
-        // reset the alternate screen of a newly discovered agent.
+        // Keep the observation pinned while recovering the display so an older
+        // shell result cannot reset a newly discovered agent. A newer shell
+        // observation must still let the pending shell recovery finish.
         {
             let entry = state.session_maps.session_states.get(session_id)?;
-            if entry.foreground_probe_generation != generation {
+            if entry.foreground_probe_generation != generation
+                && (effective.is_some() || entry.agent_type.is_some())
+            {
                 return entry.foreground_probe_result.clone();
             }
             if entry.agent_type.is_none() && vt.is_alternate_screen() {
