@@ -1,3 +1,7 @@
+## Agent exit backend cleanup (1990-66ac) — Rust restart required
+
+- [ ] After Boss manually restarts `make dev` or installs `make build`, exit Claude from a mobile-only terminal. Confirm shell output replaces the old agent screen in both the open view and a fresh page, and the session card drops the old intent/task. Repeat with an agent that restores its alternate screen normally. No live desktop was restarted by this peer.
+
 ## Desktop standby input recovery (1986-1236) — Rust restart required
 
 - [ ] After Boss manually restarts `make dev` or installs `make build`, let an isolated plain-shell terminal enter standby after its foreground child exits. Confirm desktop typing wakes it and executes the command without switching tabs again. Repeat by viewing the terminal and by sending from the phone. The running backend was not restarted; the real-PTY regression is not evidence that Boss's current binary loaded this fix.

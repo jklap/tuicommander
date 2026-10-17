@@ -41,6 +41,17 @@ this lifecycle through spawn binding, cleanup, reconnect and session publication
 It fails on the pre-repair revision `1137eeb6f`. This proves a reachable removal
 path, not that this sequence caused the historical incident in story 1673.
 
+## Agent return to the shell
+
+The backend foreground observation transition owns exit cleanup for desktop,
+browser and headless clients. When an observed agent identity is revoked, it
+clears `agent_intent` and `current_task`. If the agent left the alternate screen
+active, the same transition flushes buffered synchronized output and restores the
+primary grid with display-only exit sequences. It marks the frame ticker dirty;
+HTTP terminal-line reads use the restored grid without a mounted desktop view.
+No recovery sequence is written to PTY stdin. A stale foreground observation,
+an unobserved startup preset, or a temporary helper does not trigger cleanup.
+
 ## Session Lifecycle
 
 ```
@@ -344,7 +355,7 @@ Foreground agent detection is shared by the desktop command, HTTP foreground end
 
 A direct agent has no shell to return to. Its identity remains valid while its root lives; a foreground child (including a nested shell, git or an editor) holds unattended submit and mail wake until the root regains the foreground. Missing root role, PID or foreground evidence also holds input. Mirrors without the owning daemon's answer never infer a role. A different discovered agent drops preset provenance. Creation seeds provenance synchronously; delayed lifecycle events cannot re-arm an observed identity.
 
-OS samples receive a generation under the session lock. Older samples cannot overwrite a newer identity or foreground-input hold; screen reclassification also verifies ownership of its generation. Identity changes reclassify the existing terminal screen so a quiet composer does not retain a shell-era cache. The refresh return value is the effective foreground detection, which can differ from the retained startup preset; lifecycle consumers read stored state.
+OS samples receive a generation under the session lock. Older samples cannot overwrite a newer identity or foreground-input hold; screen reclassification also verifies ownership of its generation. Pending shell-exit recovery can finish after a newer observation if both observations still identify no agent; it remains pinned against a newly discovered live agent. Identity changes reclassify the existing terminal screen so a quiet composer does not retain a shell-era cache. The refresh return value is the effective foreground detection, which can differ from the retained startup preset; lifecycle consumers read stored state.
 
 The output reader checks the grid's alternate-screen state for agent sessions. On the first entry per session, it logs a warning with the agent type and detected CLI version. This catches agent versions or launch paths that bypass the native-scrollback launch defaults without spamming on repaints.
 
