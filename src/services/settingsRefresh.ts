@@ -99,16 +99,21 @@ export function createSettingsRefreshCoordinator(subscribe?: typeof subscribeEve
 			let disposed = false;
 			let sequence = 0;
 			let queued = false;
+			let reading = false;
+			let pending = false;
 			const entry = {
 				owner: reader.connectionId,
 				section: reader.section,
 				invalidate() {
 					sequence++;
-					if (queued || disposed) return;
+					pending = true;
+					if (queued || reading || disposed) return;
 					queued = true;
 					queueMicrotask(() => {
 						queued = false;
 						if (disposed || (reader.connectionId && disconnected.has(reader.connectionId))) return;
+						pending = false;
+						reading = true;
 						const current = sequence;
 						void reader
 							.read()
@@ -117,6 +122,10 @@ export function createSettingsRefreshCoordinator(subscribe?: typeof subscribeEve
 							})
 							.catch((error) => {
 								if (!disposed) appLogger.warn("config", "Settings reload failed", error);
+							})
+							.finally(() => {
+								reading = false;
+								if (pending && !disposed) entry.invalidate();
 							});
 					});
 				},

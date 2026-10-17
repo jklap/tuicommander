@@ -10,12 +10,10 @@ import { activityStore } from "../stores/activityStore";
 import { startAgentSettingsSync } from "../stores/agentConfigs";
 import { appLogger } from "../stores/appLogger";
 import { type CloseRequest, closeDialogStore } from "../stores/closeDialog";
-import { dictationStore } from "../stores/dictation";
 import { editorTabsStore } from "../stores/editorTabs";
 import { githubStore } from "../stores/github";
 import { globalWorkspaceStore, MANUAL_SCOPE } from "../stores/globalWorkspace";
 import { keybindingsStore } from "../stores/keybindings";
-import { mcpPopupStore } from "../stores/mcpPopup";
 import { mdTabsStore, resolveRepoForCwd } from "../stores/mdTabs";
 import { notificationsStore } from "../stores/notifications";
 import { paneLayoutStore } from "../stores/paneLayout";
@@ -156,6 +154,7 @@ export interface AppInitDeps {
 		startPrNotificationTimer: () => void;
 		loadFontFromConfig: () => void;
 		refreshDictationConfig: () => Promise<void>;
+		startDictationSettingsSync: () => () => void;
 		startUserActivityListening: () => void;
 	};
 	applyPlatformClass: () => string;
@@ -427,6 +426,7 @@ export async function initApp(deps: AppInitDeps) {
 		deps.setStatusInfo("Warning: store(s) failed to load");
 	}
 
+	const { mcpPopupStore } = await import("../stores/mcpPopup");
 	for (const start of [
 		() => mcpPopupStore.startRemoteSync(),
 		() => promptLibraryStore.startRemoteSync(),
@@ -1232,7 +1232,7 @@ export async function initApp(deps: AppInitDeps) {
 
 	// Load dictation config from disk
 	void deps.stores.refreshDictationConfig().then(() => {
-		ownSettingsSync(() => dictationStore.startRemoteSync());
+		ownSettingsSync(deps.stores.startDictationSettingsSync);
 	});
 
 	// Start tracking user activity (click/keydown) for PR display timeouts

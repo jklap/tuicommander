@@ -1,5 +1,6 @@
-import { type Component, createEffect, createSignal, For, Show } from "solid-js";
+import { type Component, createEffect, createSignal, For, Show, untrack } from "solid-js";
 import type { SettingId } from "../../../services/settingsCatalogue";
+import { reportSettingsConflicts } from "../../../services/settingsRefresh";
 import s from "../Settings.module.css";
 import a from "./AgentsTab.module.css";
 
@@ -23,7 +24,14 @@ export const LaunchInstructionsEditor: Component<{
 	onSave: (text: string | undefined) => void;
 }> = (props) => {
 	const [draft, setDraft] = createSignal(props.value ?? props.fallback);
-	createEffect(() => setDraft(props.value ?? props.fallback));
+	let acknowledged = props.value ?? props.fallback;
+	createEffect(() => {
+		const incoming = props.value ?? props.fallback;
+		const current = untrack(draft);
+		if (current === acknowledged) setDraft(incoming);
+		else if (incoming !== acknowledged && incoming !== current) reportSettingsConflicts(["/"]);
+		acknowledged = incoming;
+	});
 	const missing = () => (draft().trim() === "" ? [] : missingMarkers(draft(), props.requiredMarkers));
 	const save = () => {
 		if (draft() !== (props.value ?? props.fallback)) props.onSave(draft());
@@ -62,7 +70,10 @@ export const LaunchInstructionsEditor: Component<{
 					data-setting-id={props.settingId}
 					type="button"
 					class={a.smallBtn}
-					onClick={() => props.onSave(undefined)}
+					onClick={() => {
+						setDraft(props.fallback);
+						props.onSave(undefined);
+					}}
 				>
 					Reset to default
 				</button>

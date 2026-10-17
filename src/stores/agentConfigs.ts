@@ -13,8 +13,8 @@ import { invoke } from "../invoke";
 import { reportSettingsConflicts, settingsRefresh } from "../services/settingsRefresh";
 import { rpc } from "../transport";
 import { getRemoteBaseUrl, getRepoConnection } from "../transportRuntime";
+import { createConfigDeltaWriter } from "../utils/configDeltaWriter";
 import { buildEnvFromEntries, type EnvVarEntry } from "../utils/envVars";
-import { mergeSettingsSnapshot } from "../utils/mergeSettingsSnapshot";
 import { appLogger } from "./appLogger";
 
 export interface AgentConfigIO {
@@ -85,9 +85,7 @@ function clone<T>(obj: T): T {
 }
 
 export function createAgentConfigsStore(io: AgentConfigIO = defaultIO, connectionId?: string) {
-	let adoptionEpoch = 0;
-	let savedBase: AgentsConfig | null = null;
-	let saveTail: Promise<void> | null = null;
+	const writer = createConfigDeltaWriter<AgentsConfig>("save_agents_config", "config", io.save);
 	const [state, setState] = createStore<AgentConfigsState>({
 		agents: {},
 		hibernate_idle_minutes: 60,
@@ -125,25 +123,8 @@ export function createAgentConfigsStore(io: AgentConfigIO = defaultIO, connectio
 	/** Save changes since the last acknowledged snapshot. */
 	async function saveToDisk(): Promise<void> {
 		try {
-			if (!state.loaded || !savedBase) throw new Error("Agent config has not loaded; save refused");
-			const full = wire();
-			const epoch = adoptionEpoch;
-			const write = async () => {
-				if (epoch !== adoptionEpoch) return;
-				if (!savedBase) throw new Error("Agent config has not loaded; save refused");
-				await io.save(savedBase, full);
-				if (epoch === adoptionEpoch) savedBase = full;
-			};
-			const operation = saveTail ? saveTail.then(write) : write();
-			const settled = operation.then(
-				() => undefined,
-				() => undefined,
-			);
-			saveTail = settled;
-			void settled.then(() => {
-				if (saveTail === settled) saveTail = null;
-			});
-			await operation;
+			if (!state.loaded) throw new Error("Agent config has not loaded; save refused");
+			await writer.save(wire());
 		} catch (err) {
 			appLogger.error("config", "Failed to save agent config", err);
 			throw err;
@@ -157,10 +138,8 @@ export function createAgentConfigsStore(io: AgentConfigIO = defaultIO, connectio
 				connectionId,
 				read: io.load,
 				apply: (remote) => {
-					if (!state.loaded || !savedBase) return;
-					const merged = mergeSettingsSnapshot(savedBase, wire(), remote);
-					adoptionEpoch++;
-					savedBase = clone(remote);
+					if (!state.loaded) return;
+					const merged = writer.adopt(remote, wire());
 					applyLoaded(merged.value);
 					reportSettingsConflicts(merged.conflicts);
 				},
@@ -175,7 +154,7 @@ export function createAgentConfigsStore(io: AgentConfigIO = defaultIO, connectio
 		async hydrate(): Promise<void> {
 			try {
 				const config = await io.load();
-				savedBase = clone(config);
+				writer.loaded(config);
 				applyLoaded(config);
 			} catch (err) {
 				appLogger.error("config", "Failed to hydrate agent configs", err);

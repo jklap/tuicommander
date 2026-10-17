@@ -1,4 +1,4 @@
-import { type Component, createEffect, createSignal, For, onCleanup, onMount, Show } from "solid-js";
+import { type Component, createEffect, createSignal, For, onCleanup, Show } from "solid-js";
 import { createStore, reconcile } from "solid-js/store";
 import { t } from "../../../../i18n";
 import { settingsRefresh } from "../../../../services/settingsRefresh";
@@ -37,8 +37,14 @@ export const LocalMcpPanel: Component = () => {
 	onCleanup(
 		settingsRefresh.register({
 			section: "app",
-			read: () => rpc<AppConfig>("load_config"),
+			read: () =>
+				rpc<AppConfig>("load_config").catch((error) => {
+					appLogger.warn("config", "Failed to load native tool config, using defaults", error);
+					setNativeToolsLoaded(true);
+					return undefined;
+				}),
 			apply: (config) => {
+				if (!config) return;
 				setDisabledNativeTools(config.disabled_native_tools ?? []);
 				setSettingsEnabled(config.settings_mcp_enabled ?? false);
 				setCollapseTools(config.collapse_tools ?? false);
@@ -46,19 +52,6 @@ export const LocalMcpPanel: Component = () => {
 			},
 		}),
 	);
-
-	onMount(async () => {
-		try {
-			const config = await rpc<AppConfig>("load_config");
-			setDisabledNativeTools(config.disabled_native_tools ?? []);
-			setSettingsEnabled(config.settings_mcp_enabled ?? false);
-			setCollapseTools(config.collapse_tools ?? false);
-		} catch (e) {
-			appLogger.warn("config", "Failed to load native tool config, using defaults", e);
-		} finally {
-			setNativeToolsLoaded(true);
-		}
-	});
 
 	return (
 		<div class={`${s.section} ${layout.page}`}>
