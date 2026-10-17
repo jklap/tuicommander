@@ -790,11 +790,19 @@ function createTerminalsStore() {
 			// still-live view of the same session (or vice versa) — visibility
 			// is now per-viewer, "visible" means visible to ANY of them. See
 			// AppState::is_session_visible's doc comment.
-			if (prevId && prevId !== id) {
-				rpc("set_session_visible", { sessionId: prevId, visible: false, viewerId: CLIENT_INSTANCE_ID }).catch(() => {});
+			// `prevId`/`id` are terminal-store ids ("term-6"); the backend keys visibility and
+			// standby by PTY session id. Passing the terminal id used to make `wake_session` a
+			// silent no-op, so a parked tab never woke on click. A tab with no PTY yet (a restore
+			// placeholder) has no session to report.
+			const prevSessionId = prevId ? state.terminals[prevId]?.sessionId : null;
+			if (prevId && prevId !== id && prevSessionId) {
+				rpc("set_session_visible", { sessionId: prevSessionId, visible: false, viewerId: CLIENT_INSTANCE_ID }).catch(
+					() => {},
+				);
 			}
-			if (id) {
-				rpc("set_session_visible", { sessionId: id, visible: true, viewerId: CLIENT_INSTANCE_ID }).catch(() => {});
+			const sessionId = id ? state.terminals[id]?.sessionId : null;
+			if (sessionId) {
+				rpc("set_session_visible", { sessionId, visible: true, viewerId: CLIENT_INSTANCE_ID }).catch(() => {});
 			}
 		},
 

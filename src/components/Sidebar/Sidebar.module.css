@@ -956,6 +956,13 @@
   flex-shrink: 0;
 }
 
+/* Replaces the age on a parked (SIGSTOP'd) tab; same slot, same muted colour as the time. */
+.branchStandbyMark {
+  display: inline-flex;
+  align-items: center;
+  opacity: 0.8;
+}
+
 .mergedBadge,
 .lifecycleBadge {
   display: inline-flex;

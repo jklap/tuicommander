@@ -127,6 +127,8 @@ export interface AppInitDeps {
 				display_name_is_custom?: boolean;
 				display_name_from_spawn?: boolean;
 				is_remote?: boolean;
+				/** SIGSTOP'd by auto-standby; absent when the session is running. */
+				standby?: boolean;
 				parent_session?: string | null;
 				state?: {
 					shell_state?: "busy" | "idle";
@@ -472,6 +474,10 @@ function applySessionList(
 			// Only the row survives a reload, and only the backend knows where the
 			// name came from: every OSC/intent title is synced back as non-custom.
 			nameFromSpawn: session.display_name_from_spawn === true,
+			// `session-standby` fires only on a transition, so a reload while a tab is parked would
+			// otherwise show it as running (no pause mark, a counting age) until it next woke.
+			// The snapshot is complete: absence retracts.
+			standby: session.standby === true,
 			parentSession: session.parent_session ?? null,
 			placementPath: session.worktree_path ?? null,
 			...(session.tuic_session ? { tuicSession: session.tuic_session } : {}),
