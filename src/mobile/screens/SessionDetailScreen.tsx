@@ -514,8 +514,6 @@ export function SessionDetailScreen(props: SessionDetailScreenProps) {
 				/>
 			</Show>
 			<TerminalKeybar
-				showScrollToBottom={chat.active() ? !chat.atBottom() : !cliAtBottom()}
-				onScrollToBottom={() => (chat.active() ? chat.scrollToBottom() : jumpCli?.())}
 				sessionId={props.session.session_id}
 				agentType={sessionState()?.agent_type as string | null | undefined}
 				awaitingInput={sessionState()?.awaiting_input}
@@ -527,6 +525,8 @@ export function SessionDetailScreen(props: SessionDetailScreenProps) {
 				onInputKeyRequest={(key) => requestComposerInputKey?.(key)}
 			/>
 			<CommandInput
+				showScrollToBottom={chat.active() ? !chat.atBottom() : !cliAtBottom()}
+				onScrollToBottom={() => (chat.active() ? chat.scrollToBottom() : jumpCli?.())}
 				serverVoiceRecording={voice.recording()}
 				onBrowserDictating={setBrowserDictating}
 				sessionId={props.session.session_id}

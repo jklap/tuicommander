@@ -112,6 +112,10 @@ per version; an ellipsis marks a truncated excerpt. A failed tool card describes
 a proposed edit, not a successful file change.
 
 
+In a terminal, a down-arrow appears to the right of **Send** while CLI or Chat
+output is scrolled back. Tap it to return to the latest output. It does not send
+terminal input or cover the key-bar controls.
+
 Both mobile composers use **+**, a text box with a microphone when browser speech is available, and **Send**. Tap **+ → Attach file** to choose a file or **Take photo** to open the camera capture picker. In a terminal, the upload
 inserts its `@path` into the draft; review the draft and tap Send when ready.
 In mobile AI Chat, images join the image draft and other files appear as file
