@@ -407,14 +407,19 @@ Content-Type: application/json
 ```
 
 Authenticated browser/PWA counterpart of `session action=submit`. It checks the
-managed agent's idle state and empty composer, writes the whole reply and Enter
-atomically, and returns the same submission receipt. A closed session returns
+managed agent and empty composer, writes the whole reply and Enter atomically,
+and returns the same submission receipt. An explicit human reply can answer an
+`awaiting_input` session even while its shell is busy and no question text was
+recognized. Otherwise confirmed idle is required. A recognized picker returns
+`selection_required`: use its answer controls instead of submitting prose. A closed session returns
 HTTP 404 with `submitted: false` and `reason: "session_not_found"`; another
 rejection returns HTTP 409 and its precise `reason`. A successful write can
 still have `acknowledged: false`: the client must not retry blindly. While a
-confident question is open, a human reply can pass queued automated messages;
-those messages remain parked until the question clears. Automated `session
-action=submit` cannot answer the question.
+question is awaiting human input, a human reply can pass queued automated messages;
+those messages remain parked until the question clears. The mobile client shows
+the returned `detail` on refusal and keeps the draft. Foreground ownership,
+unfinished drafts and uncertain prior writes still block submission. Automated
+`session action=submit` cannot answer a confident question.
 
 ### Write Several Inputs at Once
 
