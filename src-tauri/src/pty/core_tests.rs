@@ -15067,3 +15067,78 @@ fn ego_recovery_recorded_producer_replays_wait_retry_clear() {
         "{phases:?}"
     );
 }
+
+/// Catches a stale ego intent/title when generic chrome trimming hides a newer
+/// marker below a historical separator or submitted prompt.
+#[cfg(unix)]
+#[tokio::test(flavor = "current_thread")]
+async fn ego_second_recorded_intent_replaces_context_and_title_1964() {
+    let capture = crate::pty_capture::decode_capture(&agent_prompt_fixture("ego-intent-1964.tcap"))
+        .expect("real ego capture");
+    let (rows, cols) = capture.geometry.expect("recorded geometry");
+    let state = std::sync::Arc::new(crate::state::tests_support::make_test_app_state());
+    state.config.write().progress_tracking = false;
+    let sid = "ego-intent-1964";
+    crate::state::tests_support::insert_dummy_session(&state, sid);
+    agent_session(&state, sid, SHELL_BUSY);
+    state
+        .session_maps
+        .session_states
+        .get_mut(sid)
+        .unwrap()
+        .agent_type = Some("ego".into());
+    state.grid.vt_log_buffers.insert(
+        sid.into(),
+        Mutex::new(crate::state::VtLogBuffer::new(rows, cols, 2000)),
+    );
+    let silence = state.session_maps.silence_states.get(sid).unwrap().clone();
+    let mut receiver = state.event_bus.subscribe();
+    let mut processor = ChunkProcessor::new(None, None);
+    let mut intents = Vec::new();
+    for record in capture.records {
+        if record.direction != crate::pty_capture::CaptureDirection::Output {
+            continue;
+        }
+        processor.process_chunk(
+            std::str::from_utf8(&record.data).expect("UTF-8 capture"),
+            &silence,
+            sid,
+            &state,
+        );
+        while let Ok(event) = receiver.try_recv() {
+            if let crate::state::AppEvent::PtyParsed { parsed, .. } = &event {
+                if parsed["type"] == "intent" {
+                    intents.push((
+                        parsed["text"].as_str().unwrap().to_string(),
+                        parsed["title"].as_str().map(str::to_string),
+                    ));
+                }
+            }
+            crate::state::tests_support::apply_replay_event(&state, &event);
+        }
+    }
+    let expected = "Recording the second real ego intent while preserving its wrapped title";
+    assert_eq!(
+        intents.last(),
+        Some(&(expected.to_string(), Some("Latest task".to_string()))),
+        "latest Intent event drives desktop tab title; all events: {intents:?}"
+    );
+    assert_eq!(
+        state
+            .session_maps
+            .session_states
+            .get(sid)
+            .unwrap()
+            .agent_intent
+            .as_deref(),
+        Some(expected),
+        "the context bar and remote/mobile snapshots read accumulated session intent"
+    );
+    assert!(
+        intents.iter().any(
+            |(text, title)| text == "Checking the initial recorded ego task"
+                && title.as_deref() == Some("Initial task")
+        ),
+        "the first marker must also be observed"
+    );
+}

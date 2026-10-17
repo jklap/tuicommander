@@ -278,6 +278,7 @@ pub(crate) fn write_pty_input_parts(
     session_id: &str,
     parts: &[&str],
 ) -> Result<(), String> {
+    crate::background_mode::hidden::record_remote_activity(state, session_id);
     let transaction = state.input_transaction(session_id);
     let _input = transaction.lock();
     let byte_parts: Vec<&[u8]> = parts.iter().map(|part| part.as_bytes()).collect();
@@ -307,11 +308,12 @@ pub(crate) fn write_pty_input_pair(
     key: &str,
     agent_type: Option<&str>,
 ) -> Result<(), String> {
-    let transaction = state.input_transaction(session_id);
-    let _input = transaction.lock();
     if key != "\r" || agent_type.is_none() {
         return write_pty_input_parts(state, session_id, &[text, key]);
     }
+    crate::background_mode::hidden::record_remote_activity(state, session_id);
+    let transaction = state.input_transaction(session_id);
+    let _input = transaction.lock();
 
     let writer = state
         .pty_writer(session_id)
@@ -344,6 +346,7 @@ fn write_pty_input_bytes(
     session_id: &str,
     data: &[u8],
 ) -> Result<(), String> {
+    crate::background_mode::hidden::record_remote_activity(state, session_id);
     let transaction = state.input_transaction(session_id);
     let _input = transaction.lock();
     state.write_pty_parts(session_id, &[data])?;
@@ -515,6 +518,7 @@ pub(super) async fn get_output(
     Path(session_id): Path<String>,
     Query(query): Query<OutputQuery>,
 ) -> impl IntoResponse {
+    crate::background_mode::hidden::record_remote_activity(&state, &session_id);
     let format = query.format.as_deref().unwrap_or("raw");
 
     // Both local MCP and the remote proxy use the same serializer, including
