@@ -5757,6 +5757,34 @@ mod tests {
         assert_eq!(grid.prompt_input_text().as_deref(), Some("cafe\u{0301}"));
     }
 
+    /// Catches inventing a space before a wide glyph that wraps at the margin.
+    #[test]
+    fn softwrap_1977_does_not_copy_wide_glyph_padding_as_content() {
+        let mut grid = TerminalGrid::new(3, 4, 10);
+        grid.process("abc界x".as_bytes());
+
+        assert_eq!(
+            grid.get_selection_text(0, 0, 1, 3),
+            "abc界x",
+            "copy must omit the synthetic leading-wide-character spacer"
+        );
+        let rows = grid.screen_text_rows();
+        let wraps = grid.screen_row_wraps();
+        let mut screen = String::new();
+        let mut previous_wrapped = true;
+        for (row, wrapped) in rows.into_iter().zip(wraps) {
+            if !previous_wrapped {
+                screen.push('\n');
+            }
+            screen.push_str(&row);
+            previous_wrapped = wrapped;
+        }
+        assert_eq!(screen.trim_end_matches('\n'), "abc界x");
+        let log = grid.screen_log_lines();
+        assert_eq!(log[0].text(), "abc");
+        assert_eq!(log[1].text(), "界x");
+    }
+
     #[test]
     fn get_selection_text_single_row() {
         let mut grid = TerminalGrid::new(5, 20, 0);
