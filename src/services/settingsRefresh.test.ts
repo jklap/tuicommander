@@ -1,4 +1,6 @@
 import { expect, it, vi } from "vitest";
+import { mockInvoke } from "../__tests__/mocks/tauri";
+import { invoke } from "../invoke";
 import type { subscribeEvents } from "../transport";
 import { createSettingsRefreshCoordinator } from "./settingsRefresh";
 
@@ -33,6 +35,36 @@ function fixture() {
 	};
 }
 
+// Catches: the invoke layer coalescing an invalidated read with its replacement,
+// so a post-write refresh adopts the pre-write snapshot despite its newer sequence.
+it("refetches_after_an_invalidated_deduplicated_ipc_read_instead_of_adopting_its_old_snapshot", async () => {
+	const f = fixture();
+	let finishOld!: (value: { enabled: boolean }) => void;
+	mockInvoke.mockReset();
+	mockInvoke
+		.mockImplementationOnce(
+			() =>
+				new Promise((resolve) => {
+					finishOld = resolve;
+				}),
+		)
+		.mockResolvedValue({ enabled: true });
+	const apply = vi.fn();
+	const stop = f.coordinator.register({
+		section: "notifications",
+		read: () => invoke<{ enabled: boolean }>("load_notification_config"),
+		apply,
+	});
+	await flush();
+	f.emit("notifications", 1);
+	await flush();
+	finishOld({ enabled: false });
+	await flush();
+	expect(apply.mock.calls.at(-1)).toEqual([{ enabled: true }]);
+	expect(apply.mock.calls).not.toContainEqual([{ enabled: false }]);
+	stop();
+});
+
 // Catches: a delayed older owner read overwriting a later accepted read.
 it("out_of_order_revision_ignored", async () => {
 	const f = fixture();
@@ -46,9 +78,10 @@ it("out_of_order_revision_ignored", async () => {
 	await flush();
 	f.emit("app", 1);
 	await flush();
-	replies[1]("newer state");
-	await flush();
 	replies[0]("stale state");
+	await flush();
+	expect(apply).not.toHaveBeenCalled();
+	replies[1]("newer state");
 	await flush();
 	expect(apply.mock.calls).toEqual([["newer state"]]);
 	f.emit("app", 1);

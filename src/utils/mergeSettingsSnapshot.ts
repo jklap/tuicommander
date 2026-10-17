@@ -1,5 +1,10 @@
 /** Three-way adoption for UI snapshots. Arrays are atomic owner values, not index edits. */
-export function mergeSettingsSnapshot<T>(base: T, local: T, remote: T): { value: T; conflicts: string[] } {
+export function mergeSettingsSnapshot<T>(
+	base: T,
+	local: T,
+	remote: T,
+	conflict: "local" | "remote" = "local",
+): { value: T; conflicts: string[] } {
 	const conflicts: string[] = [];
 	const equal = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
 	const object = (value: unknown): value is Record<string, unknown> =>
@@ -21,7 +26,7 @@ export function mergeSettingsSnapshot<T>(base: T, local: T, remote: T): { value:
 			return result;
 		}
 		conflicts.push(path || "/");
-		return current;
+		return conflict === "remote" ? incoming : current;
 	}
 	return { value: merge(base, local, remote, "") as T, conflicts };
 }

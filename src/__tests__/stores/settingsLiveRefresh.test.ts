@@ -73,6 +73,76 @@ describe("settings live refresh", () => {
 		expect(io.invoke.mock.calls.filter(([command]) => command === "save_config")).toEqual([]);
 	});
 
+	// Catches: the first save's own refresh silently cancelling a second autosave
+	// while leaving its unsaved value visible in Settings.
+	it("persists_a_queued_repo_default_edit_after_the_first_save_refreshes_its_baseline", async () => {
+		let persisted = { base_branch: "automatic", copy_ignored_files: false };
+		let acknowledgeFirst!: () => void;
+		let writes = 0;
+		io.invoke.mockImplementation((command: string, args?: { config: typeof persisted }) => {
+			if (command === "load_repo_defaults") return Promise.resolve(structuredClone(persisted));
+			if (command === "save_repo_defaults") {
+				persisted = structuredClone(args!.config);
+				if (++writes === 1)
+					return new Promise<void>((resolve) => {
+						acknowledgeFirst = resolve;
+					});
+			}
+			return Promise.resolve(undefined);
+		});
+		const defaults = (await import("../../stores/repoDefaults")).repoDefaultsStore;
+		await defaults.hydrate();
+		const stopDefaults = defaults.startRemoteSync();
+		try {
+			await flush();
+			defaults.setBaseBranch("main");
+			defaults.setCopyIgnoredFiles(true);
+			handlers["settings-changed"]({ section: "repo_defaults", generation: 1, persisted: true, applied: true });
+			await flush();
+			acknowledgeFirst();
+			await flush();
+			expect(defaults.state.copyIgnoredFiles).toBe(true);
+			expect(persisted.copy_ignored_files).toBe(true);
+		} finally {
+			stopDefaults();
+		}
+	});
+
+	// Catches: the agent owner's custom save transport dropping its second
+	// immediate edit when the first write's event arrives before its response.
+	it("persists_a_queued_agent_edit_after_its_own_refresh", async () => {
+		let persisted: import("../../agents").AgentsConfig = { agents: {}, hibernate_idle_minutes: 60 };
+		let acknowledgeFirst!: () => void;
+		let writes = 0;
+		io.invoke.mockImplementation((command: string, args?: { config: typeof persisted }) => {
+			if (command === "load_agents_config") return Promise.resolve(structuredClone(persisted));
+			if (command === "save_agents_config") {
+				persisted = structuredClone(args!.config);
+				if (++writes === 1)
+					return new Promise<void>((resolve) => {
+						acknowledgeFirst = resolve;
+					});
+			}
+			return Promise.resolve(undefined);
+		});
+		const agents = (await import("../../stores/agentConfigs")).agentConfigsStore;
+		await agents.hydrate();
+		const stopAgents = agents.startRemoteSync();
+		try {
+			await flush();
+			const first = agents.setHibernate(90, "background_only");
+			const second = agents.setLaunchInstructions("queued instructions");
+			handlers["settings-changed"]({ section: "agents", generation: 1, persisted: true, applied: true });
+			await flush();
+			acknowledgeFirst();
+			await Promise.all([first, second]);
+			expect(persisted.hibernate_idle_minutes).toBe(90);
+			expect(persisted.launch_instructions).toBe("queued instructions");
+		} finally {
+			stopAgents();
+		}
+	});
+
 	// Catches: a missed event or a restarted server's reset counter leaving stale settings.
 	it("sse_reconnect_refetches", async () => {
 		document.theme = "before-restart";
