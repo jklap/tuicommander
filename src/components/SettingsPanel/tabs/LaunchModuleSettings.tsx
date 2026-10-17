@@ -12,6 +12,7 @@ export const LaunchModuleSettings: Component<{ agentType?: AgentType }> = (props
 	const ModuleToggle: Component<{ id: string; label: string }> = (toggle) => (
 		<label class={a.toggleRow}>
 			<input
+				data-setting-id={props.agentType ? "agents.agents.{key}.launch_modules.{key}" : "agents.launch_modules.{key}"}
 				type="checkbox"
 				checked={(store.state.launch_modules[toggle.id] ?? true) && (own()?.launch_modules?.[toggle.id] ?? true)}
 				disabled={disabled() || (!!props.agentType && store.state.launch_modules[toggle.id] === false)}
@@ -25,6 +26,9 @@ export const LaunchModuleSettings: Component<{ agentType?: AgentType }> = (props
 			<h3>Launch modules</h3>
 			<label class={a.toggleRow}>
 				<input
+					data-setting-id={
+						props.agentType ? "agents.agents.{key}.launch_instructions_disabled" : "agents.launch_instructions_disabled"
+					}
 					type="checkbox"
 					checked={store.state.launch_instructions_disabled || (own()?.launch_instructions_disabled ?? false)}
 					disabled={!store.state.loaded || (!!props.agentType && store.state.launch_instructions_disabled)}
