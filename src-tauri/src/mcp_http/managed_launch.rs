@@ -4,20 +4,26 @@ use crate::state::AppState;
 use serde_json::{Value, json};
 use std::{net::SocketAddr, sync::Arc};
 
+/// Run-owned launch policy shared by automation and workflow bindings.
+pub(super) struct Launch<'a> {
+    pub profile: &'a str,
+    pub name: &'a str,
+    pub prompt: &'a str,
+    pub workspace: &'a str,
+    pub owner_scope: &'a str,
+    pub idempotency_key: &'a str,
+    pub keep_open: bool,
+}
+
 /// Compatibility projection for existing run bindings. All creation and policy
 /// now lives in the keyed transaction; call only from a blocking worker.
 pub(super) fn launch(
     state: &Arc<AppState>,
     addr: SocketAddr,
     origin: Option<&str>,
-    profile: &str,
-    name: &str,
-    prompt: &str,
-    workspace: &str,
-    owner_scope: &str,
-    idempotency_key: &str,
-    keep_open: bool,
+    input: Launch<'_>,
 ) -> Value {
+    let Launch { profile, name, prompt, workspace, owner_scope, idempotency_key, keep_open } = input;
     let parent = origin.and_then(|origin| {
         state
             .mcp
@@ -83,13 +89,15 @@ pub(crate) fn launch_named(
         state,
         SocketAddr::from(([127, 0, 0, 1], 0)),
         None,
-        profile,
-        name,
-        prompt,
-        workspace,
-        &format!("automation:{run_id}"),
-        run_id,
-        true,
+        Launch {
+            profile,
+            name,
+            prompt,
+            workspace,
+            owner_scope: &format!("automation:{run_id}"),
+            idempotency_key: run_id,
+            keep_open: true,
+        },
     );
     if let Some(error) = spawned["error"].as_str() {
         return Err(error.into());

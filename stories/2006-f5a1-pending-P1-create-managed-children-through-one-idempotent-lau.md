@@ -31,3 +31,6 @@ Candidate 3. Source: ~/Gits/personal/orchestrator/reports/tuicommander/2026-10-1
 - 1240-8438
 
 ## Work Log
+
+### 2026-10-17T21:03:08.149Z - Round-2 contract: a run-owned parentless child with a mute startup must report blocked after the existing 30-second prompt budget, retaining exactly one queued prompt and one child. Authority is pending initial prompt state and the public owned-launch receipt. Adjacent cases: parent-linked watchdog, delivered prompt, identical retry, and overlapping keyed public requests. Pre-fix HEAD 3f8759c80.
+

@@ -57,10 +57,7 @@ struct Record {
 }
 
 fn hash(text: &[u8]) -> String {
-    Sha256::digest(text)
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect()
+    format!("{:x}", Sha256::digest(text))
 }
 
 // Sort object keys recursively: JSON member ordering is not a contract change.

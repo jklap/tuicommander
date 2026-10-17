@@ -137,6 +137,45 @@ async fn launch_transaction_delivery_failure_keeps_one_queued_prompt() {
     close(&state, child);
 }
 
+// Catches: a parentless run never arms the deferred initial-prompt watchdog.
+#[cfg(unix)]
+#[tokio::test]
+async fn launch_transaction_owned_prompt_timeout_reports_blocked_without_requeue() {
+    let state = state();
+    let root = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+    let _config = crate::config::set_config_dir_override(root.path().join("config"));
+    let binary = crate::test_support::fake_ssh_script(
+        "launch-owned-prompt-timeout",
+        "if [ \"$1\" = '--help' ]; then printf '%s\\n' '--no-alt-screen'; else read unused; fi",
+        "if \"%1\"==\"--help\" (echo --no-alt-screen) else (set /p HOLD=)",
+    );
+    let mut request = request();
+    request["parent_session_id"] = json!("automation:watchdog-regression");
+    request["spawn"]["agent_type"] = json!("codex");
+    request["spawn"]["binary_path"] = json!(binary);
+    request["spawn"]["args"] = json!(["--profile", "fixture"]);
+    let first = execute_owned(&state, addr(), &request).await;
+    assert_eq!(first["status"], "created", "{first}");
+    assert_eq!(first["prompt_delivery"], "queued");
+    let child = first["session_id"].as_str().unwrap();
+    assert!(!state.session_maps.session_parent.contains_key(child));
+    tokio::time::pause();
+    tokio::task::yield_now().await;
+    tokio::time::advance(std::time::Duration::from_secs(31)).await;
+    tokio::task::yield_now().await;
+    let after = execute_owned(&state, addr(), &request).await;
+    let queued = state.pending_injections.get(child).unwrap().len();
+    let children = state.session_maps.sessions.len();
+    close(&state, child);
+    assert_eq!(after["status"], "blocked", "{after}");
+    assert_eq!(after["prompt_delivery"], "queued");
+    assert_eq!(after["ready"], false);
+    assert_eq!(after["reason"], "initial prompt delivery timed out; prompt remains queued");
+    assert_eq!(after["session_id"], first["session_id"]);
+    assert_eq!(queued, 1);
+    assert_eq!(children, 1);
+}
+
 // Catches: conflicting retry key silently changes model, name, hold policy or checkout.
 #[cfg(unix)]
 #[tokio::test]
@@ -216,45 +255,27 @@ async fn launch_transaction_interrupted_side_effect_blocks_without_retry() {
     }
 }
 
-// Catches: two processes advancing the same checkpoint both gain creation authority.
-#[test]
-fn launch_transaction_checkpoint_compare_and_swap_has_one_winner() {
-    let root = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
-    let journal = Journal(root.path().join("launches.sqlite"));
-    let mut first = journal
-        .reserve(
-            "key",
-            Record {
-                launch_id: "launch".into(),
-                digest: "digest".into(),
-                session_id: "child".into(),
-                stage: "reserved".into(),
-                workspace_path: None,
-                child: None,
-                prompt_handoff: false,
-                reason: None,
-                revision: 0,
-            },
-        )
-        .unwrap();
-    let mut stale = first.clone();
-    first.stage = "spawn_started".into();
-    journal.save("key", &mut first).unwrap();
-    stale.stage = "spawn_started".into();
-    assert!(
-        journal
-            .save("key", &mut stale)
-            .unwrap_err()
-            .contains("concurrently")
+// Catches: overlapping public retries both gain creation authority and spawn children.
+#[cfg(unix)]
+#[tokio::test]
+async fn launch_transaction_overlapping_requests_create_one_child() {
+    let state = state();
+    let request = request();
+    let (first, second) = tokio::join!(
+        execute(&state, addr(), &request),
+        execute(&state, addr(), &request),
     );
-    assert_eq!(
-        Journal(root.path().join("launches.sqlite"))
-            .get("launch")
-            .unwrap()
-            .unwrap()
-            .revision,
-        1
-    );
+    assert!(first.get("error").is_none(), "{first}");
+    assert!(second.get("error").is_none(), "{second}");
+    let child = first["session_id"].as_str().unwrap();
+    let children = state.session_maps.sessions.len();
+    let tasks = state.tasks.live_ids_for_session(child);
+    close(&state, child);
+    assert_eq!(first["launch_id"], second["launch_id"]);
+    assert_eq!(first["session_id"], second["session_id"]);
+    assert_eq!(first["child"]["task_id"], second["child"]["task_id"]);
+    assert_eq!(children, 1, "only one public request may create a PTY");
+    assert_eq!(tasks.len(), 1, "only one spawn may acquire a task handle");
 }
 
 // Catches: output or a generic idle shell is treated as native agent readiness.
