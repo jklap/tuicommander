@@ -13,23 +13,38 @@ use std::path::PathBuf;
 pub struct UiSettingsStore {
     path: PathBuf,
     keybindings: bool,
+    actions: Option<std::sync::Arc<parking_lot::RwLock<Option<Vec<String>>>>>,
 }
 impl UiSettingsStore {
     pub fn keybindings() -> Self {
         Self {
             path: crate::config::config_dir().join("keybindings.json"),
             keybindings: true,
+            actions: None,
+        }
+    }
+    pub fn keybindings_with_actions(
+        actions: std::sync::Arc<parking_lot::RwLock<Option<Vec<String>>>>,
+    ) -> Self {
+        Self {
+            actions: Some(actions),
+            ..Self::keybindings()
         }
     }
     pub fn pane_layout() -> Self {
         Self {
             path: crate::config::config_dir().join("pane-layout.json"),
             keybindings: false,
+            actions: None,
         }
     }
     #[cfg(test)]
     pub(super) fn at_path(path: PathBuf, keybindings: bool) -> Self {
-        Self { path, keybindings }
+        Self {
+            path,
+            keybindings,
+            actions: None,
+        }
     }
     fn document(&self, value: Value) -> Result<Value, Failure> {
         if self.keybindings {
@@ -76,6 +91,28 @@ impl Store for UiSettingsStore {
     }
     fn validate_proposal(&self, _: &Value, value: &Value) -> Result<(), Failure> {
         self.document(self.raw(value)).map(|_| ())
+    }
+    fn refresh_choices(
+        &self,
+        resolver: &str,
+        _: &str,
+    ) -> impl std::future::Future<Output = Result<Vec<Value>, Failure>> + Send {
+        let result = (|| {
+            if !self.keybindings || resolver != "keybinding_actions" {
+                return Err(Error::new(self.id(), "unavailable"));
+            }
+            let registered = self
+                .actions
+                .as_ref()
+                .and_then(|actions| actions.read().clone())
+                .ok_or_else(|| Error::new(self.id(), "unavailable"))?;
+            let actions: std::collections::BTreeSet<_> = super::keybindings::actions()
+                .into_iter()
+                .chain(registered)
+                .collect();
+            Ok(actions.into_iter().map(Value::String).collect())
+        })();
+        std::future::ready(result)
     }
     fn commit(
         &self,

@@ -716,7 +716,7 @@ Some frontend-only stores persist to localStorage:
 - [x] Remote access / HTTP server
 - [x] SSH-managed remote daemon deployment, idle lifetime, pairing-token vaulting, and systemd/launchd installation
 - [x] Mobile terminal prompt keyboard correction defaults on, with a device-local Settings toggle for autocorrect, spellcheck and sentence capitalization (#1878-3a3c).
-- [x] Mobile CLI and Chat key-bar jump-to-bottom arrow appears only while scrolled back and resumes output follow without terminal input (#1975-4a38).
+- [x] Mobile CLI and Chat jump-to-bottom arrow floats over output at least 8px above the key bar, outside the composer, only while scrolled back and resumes output follow without terminal input (#1975-4a38).
 - [x] Mobile terminal Ctrl menu (Ctrl+C, Ctrl+B, Ctrl+D, agent-aware Ctrl+Enter)
 - [x] Mobile Send long-press Queue transfers the live draft to the shared server ready-window queue; taps still submit immediately.
 - [x] Session uploads live under TUIC data, with launch grants and session-end cleanup; startup reclaims only provably dead owners, preserving concurrent instances; ego invocation-scoped binary-file read roots remain unsupported (#1833-aa60).
@@ -1204,6 +1204,16 @@ Mobile Settings does not mount or offer Telegram setup. Desktop Settings retains
 ### Settings MCP live refresh contract
 
 The shared settings facade publishes `{section, generation, persisted, applied}` after durable writes, including vault-only and partial-persist outcomes. The monotonic counter is process-local, is never persisted, and does not replace owner CAS revisions or hash credentials. Desktop and SSE carry the same value-free payload. Frontend read/apply coordination preserves dirty intent and acknowledged baselines, suppresses obsolete writes and stale reads, scopes remote events by connection, and refetches active owners after reconnect.
+
+## Settings UI catalogue contract (#1789-796d)
+
+Controls carry Rust catalogue IDs, including raw inputs, dynamic sound rows, composite record editors, platform and expert branches. Shared selects derive static options from descriptors. The typed All settings inspector covers writable scalar/string-list descriptors, with concrete stable-key paths and explicit machine/instance/repository/profile targets. It uses shared settings_action reads and revision-checked edits; it never edits arbitrary JSON. Existing owner workflows retain credentials and structured records. Per-ID exclusion ledgers require review; CircleCI/corrections catalogue ownership and transient PR-filter persistence are tracked by 1991-bd88, 1992-d4fa and 1993-e7af.
+
+Frontend plugin shortcut IDs publish runtime metadata through the shared action endpoint. Registration/unload/reconnect update the current set without durable writes. Plugin-action choice discovery remains unavailable until publication. Source parity and renderer tests are authored; batch/runtime acceptance is recorded separately from implementation.
+
+## Settings startup contract status (#1790-1011)
+
+Published workflows and recovery are documented in `docs/backend/settings-startup.md`. Typed account enumeration and configured Ego interactive login start/status are published. The login gives the person a tracked PTY; closed is not authentication success, and credential readback comes from the configured owner. Step 10 remains incomplete until schema-only startup and refusal/expiry/conflict/apply-failure integration are verified; native inventory and compile checks alone are insufficient.
 
 ### CircleCI Settings owner (#1991-bd88)
 

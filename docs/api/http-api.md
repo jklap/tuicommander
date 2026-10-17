@@ -3276,6 +3276,14 @@ Rows returned by session `format=log` output and the `format=log|text` WebSocket
 
 `GET /events` publishes `settings-changed` with `{section: string, generation: number, persisted: boolean, applied: boolean}` after a durable settings-facade write. A persisted apply failure also emits a hint, with `applied: false`; its structured error carries the same generation. A refusal or failed persistence emits no hint. Successful reads expose the current generation, while owner `revision` remains the compare-and-swap token. The counter is process-local and resets after restart: clients must refetch their active settings snapshots after SSE connect, reconnect or `lagged`, not compare generations across process lifetimes. Values and credentials are never included in the event.
 
+### Frontend shortcut metadata publication
+
+`POST /settings/action` and IPC `settings_action` accept `{action:"publish_plugin_keybinding_actions",actions:["plugin:pluginId:commandId"]}`. IDs are validated and bounded; the newest frontend publication replaces the process-local set. This is runtime metadata, not configuration persistence. It returns persisted=false/applied=true and does not emit settings-changed. Existing host-issued caller guards apply. Explicit keybinding choice refresh reads this set with built-in actions.
+
+## Settings startup and recovery
+
+The published Settings startup sequence and GitHub/Ego owner contracts are documented in [Settings startup workflows](../backend/settings-startup.md). Device-login status is not authentication success; owner revisions, confirmation proposals and persisted-but-unapplied outcomes require their distinct recovery paths. Do not substitute a legacy HTTP command for an action absent from the Settings schema.
+
 ### CircleCI credential settings (#1991-bd88)
 
 The machine-scoped `circleci.token` descriptor is write-only. Read
@@ -3292,3 +3300,22 @@ continues to show the effective token source. No transport returns the token.
 ### Frame workload evidence
 
 `POST /debug/frame-workload` accepts `{ "recording": "<schema v1 JSON>" }` and returns the saved path as a JSON string. Same writer and payload as `save_frame_workload` IPC; 8 MiB request cap, 6 MiB recording cap, existing authentication. Writes rotate two instance-local content files and run on the blocking pool. See [stall evidence](../backend/stall-journal.md).
+
+### Startup owner discovery and interactive login
+
+`POST /settings/action` shares these typed perform requests with IPC/MCP:
+
+- Machine `github_accounts`, `operation:{action:"list_accounts"}` returns owner
+  metadata, credential presence and revision; no secret values or auth document.
+- Machine `ego`, `expectedRevision` from its machine read and
+  `operation:{action:"begin_login",provider:"openai-codex"}` returns a bounded
+  `flowId` and `sessionId` for human authentication. Terminal output/input use the
+  existing session HTTP/WS APIs; Settings does not transport codes or tokens.
+- The same Ego envelope with `operation:{action:"login_status",flow_id:FLOW}`
+  returns `interactive`, `closed` with owner credential presence, or `expired`.
+  Status does not compare `expectedRevision`; begin does. Closed is not success.
+  Refresh providers explicitly after the person completes login. Configured
+  executable/workspace changes invalidate status with `conflict`.
+
+See [startup workflows](../backend/settings-startup.md#interactive-login) for
+expiry, retained-terminal cleanup, readback and error semantics.

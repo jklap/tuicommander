@@ -5,6 +5,14 @@ import { ACTION_NAMES } from "../../keybindingDefaults";
 import { settingsStore } from "../../stores/settings";
 
 describe("KeyboardShortcutsTab", () => {
+	// Catches: action-first shortcut UI still instructs users to find a pencil-only control.
+	it("explains the named Rebind action within Shortcut groups", () => {
+		const view = render(() => <KeyboardShortcutsTab />);
+		expect(view.getByRole("region", { name: "Shortcut groups" })).toBeTruthy();
+		expect(view.container.textContent).toContain("Click Rebind to change a shortcut.");
+		expect(view.container.textContent).not.toContain("pencil icon");
+	});
+
 	it("renders the heading", () => {
 		const { container } = render(() => <KeyboardShortcutsTab />);
 		const heading = container.querySelector("h2");

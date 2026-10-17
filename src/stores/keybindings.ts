@@ -45,6 +45,30 @@ export function createKeybindingsStore() {
 	// set. No successful hydrate, no persist.
 	let hydrated = false;
 
+	let publishing = false;
+	let publicationQueued = false;
+	let publicationTail: Promise<void> = Promise.resolve();
+	function publishActions(): Promise<void> {
+		publicationTail = publicationTail
+			.then(async () => {
+				if (!publishing) return;
+				const reply = await invoke<{ error?: unknown }>("settings_action", {
+					request: { action: "publish_plugin_keybinding_actions", actions: [...dynamicActions.keys()].sort() },
+				});
+				if (reply?.error) throw new Error("Plugin keybinding action publication refused");
+			})
+			.catch((error) => appLogger.warn("config", "Plugin shortcut choices unavailable", error));
+		return publicationTail;
+	}
+	function schedulePublication(): void {
+		if (!publishing || publicationQueued) return;
+		publicationQueued = true;
+		queueMicrotask(() => {
+			publicationQueued = false;
+			void publishActions();
+		});
+	}
+
 	/** Merge static defaults with dynamic plugin defaults */
 	function allDefaults(): Record<string, string | undefined> {
 		const merged: Record<string, string | undefined> = { ...DEFAULT_BINDINGS };
@@ -125,15 +149,23 @@ export function createKeybindingsStore() {
 
 	return {
 		startRemoteSync(): () => void {
-			return settingsRefresh.register({
+			publishing = true;
+			const stop = settingsRefresh.register({
 				section: "keybindings",
-				read: () => invoke<KeybindingOverride[]>("load_keybindings"),
+				read: async () => {
+					await publishActions();
+					return invoke<KeybindingOverride[]>("load_keybindings");
+				},
 				apply: (overrides) => {
 					const merged = keybindingsWriter.adopt(overrides ?? [], toOverridesArray());
 					applyOverrides(merged.value);
 					reportSettingsConflicts(merged.conflicts);
 				},
 			});
+			return () => {
+				publishing = false;
+				stop();
+			};
 		},
 		/** Reactivity accessor — read this in createEffect/createMemo to track changes */
 		get version() {
@@ -164,6 +196,7 @@ export function createKeybindingsStore() {
 		 */
 		registerDynamicAction(dyn: DynamicAction): void {
 			dynamicActions.set(dyn.action, dyn);
+			schedulePublication();
 			rebuildMaps(getMergedBindings());
 			setVersion((v) => v + 1);
 		},
@@ -171,6 +204,7 @@ export function createKeybindingsStore() {
 		/** Remove a dynamic action (called on plugin unload) */
 		unregisterDynamicAction(action: string): void {
 			if (!dynamicActions.delete(action)) return;
+			schedulePublication();
 			// Leave any user override in place so re-registering later restores it,
 			// but drop from the active maps.
 			rebuildMaps(getMergedBindings());

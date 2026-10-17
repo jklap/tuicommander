@@ -127,10 +127,10 @@ describe("EgoPerimeterSection", () => {
 		fireEvent.click(screen.getByRole("button", { name: "Add folder" }));
 		const root = await screen.findByLabelText("Root directory");
 		fireEvent.input(root, { target: { value: "/unsaved/root" } });
-		fireEvent.change(screen.getByLabelText("Network"), { target: { value: "blocked" } });
+		fireEvent.change(screen.getByLabelText("Network"), { target: { value: "off" } });
 		await vi.waitFor(() => expect(setNetwork).toHaveBeenCalledWith(false));
 		expect((root as HTMLInputElement).value).toBe("/unsaved/root");
-		expect((screen.getByLabelText("Network") as HTMLSelectElement).value).toBe("blocked");
+		expect((screen.getByLabelText("Network") as HTMLSelectElement).value).toBe("off");
 	});
 
 	// Catches: a failed write or readback clears the draft and claims it succeeded.
@@ -180,8 +180,8 @@ describe("EgoPerimeterSection", () => {
 			/>
 		));
 		const network = await screen.findByLabelText("Network");
-		fireEvent.change(network, { target: { value: "blocked" } });
+		fireEvent.change(network, { target: { value: "off" } });
 		expect(await screen.findByText(/system requires offline/)).toBeTruthy();
-		expect((network as HTMLSelectElement).value).toBe("allowed");
+		expect((network as HTMLSelectElement).value).toBe("on");
 	});
 });

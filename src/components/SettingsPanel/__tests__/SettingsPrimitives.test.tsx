@@ -88,3 +88,45 @@ describe("Settings presentation contract", () => {
 		expect(selected).toBe("appearance");
 	});
 });
+
+// Catches: the card heading slot drops contextual help or nests an interactive help trigger in the heading label.
+it("keeps card help next to its heading without changing the region name", () => {
+	const view = render(() => (
+		<SectionCard title="Local tools" help={<button>Explain tools</button>}>
+			<p>Tools</p>
+		</SectionCard>
+	));
+	const heading = view.getByRole("heading", { name: "Local tools" });
+	expect(heading.parentElement).toBe(view.getByRole("button", { name: "Explain tools" }).parentElement);
+	expect(view.getByRole("region", { name: "Local tools" })).toBeTruthy();
+});
+// Catches: adding banner details moves existing caller-owned status actions into the text column.
+it("keeps status details separate from legacy and named actions", () => {
+	const view = render(() => (
+		<StatusSummary
+			label="Not checked"
+			source="Local configuration"
+			details={<p>Check explicitly</p>}
+			actions={<button>Check now</button>}
+		>
+			<button>Existing action</button>
+		</StatusSummary>
+	));
+	const detail = view.getByText("Check explicitly");
+	expect(detail.parentElement).not.toContainElement(view.getByRole("button", { name: "Check now" }));
+	expect(detail.parentElement).not.toContainElement(view.getByRole("button", { name: "Existing action" }));
+});
+
+// Catches: absolutely positioned card actions overlap the description on compact screens.
+it("keeps heading actions in the shared heading layout before the description", () => {
+	const view = render(() => (
+		<SectionCard title="Upstreams" description="Proxy external servers" headingActions={<button>Add server</button>}>
+			<p>Existing content</p>
+		</SectionCard>
+	));
+	const heading = view.getByRole("heading", { name: "Upstreams" });
+	const action = view.getByRole("button", { name: "Add server" });
+	expect(heading.parentElement).toContainElement(action);
+	expect(heading.parentElement?.nextElementSibling).toBe(view.getByText("Proxy external servers"));
+	expect(view.getByRole("region", { name: "Upstreams" })).toBeTruthy();
+});

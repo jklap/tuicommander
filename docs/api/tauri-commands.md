@@ -1037,6 +1037,10 @@ Existing input/output device enumeration returns the same device objects on succ
 shared ego recovery transaction. It refuses a non-empty tracked composer and returns
 the error to the caller. HTTP equivalent: `POST /sessions/{id}/force-retry`.
 
+## Settings startup ownership
+
+`settings_action` shares its envelope and recovery behavior with HTTP and MCP; native caller trust does not bypass owner CAS or human confirmation. [Settings startup workflows](../backend/settings-startup.md) describes GitHub `list_accounts` and configured Ego `begin_login`/`login_status`, including owner revision checks, a human-operated terminal and credential readback distinct from process completion.
+
 ### CircleCI credential settings (#1991-bd88)
 
 The machine-scoped `circleci.token` descriptor is write-only. Read

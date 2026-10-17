@@ -6,11 +6,27 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+- Publish typed Settings account enumeration and configured Ego interactive login start/status, with human terminal authentication and separate credential readback (#1790-1011).
+### Fixed
+
+- Correct Settings accent-action text, compact navigation, wrapped help badges, shortcut groups, and workspace path presentation; hide the desktop-only Local tools card in browser mode (#1945).
+
+- Keep marker-projected terminal frames incremental: repaint dirty display rows and changed projection slots instead of clearing the whole canvas (#2003-f218).
+- Bound CLI marker planning to 128 rows above the viewport, reuse unchanged row generations, and resolve cold prompt ownership in bounded background steps (#2002-2239).
+
+- Keep quoted answer markers in Claude and Codex prompt echoes out of the answer gutter and Answers view, including long prompts above the viewport lookback, while preserving blank-separated indented answers (#1389-3a47).
+
+- Keep compact Settings color targets circular and reserve layout space for MCP heading actions (#1945-a78d).
+- Align Settings help badges and row actions, restore the General status/local-tools layout, and correct compact repository navigation and shortcut spacing (#1945-a78d).
+
 - Preserve unrelated repo-root tabs when a worktree is removed or recycled; terminal placement and cleanup follow cwd instead of stale workspace membership (#1999-95b0).
 - Keep the selected workspace's active tab and pane layout consistent when saved tabs are restored to another workspace by cwd (#1999-95b0).
 ### Added
 
 - Add an opt-in bounded terminal frame-workload recorder, rotated capture files and grid-paint replay timing for future WebView stall evidence; this does not replace the missing real-stall replay (#1638-c94c).
+- Publish read-only GitHub credential-source provenance and document GitHub/Ego startup ownership, confirmation and recovery; interactive Ego login and account enumeration remain explicit onboarding gaps (#1790-1011).
+
+- Add a typed **All settings (Expert)** inspector, catalogue identities on native Settings controls, descriptor-owned enum choices, resource-limit controls and runtime plugin shortcut discovery (#1789-796d).
 
 - Live Settings refresh after MCP writes, with value-free change generations, dirty-edit preservation and reconnect recovery (#1788-2163).
 - Do not restore ego question badges or notification sounds from answered selectors retained above a newer composer (#1997-eb30).
@@ -20,7 +36,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Discover and manage the write-only CircleCI credential through the shared Settings owner across MCP, IPC and HTTP (#1991-bd88).
 
 - Add desktop and mobile terminal Chat view for exact-bound ego sessions through the documented local transcript v1 export, with tool cards, goal continuation notices and compaction resets (#1969-ac9b).
-- Place the mobile jump-to-bottom control beside Send, outside the key bar so it cannot cover arrow keys (#1988-0233).
+- Float the mobile jump-to-bottom control over CLI/Chat output, at least 8px above the key bar and outside the composer (#2011-cdb9).
 
 - Preserve full mobile CLI startup, permission and selection dialogs in initial HTTP and live log-WebSocket screens (#1987-606c).
 - Wake standby shells before desktop raw input, even when tab visibility did not change again; reuse the remote input wake path (#1986-1236).

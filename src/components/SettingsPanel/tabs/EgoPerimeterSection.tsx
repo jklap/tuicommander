@@ -1,6 +1,7 @@
 import { type Component, createSignal, For, onCleanup, onMount, Show } from "solid-js";
 import { t } from "../../../i18n";
 import { type EgoPerimeterClient, egoPerimeterCli } from "../../../services/egoCli";
+import { settingOptions } from "../../../services/settingsCatalogue";
 import { reportSettingsConflicts, settingsRefresh } from "../../../services/settingsRefresh";
 import { appLogger } from "../../../stores/appLogger";
 import { asEgoCliError, type EgoPerimeterView, type EgoRootAccess, type EgoRootsEdit } from "../../../types/ego";
@@ -90,7 +91,11 @@ export const EgoPerimeterSection: Component<{ client?: EgoPerimeterClient }> = (
 						<SectionCard
 							title="Workspace access"
 							actions={
-								<button class={s.testBtn} onClick={() => setEditingRoots(!editingRoots())}>
+								<button
+									data-non-setting="Open or close perimeter editing and recovery instructions"
+									class={s.testBtn}
+									onClick={() => setEditingRoots(!editingRoots())}
+								>
 									{editingRoots() ? "Hide folder editor" : "Add folder"}
 								</button>
 							}
@@ -104,7 +109,16 @@ export const EgoPerimeterSection: Component<{ client?: EgoPerimeterClient }> = (
 								{loaded().profile ?? t("perimeter.userDefaults", "user defaults")}
 							</p>
 							<SettingRow label="Workspace · set in TUICommander">
-								{() => <span>{loaded().effective.workspace}</span>}
+								{(id, descriptionId) => (
+									<Input
+										data-non-setting="Read-only effective workspace reported by ego"
+										id={id}
+										aria-describedby={descriptionId()}
+										value={loaded().effective.workspace}
+										readOnly
+										title={loaded().effective.workspace}
+									/>
+								)}
 							</SettingRow>
 							<For each={loaded().effective.roots}>
 								{(root) => (
@@ -113,7 +127,11 @@ export const EgoPerimeterSection: Component<{ client?: EgoPerimeterClient }> = (
 										description={root.source}
 										badges={<StatusBadge label={root.access === "read" ? "Read only" : "Read and write"} />}
 										actions={
-											<button class={s.testBtn} onClick={() => setEditingRoots(true)}>
+											<button
+												data-non-setting="Open or close perimeter editing and recovery instructions"
+												class={s.testBtn}
+												onClick={() => setEditingRoots(true)}
+											>
 												Edit
 											</button>
 										}
@@ -131,6 +149,7 @@ export const EgoPerimeterSection: Component<{ client?: EgoPerimeterClient }> = (
 									{(id, descriptionId) => (
 										<>
 											<Input
+												data-setting-id="ego.roots"
 												type="text"
 												id={id}
 												aria-describedby={descriptionId()}
@@ -146,6 +165,7 @@ export const EgoPerimeterSection: Component<{ client?: EgoPerimeterClient }> = (
 									{(id, descriptionId) => (
 										<>
 											<Select
+												data-setting-id="ego.roots"
 												id={id}
 												aria-describedby={descriptionId()}
 												value={draft().rootAccess}
@@ -156,8 +176,18 @@ export const EgoPerimeterSection: Component<{ client?: EgoPerimeterClient }> = (
 														edit("rootAccess", value satisfies EgoRootAccess);
 												}}
 											>
-												<option value="read-write">{t("perimeter.readWrite", "Read and write")}</option>
-												<option value="read">{t("perimeter.read", "Read only")}</option>
+												<For
+													each={settingOptions(
+														"ego.roots",
+														{
+															"read-write": t("perimeter.readWrite", "Read and write"),
+															read: t("perimeter.read", "Read only"),
+														},
+														["items", "properties", "access"],
+													)}
+												>
+													{(option) => <option value={option.value}>{option.label}</option>}
+												</For>
 											</Select>
 										</>
 									)}
@@ -169,6 +199,7 @@ export const EgoPerimeterSection: Component<{ client?: EgoPerimeterClient }> = (
 									{(id, descriptionId) => (
 										<>
 											<Textarea
+												data-setting-id="ego.roots"
 												id={id}
 												aria-describedby={descriptionId()}
 												rows={2}
@@ -189,6 +220,7 @@ export const EgoPerimeterSection: Component<{ client?: EgoPerimeterClient }> = (
 									{(id, descriptionId) => (
 										<>
 											<Textarea
+												data-setting-id="ego.roots"
 												id={id}
 												aria-describedby={descriptionId()}
 												rows={2}
@@ -201,6 +233,7 @@ export const EgoPerimeterSection: Component<{ client?: EgoPerimeterClient }> = (
 								</SettingRow>
 								<div class={s.actions}>
 									<button
+										data-setting-id="ego.roots"
 										disabled={busy()}
 										data-ready={rootsDirty() ? "true" : undefined}
 										onClick={() => void attempt(() => client().setRoots(draft()), true)}
@@ -214,18 +247,25 @@ export const EgoPerimeterSection: Component<{ client?: EgoPerimeterClient }> = (
 							<SettingRow label="Network" hint="Network access for new ego runs.">
 								{(id, descriptionId) => (
 									<Select
+										data-setting-id="ego.network"
 										id={id}
 										aria-describedby={descriptionId()}
-										value={loaded().networkEnabled ? "allowed" : "blocked"}
+										value={loaded().networkEnabled ? "on" : "off"}
 										disabled={busy()}
 										onChange={(event) => {
-											const enabled = event.currentTarget.value === "allowed";
-											event.currentTarget.value = loaded().networkEnabled ? "allowed" : "blocked";
+											const enabled = event.currentTarget.value === "on";
+											event.currentTarget.value = loaded().networkEnabled ? "on" : "off";
 											void attempt(() => client().setNetwork(enabled), false);
 										}}
 									>
-										<option value="allowed">Allowed</option>
-										<option value="blocked">Blocked</option>
+										{/* This boolean-only owner action selects an explicit value; inheritance is available in All settings. */}
+										<For
+											each={settingOptions("ego.network", { on: "Allowed", off: "Blocked" }).filter(
+												(option) => option.value !== "",
+											)}
+										>
+											{(option) => <option value={option.value}>{option.label}</option>}
+										</For>
 									</Select>
 								)}
 							</SettingRow>
@@ -249,7 +289,11 @@ export const EgoPerimeterSection: Component<{ client?: EgoPerimeterClient }> = (
 									"Command isolation for spawned processes; profile-root tool permissions are separate."
 								}
 							>
-								<button class={s.testBtn} onClick={() => setVerifyOpen(!verifyOpen())}>
+								<button
+									data-non-setting="Open or close perimeter editing and recovery instructions"
+									class={s.testBtn}
+									onClick={() => setVerifyOpen(!verifyOpen())}
+								>
 									How to verify
 								</button>
 							</StatusSummary>
@@ -272,6 +316,7 @@ export const EgoPerimeterSection: Component<{ client?: EgoPerimeterClient }> = (
 							title="Advanced and diagnostics"
 							actions={
 								<button
+									data-non-setting="Explicitly refresh the configured Ego owner without saving"
 									class={s.testBtn}
 									disabled={busy()}
 									onClick={() => void attempt(() => client().perimeter(), true)}
@@ -289,7 +334,12 @@ export const EgoPerimeterSection: Component<{ client?: EgoPerimeterClient }> = (
 				)}
 			</Show>
 			<Show when={!view()}>
-				<button class={s.testBtn} disabled={busy()} onClick={() => void attempt(() => client().perimeter(), true)}>
+				<button
+					data-non-setting="Explicitly refresh the configured Ego owner without saving"
+					class={s.testBtn}
+					disabled={busy()}
+					onClick={() => void attempt(() => client().perimeter(), true)}
+				>
 					{t("perimeter.reload", "Reload from ego")}
 				</button>
 			</Show>
