@@ -33,6 +33,7 @@ export const RepoScriptsTab: Component<RepoTabProps> = (props) => {
 						<ContextualHelp label={t("repoScripts.label.devServerUrl", "Dev Server URL")} />
 					</div>
 					<Input
+						data-setting-id="repositories.repos.{key}.dev_server_url"
 						id="repo-dev-server-url"
 						type="url"
 						value={props.settings.devServerUrl ?? ""}
@@ -57,6 +58,7 @@ export const RepoScriptsTab: Component<RepoTabProps> = (props) => {
 						<ContextualHelp label={t("repoScripts.label.setupScript", "Setup Script")} />
 					</div>
 					<Textarea
+						data-setting-id="repositories.repos.{key}.setup_script"
 						id="repo-setup-script"
 						value={props.settings.setupScript ?? ""}
 						onInput={(e) => {
@@ -80,6 +82,7 @@ export const RepoScriptsTab: Component<RepoTabProps> = (props) => {
 						<ContextualHelp label={t("repoScripts.label.runScript", "Run Script")} />
 					</div>
 					<Textarea
+						data-setting-id="repositories.repos.{key}.run_script"
 						id="repo-run-script"
 						value={props.settings.runScript ?? ""}
 						onInput={(e) => {
@@ -103,6 +106,7 @@ export const RepoScriptsTab: Component<RepoTabProps> = (props) => {
 						<ContextualHelp label={t("repoScripts.label.archiveScript", "Archive Script")} />
 					</div>
 					<Textarea
+						data-setting-id="repositories.repos.{key}.archive_script"
 						id="repo-archive-script"
 						value={props.settings.archiveScript ?? ""}
 						onInput={(e) => {

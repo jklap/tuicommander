@@ -45,7 +45,9 @@ impl std::fmt::Debug for PollResult {
 }
 
 /// Where the active GitHub token came from.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default, schemars::JsonSchema,
+)]
 #[serde(rename_all = "snake_case")]
 pub enum TokenSource {
     /// GH_TOKEN or GITHUB_TOKEN environment variable

@@ -12,7 +12,6 @@
 }
 
 .panel {
-  --text-on-accent: var(--settings-on-accent);
   --fg-secondary: var(--settings-foreground);
   --fg-muted: var(--settings-foreground);
   width: min(1136px, calc(100vw - 48px));
@@ -199,7 +198,7 @@
 }
 
 .navLabel {
-  padding: 10px 16px 4px;
+  padding: 4px 16px 4px;
   font-size: var(--font-xs);
   font-weight: 600;
   letter-spacing: 0.08em;
@@ -1021,7 +1020,8 @@
   margin-left: 6px;
   border-radius: 50%;
   flex-shrink: 0;
-  background: rgba(255, 255, 255, 0.08);
+  background: transparent;
+  border: 1px solid var(--fg-secondary);
   color: var(--fg-muted);
   font-size: var(--font-xs);
   font-weight: 600;
@@ -1493,7 +1493,7 @@
 
 /* Shared row layout; existing field layout is retained unless opted in. */
 .settingRow { display: flex; justify-content: space-between; align-items: center; gap: 20px; padding: 12px 0; border-bottom: 1px solid var(--border); }
-.settingRow:last-child { border-bottom: 0; }
+.settingRow:last-child, .settingRow:has(+ .hint:last-child) { border-bottom: 0; }
 .settingRowText { flex: 1; min-width: 0; }
 .settingRowText label { font-size: 13px; font-weight: 600; color: var(--fg-primary); }
 .settingRowText .hint { color: var(--fg-secondary); margin-bottom: 0; }
@@ -1557,7 +1557,7 @@
 .notificationEventsHeading { margin: 20px 0 6px; font-size: 13px; font-weight: 600; color: var(--fg-primary); }
 .applicationPage .notificationEventsHeading label { margin: 0; font-size: inherit; font-weight: inherit; color: inherit; }
 .soundControls { display: flex; justify-content: flex-end; align-items: center; gap: 12px; }
-.soundPattern { width: 36px; display: inline-flex; justify-content: center; }
+.soundPattern { width: 36px; display: inline-flex; justify-content: center; padding: 4px; border-radius: var(--radius-md); background: var(--bg-tertiary); }
 
 @media (pointer: coarse) { .infoBadge { width: 44px; height: 44px; } }
 .infoBadge:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
@@ -1571,7 +1571,21 @@
 .content a { color: var(--link-foreground); }
 
 /* Keep contextual help with its label in stacked, row and grid fields. */
-.helpLabel { display: block; min-width: 0; }
+.helpLabel { display: flex; align-items: baseline; min-width: 0; width: fit-content; max-width: 100%; }
 .group .helpLabel { margin-bottom: 6px; }
 .helpLabel > label { display: inline; min-width: 0; margin-bottom: 0; }
 .helpLabel > .infoBadge { flex-shrink: 0; }
+
+.helpLabel > .settingHelp { flex-shrink: 0; }
+.helpLabel .infoBadge { width: 14px; height: 14px; border: 1px solid var(--fg-secondary); background: transparent; font-size: 10px; line-height: 1; }
+.navLabel > span { display: inline-flex; vertical-align: middle; line-height: 1; }
+@media (max-width: 600px) {
+  .panel { height: calc(100dvh - 24px); max-height: calc(100dvh - 24px); }
+  .header, .footer { padding: 8px 16px; }
+  .nav { box-sizing: border-box; padding-right: 24px; display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 8px; }
+  .navSearch { padding: 0; min-width: 0; }
+  .compactNav { min-width: 0; }
+  .content { scrollbar-gutter: auto; }
+  .settingRowControl:has(.colorSwatch) { align-items: flex-start; }
+  .settingRowControl > div:has(.colorSwatch) { justify-content: flex-start; }
+}

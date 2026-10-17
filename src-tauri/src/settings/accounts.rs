@@ -96,6 +96,16 @@ impl GithubSettings {
                 "confirmationClass": "ordinary"
             }
         });
+        let mut source = super::catalogue::schema::<crate::github_auth::TokenSource>();
+        source["x-setting"] = json!({
+            "sensitivity":"public", "apply":"live",
+            "effect":"Reports the runtime GitHub credential source without revealing credentials.",
+            "operations":["get"], "confirmationClass":"ordinary"
+        });
+        // Only provenance is public here: never register the sibling auth.secret projection.
+        schema["properties"]["auth"] = json!({
+            "type":"object", "properties":{"source":source}, "required":["source"]
+        });
         schema
     }
 

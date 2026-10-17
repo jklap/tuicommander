@@ -132,7 +132,7 @@ export const NotificationsTab: Component = () => {
 				title="Notifications"
 				breadcrumb="Application / Notifications"
 				description="Audio alerts, visual notices and operating-system notifications."
-				scope="Application"
+				scope="Application defaults"
 			/>
 			<SectionCard title={t("notifications.heading.notificationSettings", "Notification Settings")}>
 				<Show
@@ -144,6 +144,7 @@ export const NotificationsTab: Component = () => {
 					}
 				>
 					<SettingToggle
+						settingId="notifications.enabled"
 						row
 						checked={notificationsStore.state.config.enabled}
 						onChange={(v) => notificationsStore.setEnabled(v)}
@@ -152,6 +153,7 @@ export const NotificationsTab: Component = () => {
 
 					<ExpertSetting configKey="notifications.volume" value={notificationsStore.state.config.volume}>
 						<SettingSlider
+							settingId="notifications.volume"
 							row
 							label={t("notifications.label.masterVolume", "Master Volume")}
 							value={Math.round(notificationsStore.state.config.volume * 100)}
@@ -190,6 +192,7 @@ export const NotificationsTab: Component = () => {
 														})}
 													</p>
 													<button
+														data-non-setting="Explicit output-device discovery; does not select a device"
 														id={id}
 														aria-label={t("notifications.btn.chooseDevice", "Choose output device…")}
 														aria-describedby={descriptionId()}
@@ -205,6 +208,7 @@ export const NotificationsTab: Component = () => {
 											}
 										>
 											<Select
+												data-setting-id="notifications.audio_device"
 												id={id}
 												aria-describedby={descriptionId()}
 												value={notificationsStore.state.config.audio_device ?? ""}
@@ -226,6 +230,7 @@ export const NotificationsTab: Component = () => {
 												</For>
 											</Select>
 											<button
+												data-non-setting="Explicit output-device discovery; does not select a device"
 												class={s.testBtn}
 												style={{ "margin-top": "6px" }}
 												disabled={loadingDevices()}
@@ -258,6 +263,7 @@ export const NotificationsTab: Component = () => {
 												type="checkbox"
 												role="switch"
 												class={s.rowSwitch}
+												data-setting-id={`notifications.sounds.${sound.key}`}
 												checked={notificationsStore.state.config.sounds[sound.key]}
 												onChange={(event) => notificationsStore.setSoundEnabled(sound.key, event.currentTarget.checked)}
 											/>
@@ -265,6 +271,7 @@ export const NotificationsTab: Component = () => {
 												<SoundPatternSvg sound={sound.key} />
 											</span>
 											<button
+												data-non-setting="Preview the sound without changing its configuration"
 												class={s.testBtn}
 												aria-label={`Preview ${sound.label}`}
 												onClick={() => notificationsStore.testSound(sound.key)}
@@ -284,6 +291,7 @@ export const NotificationsTab: Component = () => {
 							<ContextualHelp label={t("notifications.label.orchestration", "Orchestration")} />
 						</div>
 						<SettingToggle
+							settingId="notifications.silence_remote_completions"
 							row
 							checked={notificationsStore.state.config.silence_remote_completions}
 							onChange={(value) => notificationsStore.setSilenceRemoteCompletions(value)}
@@ -298,7 +306,10 @@ export const NotificationsTab: Component = () => {
 					</div>
 
 					<div class={s.actions}>
-						<button onClick={() => notificationsStore.reset()}>
+						<button
+							data-non-setting="Reset the notification owner document to its defaults"
+							onClick={() => notificationsStore.reset()}
+						>
 							{t("notifications.btn.resetDefaults", "Reset Defaults")}
 						</button>
 					</div>
@@ -313,6 +324,7 @@ export const NotificationsTab: Component = () => {
 						<ContextualHelp label={t("notifications.label.toolbarBell", "Toolbar Bell")} />
 					</div>
 					<SettingToggle
+						settingId="notifications.toasts_in_bell"
 						row
 						checked={notificationsStore.state.config.toasts_in_bell}
 						onChange={(value) => notificationsStore.setToastsInBell(value)}
@@ -327,6 +339,7 @@ export const NotificationsTab: Component = () => {
 				</div>
 
 				<SettingToggle
+					data-non-setting="Client-local toast-card preference; no backend owner"
 					row
 					checked={notificationsStore.state.autoToastCards}
 					onChange={(enabled) => notificationsStore.setAutoToastCards(enabled)}
@@ -340,6 +353,7 @@ export const NotificationsTab: Component = () => {
 				<div class={s.group}>
 					<label>{t("notifications.label.prNotifications", "Pull Requests")}</label>
 					<SettingToggle
+						settingId="notifications.pr_native_notifications"
 						row
 						checked={notificationsStore.state.config.pr_native_notifications}
 						onChange={(value) => notificationsStore.setPrNativeNotifications(value)}
@@ -355,6 +369,7 @@ export const NotificationsTab: Component = () => {
 			</SectionCard>
 			<SectionCard title={t("notifications.heading.tasks", "Tasks")}>
 				<SettingToggle
+					data-non-setting="Client-local Tasks notification preference; no backend owner"
 					row
 					checked={tasksNotifications.enabled()}
 					onChange={(enabled) => tasksNotifications.setEnabled(enabled)}

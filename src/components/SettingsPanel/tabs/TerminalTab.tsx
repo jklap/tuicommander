@@ -291,11 +291,12 @@ export const TerminalTab: Component = () => {
 			<SettingPageHeader
 				title="Terminal"
 				description="Configure terminal typography, preview, and behavior."
-				scope="Application"
+				scope="Application defaults"
 				breadcrumb="Workspace / Terminal"
 			/>
 			<SectionCard title={t("appearance.heading.theme", "Theme")}>
 				<SettingSelect
+					settingId="app.theme"
 					row
 					label={t("appearance.label.terminalTheme", "Terminal Theme")}
 					value={settingsStore.state.theme}
@@ -307,6 +308,7 @@ export const TerminalTab: Component = () => {
 			<SectionCard title={t("general.heading.terminal", "Terminal")}>
 				<ExpertSetting configKey="app.shell" value={settingsStore.state.shell}>
 					<SettingInput
+						settingId="app.shell"
 						row
 						label={t("general.label.shell", "Shell")}
 						value={settingsStore.state.shell ?? ""}
@@ -319,6 +321,7 @@ export const TerminalTab: Component = () => {
 				<div class={w.typography}>
 					<div>
 						<SettingSelect
+							settingId="app.font_family"
 							row
 							label={t("appearance.label.terminalFont", "Terminal Font")}
 							value={settingsStore.state.font}
@@ -328,6 +331,7 @@ export const TerminalTab: Component = () => {
 						/>
 
 						<SettingSlider
+							settingId="app.default_font_size"
 							row
 							label={t("appearance.label.defaultFontSize", "Default Font Size")}
 							value={settingsStore.state.defaultFontSize}
@@ -340,6 +344,7 @@ export const TerminalTab: Component = () => {
 
 						<ExpertSetting configKey="app.font_weight" value={settingsStore.state.fontWeight}>
 							<SettingSlider
+								settingId="app.font_weight"
 								row
 								label={t("appearance.label.fontWeight", "Font Weight")}
 								value={settingsStore.state.fontWeight}
@@ -355,6 +360,7 @@ export const TerminalTab: Component = () => {
 						</ExpertSetting>
 
 						<SettingSelect
+							settingId="app.cursor_style"
 							row
 							label={t("appearance.label.cursorStyle", "Cursor Style")}
 							value={settingsStore.state.cursorStyle}
@@ -377,6 +383,7 @@ export const TerminalTab: Component = () => {
 			</SectionCard>
 			<SectionCard title="Behavior">
 				<SettingToggle
+					settingId="app.copy_on_select"
 					row
 					checked={settingsStore.state.copyOnSelect}
 					onChange={(v) => settingsStore.setCopyOnSelect(v)}
@@ -386,6 +393,7 @@ export const TerminalTab: Component = () => {
 
 				<ExpertSetting configKey="app.osc52_clipboard" value={settingsStore.state.osc52Clipboard}>
 					<SettingToggle
+						settingId="app.osc52_clipboard"
 						row
 						checked={settingsStore.state.osc52Clipboard}
 						onChange={(v) => settingsStore.setOsc52Clipboard(v)}
@@ -398,6 +406,7 @@ export const TerminalTab: Component = () => {
 				</ExpertSetting>
 
 				<SettingToggle
+					settingId="app.show_block_timestamps"
 					row
 					checked={settingsStore.state.showBlockTimestamps}
 					onChange={(v) => settingsStore.setShowBlockTimestamps(v)}
@@ -410,6 +419,7 @@ export const TerminalTab: Component = () => {
 
 				<ExpertSetting configKey="app.block_folding_enabled" value={settingsStore.state.blockFoldingEnabled}>
 					<SettingToggle
+						settingId="app.block_folding_enabled"
 						row
 						checked={settingsStore.state.blockFoldingEnabled}
 						onChange={(v) => settingsStore.setBlockFoldingEnabled(v)}
@@ -423,6 +433,7 @@ export const TerminalTab: Component = () => {
 
 				<ExpertSetting configKey="app.show_scrollbar_marks" value={settingsStore.state.showScrollbarMarks}>
 					<SettingToggle
+						settingId="app.show_scrollbar_marks"
 						row
 						checked={settingsStore.state.showScrollbarMarks}
 						onChange={(v) => settingsStore.setShowScrollbarMarks(v)}
@@ -436,6 +447,7 @@ export const TerminalTab: Component = () => {
 
 				<ExpertSetting configKey="app.scrollback_reflow" value={settingsStore.state.scrollbackReflow}>
 					<SettingToggle
+						settingId="app.scrollback_reflow"
 						row
 						checked={settingsStore.state.scrollbackReflow}
 						onChange={(v) => settingsStore.setScrollbackReflow(v)}

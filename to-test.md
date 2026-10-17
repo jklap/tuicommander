@@ -2137,6 +2137,7 @@ Needs an iPhone (iOS 16.4+, 18.4+ preferred), the desktop TUICommander running a
   Covered by tests: `tuic_state_busy_carries_no_prompt_row` (busy hooks carry row -1, prompt hooks the real row); headless run with 300 busy hooks and 3 prompts gave 3 ticks. Not verified: a screenshot of a long real session (earlier screenshots used simulated hooks).
 ## Answer highlight covers the whole answer (1389-3a47) — frontend only (HMR)
 
+- [ ] Scroll to a quoted `💬` line in a long pasted Claude prompt whose start is more than 32 rows above the viewport. The quoted line has no answer gutter or hidden marker; the real answer does. Repeat after scrolling far away and back to exercise a cold row cache. Confirm a blank-separated indented genuine answer remains visible. _(round 2: automated planner regressions cover both warm and missing prompt-prefix caches; live rendering remains unverified.)_
 - [ ] [VISUAL] In a live Claude session, get an answer with a 💬 line, wrapped rows and 3 or more continuation lines. Every row of the answer is tinted, up to the next bullet, prompt or marker. Nothing after the answer is tinted. The answers-only view shows the same extent. Take a screenshot. _(audit 2026-10-13: VISUAL-OWED — Screenshots unavailable and image viewing unsupported; rendered appearance not proved.)_ _(triage 2026-10-14: WAITS — Recorded answer-shape/presentation tests retained; exact live multirow tint and required screenshot cannot be captured while Chrome is locked and MacControl recording denied.)_
   Covered by tests: `answerExtent` (shared by overlay and answers-only view), suggestOverlay 32 and answersTurn 23 tests, critic tests for fenced code and indented prompts. Not verified: a live session screenshot.
 ## Mobile sub-agent rows nest under the coordinator (1698-46a8) — Rust restart required
@@ -2453,7 +2454,18 @@ Needs an iPhone (iOS 16.4+, 18.4+ preferred), the desktop TUICommander running a
 - [ ] Keep an unsaved field while MCP changes an untouched field, then the same field. Verify the draft survives and the conflict notice appears. Reconnect the browser and verify a fresh snapshot after the process generation resets.
 - [ ] In a remote machine's Agents/Upstreams editor, change settings on that daemon and verify only that machine reloads; local settings must not change. No Boss sessions or live credentials were used by automated verification.
 
+## Settings catalogue UI (#1789-796d)
+
+- [ ] After a Boss-controlled backend rebuild/restart, check plugin shortcut registration, unload and reconnect choice refresh; publication must not write keybindings.json.
+- [ ] In an isolated instance, use All settings to edit a scalar, nullable override and string list; verify source/readback, stale-revision conflict, dirty-event preservation, refusal/expiry and persisted-apply-failure recovery. Do not use production credentials.
+- [ ] Verify General Resource Limits and All settings at desktop/narrow widths and light/dark themes. Isolated General and All settings screenshots are captured under ~/Gits/.tmp/results/tuic-settings-mcp-1789-*.png. The light inspector DOM check showed its input inside the viewport with no document overflow; image review and narrow-screen checks remain pending.
+- [ ] Coordinator batch: source catalogue parity, allSettingsTab renderer/options/owner-write regressions, pluginSettingsTab, settings resource/background merge and keybindingActionPublication tests; Rust frontend_plugin_actions_reach_keybinding_owner_choices and catalogue generation consistency. No per-story GREEN run.
 - [ ] #1788-2163 critic fixes: after Boss rebuilds/restarts Rust, interrupt only a remote daemon event stream while health stays connected, then change settings and reconnect. Verify that owner refreshes after the generation resets, without reloading local or other remote settings. Keep a launch-instruction draft and issue two rapid repository-default edits during a settings refresh; verify the draft survives and both nonconflicting edits persist. No desktop restart was performed by the agent.
+
+## Settings startup contract (#1790-1011)
+
+- [ ] Coordinator batch: exercise the published GitHub/Ego settings facade with isolated owners, covering refusal/confirmation expiry, device-flow refusal/expiry, stale revisions and persisted apply/readback failure; never use production credentials.
+- [ ] Schema-only startup remains incomplete while account enumeration or typed Ego interactive login is absent. Human login completion requires explicit owner refresh; terminal exit is not success. See docs/backend/settings-startup.md.
 - [ ] After the next backend restart, check Claude trust, external-import and Bash permission dialogs in mobile CLI: all options and the footer must remain visible (#1987-606c). Rust changes require a manual restart to load.
 
 - [ ] After a manual Rust rebuild/restart, answer an ego selector and submit an ordinary prompt: no orange awaiting dot or question sound from the answered selector; a real new question still alerts (#1997-eb30).
