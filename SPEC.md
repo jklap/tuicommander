@@ -428,8 +428,10 @@ MCP callers can declare an existing linked worktree through
 `session action=declare_worktree worktree_path=/absolute/path`. Ownership comes
 from the immutable PTY launch directory and registered Git worktrees. The
 caller-only association persists under stable `TUIC_SESSION`, survives restart
-and does not change shell cwd or acquire cleanup ownership. MCP creation
-without a session spawn also places only the same-repository creator.
+and does not change shell cwd or acquire cleanup ownership. Tab placement follows
+cwd, not this association, during creation, OSC 7, reconnect and restore. Removing
+or recycling a worktree closes only terminals whose current cwd lies inside that
+checkout. A stale sidebar membership never authorizes closing an unrelated tab.
 
 
 Every workspace created by TUICommander is a linked Git worktree. Its refs and

@@ -4,6 +4,7 @@ import { appLogger } from "../../stores/appLogger";
 import { repoDefaultsStore } from "../../stores/repoDefaults";
 import { repoSettingsStore } from "../../stores/repoSettings";
 import { type RepositoryState, repositoriesStore } from "../../stores/repositories";
+import { closeWorktreeTerminals, removeWorktreeWorkspace } from "../../stores/terminalOwnership";
 import { terminalsStore } from "../../stores/terminals";
 import { timeBatch } from "../../utils/perfTrace";
 
@@ -295,7 +296,7 @@ export function createRepositoryRefreshCoordinator(deps: RepositoryRefreshCoordi
 		// (which caused the sidebar to flash/jump during refresh).
 		const storeIds = new Set(terminalsStore.getIds());
 		const toRemove: string[] = [];
-		const terminalsToClose: string[] = [];
+		const worktreesToClose: string[] = [];
 		const probeCandidates: Array<{ branchName: string; worktreePath: string; terminals: string[] }> = [];
 
 		const active = currentRepo.activeWorkspaceId;
@@ -398,7 +399,7 @@ export function createRepositoryRefreshCoordinator(deps: RepositoryRefreshCoordi
 				terminals,
 				worktreePath,
 			});
-			terminalsToClose.push(...terminals.filter((id) => storeIds.has(id)));
+			worktreesToClose.push(worktreePath);
 			toRemove.push(branchName);
 			markProcessed(repoPath, branchName);
 		});
@@ -415,11 +416,11 @@ export function createRepositoryRefreshCoordinator(deps: RepositoryRefreshCoordi
 		// Best-effort: a PTY may already be dead; log and continue so the
 		// branch removal in the batch below is not blocked.
 		await Promise.allSettled(
-			terminalsToClose.map(async (termId) => {
+			worktreesToClose.map(async (worktreePath) => {
 				try {
-					await deps.closeTerminal(termId, true);
+					await closeWorktreeTerminals(worktreePath, deps.closeTerminal);
 				} catch (err) {
-					appLogger.warn("terminal", `refreshAllBranchStats: failed to close terminal ${termId}`, err);
+					appLogger.warn("terminal", `refreshAllBranchStats: failed to close terminals in ${worktreePath}`, err);
 				}
 			}),
 		);
@@ -459,7 +460,7 @@ export function createRepositoryRefreshCoordinator(deps: RepositoryRefreshCoordi
 						if (source === active) repositoriesStore.setActiveWorkspace(repoPath, target);
 					}
 					for (const branchName of toRemove) {
-						repositoriesStore.removeWorkspace(repoPath, branchName);
+						removeWorktreeWorkspace(repoPath, branchName);
 					}
 					markBodyEnd();
 				}),

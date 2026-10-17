@@ -31,9 +31,8 @@ export function createTerminalWorktreeCoordinator(deps: TerminalWorktreeCoordina
 		const currentRepoPath = repositoriesStore.getRepoPathForTerminal(terminalId);
 		const currentWorkspaceId = repositoriesStore.findOwnerForTerminal(terminalId)?.workspaceId ?? null;
 
-		// Explicit backend placement remains authoritative even when git -C leaves
-		// the shell cwd unchanged or an OSC 7 notification arrives later.
-		const placementCwd = terminalsStore.get(terminalId)?.placementPath ?? newCwd;
+		// Declarations do not move a process: only its reported cwd determines placement.
+		const placementCwd = newCwd;
 		let target = findWorkspaceForCwd(placementCwd);
 		if (!target && currentRepoPath) {
 			const insideKnownRepo = repositoriesStore.getPaths().some((repoPath) => pathStartsWith(placementCwd, repoPath));

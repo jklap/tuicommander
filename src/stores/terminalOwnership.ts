@@ -1,6 +1,7 @@
 import { batch } from "solid-js";
+import { pathStartsWith } from "../utils/pathUtils";
 import { appLogger } from "./appLogger";
-import { globalWorkspaceStore } from "./globalWorkspace";
+import { globalWorkspaceStore, MANUAL_SCOPE } from "./globalWorkspace";
 import { placementWorkspaceFor, repositoriesStore, resolveRepoOwner } from "./repositories";
 import { terminalsStore } from "./terminals";
 
@@ -33,13 +34,20 @@ export function reconcileTerminalOwnership(terminalId?: string): void {
 		const terminal = terminalsStore.get(terminalId);
 		if (!terminal) continue;
 
-		const owner = resolveRepoOwner(terminal.placementPath ?? terminal.cwd);
+		const owner = resolveRepoOwner(terminal.cwd);
 		// Still unclaimed. Leave the parked tab where it is — moving it nowhere
 		// would only make it invisible.
 		if (!owner) continue;
 
 		const workspaceId = placementWorkspaceFor(owner);
-		if (!workspaceId) continue;
+		if (!workspaceId) {
+			// A selected linked checkout is not a substitute for an undiscovered root row.
+			const current = repositoriesStore.findOwnerForTerminal(terminalId);
+			if (current) repositoriesStore.removeTerminalFromWorkspace(current.repoPath, current.workspaceId, terminalId);
+			terminalsStore.setRepoPath(terminalId, null);
+			globalWorkspaceStore.promote(terminalId, MANUAL_SCOPE);
+			continue;
+		}
 
 		// A null `repoPath` is the parked marker: this tab sits in the Global
 		// Workspace because nothing claimed its cwd. Now something does, so it
@@ -101,4 +109,42 @@ export function reconcileTerminalOwnership(terminalId?: string): void {
 export function reclaimParkedTerminal(terminalId: string): void {
 	if (terminalsStore.get(terminalId)?.repoPath != null) return;
 	reconcileTerminalOwnership(terminalId);
+}
+
+/** Removal authority comes from current cwd, never sidebar membership or a declaration.
+ * Re-read each terminal after every await: another tab may cd while a close is pending. */
+export async function closeWorktreeTerminals(
+	worktreePath: string,
+	closeTerminal: (id: string, skipConfirm?: boolean) => Promise<void>,
+): Promise<void> {
+	if (!worktreePath) return;
+	const failures: unknown[] = [];
+	for (const id of terminalsStore.getIds()) {
+		const cwd = terminalsStore.get(id)?.cwd;
+		if (!cwd || !pathStartsWith(cwd, worktreePath)) continue;
+		try {
+			await closeTerminal(id, true);
+		} catch (error) {
+			failures.push(error);
+		}
+	}
+	if (failures.length > 0) {
+		throw new AggregateError(failures, `${failures.length} terminal(s) could not be closed`);
+	}
+}
+
+/** Drop a removed checkout's index without losing unrelated tabs filed under it. */
+export function removeWorktreeWorkspace(repoPath: string, workspaceId: string): void {
+	const survivors = [...(repositoriesStore.get(repoPath)?.workspaces[workspaceId]?.terminals ?? [])];
+	batch(() => {
+		repositoriesStore.removeWorkspace(repoPath, workspaceId);
+		for (const id of survivors) {
+			if (!terminalsStore.get(id)) continue;
+			reconcileTerminalOwnership(id);
+			if (!repositoriesStore.findOwnerForTerminal(id)) {
+				terminalsStore.setRepoPath(id, null);
+				globalWorkspaceStore.promote(id, MANUAL_SCOPE);
+			}
+		}
+	});
 }

@@ -75,7 +75,7 @@ export interface TerminalData {
 	 * home as soon as a repo claims the path.
 	 */
 	repoPath: string | null;
-	/** Backend-authored worktree placement, independent of the shell cwd. */
+	/** Legacy backend placement metadata; never overrides cwd for tab placement or cleanup. */
 	placementPath?: string | null;
 	awaitingInput: AwaitingInputType;
 	awaitingInputConfident: boolean; // High-confidence detection — don't clear on idle→busy

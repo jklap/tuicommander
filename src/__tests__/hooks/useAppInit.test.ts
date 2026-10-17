@@ -1020,7 +1020,7 @@ describe("initApp", () => {
 		repositoriesStore.setWorkspace("/repo", "main", { worktreePath: "/repo" });
 		repositoriesStore.setWorkspace("/repo", "embedded", { worktreePath: "/repo/packages/app/" });
 		repositoriesStore.add({ path: "/repo/packages/app", displayName: "Nested" });
-		repositoriesStore.setWorkspace("/repo/packages/app", "main", { worktreePath: null });
+		repositoriesStore.setWorkspace("/repo/packages/app", "main", { worktreePath: "/repo/packages/app" });
 		repositoriesStore.setActiveWorkspace("/repo/packages/app", "main");
 
 		const deps = createMockDeps({
@@ -1435,8 +1435,8 @@ describe("initApp", () => {
 		expect(branch?.terminals.length).toBe(1);
 	});
 
-	// Catches: reconnect filing a declared worktree agent under its unchanged shell cwd.
-	it("restores declared worktree placement without changing shell cwd", async () => {
+	// Catches: reconnect uses a stale declaration to file a root agent under a linked worktree.
+	it("restores a repo-root tab by cwd despite a stale declared worktree", async () => {
 		repositoriesStore.add({ path: "/repo", displayName: "Repo" });
 		repositoriesStore.setWorkspace("/repo", "main", { worktreePath: "/repo" });
 		repositoriesStore.setWorkspace("/repo", "feature", { worktreePath: "/repo__wt/feature" });
@@ -1457,7 +1457,7 @@ describe("initApp", () => {
 		await initApp(deps);
 		const declared = terminalsStore.findBySessionId("declared-survivor")!;
 		const sibling = terminalsStore.findBySessionId("sibling-survivor")!;
-		expect(repositoriesStore.findOwnerForTerminal(declared)?.workspaceId).toBe("feature");
+		expect(repositoriesStore.findOwnerForTerminal(declared)?.workspaceId).toBe("main");
 		expect(repositoriesStore.findOwnerForTerminal(sibling)?.workspaceId).toBe("main");
 		expect(terminalsStore.get(declared)?.cwd).toBe("/repo");
 		expect(terminalsStore.get(declared)?.tuicSession).toBe("stable-caller");

@@ -2027,13 +2027,13 @@ describe("repositoriesStore", () => {
 			});
 		});
 
-		it("falls back to the active workspace when no workspace records the root", async () => {
+		it("does not misfile a root terminal in the active linked worktree before root discovery", async () => {
 			const { placementWorkspaceFor } = await import("../../stores/repositories");
 			testInScope(() => {
 				store.add({ path: "/repo", displayName: "test" });
 				store.setWorkspace("/repo", "feature", { worktreePath: "/repo__wt/feature" });
 				store.setActiveWorkspace("/repo", "feature");
-				expect(placementWorkspaceFor(rootOwner)).toBe("feature");
+				expect(placementWorkspaceFor(rootOwner)).toBeNull();
 			});
 		});
 
