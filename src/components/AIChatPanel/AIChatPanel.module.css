@@ -1257,6 +1257,11 @@
   margin-bottom: 4px;
 }
 
+.noticeBody {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
 .noticeAction {
   margin-top: 8px;
   background: var(--bg-tertiary);

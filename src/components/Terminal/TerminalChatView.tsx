@@ -63,7 +63,7 @@ export const ViewModeToggle: Component<{ terminalId: string; onWheel?: (e: Wheel
 	};
 	return (
 		<Show when={term()?.agentType}>
-			<div class={s.toggle} role="group" aria-label="Terminal view" onWheel={props.onWheel}>
+			<div class={s.toggle} data-mode={mode()} role="group" aria-label="Terminal view" onWheel={props.onWheel}>
 				<button
 					type="button"
 					class={s.toggleButton}

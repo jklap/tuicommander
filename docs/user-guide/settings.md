@@ -636,3 +636,11 @@ values (or a set credential). Plugin management uses compact secondary actions.
 Telegram replies now use TUIC-driven receipt (👀), working (👨‍💻), waiting (🤔), answered (👍) and failed (👎) reactions. An ephemeral native draft shows Italian status lines or unapproved agent previews; it refreshes while work continues and the final reply replaces it. Acknowledgement of work requires inbox Read and a new recipient turn. PTY intent/activity and AI Chat assistant chunks share request correlation; finish remains authoritative after draft retirement. Telegram-mail-woken AI Chat turns automatically send their settled assistant text if finish has not answered. Queue and no-reply notices occur at ten minutes and sixty seconds after Read respectively. Restart keeps no request history. Phone rendering requires a live check after the backend restart.
 
 Settings search includes page titles and shared card controls. Page-title results scroll to the page header; when a page and card share a title, control results use the card. Runtime status badges and summaries are not settings search targets.
+
+### CircleCI Settings owner (#1991-bd88)
+
+Settings discovery includes the write-only machine setting `circleci.token`.
+Typed `set_token` and `clear_token` actions share the existing token owner across
+MCP, IPC and HTTP. Readback reports stored presence only (`set`, `unset`,
+`unavailable`), never a secret. Git & GitHub keeps its effective-source status;
+removing a stored token leaves environment and CircleCI CLI fallbacks unchanged.

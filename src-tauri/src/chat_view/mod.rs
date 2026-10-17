@@ -1,6 +1,7 @@
-//! The chat view of a Claude, Grok or Codex terminal: its transcript, tailed and projected.
+//! The chat view of a Claude, Grok, Codex or ego terminal.
 //!
-//! The grid is never read. The bound transcript file is tailed by byte offset
+//! The grid is never read. ego uses its documented incremental transcript export;
+//! other bound transcript files are tailed by byte offset
 //! (`transcript_tail`), each row goes through the agent's adapter, and the
 //! resulting ACP updates land in a bounded per-terminal log. A client asks for
 //! the log from the sequence it last saw; if the ring no longer holds that
@@ -14,6 +15,7 @@
 mod adapter;
 pub(crate) mod claude;
 pub(crate) mod codex;
+pub(crate) mod ego;
 pub(crate) mod grok;
 
 use std::collections::{HashMap, VecDeque};
@@ -120,17 +122,20 @@ enum Agent {
     Claude,
     Grok,
     Codex,
+    Ego,
 }
 
 /// The transcript a terminal's agent is bound to.
 struct Bound {
     path: PathBuf,
     agent: Agent,
+    export: Option<ego::ExportSource>,
 }
 
 /// One terminal's tail.
 struct View {
     agent: Agent,
+    export: Option<ego::ExportSource>,
     path: PathBuf,
     offset: u64,
     /// The first window has been read; later reads are plain appends.
@@ -148,6 +153,7 @@ impl View {
     fn for_agent(agent: Agent, path: PathBuf, max_entries: usize, max_bytes: usize) -> Self {
         Self {
             agent,
+            export: None,
             path,
             offset: 0,
             attached: false,
@@ -173,10 +179,11 @@ impl View {
     /// Point at the transcript of an agent that may differ from the last one
     /// (the tab's agent exited and another started): never mixes two formats.
     fn rebind_to(&mut self, bound: Bound) {
-        if bound.agent == self.agent {
+        if bound.agent == self.agent && bound.export == self.export {
             return self.rebind(bound.path);
         }
         self.agent = bound.agent;
+        self.export = bound.export;
         self.bound_at = Instant::now();
         self.path = bound.path;
         self.restart();
@@ -194,6 +201,19 @@ impl View {
     /// moved.
     fn advance(&mut self, window: u64) -> std::io::Result<bool> {
         let before = (self.log.epoch, self.log.next_seq);
+        if let Some(source) = self.export.clone() {
+            let after = match &self.adapter {
+                TranscriptAdapter::Ego(adapter) => adapter.after,
+                _ => 0,
+            };
+            source.read(after, |line| {
+                for update in self.adapter.absorb(line) {
+                    self.log.push(update);
+                }
+                Ok(())
+            })?;
+            return Ok((self.log.epoch, self.log.next_seq) != before);
+        }
         let identity = same_file::Handle::from_path(&self.path)?;
         if self
             .file_identity
@@ -264,6 +284,27 @@ fn bound_transcript(state: &AppState, session_id: &str) -> Result<Bound, String>
         .session_states
         .get(session_id)
         .and_then(|s| s.agent_type.clone());
+    if agent_type.as_deref() == Some("ego") {
+        let pid = crate::pty::session_leaf_pid(state, session_id)
+            .ok_or_else(|| not_bound("no live ego process is bound to this terminal"))?;
+        let (home, session) = crate::agent_session::ego_chat_session_for_pid(pid)
+            .ok_or_else(|| not_bound("no exact ego lease binding for this terminal"))?;
+        let program = PathBuf::from(&state.config.read().ego_executable);
+        if !program.is_absolute() || !program.is_file() {
+            return Err(not_bound(
+                "configure an absolute ego executable supporting local transcript v1 in Settings",
+            ));
+        }
+        return Ok(Bound {
+            path: home.join(&session),
+            agent: Agent::Ego,
+            export: Some(ego::ExportSource {
+                program,
+                home,
+                session,
+            }),
+        });
+    }
     let (agent, path) = if agent_type.as_deref() == Some("codex") {
         let path = crate::codex_binding::transcript(state, session_id)
             .ok_or_else(|| not_bound("no exact Codex hook binding for this terminal"))?;
@@ -280,7 +321,11 @@ fn bound_transcript(state: &AppState, session_id: &str) -> Result<Bound, String>
     if !path.is_file() {
         return Err(not_bound("the agent has not written a transcript yet"));
     }
-    Ok(Bound { path, agent })
+    Ok(Bound {
+        path,
+        agent,
+        export: None,
+    })
 }
 
 /// The Grok transcript of the process in this terminal, from `active_sessions.json`
@@ -307,12 +352,12 @@ pub(crate) fn chat_view_snapshot(
         Some(view) => {
             let must_rebind = {
                 let guard = view.lock();
-                guard.agent == Agent::Codex
+                matches!(guard.agent, Agent::Codex | Agent::Ego)
                     || state
                         .session_maps
                         .session_states
                         .get(session_id)
-                        .is_some_and(|s| s.agent_type.as_deref() == Some("codex"))
+                        .is_some_and(|s| matches!(s.agent_type.as_deref(), Some("codex" | "ego")))
                     || guard.bound_at.elapsed() >= REBIND_EVERY
             };
             if must_rebind {
@@ -326,12 +371,10 @@ pub(crate) fn chat_view_snapshot(
             views
                 .entry(session_id.to_owned())
                 .or_insert_with(|| {
-                    Arc::new(Mutex::new(View::for_agent(
-                        bound.agent,
-                        bound.path,
-                        MAX_LOG_ENTRIES,
-                        MAX_LOG_BYTES,
-                    )))
+                    let mut view =
+                        View::for_agent(bound.agent, bound.path, MAX_LOG_ENTRIES, MAX_LOG_BYTES);
+                    view.export = bound.export;
+                    Arc::new(Mutex::new(view))
                 })
                 .clone()
         }
@@ -450,7 +493,7 @@ fn tick(state: &AppState, session_id: &str, view: &Arc<Mutex<View>>) -> Tick {
         let v = view.lock();
         (
             v.last_read.elapsed(),
-            v.agent == Agent::Codex || v.bound_at.elapsed() >= REBIND_EVERY,
+            matches!(v.agent, Agent::Codex | Agent::Ego) || v.bound_at.elapsed() >= REBIND_EVERY,
         )
     };
     if unread_for > VIEWER_IDLE {
