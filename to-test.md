@@ -1,3 +1,54 @@
+## Agent exit backend cleanup (1990-66ac) — Rust restart required
+
+- [ ] After Boss manually restarts `make dev` or installs `make build`, exit Claude from a mobile-only terminal. Confirm shell output replaces the old agent screen in both the open view and a fresh page, and the session card drops the old intent/task. Repeat with an agent that restores its alternate screen normally. No live desktop was restarted by this peer.
+
+## Desktop standby input recovery (1986-1236) — Rust restart required
+
+- [ ] After Boss manually restarts `make dev` or installs `make build`, let an isolated plain-shell terminal enter standby after its foreground child exits. Confirm desktop typing wakes it and executes the command without switching tabs again. Repeat by viewing the terminal and by sending from the phone. The running backend was not restarted; the real-PTY regression is not evidence that Boss's current binary loaded this fix.
+
+## Mobile agent exit recovery (1985-45bd)
+
+- [ ] [VISUAL] On a phone, exit a throwaway viewed ego session while its question is open, then type and send a shell command. Confirm agent/question controls disappear and shell output/input remain usable. Repeat with Claude Chat open and after reconnecting the output socket. Close the PTY and confirm Session ended offers Back. Component regressions do not prove phone touch behavior; no live production sessions were used.
+## Live Settings credentials (1984-3472) — Rust restart required
+
+- [ ] After Boss manually restarts `make dev` or installs `make build`, use an isolated instance to approve a username or password change in Settings. Confirm the save succeeds and new Basic Auth/login requests use the new credentials without restarting the listener. Real headless listener port changes must still report persisted-but-unavailable application. No live desktop restart was performed by this peer.
+
+## Mobile human replies (1980-47b7) — Rust restart required
+
+- [ ] After Boss manually restarts `make dev` or installs `make build`, answer an ego free-text question from the phone, both with its card open and with the ordinary composer. Type an answer before opening the card, then open it and Send; confirm the complete answer reaches the agent and it continues. In a fresh ego session, confirm the card shows only the question, not the startup banner or shortcut help. Use a recognized picker to select an option, then verify a typed prose reply to that picker explains the selection requirement and keeps the draft. No live desktop was restarted.
+- [ ] [VISUAL] After the Mac unlocks, capture the mobile free-text question, picker selection and refused-answer toast at phone width. Supplied incident screenshots were read; no new screenshots were taken while the screen was locked. No CSS or layout change is part of this fix.
+## Mobile voice handset (1979-89e1)
+
+- [x] [VISUAL] Capture the idle handset in the phone More menu and tablet header in Commander and Paper. _(verified: screenshot-only captures at390×844 and834×844 in `.tmp/mobile-question-visual/after-1979/png/`; visible menu action230×44 and header action44×44; no live microphone or backend access.)_
+- [ ] [VISUAL] Capture the armed handset and unchanged composer dictation microphone on a real voice session. The isolated presentation fixture only captures the idle handset; existing armed/unarmed component tests remain for batch integration.
+
+## Readable mobile pushes (1978-9cfe) — Rust restart required
+
+- [ ] After Boss restarts `make dev` or installs `make build`, receive an awaiting/progress push from a named session and an unnamed agent session. Confirm readable names and progress text, no UUID/tool JSON in the displayed body, and that tapping opens the correct session. No live desktop restart or phone push was performed by this peer.
+## Soft-wrap text reconstruction (1977-063c) — Rust restart required
+
+- [ ] After Boss manually restarts `make dev` or installs `make build`, compare mobile CLI output and MCP session text with raw output for `unrestricted filesystem access` at 24 columns and a mid-word wrap at 64 columns. Confirm spaces, copied selection, ego question labels and explicit hard line breaks. At four columns, `abc界x` must copy and read as `abc界x`, without a space before `界`. The live desktop was not restarted by this peer.
+## Mobile Claude pickers (1971-5834 / 1972-128e) — Rust restart required
+
+- [ ] After Boss manually restarts `make dev` or installs `make build`, open a throwaway Claude terminal in the mobile CLI view. Verify `/resume` shows its session rows and search results, then use key-bar Up/Down and Enter to resume one. The awaiting AskUserQuestion arrows must move selection without changing a local answer draft. The isolated headless regression and capture evidence do not load the Rust fix into the running desktop app.
+- [ ] Capture mobile screenshots of the populated `/resume` list and a moved AskUserQuestion selection after macOS is unlocked. The coordinator authorized skipping these captures while the screen was locked; no screenshot was claimed.
+
+## Settings restyle integration (1945-a78d)
+
+- [ ] [VISUAL] After the Mac unlocks, capture isolated worktree Settings against the approved 2026-10-16 mock, not Boss's desktop. Capture Commander dark and Paper light at 1400×900 for all available pages across Application, Workspace, AI, Integrations, Plugin settings and Repositories. Include the selected machine/repository/plugin source, search results and a revealed expert field. Capture each theme at 780×900 and 390×844 with long repository/plugin names, paths, validation text and contextual help. Check stacked rows, compact page selection, wrapping, 44px touch targets, independent scrolling and stable shell size. Capture delayed plugin loading, empty search/catalogue, failed read and rejected-write recovery without fabricated live-service status. Screen locked during S10; no screenshots or live desktop mutation claimed.
+
+## Settings transport confirmation (1787-4778) — Rust restart required
+
+- [ ] After Boss manually restarts `make dev` or installs `make build`, use an isolated instance. Replay a gated HTTP or native settings edit with its `approval` proposal ID and `confirm: true`; approve the existing dialog and verify persistence. Decline another edit and verify no write. Confirm that replacing tunnel forwards, including an empty list, now asks for approval. No live desktop was restarted by this peer.
+
+## Mobile session Chat appearance (1974-e6ae)
+
+- [ ] After the Mac unlocks, capture `src/__tests__/browser/sessionChatAppearance.html` on isolated worktree Vite: desktop at 1000×900 and `?mobile` at 360×800, 390×844 and 430×900; repeat with `theme=light` (Commander dark and Paper light). Compare baseline `ea8c46bed6` and the 1974 commit side by side. Copy only the layout fixture into the baseline checkout; keep its baseline production CSS. The fixture uses real session transcript/switch/input components and synthetic text, not an agent transport.
+- [ ] Inspect the real mobile session detail Chat after integration: user prompt tint, folded tools, answer card, hint and existing composer in both themes. Verify send, scroll, CLI/Chat switching and answering remain usable on a phone; no touch or screenshot evidence is claimed by the static checks.
+
+## Relay room expiration (1932-8398) — standalone relay rebuild required
+
+- [x] Expired peers cannot forward into a recreated room, remove replacement peers, or refresh their activity; idle socket readers terminate. _(verified: Linux rb targeted relay tests, including different-owner and same-owner room reuse and stale channel identity.)_ Rebuild and restart any separately deployed `tuic-relay` binary to load this fix. This is not a desktop backend edit; no live TUIC restart is needed or performed.
 ## Managed injection recovery (1957-38c1) — Rust restart required
 
 - [ ] Run a full fake-agent delayed-echo E2E in an isolated headless test instance with a real PTY. Delay the fake agent's composer echo after Enter to force uncertain injection, queue a later BG DONE wake, then render a fresh stable empty ego composer. Verify the later wake reaches the fake agent once without replaying the earlier uncertain payload, raw input returns a bounded uncertainty error while the reader is stalled, and close terminates the stalled session. Use the recorded ego composer fixtures for screen semantics; the existing recording-writer regression is not this process-level E2E. Do not use Boss's instance or sessions. This check remains unverified.
@@ -40,7 +91,7 @@
 ## Plugin hot reload re-reads sub-modules (1809-010d) — Rust restart required
 ## Settings owner prerequisites (1787-4778) — Rust restart required
 
-- [ ] After Boss manually restarts `make dev` or installs `make build`, verify isolated owner requests follow an Ego launch profile change and first configuration without recreating the registry. Verify removal of an on-connect SSH connection stops its ephemeral daemon after settings persistence. General MCP cutover remains blocked by owner inventory gaps; the existing config tool stays available. Targeted owner regressions cover the saved-record callback, profile resolution and bindings-save failure. Do not restart the running app for this check.
+- [ ] After Boss manually restarts `make dev` or installs `make build`, verify isolated owner requests follow an Ego launch profile change and first configuration without recreating the registry. Verify removal of an on-connect SSH connection stops its ephemeral daemon after settings persistence. The integrated cutover closes the owner inventory gaps and replaces the config tool with settings; load the batch build before checking this path. Targeted owner regressions cover the saved-record callback, profile resolution and bindings-save failure. Do not restart the running app for this check.
 ## Orphan removal threading (1638-c94c) — Rust restart required
 
 - [ ] After Boss manually restarts `make dev` or installs `make build`, remove a throwaway orphan worktree through the desktop cleanup UI. Record desktop heartbeat continuity and independent backend-request timings during removal. The module-boundary regression covers async/blocking-pool placement, not a live heartbeat replay. No second desktop instance was launched.
@@ -2267,14 +2318,20 @@ Needs an iPhone (iOS 16.4+, 18.4+ preferred), the desktop TUICommander running a
 - [ ] After installing the Tasks provider data update and moving the existing GitHub Work `data/config.json` to `data/work-items.json`, confirm GitHub Work loads and Tasks setup saves/reloads its repository. Repeat setup with Jira and GitLab. Backend code is unchanged; the Rust edit adds a regression test only.
 - [ ] #1904-9eef: After Boss restarts `make dev` (or rebuilds release), verify new launch/MCP marker instructions permit 💬 at the start of list-item text. In a Claude session, emit `- 💬 **Answer.**` with an indented continuation and nested item, followed by an unmarked sibling; check the green rule and hidden marker in CLI and Chat, then Answers-only scope. Frontend behavior does not require a Rust restart; updated launch instructions do.
 
+## Settings cutover (#1787-4778)
+
+- [ ] After Boss restarts make dev or rebuilds release, enable settings in trusted MCP UI. Confirm an old config-enabled installation does not auto-enable settings.
+- [ ] After Boss loads the integrated settings build, use a throwaway named instance to compare prompt create/get/edit/remove over MCP, HTTP and IPC; stale revisions must conflict and disabled meta calls must fail. Isolated MCP/HTTP/native-facade readback passed in batch integration; live desktop IPC remains unverified.
+- [ ] Start GitHub device login, log out before completion, then finish browser authorization. The old flow must expire without restoring credentials. Repeat with disconnect and an additional account.
+- [ ] Confirm an exposure patch displays a redacted backend diff on desktop and phone; approve once, replay exact request, then verify approval cannot be reused.
 ## Settings choice discovery (#1908-c327)
 
 - [ ] After Boss restarts `make dev` or installs a rebuilt release, open Notifications and explicitly refresh output devices. Verify real device names/default markers and selection persistence. Disconnect or deny the audio backend and verify failure is not shown as a supported empty device list. No hardware success is claimed by the isolated owner tests.
 
 - [ ] After the next scheduled backend rebuild, refresh Claude run-config model choices, save a model and confirm existing sessions remain unchanged (#1910-451e). No live instance was started during implementation.
-- [ ] After the next planned rebuild, verify Telegram token replacement with a real bot, presence-only readback, clear, and add/remove of an isolated private-chat ID. Verify the existing poller wakes without starting a second owner. Do not use production credentials in automated tests.
+- [ ] After the next planned rebuild, verify Telegram token replacement with a real bot, presence-only readback, clear, and add/remove of an isolated private-chat ID. Verify the existing poller wakes without starting a second owner. Do not use production credentials in automated tests. _(Story #1916, read-only desktop check 2026-10-15: `telegram_settings` returned `enabled:true`, `token_set:true`, no token-value property, zero chats, `connected:false`, and `polling_owner:null`. Presence-only readback is verified; live token validation and single-poller wake still need an isolated real bot/private chat. No setup mutation or restart was performed.)_
 
-- [ ] After planned settings cutover/rebuild, set and clear credentials on an isolated saved connection; verify presence-only replies, teardown/reconnect, and that remote-target requests do not mutate local credentials. Automated tests use the in-memory vault, not a real account or Keychain. _(audit 2026-10-15, #1913: NOT READY — `ConnectionCredentialSettings` has no production constructor/caller; only `settings/remote_tests.rs` instantiates it. A desktop restart alone cannot verify runtime reconciliation or remote-target isolation. The typed owner, catalogue and prior rb tests are landed; cutover wiring must supply the actual runtime callback before this live check. Unauthenticated read-only HTTP probe returned 401; no credentials or live connection state were accessed.)_
+- [ ] After planned settings cutover/rebuild, set and clear credentials on an isolated saved connection; verify presence-only replies, teardown/reconnect, and that remote-target requests do not mutate local credentials. Automated tests use the in-memory vault, not a real account or Keychain. _(integration 2026-10-17, #1913: the shared settings registry now supplies the production runtime callback. Isolated dispatch tests passed for addressed-runtime reconciliation, disconnected-owner preservation and foreign-target refusal. Real credential storage and live reconnect remain unverified; no credentials or live connection state were accessed.)_
 - [ ] After Boss restarts the Rust backend, start a direct Gemini session in a trusted workspace, upload a PNG and ask it to read the image. There must be no trust prompt for the session attachment directory. Repeat with ego in ro, workspace and adaptive sandbox modes; the read must succeed without approval. Check a resumed and a typed-by-name launch. ACP extra-directory grants remain unsupported. (#1833-aa60)
 - [ ] After Boss restarts the Rust backend, verify the internal Ego settings owner with an isolated EGO_HOME: exec_paths/profile edits, base-only auth presence, and stale-revision rejection. No live config or credential commands are required (#1907-0f9f).
 - [ ] #1438-79b4 (closure handoff 2026-10-15): After Boss confirms readiness and pe-3 is idle, deploy on mint; register a disposable agent with Telegram, send phone text while idle and busy, observe draft/final replies and blocked/done notices, press a callback button, unregister and confirm the no-agent reply.
@@ -2365,8 +2422,23 @@ Needs an iPhone (iOS 16.4+, 18.4+ preferred), the desktop TUICommander running a
 - [ ] Telegram ACP replies (#1959-162a): after Boss manually restarts `make dev` or rebuilds release, send two requests and explicitly finish the first before a streaming tick. The first ACP turn must not also answer the second request. The pre-fix loopback regression recorded duplicate finals; post-fix integration and live phone checks remain coordinator-owned. Rust changes do not hot-reload.
 
 - [ ] After Boss rebuilds/restarts TUIC, use an ego executable with local transcript v1 support and verify an exact-bound ego terminal switches to Chat on desktop and mobile, follows completed messages/tool cards, shows goal continuation notices, and resets after compaction (#1969-ac9b). Rust changes do not hot-reload. Prerequisite: land ego #532 (`0821caee`, integrated in `batch/ego-1016-8`) and configure that rebuilt executable in Settings. The installed ego rejects `--format transcript`; the existing four-theme/viewport PDF evidence replays a real CLI recording but does not prove a live terminal binding.
+- [ ] Settings typed-owner cutover (#1787-4778): after Boss restarts make dev or installs a rebuilt release, enable settings through trusted UI and verify MCP/HTTP/IPC readback, owner choice refresh, typed credential presence, one-connection reconnect, and rejected remote/non-owning targets in an isolated instance. No live app restart was performed by the agent.
 - [ ] After Boss manually restarts `make dev` or rebuilds release, check a disposable no-remote repo whose main checkout uses `feat/macos-mvp`: integrated linked worktrees show Merged, not Unknown. A detached main checkout without main/master or a valid configured base shows No base branch with a reason. Rust does not hot-reload (#1961-bab6).
 ## Standby job control and remote activity (1962-4182) — Rust restart required
 
 - [ ] After Boss manually restarts `make dev` or installs `make build`, use an isolated disposable PTY: an agent launched as an interactive shell foreground job must remain running when standby would otherwise apply, with no suspended-job line. An eligible directly launched group must wake to a usable prompt. Remote HTTP output reads, typing and observer disconnects must postpone standby for the full configured timeout. The committed real-PTY regressions cover these paths; the current desktop does not load Rust changes until restart.
 - [ ] After Boss restarts `make dev` (or installs a rebuilt release), print two ego intents with the second wrapping across the old composer rows. Confirm Context and the non-custom tab title show the latest intent (#1964-b32e). The Rust change does not hot-reload. Automated pre-fix replay evidence is recorded in the story; GREEN is owned by the batch integrator.
+
+- [ ] Mobile CLI and Chat: scroll back to show the key-bar down-arrow above Send, tap to resume latest output, and manually return to bottom to hide it (#1975-4a38).
+## Ego mobile question forms (1973-3d1b) — backend restart required
+
+- [ ] After Boss manually restarts `make dev` or installs `make build`, open ego single-choice, multiple-choice, and free-text questions from a narrow mobile terminal. Confirm **Input** and the header question action for each. Multiple-choice taps must toggle without submitting until **Submit answers**; free-text must show its full question above the reply composer. The current running backend cannot load this Rust change through hot reload.
+- [x] Capture all three recorded ego question cards in Commander and Paper at390×844 and834×844. _(verified: `.tmp/mobile-question-visual/after-1973/png/`; actual SessionDetailScreen with existing Rust replay state; cards end at746px above the first key at747px, Paper contrast11.386:1. Presentation only, not a live PTY or physical-phone check.)_
+- [ ] Capture the originally requested360×800 geometry if that exact smaller viewport remains required; this follow-up captured390/834 widths, not360.
+
+## Telegram AI Chat fallback (#1983-1b47)
+
+- [ ] After Boss restarts the Rust backend (`make dev` or a release rebuild), send an allowed Telegram message with AI Chat connected and no explicit Telegram registration. Check receipt, delivery to ego and its final reply on the phone. Connect two chats: the latest-connected chat is the fallback, not the selected tab. Connect the second chat while the first is answering phone mail: the first reply must still arrive, and later mail must reach the second chat. Register another agent: it must retain ownership. With neither registration nor a connected AI Chat, check the no-agent instruction. This needs Boss's restart; Rust does not hot-reload.
+- [ ] [VISUAL] #1981-0caf: Capture the session header at 390 px, 430 px, and 834 px in Commander and Paper. Confirm COORDINATOR is readable, CLI/Chat stays direct, phone voice/tasks are in More, and tablet controls stay direct. The local headless capture timed out before producing images; the Mac screen was locked.
+
+- [ ] [VISUAL] #1982-ee68: After the backend rebuild, capture the same tab-separated Claude Edit in Chat at 390 px in Commander and Paper. Expand tool activity and its edit; confirm full-width old/new backgrounds, aligned columns and horizontal scrolling. From phone CLI tap Read file edits in Chat, then CLI; verify terminal history and draft remain intact, with CLI following the latest output. Includes Rust projection changes, so Boss must restart make dev or rebuild release when ready; no Rust hot reload.

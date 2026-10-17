@@ -407,14 +407,19 @@ Content-Type: application/json
 ```
 
 Authenticated browser/PWA counterpart of `session action=submit`. It checks the
-managed agent's idle state and empty composer, writes the whole reply and Enter
-atomically, and returns the same submission receipt. A closed session returns
+managed agent and empty composer, writes the whole reply and Enter atomically,
+and returns the same submission receipt. An explicit human reply can answer an
+`awaiting_input` session even while its shell is busy and no question text was
+recognized. Otherwise confirmed idle is required. A recognized picker returns
+`selection_required`: use its answer controls instead of submitting prose. A closed session returns
 HTTP 404 with `submitted: false` and `reason: "session_not_found"`; another
 rejection returns HTTP 409 and its precise `reason`. A successful write can
 still have `acknowledged: false`: the client must not retry blindly. While a
-confident question is open, a human reply can pass queued automated messages;
-those messages remain parked until the question clears. Automated `session
-action=submit` cannot answer the question.
+question is awaiting human input, a human reply can pass queued automated messages;
+those messages remain parked until the question clears. The mobile client shows
+the returned `detail` on refusal and keeps the draft. Foreground ownership,
+unfinished drafts and uncertain prior writes still block submission. Automated
+`session action=submit` cannot answer a confident question.
 
 ### Write Several Inputs at Once
 
@@ -3215,6 +3220,20 @@ No live write or desktop-load verification is implied by recorded-fixture tests.
 
 `POST /sessions/{id}/input-if-empty` accepts `{ "text": "[noop]" }` and returns a boolean. `false` means no input was sent because the agent is not ready, awaits input, has a tracked draft, or has queued commands. The backend serializes checks, split writes, and bookkeeping against raw user input. IPC equivalent: `send_agent_input_if_empty`.
 
+## Shared settings action (#1787-4778)
+
+POST `/settings/action` accepts the Rust-generated settings envelope directly, identical to IPC `settings_action` request and MCP settings arguments. It requires local or authenticated access. Describe is bounded to 128 fields per page. Owner edits require explicit target and expectedRevision; structured errors contain no input values. The owner inventory is complete; the same gate rejects future unresolved gaps. Typed workflows use `{action:"perform",target:{kind:"machine"},store,operation}`. The store selects the Rust operation DTO: github_accounts, ego (also expectedRevision), upstreams, connections, telegram, and voice in dictation builds. Dynamic-choice describe/refresh uses target, store and paths; catalogue describe uses bounded filters instead.
+
+Gated HTTP and IPC edits return `confirmation_required` with `proposalId` and do not write.
+Replay the exact original edit with `approval: "<proposalId>"` and `confirm: true`.
+The same request opens the existing all-client human confirmation dialog, waits for the
+answer, and, only after approval, commits the exact edit under its original caller.
+A decline, expiry, changed edit, caller mismatch or reused approval cannot commit.
+HTTP proposal identity uses the source IP, not the ephemeral TCP port; every request
+still requires local or authenticated access. MCP callers can continue to use
+`ui action=confirm proposalId=...` followed by an exact replay with `approval`.
+Tunnel forward lists, including empty replacements, require confirmation like tunnel ports.
+
 ### Audio choice availability (#1908-c327, #1909-0d24)
 
 Existing input/output device enumeration returns the same device objects on success, including a successful empty array. Backend enumeration failure now returns an error rather than an empty array. Internal settings choice refresh reuses those owners; cache-only describe and typed voice asset actions are not new public routes in this change. The settings transport cutover remains separate.
@@ -3248,3 +3267,7 @@ exactly-once delivery or persist the backend ring across an app restart.
 ### Telegram request streaming (1959-162a)
 
 Telegram replies now use TUIC-driven receipt (👀), working (👨‍💻), waiting (🤔), answered (👍) and failed (👎) reactions. An ephemeral native draft shows Italian status lines or unapproved agent previews; it refreshes while work continues and the final reply replaces it. Acknowledgement of work requires inbox Read and a new recipient turn. PTY intent/activity and AI Chat assistant chunks share request correlation; finish remains authoritative after draft retirement. Telegram-mail-woken AI Chat turns automatically send their settled assistant text if finish has not answered. Queue and no-reply notices occur at ten minutes and sixty seconds after Read respectively. Restart keeps no request history. Phone rendering requires a live check after the backend restart.
+
+### Styled terminal log wrap boundaries
+
+Rows returned by session `format=log` output and the `format=log|text` WebSocket include `wrapped: boolean` alongside `spans` and `cols`. True means the next row continues this logical line: concatenate span text verbatim, with no added space or newline. False means a hard line boundary. A finalized log row can wrap into the first current-screen row. Wrapped rows preserve real trailing spaces. The field is also present in the desktop `read_vt_log` response. MCP session text output applies these boundaries before redaction.

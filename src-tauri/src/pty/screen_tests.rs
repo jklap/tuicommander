@@ -1659,3 +1659,157 @@ fn injection_uncertain_recovers_after_fresh_empty_ego_composer_without_replay() 
     );
     crate::pty::close_pty_core(&state, sid, false);
 }
+
+/// Catches: a headless/browser shell inherits the exited agent's alternate
+/// screen and task labels because recovery only ran in the desktop component.
+#[test]
+fn shell_return_clears_orphaned_agent_screen_and_metadata() {
+    for exit_mode in ["orphan", "normal", "primary"] {
+        let state = crate::state::tests_support::make_test_app_state();
+        let sid = "agent-exit-grid";
+        agent_session(&state, sid, SHELL_IDLE);
+        {
+            let mut session = state.session_maps.session_states.get_mut(sid).unwrap();
+            session.agent_intent = Some("Echoing your message back".into());
+            session.current_task = Some("Levitating".into());
+        }
+        let mut vt = VtLogBuffer::new(8, 80, 100);
+        vt.process(b"shell before agent\r\n");
+        if exit_mode != "primary" {
+            vt.process(b"\x1b[?1049h\x1b[HClaude retained screen");
+        }
+        if exit_mode == "normal" {
+            vt.process(b"\x1b[?1049l");
+        }
+        state.grid.vt_log_buffers.insert(sid.into(), Mutex::new(vt));
+        state
+            .grid
+            .frame_dirty
+            .insert(sid.into(), Arc::new(AtomicBool::new(false)));
+        apply_foreground_agent_observation(&state, sid, 1, None, true, false, "bash".into());
+        assert_eq!(
+            state
+                .grid
+                .frame_dirty
+                .get(sid)
+                .unwrap()
+                .load(Ordering::Relaxed),
+            exit_mode == "orphan"
+        );
+        let session = state.session_maps.session_states.get(sid).unwrap();
+        assert_eq!(session.agent_type, None);
+        assert_eq!(session.agent_intent, None, "shell retained agent intent");
+        assert_eq!(session.current_task, None, "shell retained agent task");
+        drop(session);
+        let vt = state.grid.vt_log_buffers.get(sid).unwrap();
+        let vt = vt.lock();
+        assert!(
+            !vt.is_alternate_screen(),
+            "shell retained orphaned alternate screen"
+        );
+        let lines = vt.grid_get_lines(0, vt.grid_total_lines()).join("\n");
+        assert!(lines.contains("shell before agent"));
+        assert!(!lines.contains("Claude retained screen"));
+    }
+}
+
+/// Catches: cleanup from a stale shell sample, startup shell, or temporary
+/// helper erasing the still-live agent's display and task labels.
+#[test]
+fn shell_return_recovery_preserves_live_agent_observations() {
+    for case in ["stale", "preset", "helper"] {
+        let state = crate::state::tests_support::make_test_app_state();
+        let sid = "agent-exit-retain";
+        agent_session(&state, sid, SHELL_IDLE);
+        {
+            let mut session = state.session_maps.session_states.get_mut(sid).unwrap();
+            session.agent_intent = Some("Keep working".into());
+            session.current_task = Some("Reading".into());
+            if case == "preset" {
+                session.agent_type_from_run_config = true;
+            }
+            if case == "stale" {
+                session.foreground_probe_generation = 2;
+                session.foreground_probe_result = Some("claude".into());
+            }
+        }
+        let mut vt = VtLogBuffer::new(8, 80, 100);
+        vt.process(b"shell\x1b[?1049h\x1b[HLive agent");
+        state.grid.vt_log_buffers.insert(sid.into(), Mutex::new(vt));
+        apply_foreground_agent_observation(
+            &state,
+            sid,
+            1,
+            None,
+            case != "helper",
+            false,
+            "bash".into(),
+        );
+        let session = state.session_maps.session_states.get(sid).unwrap();
+        assert_eq!(session.agent_type.as_deref(), Some("claude"), "{case}");
+        assert_eq!(
+            session.agent_intent.as_deref(),
+            Some("Keep working"),
+            "{case}"
+        );
+        assert_eq!(session.current_task.as_deref(), Some("Reading"), "{case}");
+        assert!(
+            state
+                .grid
+                .vt_log_buffers
+                .get(sid)
+                .unwrap()
+                .lock()
+                .is_alternate_screen(),
+            "{case}"
+        );
+    }
+}
+
+/// Catches: a second shell observation overtakes exit recovery while the reader
+/// owns the grid, leaving the exited agent's alternate screen stuck forever.
+#[test]
+fn newer_shell_observation_does_not_cancel_pending_exit_screen_recovery() {
+    let state = crate::state::tests_support::make_test_app_state();
+    let sid = "overlapping-shell-exit";
+    agent_session(&state, sid, SHELL_IDLE);
+    let mut vt = VtLogBuffer::new(8, 80, 100);
+    vt.process(b"primary shell\x1b[?1049h\x1b[HExited agent");
+    state.grid.vt_log_buffers.insert(sid.into(), Mutex::new(vt));
+
+    std::thread::scope(|scope| {
+        // The reader can hold the grid while HTTP and the silence timer both
+        // observe shell return. Hold it until both observations have committed.
+        let grid = state.grid.vt_log_buffers.get(sid).unwrap();
+        let reader_guard = grid.lock();
+        let first = scope.spawn(|| {
+            apply_foreground_agent_observation(&state, sid, 1, None, true, false, "bash".into())
+        });
+        let setup_limit = std::time::Instant::now() + std::time::Duration::from_secs(60);
+        while state
+            .session_maps
+            .session_states
+            .get(sid)
+            .unwrap()
+            .foreground_probe_generation
+            != 1
+        {
+            if std::time::Instant::now() >= setup_limit {
+                drop(reader_guard);
+                panic!("setup: first foreground observation did not commit");
+            }
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        apply_foreground_agent_observation(&state, sid, 2, None, true, false, "bash".into());
+        drop(reader_guard);
+        first.join().unwrap();
+    });
+
+    let grid = state.grid.vt_log_buffers.get(sid).unwrap();
+    let grid = grid.lock();
+    let lines = grid.grid_get_lines(0, grid.grid_total_lines()).join("\n");
+    assert!(
+        lines.contains("primary shell") && !lines.contains("Exited agent"),
+        "newer shell sample cancelled exit recovery; terminal still shows: {lines:?}"
+    );
+}

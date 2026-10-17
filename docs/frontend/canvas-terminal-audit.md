@@ -11,7 +11,7 @@ Answers-only history includes a retained prompt-less prefix before the first tra
 
 Submitted prompts are not tinted in the terminal grid. Recorded `userPromptLines` still drive scrollbar ticks and answers-only turn grouping; Chat user messages retain the theme prompt tint and gutter.
 
-Adjacent `💬` answer paragraphs share one continuous tint and left bar, including blank rows between them. An unmarked prose paragraph after a blank row ends the answer; an uninterrupted indented continuation stays inside. Lists, tables, quotations and fenced code remain attached to the answer. A non-answer output row or prompt ends the region. The CLI blanks only the marker glyph cells; copy, selection and search keep the original text. Chat uses the same answer extent and strips every paragraph marker.
+Adjacent `💬` answer paragraphs share one continuous tint and left bar, including blank rows between them. An unmarked prose paragraph after a blank row ends the answer; an uninterrupted indented continuation stays inside. Lists, tables, quotations and fenced code remain attached to the answer. A non-answer output row or prompt ends the region. The CLI blanks only the marker glyph cells; selection and search retain their grid coordinates. Clipboard copy removes answer-prefix markers through the same helper used by AI Chat answer buttons (including mobile) and selectable Answers text. Inline emoji and fenced examples stay literal. Chat uses the same answer extent and strips every paragraph marker.
 
 ## Architecture
 
@@ -335,3 +335,7 @@ Native terminal ego provider recovery is carried in the backend session snapshot
 not inferred from canvas rows. Tab/status-bar presentation uses that snapshot;
 canvas rendering and input routing remain unchanged. Force retry uses the normal
 agent-aware command submission helper.
+
+### Soft-wrap text fidelity
+
+Backend selection and logical-row extraction retain real spaces at soft-wrap margins. Mobile CLI log rendering uses serialized `wrapped` boundaries rather than word-length guesses when metadata is present. Older daemon rows without this field retain the existing prose reflow fallback. This changes extracted text, not canvas layout or styling.

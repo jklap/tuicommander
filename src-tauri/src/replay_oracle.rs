@@ -24,7 +24,14 @@ pub(crate) fn assert_golden(relative: &Path, actual: &[Value]) {
     let path = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("src/fixtures/replay_oracle")
         .join(relative);
-    if std::env::var("TUIC_REGENERATE_ORACLES").as_deref() == Ok("1") {
+    // Accept exact relative paths to regenerate new fixtures without accepting
+    // drift in unrelated goldens. "1" retains the explicit full-regeneration mode.
+    let regenerate = std::env::var("TUIC_REGENERATE_ORACLES").is_ok_and(|requested| {
+        requested
+            .split(',')
+            .any(|entry| entry == "1" || relative == Path::new(entry))
+    });
+    if regenerate {
         std::fs::create_dir_all(path.parent().unwrap()).expect("create golden directory");
         let lines = actual
             .iter()

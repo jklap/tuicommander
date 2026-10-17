@@ -1,0 +1,18 @@
+import {render} from 'solid-js/web';
+import '../../src/global.css';
+import commander from '../../src-tauri/src/themes/commander.json';
+import paper from '../../src-tauri/src/themes/vscode-light.json';
+import {settingsStore} from '../../src/stores/settings';
+import {repositoriesStore} from '../../src/stores/repositories';
+import {uiStore} from '../../src/stores/ui';
+import {SettingsPanel} from '../../src/components/SettingsPanel/SettingsPanel';
+import {calls} from './rpc';
+const params=new URLSearchParams(location.search);
+const theme=params.get('theme')==='light'?paper:commander;
+document.documentElement.dataset.theme=params.get('theme')==='light'?'vscode-light':'commander';
+const tokens={background:'bg-primary',surface:'bg-secondary',surfaceElevated:'bg-tertiary',highlight:'bg-highlight',foreground:'fg-primary',foregroundSecondary:'fg-secondary',mutedForeground:'fg-muted',accentHover:'accent-hover',accentForeground:'text-on-accent',errorForeground:'text-on-error'};
+for(const [key,value] of Object.entries(theme.appChrome))document.documentElement.style.setProperty('--'+(tokens[key]??key),String(value));
+settingsStore.setExperimentalFeaturesEnabled(true);
+repositoriesStore.add({path:'/workspace/fixture-project',displayName:'Fixture project'});
+render(()=><SettingsPanel visible onClose={()=>{}} initialTab={params.get('tab')??'general'}/>,document.getElementById('preview')!);
+(window as any).auditCalls=calls;

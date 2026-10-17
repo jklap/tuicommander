@@ -2361,6 +2361,9 @@ export const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 			body: { capabilities: args.capabilities },
 		}),
 	},
+	settings_action: {
+		map: (args) => ({ method: "POST", path: "/settings/action", body: args.request }),
+	},
 	plugin_settings_action: {
 		map: (args, p) => ({
 			method: "POST",

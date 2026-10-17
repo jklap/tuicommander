@@ -30,6 +30,8 @@ interface CommandInputProps {
 	slashItems?: SlashMenuItem[];
 	/** Active numbered choice dialog parsed from agent output. */
 	choicePrompt?: ChoicePrompt;
+	/** Native free-text question, opened explicitly by the user. */
+	questionText?: string;
 	/** The Codex question panel has been opened with Alt+Up in this view. */
 	codexQuestionOpen?: boolean;
 	/** Managed agent waiting for a free-text answer. */
@@ -296,15 +298,19 @@ export function CommandInput(props: CommandInputProps) {
 	});
 
 	function requestInputKey(key: ComposerInputKey) {
-		if (atomicReply() || props.sessionExists === false) return;
-		const request =
-			key === "Tab"
+		if (props.sessionExists === false) return;
+		const data = key === "Tab" ? "\t" : key === "ArrowUp" ? "\x1b[A" : "\x1b[B";
+		// A waiting agent can own a picker without a parsed choice_prompt. Keep
+		// navigation in the PTY, not in the free-text answer or shell history.
+		const request = atomicReply()
+			? null
+			: key === "Tab"
 				? (syncedText ?? restoredPartial).length > 0
 					? { kind: "completion" as const, armed: true }
 					: null
 				: { kind: "history" as const, armed: false };
 		inputRequest = request;
-		void writePty(key === "Tab" ? "\t" : key === "ArrowUp" ? "\x1b[A" : "\x1b[B").then(
+		void writePty(data).then(
 			() => {
 				if (request && inputRequest === request) {
 					// DEFERRED (2026-10-10): input_line has no causal request ID.
@@ -333,9 +339,15 @@ export function CommandInput(props: CommandInputProps) {
 					submitted: boolean;
 					acknowledged: boolean;
 					reason?: string;
+					detail?: string;
 				}>("submit_agent_reply", { sessionId: props.sessionId, input: text });
 				if (!receipt.submitted) {
-					toastsStore.add("Reply not sent", receipt.reason ?? "The session is not ready for a reply", "error", true);
+					toastsStore.add(
+						"Reply not sent",
+						receipt.detail ?? receipt.reason ?? "The session is not ready for a reply",
+						"error",
+						true,
+					);
 					return;
 				}
 				if (!receipt.acknowledged) {
@@ -355,8 +367,14 @@ export function CommandInput(props: CommandInputProps) {
 						const result: unknown = JSON.parse(err.body);
 						const reason =
 							typeof result === "object" && result !== null && "reason" in result ? result.reason : undefined;
-						if (reason === "session_not_found") msg = "This session has ended";
-						else if (reason === "agent_not_ready") msg = "The agent is busy. Check the session before retrying.";
+						const detail =
+							typeof result === "object" && result !== null && "detail" in result ? result.detail : undefined;
+						if (typeof detail === "string" && detail.trim()) msg = detail;
+						else if (reason === "session_not_found") msg = "This session has ended";
+						else if (reason === "agent_not_ready")
+							msg = props.awaitingInput
+								? "The agent is waiting for input. Check its question before retrying."
+								: "The agent is busy. Check the session before retrying.";
 						else if (reason === "partial_composer")
 							msg = "The agent already has a draft. Check the session before retrying.";
 						else if (err.status === 409) msg = "The session is not ready. Check it before retrying.";
@@ -439,6 +457,20 @@ export function CommandInput(props: CommandInputProps) {
 			const selectedIndex = options.findIndex((option) => option.highlighted);
 			const choiceIndex = options.findIndex((option) => option.key === key);
 			const label = options[choiceIndex]?.label;
+			if (props.choicePrompt?.selection_mode === "toggle-enter") {
+				if (key !== "\r" && Number(key) > 9) {
+					// Ego binds individual digits, not multi-digit option numbers.
+					const steps = choiceIndex - Math.max(selectedIndex, 0);
+					const arrow = steps < 0 ? "\x1b[A" : "\x1b[B";
+					for (let i = 0; i < Math.abs(steps); i++) await sendPtyKey(write, arrow);
+					await sendPtyKey(write, " ");
+				} else {
+					await sendPtyKey(write, key);
+				}
+				// Only a changed backend checkmark re-arms toggles. This also
+				// keeps the next navigation based on the acknowledged cursor.
+				return;
+			}
 			if (props.choicePrompt?.selection_mode === "navigate-enter") {
 				const steps = choiceIndex - Math.max(selectedIndex, 0);
 				const arrow = steps < 0 ? "\x1b[A" : "\x1b[B";
@@ -468,7 +500,7 @@ export function CommandInput(props: CommandInputProps) {
 	}
 
 	return (
-		<div class={styles.form} style={{ position: "relative" }}>
+		<div class={styles.form}>
 			<Show when={uploading()}>
 				{(name) => (
 					<div class={styles.uploading} role="status">
@@ -476,8 +508,13 @@ export function CommandInput(props: CommandInputProps) {
 					</div>
 				)}
 			</Show>
+			<Show when={props.questionText && !showChoicePrompt()}>
+				<div class={styles.question} role="status">
+					{props.questionText}
+				</div>
+			</Show>
 			<Show when={showChoicePrompt()}>
-				<ChoicePromptOverlay prompt={props.choicePrompt!} onSelect={handleChoiceSelect} />
+				<ChoicePromptOverlay prompt={props.choicePrompt!} disabled={choiceSending()} onSelect={handleChoiceSelect} />
 			</Show>
 			<Show when={showDropup() && !showChoicePrompt()}>
 				<SlashMenuOverlay

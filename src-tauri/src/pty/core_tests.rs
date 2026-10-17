@@ -12132,6 +12132,160 @@ fn captured_ego_question_reaches_awaiting_and_full_mobile_choices() {
     );
 }
 
+/// Catches: ego multiple/free-text questions losing their mobile question card.
+#[test]
+fn captured_ego_question_forms_keep_mobile_answer_controls() {
+    let mut failures = Vec::new();
+    for mode in ["single", "multiple", "free_text", "fresh_free_text"] {
+        for cols in [120, 44] {
+            if mode == "fresh_free_text" && cols == 44 {
+                continue;
+            }
+            let fixture = if mode == "fresh_free_text" {
+                "ego-fresh-free-text-1980.tcap".to_owned()
+            } else {
+                format!("ego-{mode}-{cols}-1973.tcap")
+            };
+            let capture = crate::pty_capture::decode_capture(&agent_prompt_fixture(&fixture))
+                .expect("recorded real ego question");
+            let (rows, cols) = capture.geometry.unwrap();
+            let sid = "ego-question-forms";
+            let (state, silence) = chunk_trace_state(sid);
+            state.grid.vt_log_buffers.insert(
+                sid.into(),
+                Mutex::new(crate::state::VtLogBuffer::new(rows, cols, 2000)),
+            );
+            state
+                .session_maps
+                .session_states
+                .get_mut(sid)
+                .unwrap()
+                .agent_type = Some("ego".into());
+            let mut rx = state.event_bus.subscribe();
+            let mut processor = ChunkProcessor::new(None, None);
+            let mut utf8 = Utf8ReadBuffer::new();
+            let mut escape = EscapeAwareBuffer::new();
+            for record in capture.records {
+                if record.direction != crate::pty_capture::CaptureDirection::Output {
+                    continue;
+                }
+                let data = escape.push(&utf8.push(&record.data));
+                let (clean, _) = crate::state::strip_kitty_sequences(&data);
+                processor.process_chunk(&clean, &silence, sid, &state);
+                while let Ok(event) = rx.try_recv() {
+                    crate::state::tests_support::apply_replay_event(&state, &event);
+                }
+            }
+            let session = state.session_maps.session_states.get(sid).unwrap();
+            let expected_mode = if mode == "single" {
+                "navigate-enter"
+            } else {
+                "toggle-enter"
+            };
+            let prompt_ok = if mode.ends_with("free_text") {
+                session.choice_prompt.is_none()
+            } else {
+                session.choice_prompt.as_ref().is_some_and(|prompt| {
+                    prompt.options.len() == 2
+                        && prompt.options[0].label.contains("Parser regression")
+                        && prompt.options[1].label.contains("Mobile answer controls")
+                        && serde_json::to_value(prompt.selection_mode).unwrap() == expected_mode
+                })
+            };
+            if std::env::var_os("TUIC_QUESTION_EVIDENCE").is_some() {
+                println!(
+                    "EGO1973:{}",
+                    serde_json::json!({"fixture": fixture, "state": &*session})
+                );
+            }
+            if !session.awaiting_input
+                || !session.question_confident
+                || session.question_text.as_deref()
+                    != Some(if mode == "fresh_free_text" {
+                        "Which release check should we run?"
+                    } else {
+                        "Which release checks should we run?"
+                    })
+                || !prompt_ok
+            {
+                failures.push(format!(
+                    "{fixture}: awaiting={}, question={:?}, choice={:?}",
+                    session.awaiting_input, session.question_text, session.choice_prompt
+                ));
+            }
+        }
+    }
+    assert!(
+        failures.is_empty(),
+        "real ego question forms lost mobile controls:\n{}",
+        failures.join("\n")
+    );
+}
+
+/// Catches inserting spaces mid-word in a soft-wrapped title, option or footer.
+#[test]
+fn softwrap_1977_question_uses_original_word_boundaries() {
+    let capture =
+        crate::pty_capture::decode_capture(&agent_prompt_fixture("softwrap-question-1977-24.tcap"))
+            .expect("controlled PTY selector recording");
+    let (rows, cols) = capture.geometry.unwrap();
+    let sid = "ego-question-capture";
+    let (state, silence) = chunk_trace_state(sid);
+    state.grid.vt_log_buffers.insert(
+        sid.into(),
+        Mutex::new(crate::state::VtLogBuffer::new(rows, cols, 2000)),
+    );
+    state
+        .session_maps
+        .session_states
+        .get_mut(sid)
+        .unwrap()
+        .agent_type = Some("ego".into());
+    let mut rx = state.event_bus.subscribe();
+    let mut processor = ChunkProcessor::new(None, None);
+    let mut utf8 = Utf8ReadBuffer::new();
+    let mut escape = EscapeAwareBuffer::new();
+    for record in capture.records {
+        if record.direction != crate::pty_capture::CaptureDirection::Output {
+            continue;
+        }
+        let data = escape.push(&utf8.push(&record.data));
+        let (clean, _) = crate::state::strip_kitty_sequences(&data);
+        processor.process_chunk(&clean, &silence, sid, &state);
+        while let Ok(event) = rx.try_recv() {
+            crate::state::tests_support::apply_replay_event(&state, &event);
+        }
+    }
+    let session = state.session_maps.session_states.get(sid).unwrap();
+    assert!(
+        session.awaiting_input,
+        "soft-wrapped selector was not detected"
+    );
+    let prompt = session
+        .choice_prompt
+        .as_ref()
+        .expect("ego question must have mobile choices");
+    assert_eq!(
+        prompt.title,
+        "Does Boss authorize editing the orchestrator registry?"
+    );
+    assert_eq!(
+        prompt
+            .options
+            .iter()
+            .map(|o| o.label.as_str())
+            .collect::<Vec<_>>(),
+        vec![
+            "Yes, authorize registry integration",
+            "No, leave it unchanged",
+        ]
+    );
+    assert_eq!(
+        prompt.selection_mode,
+        Some(crate::output_parser::ChoiceSelectionMode::NavigateEnter)
+    );
+}
+
 /// Everything a refactor of `process_chunk` is allowed to leave unchanged.
 #[derive(Debug, PartialEq)]
 struct ChunkTrace {
@@ -14158,6 +14312,15 @@ fn replay_oracle_all_committed_tcap_preserves_chunk_decisions() {
                 .starts_with(agent)
                 || fixture.contains(&format!("/{agent}-"))
         })
+        .or_else(|| {
+            // These controlled printf recordings declare the parser under test,
+            // not the identity of a live agent (see each capture's provenance).
+            match std::path::Path::new(&fixture).file_name()?.to_str()? {
+                "softwrap-question-1977-24.tcap" => Some("ego"),
+                "softwrap-spaces-1977-24.tcap" | "softwrap-spaces-1977-64.tcap" => Some("shell"),
+                _ => None,
+            }
+        })
         .unwrap_or_else(|| panic!("{fixture}: declare capture's agent before recording a golden"));
         let capture =
             crate::pty_capture::decode_capture(&std::fs::read(root.join(&fixture)).unwrap())
@@ -15106,13 +15269,13 @@ async fn ego_second_recorded_intent_replaces_context_and_title_1964() {
             &state,
         );
         while let Ok(event) = receiver.try_recv() {
-            if let crate::state::AppEvent::PtyParsed { parsed, .. } = &event {
-                if parsed["type"] == "intent" {
-                    intents.push((
-                        parsed["text"].as_str().unwrap().to_string(),
-                        parsed["title"].as_str().map(str::to_string),
-                    ));
-                }
+            if let crate::state::AppEvent::PtyParsed { parsed, .. } = &event
+                && parsed["type"] == "intent"
+            {
+                intents.push((
+                    parsed["text"].as_str().unwrap().to_string(),
+                    parsed["title"].as_str().map(str::to_string),
+                ));
             }
             crate::state::tests_support::apply_replay_event(&state, &event);
         }

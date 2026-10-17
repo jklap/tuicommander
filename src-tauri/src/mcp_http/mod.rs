@@ -21,6 +21,7 @@ pub(crate) mod mcp_transport;
 mod mcp_transport_ancillary;
 #[cfg(test)]
 mod settings_policy_confirm_tests;
+mod settings_routes;
 pub(crate) use mcp_transport_ancillary::confirm_settings;
 mod mcp_transport_catalogue;
 mod mcp_transport_peer;
@@ -921,6 +922,7 @@ const API_PREFIXES: &[&str] = &[
     "repo",
     "secrets",
     "sessions",
+    "settings",
     "stats",
     "stories",
     "system",
@@ -1887,6 +1889,7 @@ pub fn build_router(state: Arc<AppState>, remote_auth: bool, mcp_enabled: bool) 
             "/config/pane-layout",
             get(config_routes::get_pane_layout).put(config_routes::put_pane_layout),
         )
+        .route("/settings/action", post(settings_routes::settings_action))
         .route("/config/clear-caches", post(config_routes::clear_caches))
         .route(
             "/config/clear-repo-caches",
@@ -2378,7 +2381,13 @@ pub fn build_router(state: Arc<AppState>, remote_auth: bool, mcp_enabled: bool) 
 
     // Static files — SPA frontend (desktop only; not embedded in the remote binary)
     #[cfg(feature = "desktop")]
-    let routes = routes.route("/", get(static_files::serve_index));
+    let routes = routes
+        .route("/", get(static_files::serve_index))
+        // The Settings landing page is a UI route; its descendants belong to the API.
+        .route(
+            "/settings",
+            get(|| async { static_files::serve_static(AxumPath("settings".into())).await }),
+        );
 
     let routes = routes
         .fallback(spa_or_api_404)
@@ -3221,8 +3230,9 @@ mod tests {
         // every test — the SQLITE_BUSY collision `make_test_app_state`
         // documents and avoids (#678-9a75).
         let state = Arc::new(crate::state::tests_support::make_test_app_state());
-        // Override default disabled_native_tools so all 8 tools are visible in tests
+        // This fixture opts into every native tool, including the settings facade.
         state.config.write().disabled_native_tools = Vec::new();
+        state.config.write().settings_mcp_enabled = true;
         mcp_transport::rebuild_tool_search_index(&state);
         state
     }
@@ -6189,7 +6199,8 @@ mod tests {
         assert!(names.contains(&"repo"));
         assert!(names.contains(&"ui"));
         assert!(names.contains(&"plugin_dev_guide"));
-        assert!(names.contains(&"config"));
+        assert!(names.contains(&"settings"));
+        assert!(!names.contains(&"config"));
         assert!(names.contains(&"debug"));
         // One family only: the ai_terminal_* tools were deleted in 789-f6ed.
         assert!(
@@ -6465,7 +6476,7 @@ mod tests {
             "repo",
             "progress",
             "ui",
-            "config",
+            "settings",
             "debug",
             "plugin_dev_guide",
         ] {
@@ -6870,69 +6881,105 @@ mod tests {
         assert!(result["error"].as_str().unwrap().contains("not found"));
     }
 
-    // --- Config meta-command tests ---
+    // --- Typed settings MCP cutover contracts ---
 
+    // Catches: typed app reads returning raw credentials after the config tool cutover.
     #[tokio::test]
-    async fn test_config_get() {
+    async fn test_settings_get_redacts_app_secrets() {
+        let dir = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+        let _guard = crate::config::set_config_dir_override(dir.path().to_owned());
+        crate::credentials::reset_test_faults();
         let state = test_state();
         {
             let mut cfg = state.config.write();
-            cfg.services.auth.password_hash = "password-hash".to_string();
-            cfg.services.auth.session_token = "session-secret".to_string();
-            cfg.services.auth.session_token_exists = true;
-            cfg.services.relay.token = "relay-secret".to_string();
-            cfg.services.relay.token_exists = Some(true);
-            cfg.services.push.vapid_private_key = "vapid-secret".to_string();
-            cfg.services.push.vapid_private_key_exists = true;
+            cfg.services.auth.password_hash = "password-hash".into();
+            cfg.services.auth.session_token = "session-secret".into();
+            cfg.services.relay.token = "relay-secret".into();
+            cfg.services.push.vapid_private_key = "vapid-secret".into();
         }
-        let result = call_mcp_tool(&state, "config", serde_json::json!({"action": "get"})).await;
-        assert!(result["font_family"].as_str().is_some());
-        assert!(
-            result.pointer("/services/auth/password_hash").is_none(),
-            "Password hash should be stripped from MCP tool response"
-        );
-        assert!(result.pointer("/services/auth/session_token").is_none());
-        assert_eq!(
-            result.pointer("/services/auth/session_token_exists"),
-            Some(&serde_json::Value::Bool(true))
-        );
-        assert!(result.pointer("/services/relay/token").is_none());
-        assert_eq!(
-            result.pointer("/services/relay/token_exists"),
-            Some(&serde_json::Value::Bool(true))
-        );
-        assert!(result.pointer("/services/push/vapid_private_key").is_none());
-        assert_eq!(
-            result.pointer("/services/push/vapid_private_key_exists"),
-            Some(&serde_json::Value::Bool(true))
-        );
-    }
-
-    #[tokio::test]
-    async fn test_config_save_requires_base_and_config() {
-        let state = test_state();
-        let result = call_mcp_tool(&state, "config", serde_json::json!({"action": "save"})).await;
-        assert!(
-            result["error"]
-                .as_str()
-                .unwrap()
-                .contains("Invalid config save request")
-        );
-    }
-
-    #[tokio::test]
-    async fn test_config_save_invalid_config() {
-        let state = test_state();
+        let paths = [
+            "/font_family",
+            "/services/auth/password_hash",
+            "/services/auth/session_token",
+            "/services/relay/token",
+            "/services/push/vapid_private_key",
+        ];
         let result = call_mcp_tool(
             &state,
-            "config",
+            "settings",
             serde_json::json!({
-                "action": "save",
-                "config": "not an object"
+                "action":"get", "target":{"kind":"machine"}, "store":"app", "paths":paths
             }),
         )
         .await;
-        assert!(result["error"].as_str().unwrap().contains("Invalid config"));
+        assert!(
+            result["values"]["/font_family"]["stored"].is_string(),
+            "{result}"
+        );
+        for path in &paths[1..] {
+            assert_eq!(
+                result["values"][path]["stored"],
+                serde_json::json!({"status":"set"}),
+                "{result}"
+            );
+        }
+        for secret in [
+            "password-hash",
+            "session-secret",
+            "relay-secret",
+            "vapid-secret",
+        ] {
+            assert!(!result.to_string().contains(secret), "{result}");
+        }
+        let retired = call_mcp_tool(&state, "config", serde_json::json!({"action":"get"})).await;
+        assert!(
+            retired["error"].as_str().unwrap().contains("Unknown tool"),
+            "{retired}"
+        );
+    }
+
+    // Catches: malformed legacy-style writes accidentally reaching typed persistence.
+    #[tokio::test]
+    async fn test_settings_patch_requires_revision_and_operations() {
+        let state = test_state();
+        let result = call_mcp_tool(
+            &state,
+            "settings",
+            serde_json::json!({
+                "action":"patch", "target":{"kind":"machine"}, "store":"app"
+            }),
+        )
+        .await;
+        assert_eq!(result["error"]["code"], "invalid_type", "{result}");
+        let retired = call_mcp_tool(&state, "config", serde_json::json!({"action":"save"})).await;
+        assert!(
+            retired["error"].as_str().unwrap().contains("Unknown tool"),
+            "{retired}"
+        );
+    }
+
+    // Catches: an invalid typed value being persisted after legacy whole-config saves were removed.
+    #[tokio::test]
+    async fn test_settings_patch_rejects_invalid_typed_value() {
+        let dir = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+        let _guard = crate::config::set_config_dir_override(dir.path().to_owned());
+        crate::credentials::reset_test_faults();
+        let state = test_state();
+        let before = call_mcp_tool(
+            &state,
+            "settings",
+            serde_json::json!({
+                "action":"get", "target":{"kind":"machine"}, "store":"app", "paths":["/font_size"]
+            }),
+        )
+        .await;
+        assert!(before["revision"].is_string(), "{before}");
+        let result = call_mcp_tool(&state, "settings", serde_json::json!({
+            "action":"patch", "target":{"kind":"machine"}, "store":"app", "expectedRevision":before["revision"],
+            "operations":[{"op":"set", "path":"/font_size", "value":"not a number"}]
+        })).await;
+        assert_eq!(result["error"]["code"], "invalid_type", "{result}");
+        assert!(!dir.path().join("config.json").exists());
     }
 
     // --- Git meta-command tests ---
@@ -8274,6 +8321,7 @@ mod tests {
             "/api/no-such-endpoint",
             "/attachments/no-such-endpoint",
             "/dictation/no-such-endpoint",
+            "/settings/no-such-endpoint",
         ] {
             let resp = app
                 .clone()
@@ -8865,7 +8913,8 @@ mod tests {
         assert!(names.contains(&"repo"));
         assert!(names.contains(&"ui"));
         assert!(names.contains(&"plugin_dev_guide"));
-        assert!(names.contains(&"config"));
+        assert!(names.contains(&"settings"));
+        assert!(!names.contains(&"config"));
         assert!(names.contains(&"debug"));
     }
 

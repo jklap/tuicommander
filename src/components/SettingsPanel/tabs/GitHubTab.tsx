@@ -741,8 +741,10 @@ export const GitHubTab: Component = () => {
 					</ExpertSetting>
 
 					<div class={s.group}>
-						<label for="default-setup-script">Default Setup Script</label>
-						<ContextualHelp label="Default Setup Script" />
+						<div class={s.helpLabel}>
+							<label for="default-setup-script">Default Setup Script</label>
+							<ContextualHelp label="Default Setup Script" />
+						</div>
 						<Textarea
 							id="default-setup-script"
 							value={repoDefaultsStore.state.setupScript}
@@ -754,8 +756,10 @@ export const GitHubTab: Component = () => {
 					</div>
 
 					<div class={s.group}>
-						<label for="default-run-script">Default Run Script</label>
-						<ContextualHelp label="Default Run Script" />
+						<div class={s.helpLabel}>
+							<label for="default-run-script">Default Run Script</label>
+							<ContextualHelp label="Default Run Script" />
+						</div>
 						<Textarea
 							id="default-run-script"
 							value={repoDefaultsStore.state.runScript}
@@ -767,8 +771,10 @@ export const GitHubTab: Component = () => {
 					</div>
 
 					<div class={s.group}>
-						<label for="default-archive-script">Default Archive Script</label>
-						<ContextualHelp label="Default Archive Script" />
+						<div class={s.helpLabel}>
+							<label for="default-archive-script">Default Archive Script</label>
+							<ContextualHelp label="Default Archive Script" />
+						</div>
 						<Textarea
 							id="default-archive-script"
 							value={repoDefaultsStore.state.archiveScript}
@@ -968,8 +974,10 @@ export const GitHubTab: Component = () => {
 						</div>
 
 						<div class={s.group}>
-							<label for="github-enterprise-host">Add Enterprise account</label>
-							<ContextualHelp label="Add Enterprise account" />
+							<div class={s.helpLabel}>
+								<label for="github-enterprise-host">Add Enterprise account</label>
+								<ContextualHelp label="Add Enterprise account" />
+							</div>
 							<Input
 								type="text"
 								id="github-enterprise-host"

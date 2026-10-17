@@ -16,7 +16,7 @@
 .docsLink {
   background: none;
   border: none;
-  color: var(--accent);
+  color: var(--link-foreground);
   font-size: var(--font-sm);
   cursor: pointer;
   padding: 0;

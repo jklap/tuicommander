@@ -633,7 +633,7 @@ wake. Other agents retain their existing uncertain-write recovery contracts.
 
 ### ego terminal questions
 
-The terminal ego CLI reports human-question waits with OSC 7770 awaiting and resumes busy after settlement. TUIC also recognizes its single-choice selector only for ego sessions, anchored to `Up/Down or number selects; Enter answers; Esc cancels.` and a highlighted numbered option. Wrapped question and option rows are joined in Rust into `choice-prompt`, using `navigate-enter` selection. This creates authoritative awaiting state even for older ego builds without the native signal. Multiple-choice and free-text questions keep the native awaiting signal and terminal/composer controls; they are not misrepresented as single-choice dialogs.
+The terminal ego CLI reports human-question waits with OSC 7770 awaiting and resumes busy after settlement. TUIC recognizes ego selectors by their exact single-choice or multiple-choice footer and a highlighted numbered option. Footer matching ignores whitespace so a narrow terminal can wrap in the middle of a word. Single-choice uses `navigate-enter`; multiple-choice uses `toggle-enter`, preserves the visible `[ ]`/`[x]` marks, and submits only on explicit Enter. Changed checkbox labels update the existing choice state. During a confident ego wait, a free-text modal above an empty `>` row supplies the question text without creating numbered choices. An empty composer alone never establishes a question, and a busy spinner is rejected. Desktop and mobile read the same accumulated state; mobile opens the full question card on demand and uses the existing composer for free-text replies. The recorded 1973 captures cover each form at 120 and 44 columns. A fresh-session output-ring export also covers startup/help rows contiguous with the free-text modal. Free-text extraction stops at the nearest blank, separator, startup banner or shortcut-help row, preserving wrapped question rows below it. Opening the mobile card does not change the explicit human-reply transport or stream the draft into the PTY.
 
 ### ego terminal provider recovery (1902)
 
@@ -682,3 +682,7 @@ It is delivered in original OSC order, including clears in the same chunk.
 `SessionState.provider_recovery` is the durable per-session presentation value;
 repeat snapshots do not generate additional parent entry notices. The existing
 session-state stream carries updates to desktop and browser consumers.
+
+### Ego selector row boundaries
+
+Before parsing an ego question, the PTY reader concatenates rows linked by the grid WRAPLINE flag. It preserves original spaces and adds none inside words. Hard line breaks still separate the title, numbered options and footer. Footer recognition remains in the ego parser; it does not infer prose boundaries from row length.

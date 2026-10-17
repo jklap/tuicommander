@@ -1495,3 +1495,20 @@
 .panel .assistantMsg { margin-bottom: 4px; }
 .panel .assistantMsg :global(#markdown-content ul), .panel .assistantMsg :global(#markdown-content ol) { padding-left: 20px; margin-bottom: 8px; }
 .assistantMsg :global(#markdown-content .chat-table-source) { white-space: pre; overflow-x: auto; word-break: normal; }
+
+/* One scroll surface keeps tabular columns aligned and each version fully tinted. */
+.editDiff {
+  margin: 8px 0;
+  min-width: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+}
+.editDiff figcaption { padding: 6px 8px; overflow-wrap: anywhere; font-size: var(--font-xs); }
+.editDiffScroll { max-width: 100%; overflow-x: auto; }
+.editDiffVersions { width: max-content; min-width: 100%; }
+.editDiffOld { background: color-mix(in srgb, var(--error) 12%, var(--bg-primary)); }
+.editDiffNew { background: color-mix(in srgb, var(--success) 12%, var(--bg-primary)); }
+.editDiffOld > span, .editDiffNew > span { display: block; padding: 4px 8px 0; font-size: var(--font-xs); font-weight: 600; }
+.editDiff pre { margin: 0; padding: 4px 8px 8px; white-space: pre; tab-size: 4; font: var(--font-sm)/1.5 var(--font-mono); color: var(--fg-primary); }
+.editDiffHint { padding: 4px 8px; font-size: var(--font-xs); color: var(--fg-secondary); }

@@ -4214,3 +4214,13 @@ it("maps_tasks_comment_comparison_without_reshaping", () => {
 		body: input,
 	});
 });
+
+// Catches: IPC settings envelopes acquiring a different HTTP wrapper.
+it("maps the shared settings envelope unchanged", () => {
+	const request = { action: "describe", limit: 1 };
+	expect(mapCommandToHttp("settings_action", { request })).toEqual({
+		method: "POST",
+		path: "/settings/action",
+		body: request,
+	});
+});

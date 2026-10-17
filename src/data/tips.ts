@@ -16,6 +16,12 @@ export const TIPS: Tip[] = [
 		shortcut: null,
 	},
 	{
+		feature: "Mobile latest output",
+		description:
+			"When you scroll back in mobile CLI or Chat output, tap the down-arrow above Send to return to the latest output without sending a terminal key.",
+		shortcut: null,
+	},
+	{
 		feature: "AI Chat table actions",
 		description:
 			"Use Markdown to inspect a table's exact source, Copy as Markdown to copy it, or Open as document to read it outside the conversation.",

@@ -1,5 +1,8 @@
 .root {
   position: relative;
+  display: flex;
+  background: var(--bg-secondary);
+  border-top: 1px solid var(--border);
   flex-shrink: 0;
 }
 
@@ -23,9 +26,10 @@
 .bar {
   display: flex;
   gap: 6px;
-  padding: 0 12px;
+  padding: 0 6px 0 12px;
+  flex: 1;
+  min-width: 0;
   background: var(--bg-secondary);
-  border-top: 1px solid var(--border);
   overflow-x: auto;
   -webkit-overflow-scrolling: touch;
   scrollbar-width: none;
@@ -90,4 +94,22 @@
   align-self: stretch;
   background: var(--border);
   flex-shrink: 0;
+}
+
+/* Fixed beside the scrollable keys, centered over the composer Send button. */
+.jumpBottom {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  min-width: 40px;
+  padding: 0;
+  color: var(--accent);
+}
+
+.jumpBottom::before {
+  content: "";
+  position: absolute;
+  inset: 0 -2px;
 }

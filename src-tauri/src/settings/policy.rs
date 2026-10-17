@@ -144,7 +144,12 @@ impl Policy {
         state.record(&proposal, "confirmation_required");
         let mut error = Error::new(store, "confirmation_required");
         error.proposal_id = Some(id);
-        error.next_action = "ui confirm proposalId".into();
+        error.next_action = if caller.key.origin == "mcp" {
+            "ui confirm proposalId"
+        } else {
+            "replay exact edit with approval=proposalId and confirm=true"
+        }
+        .into();
         Err(error)
     }
 

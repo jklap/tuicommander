@@ -41,6 +41,17 @@ this lifecycle through spawn binding, cleanup, reconnect and session publication
 It fails on the pre-repair revision `1137eeb6f`. This proves a reachable removal
 path, not that this sequence caused the historical incident in story 1673.
 
+## Agent return to the shell
+
+The backend foreground observation transition owns exit cleanup for desktop,
+browser and headless clients. When an observed agent identity is revoked, it
+clears `agent_intent` and `current_task`. If the agent left the alternate screen
+active, the same transition flushes buffered synchronized output and restores the
+primary grid with display-only exit sequences. It marks the frame ticker dirty;
+HTTP terminal-line reads use the restored grid without a mounted desktop view.
+No recovery sequence is written to PTY stdin. A stale foreground observation,
+an unobserved startup preset, or a temporary helper does not trigger cleanup.
+
 ## Session Lifecycle
 
 ```
@@ -344,7 +355,7 @@ Foreground agent detection is shared by the desktop command, HTTP foreground end
 
 A direct agent has no shell to return to. Its identity remains valid while its root lives; a foreground child (including a nested shell, git or an editor) holds unattended submit and mail wake until the root regains the foreground. Missing root role, PID or foreground evidence also holds input. Mirrors without the owning daemon's answer never infer a role. A different discovered agent drops preset provenance. Creation seeds provenance synchronously; delayed lifecycle events cannot re-arm an observed identity.
 
-OS samples receive a generation under the session lock. Older samples cannot overwrite a newer identity or foreground-input hold; screen reclassification also verifies ownership of its generation. Identity changes reclassify the existing terminal screen so a quiet composer does not retain a shell-era cache. The refresh return value is the effective foreground detection, which can differ from the retained startup preset; lifecycle consumers read stored state.
+OS samples receive a generation under the session lock. Older samples cannot overwrite a newer identity or foreground-input hold; screen reclassification also verifies ownership of its generation. Pending shell-exit recovery can finish after a newer observation if both observations still identify no agent; it remains pinned against a newly discovered live agent. Identity changes reclassify the existing terminal screen so a quiet composer does not retain a shell-era cache. The refresh return value is the effective foreground detection, which can differ from the retained startup preset; lifecycle consumers read stored state.
 
 The output reader checks the grid's alternate-screen state for agent sessions. On the first entry per session, it logs a warning with the agent type and detected CLI version. This catches agent versions or launch paths that bypass the native-scrollback launch defaults without spamming on repaints.
 
@@ -424,6 +435,13 @@ An open Claude Ink choice dialog is retained in the mobile screen payload;
 its highlighted `❯ N. option` row must not act as a composer cutoff. The
 agent-specific choice parser publishes its navigation contract through
 `SessionState.choice_prompt.selection_mode`.
+
+The HTTP and log-WebSocket screen trim also retains an active Claude `/resume`
+modal, including populated and no-match search states. Its title, search field,
+and final search/cancel footer identify the presentation boundary. Search-box
+borders and the selected session are not composer chrome. This exception does
+not change the shared bottom-zone cutoff used by output and state parsers.
+A retained modal above a later ready composer does not disable normal trimming.
 
 ```rust
 impl VtLogBuffer {
@@ -816,6 +834,15 @@ changes between Claude and Grok restarts the view. Fixture:
 
 ### Claude transcript Chat view
 
+Claude `Edit` inputs with string `file_path`, `old_string` and `new_string`
+project to ACP diff content. Old/new excerpts use the redacted 20,000-character
+text budget rather than the 1,000-character raw-input budget. The adapter keeps
+that bounded content with the pending tool ID and includes it again with the
+result, because ACP tool content updates replace the previous content. Missing
+fields and non-Edit calls retain their existing projection. Tool status remains
+authoritative: diff content alone does not mean that the edit succeeded.
+
+
 `chat_view::View::advance` reads complete JSONL rows through `transcript_tail`,
 projects them with `ClaudeAdapter`, and retains a bounded ACP update log. Each
 view retains an open file-identity handle: replacing a JSONL at the same path
@@ -937,7 +964,9 @@ The final check also reads current session visibility under that lock, so Show
 invalidates a standby tick selected while the desktop was hidden.
 Disconnect releases only that observer and starts a full standby-timeout grace
 window. HTTP output reads and input also reset remote activity and wake a parked
-session under the same visibility lock. Recent user input blocks standby even if
+session under the same visibility lock. Desktop raw input uses that same activity
+and wake path before writing bytes, so an already parked shell can recover even
+without another tab-visibility transition. Recent user input blocks standby even if
 the parsed shell idle timestamp is older. These activity clocks do not change the
 agent's semantic busy/idle state. Showing the desktop restores saved visibility
 and SIGCONTs only terminals that are visible again.
@@ -1014,3 +1043,7 @@ process, channel, ACP connection or browser event stream is added.
 The real CLI loopback recording and provenance are in
 `fixtures/chat_view/ego/README.md`. This requires an ego version with the published
 transcript v1 contract; older executables return an unavailable reason.
+
+### Exact soft-wrap text boundaries
+
+Grid text and styled log extraction preserve trailing cells on WRAPLINE rows. Those spaces are source content, not padding. MCP text output concatenates these rows without inserting a separator. Styled HTTP, WebSocket and IPC log rows include `wrapped: boolean`; a finalized row can still continue into the current screen. Only non-wrapped row tails are trimmed.

@@ -1660,6 +1660,10 @@ pub(super) fn apply_foreground_agent_observation(
             if next.as_deref() != Some("codex") || entry.agent_type.is_some() {
                 entry.codex_binding = None;
             }
+            if next.is_none() {
+                entry.agent_intent = None;
+                entry.current_task = None;
+            }
             entry.agent_type = next;
             entry.hook_instrumented = hook_instrumented_for(
                 &crate::config::load_agents_config(),
@@ -1673,20 +1677,26 @@ pub(super) fn apply_foreground_agent_observation(
     // cached shell-era verdict is not evidence about the newly known agent.
     // Use the reader's grid -> silence lock order; future chunks share the cache.
     if identity_changed && let Some(vt) = state.grid.vt_log_buffers.get(session_id) {
-        let vt = vt.lock();
-        // A newer accepted snapshot owns the cache too. The grid lock orders
-        // reclassification; do not publish an older identity after its successor.
-        if state
-            .session_maps
-            .session_states
-            .get(session_id)
-            .is_none_or(|entry| entry.foreground_probe_generation != generation)
+        let mut vt = vt.lock();
+        // Keep the observation pinned while recovering the display so an older
+        // shell result cannot reset a newly discovered agent. A newer shell
+        // observation must still let the pending shell recovery finish.
         {
-            return state
-                .session_maps
-                .session_states
-                .get(session_id)
-                .and_then(|entry| entry.foreground_probe_result.clone());
+            let entry = state.session_maps.session_states.get(session_id)?;
+            if entry.foreground_probe_generation != generation
+                && (effective.is_some() || entry.agent_type.is_some())
+            {
+                return entry.foreground_probe_result.clone();
+            }
+            if entry.agent_type.is_none() && vt.is_alternate_screen() {
+                // Display-only recovery: never send these sequences to shell
+                // stdin. This must not depend on a mounted desktop terminal.
+                vt.force_stop_sync_if_buffered();
+                vt.process(b"\x1b[?1049l\x1b[?1047l\x1b[?47l\x1b[?25h\x1b[0m");
+                if let Some(dirty) = state.grid.frame_dirty.get(session_id) {
+                    dirty.store(true, Ordering::Relaxed);
+                }
+            }
         }
         let activity = detect_agent_screen_activity_at(
             effective.as_deref(),

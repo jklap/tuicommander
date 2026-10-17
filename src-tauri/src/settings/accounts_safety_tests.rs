@@ -12,7 +12,7 @@ async fn corrupt_binding_metadata_refuses_removal_without_deleting_credentials()
     add_account_record(account.clone(), Some("corrupt-token-canary")).unwrap();
     let path = dir.path().join("github_bindings.json");
     std::fs::write(&path, "corrupt binding bytes").unwrap();
-    let settings = GithubSettings::new(state);
+    let settings = GithubSettings::new(state.clone());
     let error = settings
         .perform(GithubAction::RemoveAccount {
             id: account.id.clone(),
@@ -63,7 +63,7 @@ async fn owner_refusals_keep_their_cause() {
     let (_dir, _guard, state) = isolated();
     let account = GitHubAccount::ghe_pat(GitHubHost::new("refuse.example").unwrap(), None);
     add_account_record(account.clone(), Some("refuse-token-canary")).unwrap();
-    let settings = GithubSettings::new(state);
+    let settings = GithubSettings::new(state.clone());
     let cases = [
         (
             GithubAction::RemoveAccount {
@@ -124,7 +124,7 @@ async fn bindings_save_failure_keeps_account_retriable() {
     // A directory at the lock path makes bindings persistence fail after a successful read.
     let lock = dir.path().join("github_bindings.json.lock");
     std::fs::create_dir(&lock).unwrap();
-    let settings = GithubSettings::new(state);
+    let settings = GithubSettings::new(state.clone());
     assert!(
         settings
             .perform(GithubAction::RemoveAccount {

@@ -211,6 +211,13 @@ events, so another window or a phone sees the same order and cancellations.
 
 ## Mobile Screens (`src/mobile/`)
 
+`SessionDetailScreen` replaces its state with each complete WebSocket or polled
+session snapshot, except polls whose `last_activity_ms` is older than the applied
+state. Equal timestamps remain replaceable; this field is not a protocol revision.
+Omitted optional fields mean cleared state, not missing deltas.
+A fresh poll can therefore retire a stale socket's agent identity and question,
+return Chat to CLI, and route the composer to the remaining shell after agent exit.
+
 Mobile connection presentation follows `useSessions`, not the independent version poll. Recovery increments a root revision consumed by Files, Chat settings, Activity, Settings and Progress discovery. Failed Files reads retry without replacing unsaved edits. During an outage, tab views stay mounted but hidden so contradictory empty/setup errors do not replace the shared connection banner. Mobile Chat hydrates settings quietly and does not infer missing ego configuration from an unsuccessful read.
 
 `OpenMarkdownMenu` adds a scrollable Markdown section to session overflow.
@@ -222,6 +229,9 @@ session mounted and opens `FilesScreen` with the entry’s original checkout roo
 scrolled up or touching the output, it retains the loaded rows instead of
 evicting the content being read. Older-history pages extend that reading window.
 The next log update after following resumes restores the 500-line tail.
+The backend preserves the full Claude `/resume` modal in both the initial HTTP
+screen and log-WebSocket frames, including session rows and no-match results;
+the mobile view does not reconstruct the picker from transcript text.
 
 Terminal ego single-choice questions use the header question action to toggle the existing `ChoicePromptOverlay`. Full titles and option labels wrap within its scrollable overlay. Opening is explicit; the terminal keeps its full height. The composer uses the backend navigation selection mode and its existing in-flight guard to submit only once.
 
@@ -284,6 +294,9 @@ a queued agent message can look like prompt input. A Tab request from the
 composer or keybar accepts one strict extension of a nonempty local draft.
 Explicit keybar Up/Down accepts one history replacement after its PTY write is
 acknowledged, including an empty line, and updates the edit delta baseline.
+When a managed agent awaits an answer without parsed choices, keybar Tab and
+Up/Down still go to the PTY so an open picker can navigate. These keys do not
+import history into the local answer draft.
 Typing, sending, Escape, or a failed write cancels the request. A history response
 arriving before the HTTP acknowledgement is dropped, causing a missed recall.
 Because snapshots have no causal request ID, an unrelated delayed snapshot after
@@ -776,6 +789,8 @@ The Precheck section includes a default-off stdout context checkbox. It edits
 `precheck.inject_output` through the existing store and shared save API, without
 changing prompt text. Disabling and re-enabling the precheck resets the flag.
 
+The mobile session header uses a handset icon and Start/Stop voice call labels for the two-way voice control. The phone More menu uses the same Start/Stop voice call labels. The composer dictation button keeps its microphone icon.
+
 ### Mobile composer browser dictation
 
 Restored dictated drafts stay in the composer without writing to the terminal on mount. Send or the first edit reconciles the saved text with the current PTY input line through the existing delta path. Later edits use the local baseline so delayed terminal echoes do not replay text.
@@ -832,6 +847,8 @@ FileBrowserPanel subscribes to successful folder-drop completion and routes it t
 ### Settings presentation vocabulary
 
 `SettingsPrimitives.tsx` provides SettingPageHeader, SectionCard, SettingRow, StatusSummary, ListRow, EmptyState and DangerZone. These components render caller-owned content only. SettingRow reuses SettingField label and descriptive IDs, including field errors; controls remain the existing UI Input/Select/Textarea components. SectionCard and DangerZone titles are understood by the static Settings search extractor and render h3 anchors. Existing field consumers retain their stacked layout unless they opt into row presentation.
+
+Settings integration keeps `SettingsPanel` as the page-selection owner. Search catalogue reads do not mount page consumers; plugin `describe` supplies navigation and search while scoped `get` starts only when the editor mounts. Search reveals expert keys before the next-frame scroll without persisting Expert Mode. Section links preserve retired-tab mappings, ignore missing anchors and cancel scheduled work on close. `pluginSettingsTab.test.tsx`, `settingsPanelSearch.test.tsx`, `settingsPanelExpert.test.tsx` and `DeepLinkSection.test.tsx` cover these shared boundaries, including local loading/errors and removal during pending plugin reads. No global save transaction or status inference belongs in the shell.
 
 The Pocket Voice picker includes installed and downloadable catalogue voices for the active language. A missing configured voice stays selected with a Not Downloaded label and an adjacent Download row.
 

@@ -1800,6 +1800,8 @@ pub(crate) const MONITORING_GIT_CONCURRENCY: usize = 8;
 /// Every field is constructible without arguments, so the group carries its own
 /// `Default` and `AppState::new` names it once instead of seven times.
 pub(crate) struct GitHubState {
+    pub(crate) login_epoch: std::sync::atomic::AtomicU64,
+    pub(crate) login_commit: tokio::sync::Mutex<()>,
     /// GitHub API token — updated on fallback when a 401 triggers candidate rotation
     pub(crate) token: parking_lot::RwLock<Option<String>>,
     /// Where the current GitHub token came from (env, OAuth keyring, gh CLI)
@@ -1826,6 +1828,8 @@ pub(crate) struct GitHubState {
 impl Default for GitHubState {
     fn default() -> Self {
         Self {
+            login_epoch: std::sync::atomic::AtomicU64::new(0),
+            login_commit: tokio::sync::Mutex::new(()),
             token: parking_lot::RwLock::new(None),
             token_source: parking_lot::RwLock::new(Default::default()),
             disconnected: std::sync::atomic::AtomicBool::new(false),
@@ -2361,6 +2365,7 @@ pub struct AppState {
     /// able to unblock an agent that a native desktop dialog would have pinned to
     /// whoever is sitting at the machine.
     pub(crate) settings_policy: Arc<crate::settings::policy::Policy>,
+    pub(crate) settings_api: tokio::sync::OnceCell<crate::settings::api::Settings>,
     pub(crate) confirm_responses: DashMap<String, tokio::sync::oneshot::Sender<bool>>,
     /// App-wide process-tree snapshot shared by agent lifecycle polling.
     pub(crate) process_snapshot_cache: crate::pty::ProcessSnapshotCache,
@@ -3543,7 +3548,7 @@ impl AppState {
             .expect("monitoring_git_sem is never closed")
     }
 
-    pub fn new(
+    pub(crate) fn new(
         data_dir: PathBuf,
         worktrees_dir: PathBuf,
         config: crate::config::AppConfig,
@@ -3655,6 +3660,7 @@ impl AppState {
             suspend_lock: Mutex::new(()),
             hibernated_peers: dashmap::DashSet::new(),
             settings_policy: Arc::new(crate::settings::policy::Policy::default()),
+            settings_api: tokio::sync::OnceCell::new(),
             confirm_responses: DashMap::new(),
             process_snapshot_cache: crate::pty::ProcessSnapshotCache::default(),
             hot_repo_paths: parking_lot::RwLock::new(std::collections::HashSet::new()),
@@ -4770,9 +4776,29 @@ impl AppState {
         });
     }
 
-    /// Send a push notification to all mobile subscribers, deep-linking a session.
-    fn send_mobile_push(state: &Arc<AppState>, session_id: &str, body: &str) {
-        Self::send_mobile_push_url(state, format!("/mobile/session/{session_id}"), body);
+    /// Send a push with a readable label while retaining the PTY navigation id.
+    fn send_mobile_push(state: &Arc<AppState>, session_id: &str, prompt: &str) {
+        let identity = state.session_maps.sessions.get(session_id).map(|session| {
+            let session = session.lock();
+            (
+                session.display_name.clone(),
+                session.initial_cwd.clone().or_else(|| session.cwd.clone()),
+            )
+        });
+        let agent_type = state
+            .session_maps
+            .session_states
+            .get(session_id)
+            .and_then(|session| session.agent_type.clone());
+        let (name, cwd) = identity.unwrap_or_default();
+        let (body, url) = crate::push::session_push_payload(
+            session_id,
+            name.as_deref(),
+            agent_type.as_deref(),
+            cwd.as_deref(),
+            prompt,
+        );
+        Self::send_mobile_push_url(state, url, &body);
     }
 
     /// Send a push notification to all mobile subscribers at an arbitrary deep link.
@@ -5260,17 +5286,7 @@ impl AppState {
 
                 // Spawn push notification outside the DashMap lock
                 if let Some((sid, prompt)) = push_data {
-                    let session_name = state
-                        .session_maps.sessions
-                        .get(&sid)
-                        .and_then(|s| s.value().lock().display_name.clone())
-                        .unwrap_or_else(|| sid.clone());
-                    let body = if prompt.is_empty() {
-                        format!("{session_name}: awaiting input")
-                    } else {
-                        format!("{session_name}: {prompt}")
-                    };
-                    Self::send_mobile_push(state, &sid, &body);
+                    Self::send_mobile_push(state, &sid, &prompt);
                 }
             }
             AppEvent::PtyExit { session_id } => {
@@ -5317,16 +5333,7 @@ impl AppState {
                     }
                 }
                 if should_push {
-                    let session_name = state
-                        .session_maps.sessions
-                        .get(session_id)
-                        .and_then(|s| s.value().lock().display_name.clone())
-                        .unwrap_or_else(|| session_id.clone());
-                    Self::send_mobile_push(
-                        state,
-                        session_id,
-                        &format!("{session_name}: completed"),
-                    );
+                    Self::send_mobile_push(state, session_id, "completed");
                 }
             }
             // Global events don't affect per-session state

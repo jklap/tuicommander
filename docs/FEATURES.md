@@ -126,7 +126,7 @@ Durable workflow run storage records event history, pinned graph revisions, node
 
 ## 1. Terminal Management
 
-Adjacent `💬` answer paragraphs share one continuous green left bar without a background tint (Paper uses its darker success green for contrast), including blank rows between them. An unmarked prose paragraph after a blank row ends the answer; an uninterrupted indented continuation stays inside. Lists, tables, quotations and fenced code remain attached to the answer. A non-answer output row or prompt ends the region. The CLI blanks only the marker glyph cells; copy, selection and search keep the original text. Chat uses the same answer extent and strips every paragraph marker.
+Adjacent `💬` answer paragraphs share one continuous green left bar without a background tint (Paper uses its darker success green for contrast), including blank rows between them. An unmarked prose paragraph after a blank row ends the answer; an uninterrupted indented continuation stays inside. Lists, tables, quotations and fenced code remain attached to the answer. A non-answer output row or prompt ends the region. The CLI blanks only the marker glyph cells; selection and search retain their grid coordinates. Clipboard copy removes answer-prefix markers through the same helper used by AI Chat answer buttons (including mobile) and selectable Answers text. Inline emoji and fenced examples stay literal. Chat uses the same answer extent and strips every paragraph marker.
 
 Terminal prompt colours apply to Chat user messages only. The CLI grid retains prompt scrollbar ticks and answers-only prompt grouping without tinting prompt rows.
 
@@ -163,8 +163,11 @@ Right-click an HTTP(S) terminal link (including localhost) and choose **Start in
 
 - **Remote replay health** — Stream failure, unreadable frames and initial replay stalls show a persistent error toast. Reconnect success requires a delivered frame; healthy idle terminals have no output-silence deadline.
 
-- **Mobile Claude CLI / Chat** — Switch in the existing session header; the composer and terminal stream stay mounted. Both desktop and mobile let the backend decide Claude transcript binding and show a notice when unavailable. Returning to CLI follows the latest output.
+- **Mobile Claude CLI / Chat** — Switch in the existing session header; the composer and terminal stream stay mounted. Both desktop and mobile let the backend decide Claude transcript binding and show a notice when unavailable. Returning to CLI follows the latest output. Fresh session snapshots clear stale agent/question controls after exit, including when the output socket pauses; the composer then targets the remaining shell.
 - **CLI / Chat view** — Claude, Grok, Codex and ego terminals switch between the grid and a conversation view with docked Compose input, built from the agent's session file (Grok: its `chat_history.jsonl`, bound only through the exact `active_sessions.json` registry entry; including older prompts, human text/image follow-ups queued while Claude is busy, replies, folded tool cards, image/PDF markers and model-change cards). ego uses the exact live PID-to-lease session binding and the documented `ego export --format transcript --after` contract, not private conversation storage. Completed messages and tool lifecycle updates use the shared ticker; goal continuations and compaction checkpoints are notices. An ego executable with transcript v1 support must be configured. Desktop and mobile support ego Chat. The grid is hidden, never unmounted.
+
+- **Readable session edits** — Expand a Chat tool card to read structured old/new edit blocks with aligned four-space tab stops and horizontal scrolling. Phone Claude CLI sessions offer **Read file edits in Chat** without unmounting the terminal.
+- **Mobile session Chat appearance** — The session detail CLI/Chat view shares desktop prompt/answer theme tokens and transcript typography. Mobile keeps its existing touch-sized switch and native input; AI Chat is a separate surface.
 - **Deferred update restart** — After an in-app update installs, TUICommander restarts only when no session is busy or awaiting input; the APP UPDATE notification shows how many are busy and offers **Restart now** (with confirmation). Turn off in **Settings → General → Updates → Wait for agents before restarting** (`defer_update_relaunch`, default on).
 - **Eager resume after an update** — When the app restarts to apply an update, every agent tab with a confirmed session id resumes by itself on every branch, without selecting the branch first. Tabs without a confirmed id keep the click-to-resume banner. Turn off in **Settings → General → Updates → Resume all agents after an update** (`eager_resume_after_update`, default on).
 - **Terminal Chat reading layout** — One rule-only answer card per turn with whole-answer Copy on hover or focus, 96-character answer and 80-character prompt limits, collapsible two-line terminal pastes, and compact system notices. Tool activity stays in its collapsed row; Claude Bash uses its description when present. No time separators are shown because transcript entries carry no timestamp.
@@ -353,7 +356,7 @@ A multi-line editor docked under the terminal for writing a prompt without fight
 Idle, unfocused terminals can be paused to reduce CPU and battery use. A background checker (every 30s) sends `SIGSTOP` only when the PTY child owns the foreground process group. An agent running as a separate foreground job inside an interactive shell is not stopped: shell job control would reclaim the terminal and leave that job suspended. Processes in the eligible child's group are paused together.
 
 - **Entry conditions (all required)** — timeout enabled (`> 0`), tab not focused, shell state idle, no tracked agent background work, idle for at least the timeout, session startup settled, and not already in standby. Claude/Codex/Gemini/Grok/pi/OpenCode additionally require confirmed idle (explicit lifecycle marker or stable ready screen); silence-only idle cannot suspend them. Grok distinguishes its active Braille-spinner status row from the persistent `❯` composer.
-- **Remote activity** — remote input, HTTP output reads, and remote observer disconnects start a full timeout window before standby can resume; connected terminal WebSockets and SSE observers prevent standby. Recent local input also prevents standby.
+- **Remote activity** — remote input, HTTP output reads, and remote observer disconnects start a full timeout window before standby can resume; connected terminal WebSockets and SSE observers prevent standby. Recent local input also prevents standby. Desktop raw input wakes an already parked shell through the same visibility-serialized activity path.
 - **Wake** — `SIGCONT` targets the exact recorded stopped group when the tab is focused, remote input/output arrives, or a message arrives for the agent; the process resumes where it stopped (no session loss, no restart)
 - **Safety** — the process-group id is validated before signalling; an unsafe pgid is refused rather than risking a stop sent to the wrong group
 - **Pause badge** — suspended tabs show a pause indicator in the tab bar
@@ -799,6 +802,7 @@ Tabbed side panel with four tabs: Changes, Log, Stashes, Branches. Replaces the 
 - File Browser (folder icon) — `Cmd+E`
 - Markdown (MD icon) — `Cmd+Shift+M`
 - Git (diff icon) — `Cmd+Shift+D` (opens Git Panel)
+- Mobile session header: handset for two-way voice calls; composer dictation keeps its microphone.
 - Mic button (when dictation enabled): hold to record, release to transcribe
 
 ---
@@ -2120,7 +2124,7 @@ path and opens the existing mobile Markdown viewer. Desktop opens and closes
 update the list through SSE; worktree files retain their original checkout.
 
 
-Waiting terminal ego questions show **Input**. Tap the question icon in the session header to open or close the full question and its wrapping options. The card overlays the terminal without reserving rows. Prior suggested actions are hidden while a human answer is pending.
+Waiting terminal ego questions show **Input**, including narrow terminals whose selector footer wraps mid-word. Tap the question icon in the session header to open or close the full question and its wrapping options. Single-choice submits one option; multiple-choice toggles options until **Submit answers**; free-text uses the composer. The card overlays the terminal without reserving rows. Prior suggested actions are hidden while a human answer is pending.
 
 Phone-optimized progressive web app for monitoring AI agents remotely. Separate SolidJS entry point (`src/mobile/`) served by the existing HTTP server at `/mobile`.
 
@@ -2176,6 +2180,7 @@ Unsupported actions are hidden. Menus close on outside tap or Escape and use
 - Mirrored sessions stream through the connected desktop server to their owning daemon, so the phone stays on its HTTPS origin; the session kill action reaches that owner too
 - Live output via WebSocket with `format=log` (VT100-extracted clean lines, auto-scrolling, 500-line live tail). Scrolling up or touching retains the reading window and fetched history; the next log update after returning to the bottom restores the live tail.
 - HTTP and HTTPS links in output open in the phone's external browser; Markdown path controls open the Files editor.
+- Claude `/resume` retains its full session list and filtered or no-match search results in both initial HTTP output and live log-WebSocket frames; key-bar arrows and Enter operate the real terminal picker
 - Source-width prose rows are rejoined before the phone wraps them; short lines, lists, and box-drawing blocks retain their layout
 - When a mobile output line wraps, its continuation keeps the line's leading spaces or tabs; unindented prose and horizontally scrolling box-drawing blocks retain their layout
 - Claude tool-call status dots reserve one text cell in both visible and blank pulse frames; wrapped continuations retain the same hanging indent through the green completion frame
@@ -2187,7 +2192,7 @@ Unsupported actions are hidden. Menus close on outside tap or Escape and use
 - Suggest follow-up chips: horizontal scrollable pills from `suggested_actions`, tap to send
 - Slash menu overlay: the keybar `/` inserts at the composer selection through the same input path as typing; both sync to the PTY and show only detected agent menu entries with navigation. Surrounding draft text is preserved. Removed commands are hidden, and the close button dismisses the menu. Picking a command fills the input; submitting waits for the agent's Enter gap
 - Quick-action chips: Yes, No, y, n, Enter, Ctrl-C
-- **TerminalKeybar:** 44 px tall, horizontally scrollable row of `/`, Ctrl, Tab, Esc, arrow and Enter keys above the main input, with no visible scrollbar. Ctrl opens a menu for Ctrl+C, Ctrl+B, Ctrl+D and Ctrl+Enter; Ctrl+C and Ctrl+D are danger-coloured. A choice sends once and closes the menu; an outside tap or Escape dismisses without sending. Ctrl+Enter follows the agent registry: CSI-u submits in Claude Code and inserts a newline in OpenCode; LF supplies the newline fallback for Codex, Goose, Grok and pi, and submits in ego. Uninstalled agents use documented newline fallbacks or conservative CSI-u; see `docs/evidence/ctrl-menu-1660/README.md`. When the agent is awaiting input, it adds Yes/No quick-reply buttons. The composer input and Send button also have 44 px touch targets. After the session ends, the keybar and composer are disabled and the stale status badge is hidden
+- **TerminalKeybar:** 44 px tall, horizontally scrollable row of `/`, Ctrl, Tab, Esc, arrow and Enter keys above the main input, with no visible scrollbar. Ctrl opens a menu for Ctrl+C, Ctrl+B, Ctrl+D and Ctrl+Enter; Ctrl+C and Ctrl+D are danger-coloured. A choice sends once and closes the menu; an outside tap or Escape dismisses without sending. Ctrl+Enter follows the agent registry: CSI-u submits in Claude Code and inserts a newline in OpenCode; LF supplies the newline fallback for Codex, Goose, Grok and pi, and submits in ego. Uninstalled agents use documented newline fallbacks or conservative CSI-u; see `docs/evidence/ctrl-menu-1660/README.md`. When the agent is awaiting input, it adds Yes/No quick-reply buttons. Tab and Up/Down still reach a waiting terminal picker when no parsed choices exist, without importing picker text into a local answer draft. The composer input and Send button also have 44 px touch targets. After the session ends, the keybar and composer are disabled and the stale status badge is hidden
 - **CLI command widget:** agent-specific quick commands (e.g., `/compact` for Claude Code and `/status` for Codex) accessible via expandable button
 - Text command input with 16px font (prevents iOS auto-zoom), `inputmode="text"`
 - **Offline retry queue:** `write_pty` calls that fail due to network disconnection are queued and retried when connectivity resumes
@@ -2300,7 +2305,9 @@ Unsupported actions are hidden. Menus close on outside tap or Escape and use
 - `font-variant-emoji: text` on output view — forces Unicode symbols (●, ○, ◉) to render as monochrome text glyphs instead of colorful emoji
 
 ### 18.11 Standalone CSS
+- Mobile human replies can answer an awaiting agent even while its shell remains busy and no question was recognized. Recognized native questions keep their direct answer controls. Rejected replies retain the draft and show the backend reason instead of a generic busy message.
 - The mobile composer offers browser dictation directly next to Send (44 px touch targets) when `SpeechRecognition` or `webkitSpeechRecognition` is available. Interim and final speech append to the draft without focusing the textarea or sending; tap again to stop. Editing the draft cancels recognition and keeps the edit exactly; the mic becomes available again when the browser confirms the previous session has ended. Errors also retain the microphone claim until that confirmation, so repeated taps cannot overlap recognition sessions. Late results from the cancelled recording are ignored. Errors keep the draft and show a toast. It uses the configured dictation language, falling back to the browser language for automatic detection. Browser dictation and server hands-free conversation cannot record together.
+- Mobile CLI and Chat output show a down-arrow at the right of the key bar while scrolled back. Tap it to return to the latest output; it hides at the bottom and never sends a terminal key.
 - Mobile Settings → Input → Autocorrect and spellcheck enables keyboard correction and sentence capitalization for the terminal prompt and mobile Chat composers by default. Disable it for literal command entry. The preference stays on this device across reloads; file and code editors keep spellcheck off.
 - Dictated mobile drafts survive reload without automatic terminal input. Send or the first edit reconciles the restored draft with the current terminal line, preserving cleared text without duplicating text still present.
 - iPhone Home Screen availability remains device-dependent: [WebKit bug 225298](https://bugs.webkit.org/show_bug.cgi?id=225298#c3) documents the historical standalone restriction; Safari's [14.1 release notes](https://webkit.org/blog/11648/new-webkit-features-in-safari-14-1/) require Siri enabled. Feature detection and error handling apply; Safari tab support does not prove PWA support.
@@ -2833,6 +2840,8 @@ Command boundaries and user prompt ticks retain their physical row after capped 
 
 ## Headless Telegram channel
 
+Without an explicit registration, allowlisted text reaches the latest-connected
+live AI Chat peer. Explicit registration always has priority over that fallback.
 Any MCP-bound TUIC agent opts in with `telegram register`; one volatile
 registration replaces the previous agent with one native notice. It ends on
 MCP session end, PTY close, foreground-agent exit or daemon restart.
@@ -2844,7 +2853,9 @@ cursor persists; live mint deployment remains pending. See
 [Telegram channel](design/telegram-channel.md).
 ### Telegram Settings
 
-Desktop Settings → Telegram and Mobile Settings → Telegram setup provide token replacement/getMe check, one-use ten-minute pairing or explicit private-chat IDs, read-only registered-agent status, enable and safe status. Desktop and `tuic-remote` share one process-held polling lock; the standby takes over when the owner exits. Settings identifies the connected owner and enables pairing only while connected. Tokens stay in owner-only private files and never return to the UI.
+Mobile Settings does not offer Telegram setup.
+
+Desktop Settings → Telegram provides token replacement/getMe check, one-use ten-minute pairing or explicit private-chat IDs, read-only registered-agent status, enable and safe status. Desktop and `tuic-remote` share one process-held polling lock; the standby takes over when the owner exits. Settings identifies the connected owner and enables pairing only while connected. Tokens stay in owner-only private files and never return to the UI.
 
 Connected daemon notices carry their host identity. MCP confirmation responses and ACP permission/elicitation answers return to that daemon; disconnected questions disappear without changing local connections. AI Chat shows remote questions separately, with their ACP connection identity. Remote GitHub transitions fetch PR data from the repository owner, notify once, and do not run local repository automation. GitHub polling also works on the headless daemon. MCP upstream health refreshes use a separate host snapshot rather than this machine’s editable configuration.
 
@@ -3112,6 +3123,10 @@ Hibernation requires an idle agent and a verified resume session in its saved pr
 
 The normal Rust suspension path persists `reason: "idle_hibernate"` before ending the PTY. Opening the tab, submitting input or sending peer mail uses the shared wake path. Storage or resume-verification failures leave the live session intact.
 
+## Settings transport cutover (#1787-4778)
+
+The generated settings contract replaces the legacy MCP config tool and also serves HTTP and IPC. Trusted UI opt-in is independent of legacy config enablement. The resolved inventory enables owner transactions and typed workflows, including connection credential reconciliation scoped to one runtime. The inventory gate remains enforced for future additions.
+
 Mobile outage recovery: one connection banner offers immediate retry, automatic session recovery refreshes failed view loads, and retained mobile views preserve drafts without desktop restart advice (#1930-f4c2).
 
 Settings owner validation covers typed shortcut records and bounded pane geometry. Geometry references existing groups; runtime tab membership and focus are not configurable settings (#1914-cdf6).
@@ -3140,7 +3155,7 @@ AI Chat can pin repository context per conversation. A separate composer control
 
 ### Settings layout foundation
 
-Settings shares a responsive shell (1136px maximum, 80vh height) and reusable theme-aware cards, rows, status summaries and scoped action presentation. Existing settings behavior is unchanged; page-by-page adoption follows separately.
+Settings shares a responsive shell (1136px maximum, 80vh height) and reusable theme-aware cards, rows, status summaries and scoped action presentation across global, plugin and repository pages. Catalogue search preserves lazy page loading and reveals expert matches without changing Expert Mode. Section links retain their page mappings; plugin loading, read failures and unloads remain local to their scoped editors. Existing settings ownership and save behavior are unchanged.
 
 Pocket spoken replies keep a missing selected voice visible and downloadable; while its download is absent, a ready bundle speaks with its own language default.
 
@@ -3156,3 +3171,5 @@ Telegram Settings includes a newest-first, process-local log of the last 20 inbo
 ### Telegram request streaming (1959-162a)
 
 Telegram replies now use TUIC-driven receipt (👀), working (👨‍💻), waiting (🤔), answered (👍) and failed (👎) reactions. An ephemeral native draft shows Italian status lines or unapproved agent previews; it refreshes while work continues and the final reply replaces it. Acknowledgement of work requires inbox Read and a new recipient turn. PTY intent/activity and AI Chat assistant chunks share request correlation; finish remains authoritative after draft retirement. Telegram-mail-woken AI Chat turns automatically send their settled assistant text if finish has not answered. Queue and no-reply notices occur at ten minutes and sixty seconds after Read respectively. Restart keeps no request history. Phone rendering requires a live check after the backend restart.
+
+Terminal text fidelity: soft-wrap rows preserve original spaces in session text, mobile CLI output, copied selections and ego question labels; explicit hard breaks remain. Chat uses its separate transcript source.
