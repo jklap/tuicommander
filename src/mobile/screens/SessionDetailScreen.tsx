@@ -51,7 +51,13 @@ export function SessionDetailScreen(props: SessionDetailScreenProps) {
 	// Both transports send complete snapshots, with cleared optional fields omitted.
 	// Replace rather than merge, and let a fresh poll recover a paused/stale socket.
 	const [sessionState, setSessionState] = createSignal(props.session.state);
-	createEffect(() => setSessionState(props.session.state));
+	createEffect(() => {
+		const snapshot = props.session.state;
+		setSessionState((current) => {
+			if (snapshot && current && snapshot.last_activity_ms < current.last_activity_ms) return current;
+			return snapshot;
+		});
+	});
 	const status = useDebouncedStatus(() => ({ ...props.session, state: sessionState() }));
 	const [moreOpen, setMoreOpen] = createSignal(false);
 	const [headerPanel, setHeaderPanel] = createSignal<SessionHeaderPanel | null>(null);

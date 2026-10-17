@@ -212,7 +212,9 @@ events, so another window or a phone sees the same order and cancellations.
 ## Mobile Screens (`src/mobile/`)
 
 `SessionDetailScreen` replaces its state with each complete WebSocket or polled
-session snapshot. Omitted optional fields mean cleared state, not missing deltas.
+session snapshot, except polls whose `last_activity_ms` is older than the applied
+state. Equal timestamps remain replaceable; this field is not a protocol revision.
+Omitted optional fields mean cleared state, not missing deltas.
 A fresh poll can therefore retire a stale socket's agent identity and question,
 return Chat to CLI, and route the composer to the remaining shell after agent exit.
 
