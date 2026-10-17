@@ -3,7 +3,9 @@ import { afterEach, expect, it, vi } from "vitest";
 import { setPerfDebug } from "../../../utils/perfDebug";
 import type { CellMetrics, DecodedRow } from "../canvasTerminalUtils";
 import {
+	dumpFrameWorkload,
 	FrameWorkloadRecorder,
+	recordWorkloadPaint,
 	type PaintState,
 	recordWorkloadArrival,
 	setFrameWorkloadEnabled,
@@ -153,4 +155,29 @@ it("a stall longer than the window does not erase its last paint before the dump
 	const recorder = new FrameWorkloadRecorder();
 	recorder.paint("stalled", new Map([[0, row()]]), state, 10);
 	expect(recorder.snapshot("recovered-after-long-paint", 60_000).events).toHaveLength(1);
+});
+
+it("a queued dump retains the triggering slow paint when a later arrival ages the active window", async () => {
+	vi.useFakeTimers();
+	let now = 10;
+	vi.spyOn(performance, "now").mockImplementation(() => now);
+	const invoke = vi.fn().mockResolvedValue("capture.json");
+	vi.doMock("../../../invoke", () => ({ invoke }));
+	try {
+		setPerfDebug(true);
+		setFrameWorkloadEnabled(true);
+		recordWorkloadPaint("stalled", new Map([[0, row()]]), state);
+		// The paint consumed 31 seconds. Dumping yields to the event loop;
+		// an already queued transport delivery can run before that timer.
+		now = 31_010;
+		const pending = dumpFrameWorkload("long-grid-paint");
+		recordWorkloadArrival("stalled", new ArrayBuffer(32), false);
+		await vi.runAllTimersAsync();
+		await pending;
+		const recording = JSON.parse(invoke.mock.calls[0][1].recording);
+		expect(recording.events.some((event: { kind: string }) => event.kind === "paint")).toBe(true);
+	} finally {
+		vi.doUnmock("../../../invoke");
+		vi.useRealTimers();
+	}
 });
