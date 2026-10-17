@@ -2532,6 +2532,9 @@ fn write_pty_parts_blocking(
     session_id: &str,
     parts: &[String],
 ) -> Result<(), String> {
+    // Match HTTP input: wake under the visibility lock even if focusing the tab
+    // did not produce another visibility transition after it entered standby.
+    crate::background_mode::hidden::record_remote_activity(state, session_id);
     let transaction = state.input_transaction(session_id);
     let _input = transaction.lock();
     // Keystroke delivery to the PTY: run on the high QoS band so the write (and

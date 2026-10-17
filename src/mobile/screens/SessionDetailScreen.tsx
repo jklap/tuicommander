@@ -18,7 +18,7 @@ import { useSessionChatView } from "../components/useSessionChatView";
 
 import { getAgentCommands } from "../config/agentCommands";
 import { useMobileVoice } from "../useMobileVoice";
-import type { SessionInfo } from "../useSessions";
+import type { SessionInfo, SessionState } from "../useSessions";
 import { formatRetryCountdown } from "../utils/formatRetryCountdown";
 import { isKnownAgentType } from "../utils/sessionKind";
 import { useDebouncedStatus } from "../utils/useDebouncedStatus";
@@ -47,17 +47,35 @@ function elapsedTime(ms: number): string {
 	return `${Math.floor(minutes / 1_440)}d`;
 }
 
+/** Both responsive call actions use the same handset, not the dictation mic. */
+function VoiceCallIcon() {
+	return (
+		<svg
+			width="20"
+			height="20"
+			viewBox="0 0 24 24"
+			fill="none"
+			stroke="currentColor"
+			stroke-width="2"
+			stroke-linecap="round"
+			aria-hidden="true"
+		>
+			<path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72c.13.96.36 1.9.69 2.79a2 2 0 0 1-.45 2.11L8.09 9.89a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45c.89.33 1.83.56 2.79.69A2 2 0 0 1 22 16.92z" />
+		</svg>
+	);
+}
+
 export function SessionDetailScreen(props: SessionDetailScreenProps) {
-	// Merge polled state with real-time WebSocket state pushes.
-	// WS state arrives instantly; poll state arrives every 3s as fallback.
-	const [wsState, setWsState] = createSignal<Record<string, unknown> | null>(null);
-	const sessionState = () => {
-		const ws = wsState();
-		const poll = props.session.state;
-		if (!ws) return poll;
-		// WS state is authoritative when present; poll state fills gaps on reconnect.
-		return { ...poll, ...ws } as typeof poll;
-	};
+	// Both transports send complete snapshots, with cleared optional fields omitted.
+	// Replace rather than merge, and let a fresh poll recover a paused/stale socket.
+	const [sessionState, setSessionState] = createSignal(props.session.state);
+	createEffect(() => {
+		const snapshot = props.session.state;
+		setSessionState((current) => {
+			if (snapshot && current && snapshot.last_activity_ms < current.last_activity_ms) return current;
+			return snapshot;
+		});
+	});
 	const status = useDebouncedStatus(() => ({ ...props.session, state: sessionState() }));
 	const [moreOpen, setMoreOpen] = createSignal(false);
 	const [headerPanel, setHeaderPanel] = createSignal<SessionHeaderPanel | null>(null);
@@ -277,18 +295,7 @@ export function SessionDetailScreen(props: SessionDetailScreenProps) {
 						disabled={browserDictating()}
 						onClick={() => void voice.toggle()}
 					>
-						<svg
-							width="20"
-							height="20"
-							viewBox="0 0 24 24"
-							fill="none"
-							stroke="currentColor"
-							stroke-width="2"
-							stroke-linecap="round"
-							aria-hidden="true"
-						>
-							<path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72c.13.96.36 1.9.69 2.79a2 2 0 0 1-.45 2.11L8.09 9.89a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45c.89.33 1.83.56 2.79.69A2 2 0 0 1 22 16.92z" />
-						</svg>
+						<VoiceCallIcon />
 					</button>
 				</Show>
 				<button
@@ -364,6 +371,7 @@ export function SessionDetailScreen(props: SessionDetailScreenProps) {
 								void voice.toggle();
 							}}
 						>
+							<VoiceCallIcon />
 							{voice.armed() ? "Stop voice call" : "Start voice call"}
 						</button>
 					</Show>
@@ -493,7 +501,7 @@ export function SessionDetailScreen(props: SessionDetailScreenProps) {
 					}}
 					sessionId={props.session.session_id}
 					onOpenFileLink={props.onOpenFileLink}
-					onStateChange={setWsState}
+					onStateChange={(state) => setSessionState(state as unknown as SessionState)}
 					onInputLine={setPtyInputLine}
 					searchQuery={searchQuery()}
 				/>
@@ -513,40 +521,42 @@ export function SessionDetailScreen(props: SessionDetailScreenProps) {
 					agentType={sessionState()?.agent_type as string | null | undefined}
 				/>
 			</Show>
-			<TerminalKeybar
-				showScrollToBottom={chat.active() ? !chat.atBottom() : !cliAtBottom()}
-				onScrollToBottom={() => (chat.active() ? chat.scrollToBottom() : jumpCli?.())}
-				sessionId={props.session.session_id}
-				agentType={sessionState()?.agent_type as string | null | undefined}
-				awaitingInput={sessionState()?.awaiting_input}
-				choicePromptOpen={!!sessionState()?.choice_prompt}
-				questionConfident={sessionState()?.question_confident}
-				sessionExists={props.sessionExists}
-				onCommandWidgetOpen={() => setCommandWidgetOpen(true)}
-				onSlashRequest={() => insertComposerText?.("/")}
-				onInputKeyRequest={(key) => requestComposerInputKey?.(key)}
-			/>
-			<CommandInput
-				serverVoiceRecording={voice.recording()}
-				onBrowserDictating={setBrowserDictating}
-				sessionId={props.session.session_id}
-				managedSession={!!sessionState()?.agent_type}
-				awaitingInput={sessionState()?.awaiting_input}
-				sessionExists={props.sessionExists}
-				prefillValue={inputPrefill()}
-				ptyInputLine={ptyInputLine()}
-				agentType={sessionState()?.agent_type ?? null}
-				slashItems={sessionState()?.slash_menu_items}
-				choicePrompt={agentType() === "ego" && !egoQuestionOpen() ? undefined : sessionState()?.choice_prompt}
-				questionText={egoQuestionOpen() && !sessionState()?.choice_prompt ? sessionState()?.question_text : undefined}
-				codexQuestionOpen={codexQuestionOpen()}
-				onRegisterInsertText={(fn) => {
-					insertComposerText = fn;
-				}}
-				onRegisterInputKey={(fn) => {
-					requestComposerInputKey = fn;
-				}}
-			/>
+			<div class={styles.controls}>
+				<TerminalKeybar
+					showScrollToBottom={chat.active() ? !chat.atBottom() : !cliAtBottom()}
+					onScrollToBottom={() => (chat.active() ? chat.scrollToBottom() : jumpCli?.())}
+					sessionId={props.session.session_id}
+					agentType={sessionState()?.agent_type as string | null | undefined}
+					awaitingInput={sessionState()?.awaiting_input}
+					choicePromptOpen={!!sessionState()?.choice_prompt}
+					questionConfident={sessionState()?.question_confident}
+					sessionExists={props.sessionExists}
+					onCommandWidgetOpen={() => setCommandWidgetOpen(true)}
+					onSlashRequest={() => insertComposerText?.("/")}
+					onInputKeyRequest={(key) => requestComposerInputKey?.(key)}
+				/>
+				<CommandInput
+					serverVoiceRecording={voice.recording()}
+					onBrowserDictating={setBrowserDictating}
+					sessionId={props.session.session_id}
+					managedSession={!!sessionState()?.agent_type}
+					awaitingInput={sessionState()?.awaiting_input}
+					sessionExists={props.sessionExists}
+					prefillValue={inputPrefill()}
+					ptyInputLine={ptyInputLine()}
+					agentType={sessionState()?.agent_type ?? null}
+					slashItems={sessionState()?.slash_menu_items}
+					choicePrompt={agentType() === "ego" && !egoQuestionOpen() ? undefined : sessionState()?.choice_prompt}
+					questionText={egoQuestionOpen() && !sessionState()?.choice_prompt ? sessionState()?.question_text : undefined}
+					codexQuestionOpen={codexQuestionOpen()}
+					onRegisterInsertText={(fn) => {
+						insertComposerText = fn;
+					}}
+					onRegisterInputKey={(fn) => {
+						requestComposerInputKey = fn;
+					}}
+				/>
+			</div>
 			<Show when={commandWidgetOpen()}>
 				<CommandWidget
 					sessionId={props.session.session_id}

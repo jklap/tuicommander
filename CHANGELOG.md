@@ -6,10 +6,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+- Wake standby shells before desktop raw input, even when tab visibility did not change again; reuse the remote input wake path (#1986-1236).
+
+- Clear stale mobile agent and question controls from fresh session snapshots after agent exit, restoring CLI and shell input even when the output socket pauses (#1985-45bd).
+
 - Use Start/Stop voice call labels in the phone More menu, consistent with the tablet header (#1979-89e1, #1981-0caf).
 
 - Allow explicit mobile replies while an agent awaits input without requiring an idle shell; keep recognized question controls and show the actual refusal reason without losing the answer (#1980-47b7).
-- Distinguish mobile two-way voice calls with a handset icon; composer dictation keeps its microphone (#1979-89e1).
+- Distinguish mobile two-way voice calls with the same handset icon in the tablet header and phone More menu; composer dictation keeps its microphone (#1979-89e1).
 
 - Show readable session names and progress text in mobile push notifications; session links remain unchanged (#1978-9cfe).
 - Show structured file edits as old/new blocks with aligned tabs and horizontal scrolling in Chat; add a phone CLI shortcut to read edits without unmounting the terminal (#1982-ee68).
@@ -36,6 +40,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Restyle Workspace Settings with section cards, aligned terminal and Git fields, and action-first shortcut rows while preserving existing behavior.
 - Bound `tuic bg` completion command labels to one line and 120 characters; keep the full command before job output in the log (#1950-43b7).
 ### Fixed
+- Keep mobile question cards theme-readable and above the terminal key bar, including ego free-text questions (#1973-3d1b).
 - Apply confirmed username and password changes live in headless Settings without reporting a persisted apply failure or restarting the desktop listener; real listener changes keep their restart contract (#1984-3472).
 
 - Preserve unsent mobile answers when opening an ego question card, and exclude startup/help rows from fresh-session free-text questions (#1980-47b7, #1973-3d1b).

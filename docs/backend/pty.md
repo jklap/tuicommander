@@ -964,7 +964,9 @@ The final check also reads current session visibility under that lock, so Show
 invalidates a standby tick selected while the desktop was hidden.
 Disconnect releases only that observer and starts a full standby-timeout grace
 window. HTTP output reads and input also reset remote activity and wake a parked
-session under the same visibility lock. Recent user input blocks standby even if
+session under the same visibility lock. Desktop raw input uses that same activity
+and wake path before writing bytes, so an already parked shell can recover even
+without another tab-visibility transition. Recent user input blocks standby even if
 the parsed shell idle timestamp is older. These activity clocks do not change the
 agent's semantic busy/idle state. Showing the desktop restores saved visibility
 and SIGCONTs only terminals that are visible again.

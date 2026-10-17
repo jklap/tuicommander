@@ -25,6 +25,11 @@ normalized into each other.
 
 In the mobile session output, a small upward drag stops auto-follow. New output does not scroll the view until you return to the bottom.
 
+When the viewed agent exits, the mobile session returns to the shell: question
+controls close, Chat returns to CLI, and the composer sends shell input. Fresh
+session polling also clears stale agent controls if the output socket pauses or
+reconnects. If the PTY ends, **Session ended** offers **Back** to the session list.
+
 In the mobile session output, completed lines continue into history even after the terminal history fills, while the live region redraws below. Long text wraps to the phone width. A continuation
 keeps the original line's leading spaces or tabs, so indented lists and code
 remain readable. Claude tool-call status dots keep the same space while pulsing
@@ -77,7 +82,7 @@ Older recorded prompts with a prompt ID also appear when Claude did not record a
 
 ### Suspending a Tab
 
-**Right-click → Suspend Tab** ends the tab's process and its agent, freeing the memory and CPU they used, and keeps the tab in the tab bar marked `zz`. It is not auto-standby: auto-standby pauses an eligible idle process, which keeps its memory, and wakes it when you focus the tab. Agents running as separate foreground jobs inside an interactive shell are not auto-stopped, because the shell would reclaim their terminal. Remote viewing and typing prevent standby for a full timeout window after the last activity or disconnect. A suspended tab holds no process at all.
+**Right-click → Suspend Tab** ends the tab's process and its agent, freeing the memory and CPU they used, and keeps the tab in the tab bar marked `zz`. It is not auto-standby: auto-standby pauses an eligible idle process, which keeps its memory, and wakes it when you focus the tab. Agents running as separate foreground jobs inside an interactive shell are not auto-stopped, because the shell would reclaim their terminal. Remote viewing and typing prevent standby for a full timeout window after the last activity or disconnect. Desktop typing also wakes an already parked shell, even if the tab did not send another visibility change. A suspended tab holds no process at all.
 
 - **Resume** — click **Resume** in the tab, or right-click → **Resume Tab**. A new session opens in the same folder. An agent tab runs the same resume command a tab gets after a TUICommander restart, so the agent continues its conversation. A plain shell tab opens a fresh shell.
 - **Restart** — Rust saves suspended tabs before ending their processes. They stay suspended after a restart or frontend recreation, even when suspension happened with no UI open; they are never resumed automatically.
