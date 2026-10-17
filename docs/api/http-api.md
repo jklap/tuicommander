@@ -3319,3 +3319,12 @@ continues to show the effective token source. No transport returns the token.
 
 See [startup workflows](../backend/settings-startup.md#interactive-login) for
 expiry, retained-terminal cleanup, readback and error semantics.
+
+#### Dictation correction Settings records
+
+`POST /settings/action` describes the machine-owned `corrections` store. Get
+`/replacements`, create/remove records keyed by `from`, and set
+`/replacements/<JSON-Pointer-escaped heard text>/to` with `expectedRevision`.
+The same owner backs `PUT /dictation/corrections` and its existing `{map}` body.
+Persistence precedes runtime adoption and value-free `corrections` change hints.
+No microphone is opened. Non-dictation builds describe unavailable fields.

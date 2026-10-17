@@ -1885,3 +1885,23 @@ The internal voice settings owner uses cache-only `describe` and explicit `refre
 `VoiceAction` provides typed assets, model download/delete, speech asset download/cancel/delete and voice import/delete. It delegates to the existing command owners and their allowlisted asset IDs, size validation and runtime locks. These are internal host methods for later transport publication, not an arbitrary command executor. Existing engine/language descriptors and runtime invalidation remain authoritative. Builds without dictation still describe unavailable voice fields.
 
 Pocket voice recovery: a missing configured catalogue voice uses the ready bundle’s default voice in the same language. Each reply resolves the voice again before enqueueing, so a completed download takes effect on the next reply without rebuilding the language model. Unknown voice names remain errors. No voice or model from another language is substituted.
+
+### Settings correction owner (#1992-d4fa)
+
+The machine-scoped `corrections` Settings store projects the existing
+`dictation-corrections.json` map as `/replacements` records keyed by `from`.
+Discover `corrections.replacements.{from}.from` and `.to`, then create/remove
+records or set `/replacements/<escaped heard text>/to` with the current owner
+revision. JSON Pointer escaping applies to heard text containing `/` or `~`.
+The file format remains a plain string-to-string map.
+
+Both the Settings facade and the legacy IPC/HTTP map writer use TextCorrector's
+strict locked update and atomic persistence. Invalid maps and corrupt files do
+not replace the live dictionary. Empty match keys are rejected because replacement scanning must advance.
+Settings additionally applies its stable-key rules and transaction size bounds;
+legacy maps retain their existing string-to-string representation.
+The live corrector is refreshed from the latest committed map, not an older
+transaction result. Durable writes publish value-free `corrections` generations;
+open Voice pages reload the saved map without replacing the new-entry draft.
+Builds without dictation describe this family as unavailable. No microphone or
+speech service is needed for correction configuration.

@@ -1,5 +1,4 @@
 {
-  "dictation.corrections": "Owned outside the catalogue; story 1992-d4fa. TextCorrector owns the persisted replacement map.",
   "transient.app.pr_hide_drafts": "Transient by design, see DEFERRED repoSettings.ts:62; persistence follow-up 1993-e7af.",
   "transient.app.pr_hide_conflicting": "Transient by design, see DEFERRED repoSettings.ts:62; persistence follow-up 1993-e7af.",
   "transient.app.pr_hide_ci_failing": "Transient by design, see DEFERRED repoSettings.ts:62; persistence follow-up 1993-e7af.",

@@ -1057,3 +1057,9 @@ continues to show the effective token source. No transport returns the token.
 ### Frame workload evidence
 
 `save_frame_workload(recording: String) -> Result<String, String>` writes bounded schema-v1 live grid workload JSON through the same serialized blocking-pool writer as `POST /debug/frame-workload`. Returns the instance-local capture path. It does not enable capture.
+
+Dictation corrections are also available through `settings_action` with machine
+target and store `corrections`: discover `/replacements` records keyed by `from`,
+create/remove records and edit replacement `to` values with an owner revision.
+`set_correction_map(map)` retains its public arguments and shared TextCorrector
+persistence; its host-injected state publishes a value-free change after saving.

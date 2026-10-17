@@ -1735,3 +1735,14 @@ Settings startup publishes `list_accounts` for GitHub metadata/presence and Ego
 and base credential owner, never a caller-selected program or profile. Its
 tracked terminal is human-operated; termination and handle expiry are not
 credential success. See [interactive login](settings-startup.md#interactive-login).
+
+### Dictation correction Settings store
+
+`corrections` is a machine-owned stable-key projection of TextCorrector's
+`dictation-corrections.json` map. `/replacements` has records `{from,to}`, keyed
+by heard text, with revision-checked create, set and remove. The owner retains
+the existing map serialization, strict file reads, advisory locking and atomic
+replacement. Settings and the legacy map writers share that owner; successful
+persistence precedes runtime adoption and value-free change publication. Builds
+without native dictation publish unavailable descriptors rather than a second
+file implementation. See [dictation](dictation.md#settings-correction-owner-1992-d4fa).

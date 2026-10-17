@@ -1226,3 +1226,9 @@ removing a stored token leaves environment and CircleCI CLI fallbacks unchanged.
 ## Frame workload evidence (#1638-c94c)
 
 Implemented: opt-in, perfDebug-gated global bounded frame bytes and paint snapshots, rotated instance-local captures, manual debug dump and production grid-paint replay timing. The synthetic smoke fixture checks harness wiring only. Original captured-stall heartbeat/input/backend RED and same-workload GREEN remain open. See docs/backend/stall-journal.md for bounds and privacy.
+
+Dictation corrections use the machine-owned `corrections` Settings collection,
+keyed by heard text. The existing TextCorrector map remains the stored format;
+Settings and legacy transports share locked atomic persistence, runtime adoption
+and value-free refresh hints. Non-dictation builds report unavailable descriptors
+(#1992-d4fa).

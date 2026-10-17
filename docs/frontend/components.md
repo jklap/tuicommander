@@ -858,3 +858,7 @@ backend recovery snapshot exists; its one-second display timer stops on unmount.
 The component displays phase, attempt, next-time and a zero-clamped countdown,
 with a single-flight Force retry button using the shared backend retry transaction.
 A non-empty composer refuses the retry; the status bar displays the error.
+
+Voice correction controls carry `corrections.replacements.{from}.from` and
+`corrections.replacements.{from}.to` catalogue identities. Import, add and remove
+retain the existing TextCorrector workflow; export does not change settings.
