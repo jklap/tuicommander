@@ -151,6 +151,23 @@ async fn plugin_patch_persists_and_notifies_without_partial_or_stale_writes() {
         }
         other => panic!("unexpected reload event: {other:?}"),
     }
+    // Catches: the cross-client settings hint claiming callback completion while
+    // the owner receipt still reports a pending reload.
+    match events
+        .try_recv()
+        .expect("durable plugin write must refresh settings")
+    {
+        crate::state::AppEvent::SettingsChanged(notice) => {
+            assert_eq!(notice.section, "plugins.at-capacity-retry");
+            assert!(notice.persisted);
+            assert!(
+                !notice.applied,
+                "settings hint must not claim reload callback completion"
+            );
+            assert_eq!(Some(notice.generation), reply["generation"].as_u64());
+        }
+        other => panic!("unexpected settings event: {other:?}"),
+    }
     let (status, _) = action(
         router.clone(),
         "at-capacity-retry",

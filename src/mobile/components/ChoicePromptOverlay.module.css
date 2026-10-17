@@ -6,7 +6,7 @@
   max-height: 60vh;
   overflow-y: auto;
   -webkit-overflow-scrolling: touch;
-  background: #252526;
+  background: var(--bg-secondary);
   border-top: 1px solid var(--border);
   border-radius: 12px 12px 0 0;
   z-index: 50;
@@ -39,11 +39,11 @@
 }
 
 .item:active {
-  background: rgba(255, 255, 255, 0.08);
+  background: var(--bg-tertiary);
 }
 
 .itemHighlighted {
-  background: rgba(255, 255, 255, 0.06);
+  background: var(--bg-highlight);
 }
 
 .itemDestructive .label {
@@ -58,7 +58,7 @@
   height: 22px;
   padding: 0 6px;
   border-radius: 4px;
-  background: rgba(255, 255, 255, 0.08);
+  background: var(--bg-tertiary);
   color: var(--accent);
   font-family: var(--font-mono);
   font-size: 0.8em;

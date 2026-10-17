@@ -296,7 +296,7 @@ If a session starts in a new sibling worktree before that refresh, TUICommander 
 
 Switching branches in TUICommander does not change the working directory of existing terminals. Each branch's terminals stay in their worktree path.
 
-If a branch changes inside an existing linked worktree, its terminal sessions remain open and the sidebar updates their workspace to the new branch. Removing the worktree directory closes its terminal sessions.
+If a branch changes inside an existing linked worktree, its terminal sessions remain open and the sidebar updates their workspace to the new branch. Removing or recycling a worktree closes only terminals whose current working directory is inside that checkout. A repo-root terminal is never closed merely because a stale sidebar row lists it. Creating or declaring a worktree does not move the caller's tab unless its working directory is in that checkout. Reload and saved-tab restore also use the terminal's working directory, not an old worktree declaration. If a saved tab belongs to another workspace, restoring it does not activate it in the selected workspace or retain it in that workspace's pane layout. The selected workspace shows its own tabs or its normal empty state.
 
 When you switch branches:
 - Previous branch's terminals are hidden (but remain alive)

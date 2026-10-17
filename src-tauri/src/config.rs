@@ -2644,12 +2644,12 @@ fn app_config_delta(base: &AppConfig, desired: &AppConfig) -> Result<serde_json:
 /// The remote-access settings whose change requires an HTTP server restart.
 /// Shared by every config writer (IPC `save_config`, `PUT /config`, MCP
 /// `config` save) so the transports cannot drift on when to rebind.
+/// Auth username/password changes are live: middleware and login read the current
+/// config per request, and the credential digest invalidates cached failures.
 pub(crate) fn server_settings_changed(old: &AppConfig, new: &AppConfig) -> bool {
     old.services.server.enabled != new.services.server.enabled
         || old.services.server.port != new.services.server.port
         || old.services.server.ipv6_enabled != new.services.server.ipv6_enabled
-        || old.services.auth.username != new.services.auth.username
-        || old.services.auth.password_hash != new.services.auth.password_hash
 }
 
 /// Serializes every read-modify-write-persist of the app config.
@@ -5836,8 +5836,6 @@ mod tests {
             (|c: &mut AppConfig| c.services.server.enabled = true) as fn(&mut AppConfig),
             |c: &mut AppConfig| c.services.server.port = 1234,
             |c: &mut AppConfig| c.services.server.ipv6_enabled = true,
-            |c: &mut AppConfig| c.services.auth.username = "admin".to_string(),
-            |c: &mut AppConfig| c.services.auth.password_hash = "hash".to_string(),
         ] {
             let mut changed = base.clone();
             mutate(&mut changed);
@@ -5845,6 +5843,26 @@ mod tests {
                 server_settings_changed(&base, &changed),
                 "every listener-affecting field must trigger a rebind"
             );
+        }
+    }
+
+    // Catches: live credential edits are misclassified as unsupported headless rebinds.
+    #[test]
+    fn live_auth_changes_do_not_require_listener_rebind() {
+        let base = AppConfig::default();
+        for mutate in [
+            (|c: &mut AppConfig| c.services.auth.username = "admin".into()) as fn(&mut AppConfig),
+            |c: &mut AppConfig| c.services.auth.password_hash = "hash".into(),
+            |c: &mut AppConfig| {
+                c.services.auth.username = "admin".into();
+                c.services.auth.password_hash = "hash".into();
+            },
+        ] {
+            let mut changed = base.clone();
+            mutate(&mut changed);
+            assert!(!server_settings_changed(&base, &changed));
+            changed.services.server.port = 1234;
+            assert!(server_settings_changed(&base, &changed));
         }
     }
 

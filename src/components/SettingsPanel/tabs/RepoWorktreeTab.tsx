@@ -95,16 +95,19 @@ export const RepoWorktreeTab: Component<RepoTabProps> = (props) => {
 					<p class={s.hint}>{t("repoWorktree.hint.displayName", "Shown in sidebar instead of folder name")}</p>
 				</div>
 
-				<div class={r.group}>
-					<label>{t("repoWorktree.label.sidebarColor", "Sidebar Color")}</label>
-					<ColorSwatchPicker
-						settingId="repositories.repos.{key}.color"
-						color={props.settings.color ?? ""}
-						presets={DEFAULT_COLOR_PRESETS}
-						onChange={(c) => props.onUpdate("color", c)}
-					/>
-					<p class={s.hint}>{t("repoWorktree.hint.sidebarColor", "Color-code this repo in the sidebar")}</p>
-				</div>
+				<SettingRow
+					label={t("repoWorktree.label.sidebarColor", "Sidebar Color")}
+					hint={t("repoWorktree.hint.sidebarColor", "Color-code this repo in the sidebar")}
+				>
+					{() => (
+						<ColorSwatchPicker
+							settingId="repositories.repos.{key}.color"
+							color={props.settings.color ?? ""}
+							presets={DEFAULT_COLOR_PRESETS}
+							onChange={(c) => props.onUpdate("color", c)}
+						/>
+					)}
+				</SettingRow>
 
 				<div class={r.group}>
 					<div class={s.helpLabel}>

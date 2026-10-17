@@ -4,7 +4,7 @@ node node_modules/vite/bin/vite.js --config scripts/settings-visual/vite.config.
 vite_pid=$!
 trap 'kill "$vite_pid" 2>/dev/null || true' EXIT
 for attempt in {1..50}; do
-  if curl --silent --fail http://127.0.0.1:15387/scripts/settings-visual/index.html > /dev/null; then break; fi
+  if curl --silent --fail http://127.0.0.1:15391/scripts/settings-visual/index.html > /dev/null; then break; fi
   sleep 0.1
 done
 node scripts/settings-visual/capture.mjs

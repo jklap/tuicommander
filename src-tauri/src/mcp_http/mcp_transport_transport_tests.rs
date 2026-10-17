@@ -4658,16 +4658,6 @@ fn resolve_repo_empty_known_returns_input() {
     assert_eq!(resolve_repo_for_path("/foo/bar", &[]), "/foo/bar");
 }
 
-// ── config tool: AI prompts + prompt library ────────────────────
-
-fn localhost() -> SocketAddr {
-    "127.0.0.1:9999".parse().unwrap()
-}
-
-fn remote_addr() -> SocketAddr {
-    "192.168.1.10:9999".parse().unwrap()
-}
-
 // ---- ui(action=screenshot) -------------------------------------------------
 
 #[cfg(feature = "desktop")]

@@ -604,23 +604,24 @@ export const UpstreamMcpPanel: Component = () => {
 
 	return (
 		<div id={SETTINGS_SECTION_UPSTREAM_MCP} class={`${s.section} ${layout.upstreams}`}>
-			<SectionCard title="Upstream MCP Servers">
+			<SectionCard
+				title="Upstream MCP Servers"
+				headingActions={
+					<button
+						data-non-setting="Open, close or cancel the upstream editor"
+						class={s.copyBtn}
+						onClick={() => {
+							setShowAdd((v) => !v);
+							setError("");
+						}}
+						title="Add upstream server"
+						style={{ "font-size": "18px", "line-height": 1 }}
+					>
+						{showAdd() ? "−" : "+"}
+					</button>
+				}
+			>
 				<div class={s.group}>
-					{/* A heading, not a label: it is the section search scrolls to (#860-91a0) */}
-					<div class={layout.cardActions}>
-						<button
-							data-non-setting="Open, close or cancel the upstream editor"
-							class={s.copyBtn}
-							onClick={() => {
-								setShowAdd((v) => !v);
-								setError("");
-							}}
-							title="Add upstream server"
-							style={{ "font-size": "18px", "line-height": 1 }}
-						>
-							{showAdd() ? "−" : "+"}
-						</button>
-					</div>
 					<p class={s.hint}>
 						Proxy external MCP servers through TUIC. Their tools appear prefixed as <code>{"{name}__{tool}"}</code>.
 					</p>

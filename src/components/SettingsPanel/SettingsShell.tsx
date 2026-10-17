@@ -112,7 +112,11 @@ export const SettingsShell: Component<SettingsShellProps> = (props) => {
 									onChange={(event) => props.onTabChange(event.currentTarget.value)}
 								>
 									<For each={props.tabs.filter((tab) => tab.key !== "__sep__" && !tab.key.startsWith("__label__:"))}>
-										{(tab) => <option value={tab.key}>{tab.label}</option>}
+										{(tab) => (
+											<option value={tab.key} selected={props.activeTab === tab.key}>
+												{tab.label}
+											</option>
+										)}
 									</For>
 								</Select>
 							</div>

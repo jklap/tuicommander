@@ -516,8 +516,7 @@ export const RemoteMachinesPanel: Component = () => {
 						</SettingRow>
 					</Show>
 				</SectionCard>
-				<SectionCard title="Deployment and lifetime">
-					<ContextualHelp label="Deployment and lifetime" />
+				<SectionCard title="Deployment and lifetime" help={<ContextualHelp label="Deployment and lifetime" />}>
 					<Show when={props.formData.transportType === "Ssh"}>
 						<SettingRow label="Deployment">
 							{(id, descriptionId) => (
@@ -767,6 +766,7 @@ export const RemoteMachinesPanel: Component = () => {
 				</div>
 			</Show>
 
+			<h3>Your machines</h3>
 			{/* Empty state */}
 			<Show when={connectionList().length === 0 && !showAdd()}>
 				<p class={s.hint} style={{ color: "var(--text-dimmed)" }}>
@@ -774,7 +774,6 @@ export const RemoteMachinesPanel: Component = () => {
 				</p>
 			</Show>
 
-			<h3>Your machines</h3>
 			{/* Connection list */}
 			<For each={connectionList()}>
 				{(connState) => {

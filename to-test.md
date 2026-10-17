@@ -1,10 +1,30 @@
+## Continuous answer gutter (1998-d826)
+
+- [ ] [VISUAL] Capture the worktree CLI gutter for the real Claude answer fixture with blank rows, section headings and marked list items; confirm one continuous line and no line on trailing unmarked prose or tool output. Both headless Chrome capture attempts failed to produce a PNG; the bounded retry stopped its own Chrome/Vite processes after 35 seconds. The production-plan regression passes, but it is not screenshot evidence. No Rust change or backend restart is required.
+
+## Agent exit backend cleanup (1990-66ac) — Rust restart required
+
+- [ ] After Boss manually restarts `make dev` or installs `make build`, exit Claude from a mobile-only terminal. Confirm shell output replaces the old agent screen in both the open view and a fresh page, and the session card drops the old intent/task. Repeat with an agent that restores its alternate screen normally. No live desktop was restarted by this peer.
+
+## Desktop standby input recovery (1986-1236) — Rust restart required
+
+- [ ] After Boss manually restarts `make dev` or installs `make build`, let an isolated plain-shell terminal enter standby after its foreground child exits. Confirm desktop typing wakes it and executes the command without switching tabs again. Repeat by viewing the terminal and by sending from the phone. The running backend was not restarted; the real-PTY regression is not evidence that Boss's current binary loaded this fix.
+
+## Mobile agent exit recovery (1985-45bd)
+
+- [ ] [VISUAL] On a phone, exit a throwaway viewed ego session while its question is open, then type and send a shell command. Confirm agent/question controls disappear and shell output/input remain usable. Repeat with Claude Chat open and after reconnecting the output socket. Close the PTY and confirm Session ended offers Back. Component regressions do not prove phone touch behavior; no live production sessions were used.
+## Live Settings credentials (1984-3472) — Rust restart required
+
+- [ ] After Boss manually restarts `make dev` or installs `make build`, use an isolated instance to approve a username or password change in Settings. Confirm the save succeeds and new Basic Auth/login requests use the new credentials without restarting the listener. Real headless listener port changes must still report persisted-but-unavailable application. No live desktop restart was performed by this peer.
+
 ## Mobile human replies (1980-47b7) — Rust restart required
 
 - [ ] After Boss manually restarts `make dev` or installs `make build`, answer an ego free-text question from the phone, both with its card open and with the ordinary composer. Type an answer before opening the card, then open it and Send; confirm the complete answer reaches the agent and it continues. In a fresh ego session, confirm the card shows only the question, not the startup banner or shortcut help. Use a recognized picker to select an option, then verify a typed prose reply to that picker explains the selection requirement and keeps the draft. No live desktop was restarted.
 - [ ] [VISUAL] After the Mac unlocks, capture the mobile free-text question, picker selection and refused-answer toast at phone width. Supplied incident screenshots were read; no new screenshots were taken while the screen was locked. No CSS or layout change is part of this fix.
 ## Mobile voice handset (1979-89e1)
 
-- [ ] [VISUAL] After the Mac unlocks, capture the mobile session header in Commander dark and Paper light. Include the idle handset, armed handset, and unchanged composer dictation microphone. Confirm the handset is readable at phone and iPad sizes. The screen was locked during implementation; no visual capture is claimed.
+- [x] [VISUAL] Capture the idle handset in the phone More menu and tablet header in Commander and Paper. _(verified: screenshot-only captures at390×844 and834×844 in `.tmp/mobile-question-visual/after-1979/png/`; visible menu action230×44 and header action44×44; no live microphone or backend access.)_
+- [ ] [VISUAL] Capture the armed handset and unchanged composer dictation microphone on a real voice session. The isolated presentation fixture only captures the idle handset; existing armed/unarmed component tests remain for batch integration.
 
 ## Readable mobile pushes (1978-9cfe) — Rust restart required
 
@@ -2090,7 +2110,7 @@ Needs an iPhone (iOS 16.4+, 18.4+ preferred), the desktop TUICommander running a
 
 ## GitHub Work desktop load (1693-a816) — runtime integration pending
 
-- [ ] After 1697-4cdc and the GitHub adapter lifecycle/manifest/catalog integration land, load `github-work` in an isolated test instance. Confirm account-scoped search, an issue and a PR URL, paged normal/review comments, duplicate candidates and draft start-work intent. Verify registered-provider cleanup on unload. Desktop load and Chromium/WebKit screenshots are not yet available; no runtime plugin was installed and no desktop instance was launched by this peer.
+- [ ] #1693-a816: After Boss starts an isolated desktop verification instance and completes GitHub device-flow login (`repo read:project`), run the one-command account/module probe in `docs/user-guide/plugins.md` → GitHub Work post-login verification (`node scripts/github-work-live-check.mjs ... --isolated-desktop`). Runtime/catalog/account HTTP and B6/B7 bindings already exist on main; do not reimplement them. The probe checks desktop loaded state and read-only installed-module/account ports, not Tasks rendering or actual registry unload. Separately confirm paged normal/review comments, draft start-work intent and registered-provider cleanup in Tasks. No desktop launch, account probe, credential-store inspection or GitHub mutation was performed by gh-1693.
 - [ ] With `read:project`, record a successful Projects v2 read and verify board moves edit the Status field without closing the issue; verify roadmap date/number fields round-trip. The current credential returns `INSUFFICIENT_SCOPES`; this item has no success evidence.
 - [ ] Confirm native entry has no mobile link or developer tools. _(NOT VERIFIED 2026-10-12: needs the desktop WebView/Tauri UI, which a headless tuic-remote does not have, and this lane may not launch a desktop. Isolated headless tuic-remote built from branch chore/1706-a443-to-test-runs (main 67ccd72c3) and run on the rb box; no desktop, no Boss instance.)_
 
@@ -2117,6 +2137,7 @@ Needs an iPhone (iOS 16.4+, 18.4+ preferred), the desktop TUICommander running a
   Covered by tests: `tuic_state_busy_carries_no_prompt_row` (busy hooks carry row -1, prompt hooks the real row); headless run with 300 busy hooks and 3 prompts gave 3 ticks. Not verified: a screenshot of a long real session (earlier screenshots used simulated hooks).
 ## Answer highlight covers the whole answer (1389-3a47) — frontend only (HMR)
 
+- [ ] Scroll to a quoted `💬` line in a long pasted Claude prompt whose start is more than 32 rows above the viewport. The quoted line has no answer gutter or hidden marker; the real answer does. Repeat after scrolling far away and back to exercise a cold row cache. Confirm a blank-separated indented genuine answer remains visible. _(round 2: automated planner regressions cover both warm and missing prompt-prefix caches; live rendering remains unverified.)_
 - [ ] [VISUAL] In a live Claude session, get an answer with a 💬 line, wrapped rows and 3 or more continuation lines. Every row of the answer is tinted, up to the next bullet, prompt or marker. Nothing after the answer is tinted. The answers-only view shows the same extent. Take a screenshot. _(audit 2026-10-13: VISUAL-OWED — Screenshots unavailable and image viewing unsupported; rendered appearance not proved.)_ _(triage 2026-10-14: WAITS — Recorded answer-shape/presentation tests retained; exact live multirow tint and required screenshot cannot be captured while Chrome is locked and MacControl recording denied.)_
   Covered by tests: `answerExtent` (shared by overlay and answers-only view), suggestOverlay 32 and answersTurn 23 tests, critic tests for fenced code and indented prompts. Not verified: a live session screenshot.
 ## Mobile sub-agent rows nest under the coordinator (1698-46a8) — Rust restart required
@@ -2405,6 +2426,7 @@ Needs an iPhone (iOS 16.4+, 18.4+ preferred), the desktop TUICommander running a
 
 - [ ] Telegram ACP replies (#1959-162a): after Boss manually restarts `make dev` or rebuilds release, send two requests and explicitly finish the first before a streaming tick. The first ACP turn must not also answer the second request. The pre-fix loopback regression recorded duplicate finals; post-fix integration and live phone checks remain coordinator-owned. Rust changes do not hot-reload.
 
+- [ ] After Boss rebuilds/restarts TUIC, use an ego executable with local transcript v1 support and verify an exact-bound ego terminal switches to Chat on desktop and mobile, follows completed messages/tool cards, shows goal continuation notices, and resets after compaction (#1969-ac9b). Rust changes do not hot-reload. Prerequisite: land ego #532 (`0821caee`, integrated in `batch/ego-1016-8`) and configure that rebuilt executable in Settings. Deployment still requires the installed ego to support `--format transcript`. Isolated native verification now proves live PID/lease binding, incremental snapshots and SSE wakes through the real 532 binary; desktop/mobile dark/light PDF rasters use that live terminal, not a replay. See `docs/backend/ego-chat-verification.md`. This remaining item is the installed-app restart/deployment check, not a missing consumer integration.
 - [ ] Settings typed-owner cutover (#1787-4778): after Boss restarts make dev or installs a rebuilt release, enable settings through trusted UI and verify MCP/HTTP/IPC readback, owner choice refresh, typed credential presence, one-connection reconnect, and rejected remote/non-owning targets in an isolated instance. No live app restart was performed by the agent.
 - [ ] After Boss manually restarts `make dev` or rebuilds release, check a disposable no-remote repo whose main checkout uses `feat/macos-mvp`: integrated linked worktrees show Merged, not Unknown. A detached main checkout without main/master or a valid configured base shows No base branch with a reason. Rust does not hot-reload (#1961-bab6).
 ## Standby job control and remote activity (1962-4182) — Rust restart required
@@ -2416,7 +2438,8 @@ Needs an iPhone (iOS 16.4+, 18.4+ preferred), the desktop TUICommander running a
 ## Ego mobile question forms (1973-3d1b) — backend restart required
 
 - [ ] After Boss manually restarts `make dev` or installs `make build`, open ego single-choice, multiple-choice, and free-text questions from a narrow mobile terminal. Confirm **Input** and the header question action for each. Multiple-choice taps must toggle without submitting until **Submit answers**; free-text must show its full question above the reply composer. The current running backend cannot load this Rust change through hot reload.
-- [ ] Capture a 360×800 screenshot of each recorded ego question card after the screenshot environment is available. The 1973 agent verified DOM layout from actual Rust replay snapshots, but agent-browser reported a locked macOS screen and timed out; bundled headless Chrome also timed out, including an `about:blank` probe. This is not a completed visual check.
+- [x] Capture all three recorded ego question cards in Commander and Paper at390×844 and834×844. _(verified: `.tmp/mobile-question-visual/after-1973/png/`; actual SessionDetailScreen with existing Rust replay state; cards end at746px above the first key at747px, Paper contrast11.386:1. Presentation only, not a live PTY or physical-phone check.)_
+- [ ] Capture the originally requested360×800 geometry if that exact smaller viewport remains required; this follow-up captured390/834 widths, not360.
 
 ## Telegram AI Chat fallback (#1983-1b47)
 
@@ -2443,3 +2466,7 @@ Needs an iPhone (iOS 16.4+, 18.4+ preferred), the desktop TUICommander running a
 
 - [ ] Coordinator batch: exercise the published GitHub/Ego settings facade with isolated owners, covering refusal/confirmation expiry, device-flow refusal/expiry, stale revisions and persisted apply/readback failure; never use production credentials.
 - [ ] Schema-only startup remains incomplete while account enumeration or typed Ego interactive login is absent. Human login completion requires explicit owner refresh; terminal exit is not success. See docs/backend/settings-startup.md.
+- [ ] After the next backend restart, check Claude trust, external-import and Bash permission dialogs in mobile CLI: all options and the footer must remain visible (#1987-606c). Rust changes require a manual restart to load.
+
+- [ ] After a manual Rust rebuild/restart, answer an ego selector and submit an ordinary prompt: no orange awaiting dot or question sound from the answered selector; a real new question still alerts (#1997-eb30).
+- [ ] After Boss restarts the Rust backend, verify CircleCI Settings discovery (`circleci.token`) and presence-only readback through the shared Settings action. Isolated tests cover set/clear and failures; no production credential test is required (#1991-bd88).

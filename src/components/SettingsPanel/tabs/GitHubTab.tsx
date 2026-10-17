@@ -162,6 +162,14 @@ export const GitHubTab: Component = () => {
 			}),
 		);
 
+	onCleanup(
+		settingsRefresh.register({
+			section: "circleci",
+			read: () => rpc<CircleCiTokenStatus>("circleci_token_status"),
+			apply: setCircleCiStatus,
+		}),
+	);
+
 	onMount(() => {
 		fetchStatus();
 		fetchDiagnostics();
@@ -1096,18 +1104,18 @@ export const GitHubTab: Component = () => {
 				<p class={s.hint}>
 					{t("github.circleCiHint", "Use a read-only CircleCI token. Stored tokens are never shown again.")}
 				</p>
-				<div class={s.group}>
+				<div class={s.group} data-setting-id="circleci.token">
 					<Input
 						type="password"
 						aria-label="CircleCI read-only token"
 						placeholder={t("github.circleCiPlaceholder", "CircleCI read-only token")}
-						data-setting-exclusion="circleci.token"
+						data-setting-id="circleci.token"
 						value={circleCiToken()}
 						onInput={(e) => setCircleCiToken(e.currentTarget.value)}
 					/>
 					<div class={g.actions}>
 						<button
-							data-setting-exclusion="circleci.token"
+							data-setting-id="circleci.token"
 							class={g.btn}
 							data-ready={circleCiToken().trim() ? "true" : undefined}
 							onClick={saveCircleCiToken}
@@ -1115,7 +1123,7 @@ export const GitHubTab: Component = () => {
 							{t("github.circleCiSave", "Save token")}
 						</button>
 						<button
-							data-setting-exclusion="circleci.token"
+							data-setting-id="circleci.token"
 							class={g.btn}
 							onClick={removeCircleCiToken}
 							disabled={!circleCiStatus()?.configured}

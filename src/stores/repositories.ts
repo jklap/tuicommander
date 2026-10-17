@@ -1982,10 +1982,9 @@ export function locateFile(absolutePath: string): FileLocation {
  * feet — so it resolves late, here:
  *
  *  1. whichever workspace records the repo root as its worktree;
- *  2. failing that, `activeWorkspaceId`.
+ *  2. failing that, no workspace until the root checkout is discovered.
  *
- * The root workspace is an exact path match. `activeWorkspaceId` is only a fallback
- * for repositories discovered before their workspaces were scanned: using it first
+ * The root workspace is an exact path match. Falling back to `activeWorkspaceId`
  * files every root session under whichever linked worktree happened to be selected
  * when the frontend rehydrated.
  * It returns that workspace's KEY, not its `branchName`: the caller feeds the
@@ -1998,7 +1997,7 @@ export function placementWorkspaceFor(owner: RepoOwner): string | null {
 	const atRoot = Object.entries(repo.workspaces).find(
 		([, ws]) => !!ws.worktreePath && sameDir(ws.worktreePath, owner.repoPath),
 	);
-	return atRoot?.[0] ?? repo.activeWorkspaceId ?? null;
+	return atRoot?.[0] ?? null;
 }
 
 /** True while at least one registered repository lives on another machine. */

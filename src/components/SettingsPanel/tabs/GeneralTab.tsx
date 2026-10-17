@@ -16,12 +16,11 @@ import { isTauri } from "../../../transport";
 import { openDialog } from "../../../utils/nativeDialog";
 import { Input } from "../../ui/Input";
 import { Textarea } from "../../ui/Textarea";
-import { ContextualHelp } from "../ContextualHelp";
 import { ExpertSetting } from "../ExpertSetting";
 import { InfoBadge } from "../InfoBadge";
 import { SettingInput, SettingSelect, SettingSlider, SettingToggle } from "../SettingFields";
 import s from "../Settings.module.css";
-import { SectionCard, SettingPageHeader } from "../SettingsPrimitives";
+import { SectionCard, SettingPageHeader, SettingRow, StatusSummary } from "../SettingsPrimitives";
 import { SETTINGS_SECTION_EGO } from "../sections";
 
 interface CliStatus {
@@ -162,12 +161,246 @@ export const GeneralTab: Component = () => {
 
 	return (
 		<div class={`${s.section} ${s.applicationPage}`}>
+			<StatusSummary
+				label="Update status"
+				source="Application updates"
+				actions={
+					<button
+						data-non-setting="Explicit update discovery; does not change update preferences"
+						class={s.testBtn}
+						onClick={() => {
+							updaterStore.checkForUpdate().catch((err: unknown) => appLogger.debug("app", "Update check failed", err));
+						}}
+						disabled={updaterStore.state.checking || updaterStore.state.downloading}
+					>
+						{updaterStore.state.checking
+							? t("general.btn.checking", "Checking...")
+							: t("general.btn.checkNow", "Check Now")}
+					</button>
+				}
+				details={
+					<>
+						{" "}
+						<Show when={updaterStore.state.available && updaterStore.state.version}>
+							<p class={s.hint} style={{ color: "var(--success)" }}>
+								{t("general.hint.updateAvailable", "Version {version} is available!", {
+									version: updaterStore.state.version ?? "",
+								})}
+							</p>
+						</Show>
+						<Show
+							when={
+								!updaterStore.state.available &&
+								!updaterStore.state.checking &&
+								!updaterStore.state.error &&
+								!updaterStore.state.noRelease &&
+								!updaterStore.state.unsupported
+							}
+						>
+							<p class={s.hint}>{t("general.hint.latestVersion", "You are on the latest version")}</p>
+						</Show>
+						<Show when={updaterStore.state.unsupported}>
+							<p class={s.hint} style={{ color: "var(--fg-muted)" }}>
+								{updaterStore.state.unsupported}
+							</p>
+						</Show>
+						<Show when={updaterStore.state.noRelease}>
+							<p class={s.hint} style={{ color: "var(--fg-muted)" }}>
+								{t("general.hint.noRelease", "No {channel} releases published yet", {
+									channel: settingsStore.state.updateChannel,
+								})}
+							</p>
+						</Show>
+						<Show when={updaterStore.state.error}>
+							<p class={s.hint} style={{ color: "var(--accent-red, #f44747)" }}>
+								{updaterStore.state.error}
+							</p>
+						</Show>
+					</>
+				}
+			/>
 			<SettingPageHeader
 				title="General"
 				breadcrumb="Application / General"
 				description="Application behavior, updates and local tools."
 				scope="Application"
 			/>
+			<SectionCard title="Local tools">
+				<Show when={isTauri() && cliStatus()}>
+					<SettingRow
+						label={t("general.heading.cli", "TUIC CLI")}
+						hint={
+							cliStatus()?.installed
+								? `${t("general.hint.cliInstalled", "Installed at {path}", { path: cliStatus()?.path ?? "/usr/local/bin/tuic" })}${!cliStatus()?.version_match ? ` ${cliStatus()?.auto_updatable ? t("general.hint.cliOutdated", "(update pending — restart to apply)") : t("general.hint.cliUpdateAvailable", "(update available)")}` : ""}`
+								: t(
+										"general.hint.cliNotInstalled",
+										"Install the TUIC CLI to control TUICommander from any terminal or script. Open files and URLs as tabs, manage PTY sessions, and query repository status. Useful for scripting automation.",
+									)
+						}
+						help={t(
+							"general.hint.cliInfo",
+							"The TUIC CLI lets you control TUICommander from any terminal or script. Open files and URLs as tabs, manage PTY sessions (create, list, send input, read output), and query repository status. Useful for scripting automation.",
+						)}
+					>
+						{() => (
+							<div>
+								<Show when={!cliStatus()?.installed || !cliStatus()?.version_match}>
+									<button
+										data-non-setting="Install, update or remove an optional CLI binary; not a stored setting"
+										class={s.testBtn}
+										onClick={handleInstallCli}
+										disabled={cliInstalling()}
+									>
+										{cliInstalling()
+											? t("general.btn.installing", "Installing...")
+											: cliStatus()?.installed
+												? t("general.btn.updateCli", "Update")
+												: t("general.btn.installCli", "Install TUIC CLI")}
+									</button>
+								</Show>
+								<Show when={cliStatus()?.installed}>
+									<button
+										data-non-setting="Install, update or remove an optional CLI binary; not a stored setting"
+										class={s.testBtn}
+										onClick={handleUninstallCli}
+									>
+										{t("general.btn.uninstallCli", "Uninstall")}
+									</button>
+								</Show>
+							</div>
+						)}
+					</SettingRow>
+				</Show>
+				<Show when={isTauri()}>
+					<SettingRow
+						label={t("general.heading.codeIntelligence", "Code Intelligence")}
+						hint={
+							mdkbStatus()?.available
+								? `${t("general.hint.mdkbInstalled", "Installed at {path}", { path: mdkbStatus()?.binaryPath ?? "unknown" })}${mdkbStatus()?.version ? ` v${mdkbStatus()?.version}` : ""}`
+								: t(
+										"general.hint.mdkbNotInstalled",
+										"Install MDKB to enable outline, go-to-definition, and find references in the code editor.",
+									)
+						}
+						error={mdkbError() ?? undefined}
+						help={t(
+							"general.hint.codeIntelligenceInfo",
+							"Integrates with MDKB to provide code navigation features in the editor: Cmd+Click go-to-definition, Shift+F12 find references, and symbol outline. Also serves as a persistent memory manager for AI agents, fully integrated with TUICommander. MDKB indexes your repositories and exposes a local daemon for fast lookups.",
+						)}
+					>
+						{() => (
+							<Show
+								when={mdkbStatus()?.available}
+								fallback={
+									<button
+										data-non-setting="Install, update or remove an optional CLI binary; not a stored setting"
+										class={s.testBtn}
+										onClick={handleInstallMdkb}
+										disabled={mdkbInstalling()}
+									>
+										{mdkbInstalling()
+											? t("general.btn.installing", "Installing...")
+											: t("general.btn.installMdkb", "Install MDKB")}
+									</button>
+								}
+							>
+								<button
+									data-non-setting="Install, update or remove an optional CLI binary; not a stored setting"
+									class={s.testBtn}
+									onClick={handleUninstallMdkb}
+								>
+									{t("general.btn.uninstallMdkb", "Uninstall")}
+								</button>
+							</Show>
+						)}
+					</SettingRow>
+				</Show>
+				<Show when={isTauri()}>
+					<>
+						<div>
+							<SettingRow
+								label={t("general.heading.customLaunchers", "Custom Launchers")}
+								help={
+									<>
+										{t(
+											"general.hint.customLaunchers",
+											'Define your own tools for the "Open in" menu. Each argument may use {path}, {file}, {fileDir}, {repo}, {cwd}, {home}, {line}, {column} placeholders. One argument per line.',
+										)}
+									</>
+								}
+								hint={launchers().length ? `${launchers().length} custom launchers` : "No custom launchers"}
+							>
+								{() => (
+									<button
+										data-non-setting="Create or remove a stable custom-launcher record through its owner"
+										class={s.testBtn}
+										onClick={addLauncher}
+									>
+										{t("general.btn.addLauncher", "Add launcher")}
+									</button>
+								)}
+							</SettingRow>
+							<For each={launchers()}>
+								{(launcher) => (
+									<div
+										class={s.group}
+										style={{
+											border: "1px solid var(--border)",
+											"border-radius": "var(--radius-md)",
+											padding: "8px",
+											"margin-bottom": "8px",
+										}}
+									>
+										<div style={{ display: "flex", gap: "8px", "align-items": "center", "margin-bottom": "6px" }}>
+											<input
+												data-setting-id="app.custom_launchers.{id}.enabled"
+												type="checkbox"
+												checked={launcher.enabled}
+												title={t("general.label.launcherEnabled", "Enabled")}
+												onChange={(e) => updateLauncher(launcher.id, { enabled: e.currentTarget.checked })}
+											/>
+											<Input
+												data-setting-id="app.custom_launchers.{id}.name"
+												type="text"
+												value={launcher.name}
+												placeholder={t("general.placeholder.launcherName", "Name")}
+												onInput={(e) => updateLauncher(launcher.id, { name: e.currentTarget.value })}
+												style={{ flex: "1" }}
+											/>
+											<button
+												data-non-setting="Create or remove a stable custom-launcher record through its owner"
+												class={s.testBtn}
+												onClick={() => removeLauncher(launcher.id)}
+											>
+												{t("general.btn.remove", "Remove")}
+											</button>
+										</div>
+										<Input
+											data-setting-id="app.custom_launchers.{id}.executable"
+											type="text"
+											value={launcher.executable}
+											placeholder={t(
+												"general.placeholder.launcherExec",
+												"Executable (e.g. code, or /usr/local/bin/code)",
+											)}
+											onInput={(e) => updateLauncher(launcher.id, { executable: e.currentTarget.value })}
+											style={{ width: "100%", "margin-bottom": "6px" }}
+										/>
+										<Textarea
+											data-setting-id="app.custom_launchers.{id}.args"
+											value={launcher.args.join("\n")}
+											placeholder={"--goto\n{file}:{line}:{column}"}
+											rows={3}
+											onInput={(e) => updateLauncher(launcher.id, { args: e.currentTarget.value.split("\n") })}
+											style={{ width: "100%", "font-family": "var(--font-mono)", "font-size": "var(--font-sm)" }}
+										/>
+									</div>
+								)}
+							</For>
+						</div>
+					</>
+				</Show>
+			</SectionCard>
 			<SectionCard title={t("general.heading.general", "General")}>
 				{/* A picker with one option is not a choice. */}
 				<Show when={AVAILABLE_LOCALES.length > 1}>
@@ -396,197 +629,21 @@ export const GeneralTab: Component = () => {
 						}
 					/>
 				</ExpertSetting>
-
-				<div class={s.group}>
-					<button
-						data-non-setting="Explicit update discovery; does not change update preferences"
-						class={s.testBtn}
-						onClick={() => {
-							updaterStore.checkForUpdate().catch((err: unknown) => appLogger.debug("app", "Update check failed", err));
-						}}
-						disabled={updaterStore.state.checking || updaterStore.state.downloading}
-					>
-						{updaterStore.state.checking
-							? t("general.btn.checking", "Checking...")
-							: t("general.btn.checkNow", "Check Now")}
-					</button>
-					<Show when={updaterStore.state.available && updaterStore.state.version}>
-						<p class={s.hint} style={{ color: "var(--success)" }}>
-							{t("general.hint.updateAvailable", "Version {version} is available!", {
-								version: updaterStore.state.version ?? "",
-							})}
-						</p>
-					</Show>
-					<Show
-						when={
-							!updaterStore.state.available &&
-							!updaterStore.state.checking &&
-							!updaterStore.state.error &&
-							!updaterStore.state.noRelease &&
-							!updaterStore.state.unsupported
-						}
-					>
-						<p class={s.hint}>{t("general.hint.latestVersion", "You are on the latest version")}</p>
-					</Show>
-					<Show when={updaterStore.state.unsupported}>
-						<p class={s.hint} style={{ color: "var(--fg-muted)" }}>
-							{updaterStore.state.unsupported}
-						</p>
-					</Show>
-					<Show when={updaterStore.state.noRelease}>
-						<p class={s.hint} style={{ color: "var(--fg-muted)" }}>
-							{t("general.hint.noRelease", "No {channel} releases published yet", {
-								channel: settingsStore.state.updateChannel,
-							})}
-						</p>
-					</Show>
-					<Show when={updaterStore.state.error}>
-						<p class={s.hint} style={{ color: "var(--accent-red, #f44747)" }}>
-							{updaterStore.state.error}
-						</p>
-					</Show>
-				</div>
 			</SectionCard>
-			<Show when={isTauri() && cliStatus()}>
-				<SectionCard title={t("general.heading.cli", "TUIC CLI")}>
-					<InfoBadge>
-						{t(
-							"general.hint.cliInfo",
-							"The TUIC CLI lets you control TUICommander from any terminal or script. Open files and URLs as tabs, manage PTY sessions (create, list, send input, read output), and query repository status. Useful for scripting automation.",
-						)}
-					</InfoBadge>
 
-					<div class={s.group}>
-						<Show
-							when={cliStatus()!.installed}
-							fallback={
-								<>
-									<p class={s.hint}>
-										{t(
-											"general.hint.cliNotInstalled",
-											"Install the TUIC CLI to control TUICommander from any terminal or script. Open files and URLs as tabs, manage PTY sessions, and query repository status. Useful for scripting automation.",
-										)}
-									</p>
-									<button
-										data-non-setting="Install, update or remove an optional CLI binary; not a stored setting"
-										class={s.testBtn}
-										onClick={handleInstallCli}
-										disabled={cliInstalling()}
-										style={{ "margin-top": "8px" }}
-									>
-										{cliInstalling()
-											? t("general.btn.installing", "Installing...")
-											: t("general.btn.installCli", "Install TUIC CLI")}
-									</button>
-								</>
-							}
-						>
-							<p class={s.hint} style={{ color: "var(--success)" }}>
-								{t("general.hint.cliInstalled", "Installed at {path}", {
-									path: cliStatus()!.path ?? "/usr/local/bin/tuic",
-								})}
-								{!cliStatus()!.version_match && (
-									<span style={{ color: "var(--warning, #e5c07b)", "margin-left": "8px" }}>
-										{cliStatus()!.auto_updatable
-											? t("general.hint.cliOutdated", "(update pending — restart to apply)")
-											: t("general.hint.cliUpdateAvailable", "(update available)")}
-									</span>
-								)}
-							</p>
-							<div style={{ display: "flex", gap: "8px", "margin-top": "8px" }}>
-								<Show when={!cliStatus()!.version_match}>
-									<button
-										data-non-setting="Install, update or remove an optional CLI binary; not a stored setting"
-										class={s.testBtn}
-										onClick={handleInstallCli}
-										disabled={cliInstalling()}
-									>
-										{cliInstalling() ? t("general.btn.updating", "Updating...") : t("general.btn.updateCli", "Update")}
-									</button>
-								</Show>
-								<button
-									data-non-setting="Install, update or remove an optional CLI binary; not a stored setting"
-									class={s.testBtn}
-									onClick={handleUninstallCli}
-								>
-									{t("general.btn.uninstallCli", "Uninstall")}
-								</button>
-							</div>
-						</Show>
-					</div>
-				</SectionCard>
-			</Show>
-
-			<Show when={isTauri()}>
-				<SectionCard title={t("general.heading.codeIntelligence", "Code Intelligence")}>
-					<InfoBadge>
-						{t(
-							"general.hint.codeIntelligenceInfo",
-							"Integrates with MDKB to provide code navigation features in the editor: Cmd+Click go-to-definition, Shift+F12 find references, and symbol outline. Also serves as a persistent memory manager for AI agents, fully integrated with TUICommander. MDKB indexes your repositories and exposes a local daemon for fast lookups.",
-						)}
-					</InfoBadge>
-
-					<div class={s.group}>
-						<Show
-							when={mdkbStatus()?.available}
-							fallback={
-								<>
-									<p class={s.hint}>
-										{t(
-											"general.hint.mdkbNotInstalled",
-											"Install MDKB to enable outline, go-to-definition, and find references in the code editor.",
-										)}
-									</p>
-									<button
-										data-non-setting="Install, update or remove an optional CLI binary; not a stored setting"
-										class={s.testBtn}
-										onClick={handleInstallMdkb}
-										disabled={mdkbInstalling()}
-										style={{ "margin-top": "8px" }}
-									>
-										{mdkbInstalling()
-											? t("general.btn.installing", "Installing...")
-											: t("general.btn.installMdkb", "Install MDKB")}
-									</button>
-								</>
-							}
-						>
-							<p class={s.hint} style={{ color: "var(--success)" }}>
-								{t("general.hint.mdkbInstalled", "Installed at {path}", {
-									path: mdkbStatus()!.binaryPath ?? "unknown",
-								})}
-								{mdkbStatus()!.version && (
-									<span style={{ "margin-left": "8px", color: "var(--fg-muted)" }}>v{mdkbStatus()!.version}</span>
-								)}
-							</p>
-							<button
-								data-non-setting="Install, update or remove an optional CLI binary; not a stored setting"
-								class={s.testBtn}
-								onClick={handleUninstallMdkb}
-								style={{ "margin-top": "8px" }}
-							>
-								{t("general.btn.uninstallMdkb", "Uninstall")}
-							</button>
-							<Show when={mdkbError()}>
-								<p class={s.hint} style={{ color: "var(--error)" }}>
-									{mdkbError()}
-								</p>
-							</Show>
-						</Show>
-					</div>
-				</SectionCard>
-			</Show>
-
-			<SectionCard title={t("general.heading.ego", "ego")}>
-				<div id={SETTINGS_SECTION_EGO}>
-					<InfoBadge>
-						{t(
-							"general.hint.aiChatInfo",
-							"The AI Chat panel talks to the ego binary over ACP. Select the ego executable to enable it.",
-						)}
-					</InfoBadge>
-				</div>
-
+			<SectionCard
+				title={t("general.heading.ego", "ego")}
+				help={
+					<span id={SETTINGS_SECTION_EGO}>
+						<InfoBadge>
+							{t(
+								"general.hint.aiChatInfo",
+								"The AI Chat panel talks to the ego binary over ACP. Select the ego executable to enable it.",
+							)}
+						</InfoBadge>
+					</span>
+				}
+			>
 				{/* The native picker exists only on desktop; a browser client names the path by hand. */}
 				<Show
 					when={isTauri()}
@@ -602,43 +659,34 @@ export const GeneralTab: Component = () => {
 						/>
 					}
 				>
-					<div class={s.group}>
-						<div class={s.helpLabel}>
-							<label>{t("general.label.egoExecutable", "ego executable")}</label>
-							<ContextualHelp label="ego executable" />
-						</div>
-						<Show
-							when={settingsStore.isAcpConfigured()}
-							fallback={
-								<p class={s.hint}>
-									{t(
+					<SettingRow
+						label={t("general.label.egoExecutable", "ego executable")}
+						hint={
+							settingsStore.isAcpConfigured()
+								? t("general.hint.egoConfigured", "Configured at {path}", { path: settingsStore.state.egoExecutable })
+								: t(
 										"general.hint.egoExecutableEmpty",
 										"Not configured: the AI Chat panel cannot start a conversation until you select the ego binary.",
-									)}
-								</p>
-							}
-						>
-							<p class={s.hint} style={{ color: "var(--success)" }}>
-								{t("general.hint.egoConfigured", "Configured at {path}", {
-									path: settingsStore.state.egoExecutable,
-								})}
-							</p>
-						</Show>
-						<div style={{ display: "flex", gap: "8px", "margin-top": "8px" }}>
-							<button data-setting-id="app.ego_executable" class={s.testBtn} onClick={handleSelectEgo}>
-								{t("general.btn.selectEgo", "Select…")}
-							</button>
-							<Show when={settingsStore.isAcpConfigured()}>
-								<button
-									data-setting-id="app.ego_executable"
-									class={s.testBtn}
-									onClick={() => settingsStore.setEgoExecutable("")}
-								>
-									{t("general.btn.clearEgo", "Clear")}
+									)
+						}
+					>
+						{() => (
+							<div>
+								<button data-setting-id="app.ego_executable" class={s.testBtn} onClick={handleSelectEgo}>
+									{t("general.btn.selectEgo", "Select…")}
 								</button>
-							</Show>
-						</div>
-					</div>
+								<Show when={settingsStore.isAcpConfigured()}>
+									<button
+										data-setting-id="app.ego_executable"
+										class={s.testBtn}
+										onClick={() => settingsStore.setEgoExecutable("")}
+									>
+										{t("general.btn.clearEgo", "Clear")}
+									</button>
+								</Show>
+							</div>
+						)}
+					</SettingRow>
 				</Show>
 				<SettingInput
 					settingId="app.ego_profile"
@@ -684,103 +732,23 @@ export const GeneralTab: Component = () => {
 					hint={t("general.hint.defaultIde", "IDE used to open repositories")}
 				/>
 			</SectionCard>
-			<Show when={isTauri()}>
-				<SectionCard title={t("general.heading.customLaunchers", "Custom Launchers")}>
-					<div class={s.group}>
-						<p class={s.hint}>
-							{t(
-								"general.hint.customLaunchers",
-								'Define your own tools for the "Open in" menu. Each argument may use {path}, {file}, {fileDir}, {repo}, {cwd}, {home}, {line}, {column} placeholders. One argument per line.',
-							)}
-						</p>
-						<For each={launchers()}>
-							{(launcher) => (
-								<div
-									class={s.group}
-									style={{
-										border: "1px solid var(--border)",
-										"border-radius": "var(--radius-md)",
-										padding: "8px",
-										"margin-bottom": "8px",
-									}}
-								>
-									<div style={{ display: "flex", gap: "8px", "align-items": "center", "margin-bottom": "6px" }}>
-										<input
-											data-setting-id="app.custom_launchers.{id}.enabled"
-											type="checkbox"
-											checked={launcher.enabled}
-											title={t("general.label.launcherEnabled", "Enabled")}
-											onChange={(e) => updateLauncher(launcher.id, { enabled: e.currentTarget.checked })}
-										/>
-										<Input
-											data-setting-id="app.custom_launchers.{id}.name"
-											type="text"
-											value={launcher.name}
-											placeholder={t("general.placeholder.launcherName", "Name")}
-											onInput={(e) => updateLauncher(launcher.id, { name: e.currentTarget.value })}
-											style={{ flex: "1" }}
-										/>
-										<button
-											data-non-setting="Create or remove a stable custom-launcher record through its owner"
-											class={s.testBtn}
-											onClick={() => removeLauncher(launcher.id)}
-										>
-											{t("general.btn.remove", "Remove")}
-										</button>
-									</div>
-									<Input
-										data-setting-id="app.custom_launchers.{id}.executable"
-										type="text"
-										value={launcher.executable}
-										placeholder={t(
-											"general.placeholder.launcherExec",
-											"Executable (e.g. code, or /usr/local/bin/code)",
-										)}
-										onInput={(e) => updateLauncher(launcher.id, { executable: e.currentTarget.value })}
-										style={{ width: "100%", "margin-bottom": "6px" }}
-									/>
-									<Textarea
-										data-setting-id="app.custom_launchers.{id}.args"
-										value={launcher.args.join("\n")}
-										placeholder={"--goto\n{file}:{line}:{column}"}
-										rows={3}
-										onInput={(e) => updateLauncher(launcher.id, { args: e.currentTarget.value.split("\n") })}
-										style={{ width: "100%", "font-family": "var(--font-mono)", "font-size": "var(--font-sm)" }}
-									/>
-								</div>
-							)}
-						</For>
-						<button
-							data-non-setting="Create or remove a stable custom-launcher record through its owner"
-							class={s.testBtn}
-							onClick={addLauncher}
-						>
-							{t("general.btn.addLauncher", "Add launcher")}
-						</button>
-					</div>
-				</SectionCard>
-			</Show>
 
 			<SectionCard title={t("general.heading.experimental", "Experimental Features")}>
 				<div class={s.group}>
 					<p class={s.warning}>
 						{t("general.hint.experimentalWarning", "These features are under active development and may be unstable.")}
 					</p>
-					<div class={s.toggle}>
-						<input
-							data-setting-id="app.experimental_features_enabled"
-							type="checkbox"
-							checked={settingsStore.state.experimentalFeaturesEnabled}
-							onChange={(e) => settingsStore.setExperimentalFeaturesEnabled(e.currentTarget.checked)}
-						/>
-						<span>{t("general.toggle.experimentalFeatures", "Enable experimental features")}</span>
-					</div>
-					<p class={s.hint}>
-						{t(
+					<SettingToggle
+						settingId="app.experimental_features_enabled"
+						row
+						checked={settingsStore.state.experimentalFeaturesEnabled}
+						onChange={(enabled) => settingsStore.setExperimentalFeaturesEnabled(enabled)}
+						label={t("general.toggle.experimentalFeatures", "Enable experimental features")}
+						hint={t(
 							"general.hint.experimentalFeatures",
 							"Opt in to features under active development: the AI Chat panel and SSH Tunnels.",
 						)}
-					</p>
+					/>
 				</div>
 			</SectionCard>
 		</div>

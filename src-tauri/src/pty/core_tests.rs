@@ -12132,6 +12132,88 @@ fn captured_ego_question_reaches_awaiting_and_full_mobile_choices() {
     );
 }
 
+/// Catches: a retained answered ego selector becoming a new question on submit.
+#[test]
+fn captured_ego_answered_selector_does_not_notify_on_submit() {
+    let capture = crate::pty_capture::decode_capture(&agent_prompt_fixture(
+        "ego-answered-selector-1997.tcap",
+    ))
+    .expect("real ego selector/answer/next-submission recording");
+    let (rows, cols) = capture.geometry.unwrap();
+    let sid = "ego-answered-selector";
+    let (state, silence) = chunk_trace_state(sid);
+    state.grid.vt_log_buffers.insert(
+        sid.into(),
+        Mutex::new(crate::state::VtLogBuffer::new(rows, cols, 2000)),
+    );
+    state
+        .session_maps
+        .session_states
+        .get_mut(sid)
+        .unwrap()
+        .agent_type = Some("ego".into());
+    let mut rx = state.event_bus.subscribe();
+    let mut processor = ChunkProcessor::new(None, None);
+    let mut utf8 = Utf8ReadBuffer::new();
+    let mut escape = EscapeAwareBuffer::new();
+    let mut saw_real_question = false;
+    let mut submitted = false;
+    let mut answered = false;
+    let mut saw_retained_footer = false;
+    for record in capture.records {
+        if record.direction == crate::pty_capture::CaptureDirection::Input {
+            submitted |= record.data == b"Reply only OK, no question.\r";
+            answered |= record.data == b"1\r";
+            continue;
+        }
+        let data = escape.push(&utf8.push(&record.data));
+        let (clean, _) = crate::state::strip_kitty_sequences(&data);
+        processor.process_chunk(&clean, &silence, sid, &state);
+        while let Ok(event) = rx.try_recv() {
+            crate::state::tests_support::apply_replay_event(&state, &event);
+        }
+        let session = state.session_maps.session_states.get(sid).unwrap();
+        saw_real_question |= session.awaiting_input && session.choice_prompt.is_some();
+        let screen = state
+            .grid
+            .vt_log_buffers
+            .get(sid)
+            .unwrap()
+            .lock()
+            .screen_rows();
+        let resumed = answered && screen.iter().any(|row| row.contains("Esc to interrupt"));
+        if resumed && screen.iter().any(|row| row.contains("Esc cancels.")) {
+            saw_retained_footer = true;
+            assert!(
+                crate::output_parser::parse_ego_question(&screen).is_none(),
+                "answered selector above the working composer must not notify"
+            );
+        }
+        if resumed || submitted {
+            assert!(
+                !session.awaiting_input,
+                "ordinary submission resurrected the answered question"
+            );
+            assert!(
+                session.choice_prompt.is_none(),
+                "historical answer controls returned"
+            );
+        }
+    }
+    assert!(
+        saw_real_question,
+        "the real open selector must still reach awaiting"
+    );
+    assert!(
+        submitted,
+        "capture must include an ordinary next submission"
+    );
+    assert!(
+        saw_retained_footer,
+        "capture must reproduce a historical footer above the working composer"
+    );
+}
+
 /// Catches: ego multiple/free-text questions losing their mobile question card.
 #[test]
 fn captured_ego_question_forms_keep_mobile_answer_controls() {

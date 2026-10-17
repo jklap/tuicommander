@@ -1297,9 +1297,9 @@ the same shared core.
 
 The lifecycle event includes `creator_session` resolved from the MCP binding,
 never from a caller-supplied session id, and the requested `spawn_session` flag.
-Without a spawn request, only the creator already placed in the same repository
-moves into the new workspace. Other tabs and an inactive tab selection stay in
-place. This changes placement only, without changing the agent process cwd.
+Without a spawn request, the same-repository creator is reconciled from its
+reported cwd. A root coordinator does not move into a worktree merely because it
+created it. Other tabs and the active workspace selection stay in place.
 
 When the MCP client identifies as Claude Code (detected via `clientInfo.name` at initialize time), the `repo action=worktree_create` response includes an additional `cc_agent_hint` field:
 
@@ -2146,7 +2146,8 @@ worktrees are discovered without recreating or deleting them.
 
 The response and `session-worktree-declared` event use the worktree lifecycle
 payload, with `creator_session` naming the caller and `spawn_session=false`.
-Only that tab moves. Its real cwd, sibling tabs and an inactive selection stay
+The frontend reconciles the caller from its reported cwd; a caller outside that
+checkout stays in its cwd workspace. Sibling tabs and the active selection stay
 unchanged. Retrying the same declaration is idempotent.
 
 The stable `TUIC_SESSION` association is stored in the owning repository's
@@ -2154,14 +2155,16 @@ The stable `TUIC_SESSION` association is stored in the owning repository's
 caller snapshot moves to the target workspace; sibling snapshots are preserved.
 After a restart or WebView reconnect, HTTP `GET /sessions` and IPC
 `list_active_sessions` return the declared `worktree_path` and `worktree_branch`
-while `cwd` remains the actual shell directory. The frontend restores placement
-from that worktree path. Declaration does not acquire worktree cleanup ownership.
+while `cwd` remains the reported shell directory. The frontend restores tab
+placement from cwd, not the declared worktree path. Declaration does not acquire
+worktree cleanup ownership.
 A concurrent repository edit can return a configuration conflict; retry the
 declaration after refreshing rather than overwriting that edit.
 
-The explicit placement remains authoritative over later shell cwd notifications
-until another declaration changes it. The frontend retains the backend placement
-path separately from the observed cwd during reconciliation.
+The association is backend metadata, not authority to place or close a terminal.
+Later shell cwd notifications, reconnect and saved-tab restore use cwd to resolve
+the tab's workspace. Worktree removal also checks each terminal's current cwd, not
+its declaration or sidebar membership.
 
 **Intentional request transport exception:** `declare_worktree` is an MCP-only
 action, callable over the existing HTTP `POST /mcp` route with a bound caller.
@@ -2339,7 +2342,7 @@ No live write or desktop-load verification is implied by recorded-fixture tests.
 
 ### Settings cutover (#1787-4778)
 
-`settings` replaces the removed MCP `config` tool without an alias. Its schema is generated from Rust action DTOs. `settings_action(request)` and `POST /settings/action` use the same envelope and owner services. Describe has optional area/store/id filters and cursor pagination (1–128 fields). Reads and edits use an explicit target; edits require expectedRevision. Prompts remain available through the stable-ID `prompts` store; get `/prompts` lists id/label/text/pinned records, while keyed leaf reads and create/remove patches retain stable identities. Typed workflows use perform with an explicit machine target and a store-selected operation DTO for github_accounts, ego (also expectedRevision), upstreams, connections, telegram and voice in dictation builds. Targeted describe/refresh uses target/store/paths through the registered owner resolver. Connection credential reads use /{id}/credential and return separate password/pairingToken presence. Credential writes retire only that runtime and reconnect it only when it was active; an explicit later disconnect retires the queued reconnect. Explicit refresh for ego refreshes the configured owner's provider catalogue; describe never performs a network refresh.
+`settings` replaces the removed MCP `config` tool without an alias. Its schema is generated from Rust action DTOs. `settings_action(request)` and `POST /settings/action` use the same envelope and owner services. Describe has optional area/store/id filters and cursor pagination (1–128 fields). Reads and edits use an explicit target; edits require expectedRevision. Prompts remain available through the stable-ID `prompts` store; get `/prompts` lists id/label/text/pinned records, while keyed leaf reads and create/remove patches retain stable identities. Typed workflows use perform with an explicit machine target and a store-selected operation DTO for github_accounts, ego (also expectedRevision), upstreams, connections, circleci, telegram and voice in dictation builds. Targeted describe/refresh uses target/store/paths through the registered owner resolver. Connection credential reads use /{id}/credential and return separate password/pairingToken presence. Credential writes retire only that runtime and reconnect it only when it was active; an explicit later disconnect retires the queued reconnect. Explicit refresh for ego refreshes the configured owner's provider catalogue; describe never performs a network refresh.
 
 MCP access requires settings_mcp_enabled, enabled only by trusted UI; legacy config enablement grants no settings authority. MCP mutations remain loopback-only. HTTP retains local-or-authenticated access and IPC retains native host trust. Exposure proposals use ui confirm proposalId and an exact replay with approval. Secrets remain write-only. Owner transactions and perform remain unavailable while the native inventory gap ledger is nonempty; describe reports inventoryComplete.
 
@@ -2367,3 +2370,16 @@ Telegram replies now use TUIC-driven receipt (👀), working (👨‍💻), wait
 ### Settings startup contract
 
 See [Settings startup workflows](settings-startup.md) for discovery, target/revision ownership, device-login intervals, human confirmation and partial-persistence recovery. Native `inventoryComplete` does not prove schema-only authentication onboarding or UI parity. The current account-list and Ego interactive-login publication gaps remain explicit acceptance limits, not implicit legacy-command fallbacks.
+
+### CircleCI credential settings (#1991-bd88)
+
+The machine-scoped `circleci.token` descriptor is write-only. Read
+`{action:"get",target:{kind:"machine"},store:"circleci",paths:["/token"]}`
+through MCP `settings`, IPC `settings_action`, or HTTP `POST /settings/action`.
+Readback returns only `stored.status` and `effective.status`: `set`, `unset`, or
+`unavailable`. It describes the stored TUIC token, not environment or CLI fallbacks.
+Use `{action:"perform",target:{kind:"machine"},store:"circleci",operation:{action:"set_token",token:"..."}}`
+or `operation:{action:"clear_token"}`. Both actions use the existing CircleCI
+owner; replies contain only token presence. Clearing the stored token does not
+remove `CIRCLE_TOKEN` or the CircleCI CLI configuration. The Git & GitHub page
+continues to show the effective token source. No transport returns the token.
