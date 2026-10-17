@@ -464,6 +464,8 @@ fail closed. The foreground probe still gates idle; recovery never requeues the
 uncertain payload, but normal idle flush can deliver the next queued BG wake.
 The adapter shapes are recorded in `ego-composer-1957*.tcap`.
 
+Ego selector recovery accepts both single-answer and checkbox footers, including mid-word terminal wrapping. Checkbox state uses `toggle-enter` and changes only on a toggle; Enter or Escape settles the dialog. Free-text modal text enriches an existing confident ego wait, never a ready composer. The mobile header question action supports all three forms.
+
 **Every signal that sets awaiting needs a path that clears it.** The badge is
 `SessionState.awaiting_input`, not an event, and it is sticky by construction —
 whatever sets it owns nothing until something retracts it. These paths clear it:

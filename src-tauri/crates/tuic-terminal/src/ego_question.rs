@@ -1,29 +1,51 @@
-//! Decode ego's native single-answer selector, anchored by its exact footer.
+//! Decode ego's native question surfaces; selectors require their exact footer.
 use crate::output_parser::{ChoiceOption, ChoiceSelectionMode, ParsedEvent};
 
 const FOOTER: &str = "Up/Down or number selects; Enter answers; Esc cancels.";
+const MULTIPLE_FOOTER: &str = "Up/Down moves; Space or number toggles; Enter answers; Esc cancels.";
 
-pub fn parse_ego_question(rows: &[String]) -> Option<ParsedEvent> {
-    let end = (0..rows.len()).rev().find(|&start| {
+fn footer_end(rows: &[String], expected: &str) -> Option<usize> {
+    // A terminal can wrap in the middle of a word. Compare the exact non-space
+    // footer instead of inserting a word boundary at every physical row.
+    let expected: String = expected.chars().filter(|ch| !ch.is_whitespace()).collect();
+    (0..rows.len()).rev().find(|&start| {
         let mut footer = String::new();
         for row in rows.iter().skip(start).take(4) {
-            if !footer.is_empty() {
-                footer.push(' ');
-            }
-            footer.push_str(row.trim());
-            if footer == FOOTER {
+            footer.extend(row.chars().filter(|ch| !ch.is_whitespace()));
+            if footer == expected {
                 return true;
             }
-            if !FOOTER.starts_with(&footer) {
+            if !expected.starts_with(&footer) {
                 return false;
             }
         }
         false
-    })?;
-    let first = (0..end).rev().find(|&i| {
-        let text = rows[i].trim().trim_start_matches('>').trim_start();
-        text.starts_with("1. ")
-    })?;
+    })
+}
+
+fn option_text(row: &str, multiple: bool) -> Option<(&str, &str)> {
+    let text = row
+        .trim()
+        .strip_prefix('>')
+        .unwrap_or(row.trim())
+        .trim_start();
+    let text = if multiple {
+        text.strip_prefix("[ ] ")
+            .or_else(|| text.strip_prefix("[x] "))?
+    } else {
+        text
+    };
+    text.split_once(". ")
+        .filter(|(key, _)| !key.is_empty() && key.bytes().all(|ch| ch.is_ascii_digit()))
+}
+
+pub fn parse_ego_question(rows: &[String]) -> Option<ParsedEvent> {
+    let (end, multiple) = footer_end(rows, FOOTER)
+        .map(|end| (end, false))
+        .or_else(|| footer_end(rows, MULTIPLE_FOOTER).map(|end| (end, true)))?;
+    let first = (0..end)
+        .rev()
+        .find(|&i| option_text(&rows[i], multiple).is_some_and(|(key, _)| key == "1"))?;
     let mut options: Vec<ChoiceOption> = Vec::new();
     for row in &rows[first..end] {
         let text = row.trim();
@@ -31,17 +53,29 @@ pub fn parse_ego_question(rows: &[String]) -> Option<ParsedEvent> {
             continue;
         }
         let highlighted = text.starts_with('>');
-        let text = text.trim_start_matches('>').trim_start();
-        let numbered = text
-            .split_once(". ")
-            .filter(|(key, _)| !key.is_empty() && key.bytes().all(|ch| ch.is_ascii_digit()));
+        let numbered = option_text(row, multiple);
         if let Some((key, label)) = numbered {
             if key.parse::<usize>().ok()? != options.len() + 1 || label.is_empty() {
                 return None;
             }
             options.push(ChoiceOption {
                 key: key.to_owned(),
-                label: label.to_owned(),
+                label: if multiple {
+                    format!(
+                        "{} {label}",
+                        if text
+                            .trim_start_matches('>')
+                            .trim_start()
+                            .starts_with("[x] ")
+                        {
+                            "[x]"
+                        } else {
+                            "[ ]"
+                        }
+                    )
+                } else {
+                    label.to_owned()
+                },
                 highlighted,
                 destructive: false,
                 hint: None,
@@ -70,9 +104,41 @@ pub fn parse_ego_question(rows: &[String]) -> Option<ParsedEvent> {
     Some(ParsedEvent::ChoicePrompt {
         title,
         options,
-        selection_mode: Some(ChoiceSelectionMode::NavigateEnter),
+        selection_mode: Some(if multiple {
+            ChoiceSelectionMode::ToggleEnter
+        } else {
+            ChoiceSelectionMode::NavigateEnter
+        }),
         dismiss_key: Some("cancel".to_owned()),
         amend_key: None,
+    })
+}
+
+/// This text shape alone is not authoritative: call only during a confident ego
+/// awaiting interval. A ready composer has the same empty `>` row.
+pub fn parse_ego_free_text_question(rows: &[String]) -> Option<ParsedEvent> {
+    let end = rows.iter().rposition(|row| row.trim() == ">")?;
+    if rows[end + 1..].iter().any(|row| !row.trim().is_empty()) {
+        return None;
+    }
+    let mut start = end;
+    while start > 0 && !rows[start - 1].trim().is_empty() {
+        start -= 1;
+    }
+    let prompt_text = rows[start..end]
+        .iter()
+        .map(|row| row.trim())
+        .collect::<Vec<_>>()
+        .join(" ");
+    if prompt_text.is_empty()
+        || prompt_text.contains("Esc to interrupt")
+        || prompt_text.contains("Esc cancels.")
+    {
+        return None;
+    }
+    Some(ParsedEvent::Question {
+        prompt_text,
+        confident: true,
     })
 }
 
@@ -132,5 +198,37 @@ mod tests {
         assert!(
             parse_ego_question(&rows(&["Question?", "> 1. First", "3. Third", FOOTER])).is_none()
         );
+    }
+    /// Catches: checkbox state being dropped or interpreted as a single-answer selector.
+    #[test]
+    fn ego_multiple_question_preserves_checks_and_requires_explicit_submit() {
+        let Some(ParsedEvent::ChoicePrompt {
+            options,
+            selection_mode,
+            ..
+        }) = parse_ego_question(&rows(&[
+            "Which release checks should we run?",
+            "> [x] 1. Parser regression",
+            "  [ ] 2. Mobile answer controls",
+            MULTIPLE_FOOTER,
+        ]))
+        else {
+            panic!("multiple selector lost")
+        };
+        assert_eq!(selection_mode, Some(ChoiceSelectionMode::ToggleEnter));
+        assert_eq!(options[0].label, "[x] Parser regression");
+        assert_eq!(options[1].label, "[ ] Mobile answer controls");
+    }
+
+    /// Catches: awaiting arriving before the modal repaint exposing a busy spinner as a question.
+    #[test]
+    fn ego_free_text_question_rejects_busy_composer_and_nonempty_draft() {
+        for screen in [
+            rows(&["◓ Working 1s · Esc to interrupt", ">"]),
+            rows(&["Question?", "> draft"]),
+            rows(&[">"]),
+        ] {
+            assert!(parse_ego_free_text_question(&screen).is_none());
+        }
     }
 }

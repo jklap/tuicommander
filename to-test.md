@@ -2394,3 +2394,7 @@ Needs an iPhone (iOS 16.4+, 18.4+ preferred), the desktop TUICommander running a
 - [ ] After Boss restarts `make dev` (or installs a rebuilt release), print two ego intents with the second wrapping across the old composer rows. Confirm Context and the non-custom tab title show the latest intent (#1964-b32e). The Rust change does not hot-reload. Automated pre-fix replay evidence is recorded in the story; GREEN is owned by the batch integrator.
 
 - [ ] Mobile CLI and Chat: scroll back to show the key-bar down-arrow above Send, tap to resume latest output, and manually return to bottom to hide it (#1975-4a38).
+## Ego mobile question forms (1973-3d1b) — backend restart required
+
+- [ ] After Boss manually restarts `make dev` or installs `make build`, open ego single-choice, multiple-choice, and free-text questions from a narrow mobile terminal. Confirm **Input** and the header question action for each. Multiple-choice taps must toggle without submitting until **Submit answers**; free-text must show its full question above the reply composer. The current running backend cannot load this Rust change through hot reload.
+- [ ] Capture a 360×800 screenshot of each recorded ego question card after the screenshot environment is available. The 1973 agent verified DOM layout from actual Rust replay snapshots, but agent-browser reported a locked macOS screen and timed out; bundled headless Chrome also timed out, including an `about:blank` probe. This is not a completed visual check.

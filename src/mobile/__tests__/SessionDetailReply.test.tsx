@@ -183,3 +183,44 @@ it.each(["Reading files", "Waiting for background terminal"])("shows a real task
 	await fireEvent.click(view.getByRole("button", { name: "codex" }));
 	expect(view.getByText(task)).not.toBeNull();
 });
+
+// Catches: an opened ego modal answer taking the idle-only atomic submit path,
+// which refuses the native awaiting interval as agent_not_ready instead of typing
+// the human answer into the modal (the same path used for an opened Codex modal).
+it("types an opened ego free-text answer into its waiting modal instead of requiring idle submission", async () => {
+	const session: SessionInfo = {
+		session_id: "ego-free-text",
+		cwd: "/repo",
+		worktree_path: null,
+		worktree_branch: null,
+		state: {
+			agent_type: "ego",
+			awaiting_input: true,
+			question_confident: true,
+			question_text: "Which release checks should we run?",
+			shell_state: "busy",
+			rate_limited: false,
+			last_activity_ms: 1,
+		},
+	};
+	const { getByRole, container } = render(() => (
+		<SessionDetailScreen
+			subscribeChatWake={() => () => {}}
+			session={session}
+			sessionExists
+			onBack={() => {}}
+			onOpenFiles={() => {}}
+		/>
+	));
+	await fireEvent.click(getByRole("button", { name: "Open ego question" }));
+	await fireEvent.input(container.querySelector("textarea")!, { target: { value: "Run the parser checks" } });
+	await fireEvent.click(getByRole("button", { name: "Send" }));
+	await waitFor(() =>
+		expect(rpc).toHaveBeenCalledWith("write_pty", {
+			sessionId: "ego-free-text",
+			data: "Run the parser checks",
+		}),
+	);
+	await waitFor(() => expect(rpc).toHaveBeenCalledWith("write_pty", { sessionId: "ego-free-text", data: "\r" }));
+	expect(rpc.mock.calls.some(([command]) => command === "submit_agent_reply")).toBe(false);
+});
