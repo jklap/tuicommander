@@ -429,7 +429,8 @@ pub(super) const AGENT_ACTIONS: &str = "spawn, register, list_peers, send, inbox
 pub(super) const REPO_ACTIONS: &str = "list, add, active, status, branch_integrations, branch_integration, worktree_list, worktree_lifecycle, worktree_create, worktree_remove, orphan_cleanup_answer, branch_delete, progress_list, work_item, work_item_act";
 pub(super) const UI_ACTIONS: &str = "tab, toast, confirm, screenshot";
 pub(super) const TASK_ACTIONS: &str = "get, cancel";
-pub(super) const DEBUG_ACTIONS: &str = "agent_detection, logs, sessions, invoke_js, help";
+pub(super) const DEBUG_ACTIONS: &str =
+    "agent_detection, logs, sessions, invoke_js, frame_workload_dump, help";
 #[cfg(any(feature = "dictation", test))]
 pub(super) const VOICE_ACTIONS: &str = "speak, stop, status";
 pub(super) const REMOTE_ACTIONS: &str = "preview, update";
@@ -708,7 +709,7 @@ pub(super) fn native_tool_definitions() -> serde_json::Value {
             "name": "debug",
             "description": "Diagnostics for TUICommander internals. action=help returns the full usage guide.",
             "inputSchema": { "type": "object", "properties": {
-                "action": { "type": "string", "description": "One of: agent_detection, logs, sessions, invoke_js, help" },
+                "action": { "type": "string", "description": "One of: agent_detection, logs, sessions, invoke_js, frame_workload_dump, help" },
                 "session_id": { "type": "string", "description": "PTY session UUID (action=agent_detection, optional — omit for all)" },
                 "level": { "type": "string", "description": "Log level filter: debug, info, warn, error (action=logs)" },
                 "source": { "type": "string", "description": "Log source filter (action=logs)" },

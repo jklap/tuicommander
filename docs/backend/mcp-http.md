@@ -2383,3 +2383,7 @@ or `operation:{action:"clear_token"}`. Both actions use the existing CircleCI
 owner; replies contain only token presence. Clearing the stored token does not
 remove `CIRCLE_TOKEN` or the CircleCI CLI configuration. The Git & GitHub page
 continues to show the effective token source. No transport returns the token.
+
+### Frame workload dump
+
+The loopback-only `debug action=frame_workload_dump` schedules the enabled frontend recorder dump. Like `invoke_js`, read `eval_js` logs for completion; submission does not prove frontend liveness. `POST /debug/frame-workload` and desktop `save_frame_workload` share the bounded writer. See [stall evidence](stall-journal.md).

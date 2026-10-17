@@ -1053,3 +1053,7 @@ or `operation:{action:"clear_token"}`. Both actions use the existing CircleCI
 owner; replies contain only token presence. Clearing the stored token does not
 remove `CIRCLE_TOKEN` or the CircleCI CLI configuration. The Git & GitHub page
 continues to show the effective token source. No transport returns the token.
+
+### Frame workload evidence
+
+`save_frame_workload(recording: String) -> Result<String, String>` writes bounded schema-v1 live grid workload JSON through the same serialized blocking-pool writer as `POST /debug/frame-workload`. Returns the instance-local capture path. It does not enable capture.

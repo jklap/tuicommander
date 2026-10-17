@@ -340,6 +340,10 @@ agent-aware command submission helper.
 
 Backend selection and logical-row extraction retain real spaces at soft-wrap margins. Mobile CLI log rendering uses serialized `wrapped` boundaries rather than word-length guesses when metadata is present. Older daemon rows without this field retain the existing prose reflow fallback. This changes extracted text, not canvas layout or styling.
 
+### Opt-in workload evidence
+
+CanvasTerminal records raw arrivals before decode and immutable merged grid snapshots immediately before the base paint, plus visibility transitions. Capture requires both the explicit recorder flag and perfDebug. No render behavior changes. See [stall evidence](../backend/stall-journal.md) for caps, timing replay and limitations.
+
 ### Prompt ownership after reflow (#1389-3a47)
 
 Accepting changed frame geometry invalidates cached prompt boundaries and rejects
