@@ -881,6 +881,54 @@ async fn telegram_latest_connected_ai_chat_wins_without_registration() {
     assert!(finals(&server).is_empty());
 }
 
+// Catches: connecting a second AI Chat discards the first chat's in-flight Telegram reply.
+#[tokio::test]
+async fn connecting_another_ai_chat_keeps_the_inflight_telegram_reply() {
+    let (_dir, paths) = setup();
+    let server = FakeServer::start(vec![]).await;
+    let mut runtime = super::tests::outbound_tests::runtime(paths, server.address).await;
+    runtime.clear_registration();
+    runtime
+        .state
+        .config
+        .write()
+        .ai_chat_peer_ids
+        .insert("/first".into(), PEER.into());
+    let journal = runtime.state.acp.test_peer_journal(PEER);
+    assert_eq!(runtime.deliver(mail(7)).await.unwrap()["accepted"], true);
+    read(&runtime).await;
+    let (turn, sequence) = start(&journal, true);
+    drain(&runtime, sequence).await;
+    runtime.tick().await;
+
+    // The next inbound message should choose this chat, but the first reply
+    // still belongs to the connected conversation that received its request.
+    let other = "22222222-2222-4222-8222-222222222222";
+    runtime
+        .state
+        .config
+        .write()
+        .ai_chat_peer_ids
+        .insert("/second".into(), other.into());
+    let _second = runtime.state.acp.test_peer_journal(other);
+    append(&journal, turn, chunk("First chat answer"));
+    let sequence = append(
+        &journal,
+        turn,
+        Event::TurnSettled {
+            stop_reason: v1::StopReason::EndTurn,
+            usage: None,
+        },
+    );
+    drain(&runtime, sequence).await;
+    runtime.tick().await;
+    assert_eq!(
+        finals(&server),
+        ["First chat answer"],
+        "opening another chat must not replace a correlated Telegram answer with a stopped notice"
+    );
+}
+
 // Catches: saved chat identities without a live connection suppress the no-agent response.
 #[tokio::test]
 async fn telegram_no_agent_reply_requires_no_live_owner_or_chat() {
