@@ -856,3 +856,8 @@ Leaving the action alone keeps the original saved address.
 ## Remote Settings startup limits
 
 The shared Settings HTTP endpoint retains local-or-authenticated access; MCP mutation remains loopback-only. A local request does not implicitly target a remote daemon. Select the owner explicitly, keep its read revision, and never treat a remote invalidation cursor as a local CAS token. [Startup workflows](../backend/settings-startup.md) covers confirmation, device-login state and readback after uncertain or partial persistence. Secrets remain write-only.
+
+Typed Ego startup login returns a session on the explicitly selected daemon.
+Open that session in the owning client's terminal view to authenticate, then
+request status and refresh providers on that same daemon. Never read a local
+credential owner to infer the result of remote authentication.

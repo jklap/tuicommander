@@ -2465,7 +2465,7 @@ Needs an iPhone (iOS 16.4+, 18.4+ preferred), the desktop TUICommander running a
 ## Settings startup contract (#1790-1011)
 
 - [ ] Coordinator batch: exercise the published GitHub/Ego settings facade with isolated owners, covering refusal/confirmation expiry, device-flow refusal/expiry, stale revisions and persisted apply/readback failure; never use production credentials.
-- [ ] Schema-only startup remains incomplete while account enumeration or typed Ego interactive login is absent. Human login completion requires explicit owner refresh; terminal exit is not success. See docs/backend/settings-startup.md.
+- [ ] After Boss restarts the Rust backend, discover GitHub list_accounts and Ego begin_login/login_status through Settings. Complete a human Ego login in the returned terminal; verify closed/expired is never success and provider refresh shows owner credential state. Use only an isolated test account/instance. Automated GREEN and live authentication are not yet claimed. See docs/backend/settings-startup.md.
 - [ ] After the next backend restart, check Claude trust, external-import and Bash permission dialogs in mobile CLI: all options and the footer must remain visible (#1987-606c). Rust changes require a manual restart to load.
 
 - [ ] After a manual Rust rebuild/restart, answer an ego selector and submit an ordinary prompt: no orange awaiting dot or question sound from the answered selector; a real new question still alerts (#1997-eb30).

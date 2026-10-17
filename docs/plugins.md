@@ -2106,4 +2106,4 @@ No live write or desktop-load verification is implied by recorded-fixture tests.
 
 ### Settings startup is not a plugin capability
 
-Plugin-scoped settings do not confer host account, executable or provider-login authority. Runtime shortcut-ID publication is metadata, not permission to invoke authentication or arbitrary commands. The host [startup contract](backend/settings-startup.md) documents the separate owner workflows and current publication limits.
+Plugin-scoped settings do not confer host account, executable or provider-login authority. Runtime shortcut-ID publication is metadata, not permission to invoke authentication or arbitrary commands. The host [startup contract](backend/settings-startup.md) documents typed GitHub enumeration and Ego human-login owner workflows; these do not grant plugins host authentication authority.

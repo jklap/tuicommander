@@ -653,7 +653,7 @@ The explicit source ledgers distinguish read-only identities, derived credential
 
 ## Assisted startup
 
-The [Settings startup contract](../backend/settings-startup.md) describes discoverable GitHub device/Enterprise workflows and Ego settings/readback. Interactive Ego login still requires the human AI Chat Settings workflow and has no published Settings login action. Native inventory completeness does not mean every onboarding or live UI check is complete.
+The [Settings startup contract](../backend/settings-startup.md) describes discoverable GitHub device/Enterprise workflows and Ego settings/readback. GitHub `list_accounts` discovers existing account IDs and credential presence. Typed Ego `begin_login` opens a terminal for you to authenticate; `login_status` reports process lifetime and owner credential readback separately. Native inventory completeness does not mean every onboarding or live UI check is complete.
 
 ### CircleCI Settings owner (#1991-bd88)
 

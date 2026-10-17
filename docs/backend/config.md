@@ -1729,3 +1729,9 @@ While a frontend keybinding sync lifetime is active, it publishes its current pl
 ### Startup owner boundaries
 
 [Settings startup workflows](settings-startup.md) documents the published configuration/authentication boundary. App launch preferences select the configured Ego executable, profile and workspace; Ego owns its user/profile configuration. A GitHub environment, OAuth or PAT credential source is provenance, not a writable PAT field. A settings generation is not a CAS revision, and successful persistence is not proof that a runtime effect applied.
+
+Settings startup publishes `list_accounts` for GitHub metadata/presence and Ego
+`begin_login`/`login_status`. Ego login uses the configured executable/workspace
+and base credential owner, never a caller-selected program or profile. Its
+tracked terminal is human-operated; termination and handle expiry are not
+credential success. See [interactive login](settings-startup.md#interactive-login).

@@ -541,7 +541,10 @@ pub(crate) async fn providers(
     providers_in(&ConfigContext::configured(state)?, refresh).await
 }
 
-async fn providers_in(context: &ConfigContext, refresh: bool) -> Result<EgoProviders, EgoCliError> {
+pub(crate) async fn providers_in(
+    context: &ConfigContext,
+    refresh: bool,
+) -> Result<EgoProviders, EgoCliError> {
     let raw = context.command("ls", &["--json"]).await?;
     let mut listing: ConfigListing = serde_json::from_str(&raw)
         .map_err(|error| unreadable("ego config ls --json", raw, error))?;

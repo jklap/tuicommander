@@ -3282,7 +3282,7 @@ Rows returned by session `format=log` output and the `format=log|text` WebSocket
 
 ## Settings startup and recovery
 
-The published Settings startup sequence and current GitHub/Ego publication limits are documented in [Settings startup workflows](../backend/settings-startup.md). Device-login status is not authentication success; owner revisions, confirmation proposals and persisted-but-unapplied outcomes require their distinct recovery paths. Do not substitute a legacy HTTP command for an action absent from the Settings schema.
+The published Settings startup sequence and GitHub/Ego owner contracts are documented in [Settings startup workflows](../backend/settings-startup.md). Device-login status is not authentication success; owner revisions, confirmation proposals and persisted-but-unapplied outcomes require their distinct recovery paths. Do not substitute a legacy HTTP command for an action absent from the Settings schema.
 
 ### CircleCI credential settings (#1991-bd88)
 
@@ -3296,3 +3296,22 @@ or `operation:{action:"clear_token"}`. Both actions use the existing CircleCI
 owner; replies contain only token presence. Clearing the stored token does not
 remove `CIRCLE_TOKEN` or the CircleCI CLI configuration. The Git & GitHub page
 continues to show the effective token source. No transport returns the token.
+
+### Startup owner discovery and interactive login
+
+`POST /settings/action` shares these typed perform requests with IPC/MCP:
+
+- Machine `github_accounts`, `operation:{action:"list_accounts"}` returns owner
+  metadata, credential presence and revision; no secret values or auth document.
+- Machine `ego`, `expectedRevision` from its machine read and
+  `operation:{action:"begin_login",provider:"openai-codex"}` returns a bounded
+  `flowId` and `sessionId` for human authentication. Terminal output/input use the
+  existing session HTTP/WS APIs; Settings does not transport codes or tokens.
+- The same Ego envelope with `operation:{action:"login_status",flow_id:FLOW}`
+  returns `interactive`, `closed` with owner credential presence, or `expired`.
+  Status does not compare `expectedRevision`; begin does. Closed is not success.
+  Refresh providers explicitly after the person completes login. Configured
+  executable/workspace changes invalidate status with `conflict`.
+
+See [startup workflows](../backend/settings-startup.md#interactive-login) for
+expiry, retained-terminal cleanup, readback and error semantics.

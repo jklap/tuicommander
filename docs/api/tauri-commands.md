@@ -1039,7 +1039,7 @@ the error to the caller. HTTP equivalent: `POST /sessions/{id}/force-retry`.
 
 ## Settings startup ownership
 
-`settings_action` shares its envelope and recovery behavior with HTTP and MCP; native caller trust does not bypass owner CAS or human confirmation. [Settings startup workflows](../backend/settings-startup.md) distinguishes published GitHub operations, configured Ego settings/readback and the unpublished interactive Ego-login boundary.
+`settings_action` shares its envelope and recovery behavior with HTTP and MCP; native caller trust does not bypass owner CAS or human confirmation. [Settings startup workflows](../backend/settings-startup.md) describes GitHub `list_accounts` and configured Ego `begin_login`/`login_status`, including owner revision checks, a human-operated terminal and credential readback distinct from process completion.
 
 ### CircleCI credential settings (#1991-bd88)
 

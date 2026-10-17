@@ -527,4 +527,4 @@ Logout and disconnect advance the GitHub login generation. Settings device flows
 
 ## Settings startup workflows
 
-The Settings facade delegates device flow, Enterprise verification, account cleanup and registered-repository bindings to the GitHub owners. [Startup workflows](settings-startup.md#github) records poll/status semantics, binding revisions, write-only credentials and current read-discovery gaps. An adapter-level owner snapshot alone does not prove the same information is reachable through the published Settings schema.
+The Settings facade delegates device flow, Enterprise verification, account cleanup and registered-repository bindings to the GitHub owners. [Startup workflows](settings-startup.md#github) records poll/status semantics, binding revisions, write-only credentials and typed `list_accounts` discovery of account metadata/presence. An adapter-level owner snapshot alone does not prove the same information is reachable through the published Settings schema.

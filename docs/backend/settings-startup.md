@@ -53,10 +53,11 @@ The read-only `github_accounts.auth.source` descriptor publishes the existing
 `auth.secret` stays unpublished: provenance is not permission to reveal a token,
 credential reference or the full owner authentication object.
 
-**Current publication gap:** the general account collection has no published
-list workflow; keyed leaf reads require an already known account ID. Do not
-claim that an unaided schema-only client can enumerate every existing account.
-Owner completion remains an acceptance gate.
+Use the typed `list_accounts` operation to discover stable account IDs, labels,
+canonical sites and credential presence before keyed reads or edits. It returns
+`accounts`, the owner `revision`, and `persisted:false`. It does not return the
+full authentication object, secret values or credential references. An empty list
+is a valid result; a failed owner read is not an empty list.
 
 ## Ego
 
@@ -80,14 +81,38 @@ replacement value. Read back after an edit, and report next-session effects.
 Existing ACP conversations retain their launch/options; no PTY fallback replaces
 an unavailable ACP or settings owner.
 
-**Current publication gap:** interactive `ego auth login PROVIDER` is a human
-workflow opened by `services/egoLogin.ts` in the AI Chat Settings UI. The
-published `OwnerAction::Ego` accepts only `EgoAuthAction` configuration edits.
-There is no typed Settings login-start/completion action. Ending the terminal
-command does not prove authentication; the person refreshes provider state.
-A schema-only Ego login remains blocked. Do not invent a login action, claim
-completion, scrape credential files or launch an alternate executable. A typed
-interactive-login contract needs a separate owner follow-up after feature freeze.
+### Interactive login
+
+The same `store:"ego"` perform envelope also publishes `begin_login` and
+`login_status`. Both require the envelope's `expectedRevision`; obtain it from a
+machine-targeted Ego read (not a profile read). Only `begin_login` compares that
+revision because it starts a process; status never retries or changes configuration.
+
+- `operation:{action:"begin_login",provider:"openai-codex"}` starts the configured
+  executable with argument vector `auth login -- PROVIDER` in the configured AI
+  Chat workspace, without a shell or profile override. It returns `flowId`,
+  `sessionId`, `status:"interactive"`, `expiresIn:900`, `persisted:false` and
+  `nextAction:"login_status"`. The person completes the browser/device/API-key
+  exchange in that terminal. No Settings action accepts a login code or token.
+- `operation:{action:"login_status",flow_id:FLOW}` reports `interactive` while the
+  process lives. After it exits or the person closes the terminal, status is
+  `closed`, with the provider's fresh `credential` projection from Ego doctor:
+  `stored`, `expired`, `missing` or `unknown`. `closed` is not authentication success.
+  An unavailable readback is an error, never a fabricated missing credential.
+  Follow `nextAction:"refresh"` to refresh models/provider state before selecting
+  a default model. No existing ACP conversation is relaunched.
+- The host retains at most 32 handles for 15 minutes. An expired handle returns
+  `status:"expired"`, its `sessionId` and `nextAction:"begin_login"`; unknown or
+  pruned handles return `not_found`. Handle expiry does not imply that the
+  provider credential expired and does not kill a person's terminal. Close it
+  through the existing session control before starting another attempt.
+- If the configured executable or workspace changes, status returns `conflict`
+  instead of reading a different owner. A stale begin revision also returns
+  `conflict` before spawning. Missing executable/capability returns unavailable.
+
+The existing AI Chat Settings button remains a separate human UI entry point.
+The typed owner action is not an ACP-to-PTY fallback and never accepts another
+executable from its caller.
 
 ## Refusal and recovery
 
@@ -112,8 +137,8 @@ revision. Reconnect requires fresh reads; dirty UI drafts remain local.
 The source tests, replay fixtures and generated catalogue do not authenticate a
 real account or prove live desktop/browser convergence. The Ego replay uses
 captured owner responses; real interactive authentication remains the person's
-responsibility. Step 10 must remain incomplete while the publication gaps above
-or its refusal/expiry/conflict/apply-failure integration criteria are unverified.
+responsibility. Step 10 must remain incomplete while its schema-only startup and
+refusal/expiry/conflict/apply-failure integration criteria are unverified.
 See [Settings](../user-guide/settings.md), [HTTP API](../api/http-api.md), and
 [configuration ownership](config.md) for the corresponding user and transport
 surfaces.
