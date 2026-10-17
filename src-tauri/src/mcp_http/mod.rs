@@ -2381,7 +2381,13 @@ pub fn build_router(state: Arc<AppState>, remote_auth: bool, mcp_enabled: bool) 
 
     // Static files — SPA frontend (desktop only; not embedded in the remote binary)
     #[cfg(feature = "desktop")]
-    let routes = routes.route("/", get(static_files::serve_index));
+    let routes = routes
+        .route("/", get(static_files::serve_index))
+        // The Settings landing page is a UI route; its descendants belong to the API.
+        .route(
+            "/settings",
+            get(|| async { static_files::serve_static(AxumPath("settings".into())).await }),
+        );
 
     let routes = routes
         .fallback(spa_or_api_404)
@@ -8315,6 +8321,7 @@ mod tests {
             "/api/no-such-endpoint",
             "/attachments/no-such-endpoint",
             "/dictation/no-such-endpoint",
+            "/settings/no-such-endpoint",
         ] {
             let resp = app
                 .clone()
