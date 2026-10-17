@@ -90,13 +90,10 @@ impl Settings {
                 expected_revision,
                 operation,
             } => {
-                let ego = self.ego.clone();
-                let reply = tokio::task::spawn_blocking(move || {
-                    ego.auth_edit(&expected_revision, operation)
-                })
-                .await
-                .map_err(|_| Error::new("ego", "store_failed"))??;
-                serde_json::to_value(reply).map_err(|_| Error::new("ego", "store_failed"))
+                self.ego
+                    .clone()
+                    .perform_auth(expected_revision, operation)
+                    .await
             }
             #[cfg(feature = "dictation")]
             OwnerAction::Voice { operation } => {

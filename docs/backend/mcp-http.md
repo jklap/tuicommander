@@ -2367,6 +2367,10 @@ browser status-bar control uses its owning daemon's normal PTY write transport.
 
 Telegram replies now use TUIC-driven receipt (👀), working (👨‍💻), waiting (🤔), answered (👍) and failed (👎) reactions. An ephemeral native draft shows Italian status lines or unapproved agent previews; it refreshes while work continues and the final reply replaces it. Acknowledgement of work requires inbox Read and a new recipient turn. PTY intent/activity and AI Chat assistant chunks share request correlation; finish remains authoritative after draft retirement. Telegram-mail-woken AI Chat turns automatically send their settled assistant text if finish has not answered. Queue and no-reply notices occur at ten minutes and sixty seconds after Read respectively. Restart keeps no request history. Phone rendering requires a live check after the backend restart.
 
+### Settings startup contract
+
+See [Settings startup workflows](settings-startup.md) for discovery, target/revision ownership, device-login intervals, human confirmation and partial-persistence recovery. Native `inventoryComplete` does not prove schema-only authentication onboarding or UI parity. Typed `list_accounts` and Ego `begin_login`/`login_status` use the same owner facade. Login launches the configured process directly in a tracked human terminal, not an arbitrary-command or ACP fallback; status separates process lifetime from credential readback.
+
 ### CircleCI credential settings (#1991-bd88)
 
 The machine-scoped `circleci.token` descriptor is write-only. Read
@@ -2479,3 +2483,7 @@ IPC MCP passthrough intentionally share the local `ipc` continuation scope for
 the same target: either local-user transport can resume a token issued by the
 other. Tokens are opaque snapshot references, **not authorization credentials**;
 normal endpoint admission and the local OS-user trust boundary still apply.
+
+### Frame workload dump
+
+The loopback-only `debug action=frame_workload_dump` schedules the enabled frontend recorder dump. Like `invoke_js`, read `eval_js` logs for completion; submission does not prove frontend liveness. `POST /debug/frame-workload` and desktop `save_frame_workload` share the bounded writer. See [stall evidence](stall-journal.md).

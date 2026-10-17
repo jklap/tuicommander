@@ -5,6 +5,7 @@ import commander from "../../../../src-tauri/src/themes/commander.json";
 import paper from "../../../../src-tauri/src/themes/vscode-light.json";
 import "../../../global.css";
 import { Input } from "../../ui/Input";
+import { AllSettingsTab } from "../AllSettingsTab";
 import { SettingsShell } from "../SettingsShell";
 import { AppearanceTab } from "../tabs/AppearanceTab";
 import { GeneralTab } from "../tabs/GeneralTab";
@@ -48,10 +49,14 @@ function Preview() {
 			tabs={[
 				{ key: "__label__:app", label: "Application" },
 				{ key: "general", label: "General" },
+				{ key: "all-settings", label: "All settings (Expert)" },
 				{ key: "appearance", label: "Appearance" },
 				{ key: "notifications", label: "Notifications" },
 			].filter((item) => item.key.startsWith("__label__:") || item.label.toLowerCase().includes(query().toLowerCase()))}
 		>
+			<Show when={tab() === "all-settings"}>
+				<AllSettingsTab initialSetting="app.services.auth.auth_rate_limit_max" />
+			</Show>
 			<Show when={tab() === "general"}>
 				<GeneralTab />
 			</Show>

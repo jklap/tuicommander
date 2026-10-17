@@ -1,7 +1,9 @@
 import { type Component, createEffect, createSignal, For, onCleanup, Show } from "solid-js";
+import { settingsCatalogue } from "../../generated/settingsCatalogue";
 import { t } from "../../i18n";
 import { invoke } from "../../invoke";
 import { shortenHomePath } from "../../platform";
+import { hasCatalogueEditor, settingLabel } from "../../services/settingsCatalogue";
 import { repoDefaultsStore } from "../../stores/repoDefaults";
 import { type RepoSettings, repoSettingsStore } from "../../stores/repoSettings";
 import { repositoriesStore } from "../../stores/repositories";
@@ -12,6 +14,7 @@ import { uiStore } from "../../stores/ui";
 import { isTauri } from "../../transport";
 import { pathBasename } from "../../utils/pathUtils";
 import { getRepoColor } from "../../utils/repoColor";
+import { AllSettingsTab } from "./AllSettingsTab";
 import { SettingsHelpScope } from "./ContextualHelp";
 import { DictationSettings } from "./DictationSettings";
 import { ExpertModeSwitch } from "./ExpertSetting";
@@ -61,6 +64,7 @@ const GLOBAL_TAB_GROUPS: { key: string; label: string; tabs: SettingsShellTab[] 
 		label: t("settings.group.application", "Application"),
 		tabs: [
 			{ key: "general", label: t("settings.general", "General") },
+			{ key: "all-settings", label: "All settings (Expert)" },
 			{ key: "appearance", label: t("settings.appearance", "Appearance") },
 			{ key: "notifications", label: t("settings.notifications", "Notifications") },
 		],
@@ -92,7 +96,7 @@ const GLOBAL_TAB_GROUPS: { key: string; label: string; tabs: SettingsShellTab[] 
 			{ key: "remote-access", label: t("settings.remoteAccess", "Remote Access") },
 			{ key: "remote-machines", label: t("settings.remoteMachines", "Remote Machines") },
 			{ key: "telegram", label: "Telegram" },
-			{ key: "plugins", label: t("settings.plugins", "Plugins") },
+			{ key: "plugins", label: t("settings.managePlugins", "Manage plugins") },
 		],
 	},
 ];
@@ -183,6 +187,15 @@ export const SettingsPanel: Component<SettingsPanelProps> = (props) => {
 	const [activeTab, setActiveTab] = createSignal(initialTabFor(props.initialTab, ctx()));
 
 	const [query, setQuery] = createSignal("");
+	const [catalogueSelection, setCatalogueSelection] = createSignal<string>();
+	const catalogueEntries = Object.values(settingsCatalogue.fields)
+		.filter(hasCatalogueEditor)
+		.map((field) => ({
+			tab: "all-settings",
+			section: "Catalogue inspector",
+			label: settingLabel(field.id, field.label),
+			configKey: field.id,
+		}));
 	const pluginPages = createPluginSettingsCatalogue();
 	const pluginTabs = () =>
 		pluginPages().map((page) => ({
@@ -240,6 +253,7 @@ export const SettingsPanel: Component<SettingsPanelProps> = (props) => {
 	const openResult = (entry: SettingsSearchEntry) => {
 		setQuery("");
 		setActiveTab(entry.tab);
+		if (entry.tab === "all-settings") setCatalogueSelection(entry.configKey);
 		// A hidden expert control has nothing to scroll to until it is revealed
 		if (entry.configKey) settingsExpertStore.reveal(entry.configKey);
 		setPendingTarget({ section: entrySection(entry), label: entryLabel(entry) });
@@ -264,7 +278,7 @@ export const SettingsPanel: Component<SettingsPanelProps> = (props) => {
 			query(),
 			new Set([...getGlobalTabs(), ...pluginTabs()].map((tab) => tab.key)),
 			isTauri() ? "desktop" : "browser",
-			pluginEntries(),
+			[...pluginEntries(), ...catalogueEntries],
 		);
 
 	const repoSettings = (path: string) => repoSettingsStore.getOrCreate(path, shortenHomePath(path));
@@ -296,7 +310,11 @@ export const SettingsPanel: Component<SettingsPanelProps> = (props) => {
 		return (
 			<div class={s.footer}>
 				<span />
-				<button class={s.footerDone} onClick={props.onClose}>
+				<button
+					data-non-setting="Navigate or close Settings without editing configuration"
+					class={s.footerDone}
+					onClick={props.onClose}
+				>
 					{t("settings.done", "Done")}
 				</button>
 			</div>
@@ -354,9 +372,12 @@ export const SettingsPanel: Component<SettingsPanelProps> = (props) => {
 				</For>
 
 				{/* Global sections */}
+				<Show when={activeTab() === "all-settings"}>
+					<AllSettingsTab initialSetting={catalogueSelection()} />
+				</Show>
 				<Show when={activeTab() === "general"}>
 					<SettingsHelpScope page="general">
-						<GeneralTab />
+						<GeneralTab onOpenAiChat={settingsStore.isAiChatEnabled() ? () => setActiveTab("ai-chat") : undefined} />
 					</SettingsHelpScope>
 				</Show>
 				<Show when={activeTab() === "appearance"}>

@@ -16,7 +16,7 @@ vi.mock("../../../transport", async (importOriginal) => ({
 
 vi.mock("../../../stores/settings", () => ({
 	settingsStore: {
-		state: { ide: "vscode", font: "JetBrains Mono", defaultFontSize: 12 },
+		state: { ide: "vscode", font: "JetBrains Mono", defaultFontSize: 12, customLaunchers: [] },
 		isAiChatEnabled: () => false,
 		isAcpConfigured: () => false,
 	},

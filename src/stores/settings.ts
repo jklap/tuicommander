@@ -3,6 +3,7 @@ import { createStore } from "solid-js/store";
 import appChoiceOptions from "../../src-tauri/src/settings/app_choice_options.json";
 import { setLocale } from "../i18n";
 import { invoke } from "../invoke";
+import { settingNumberDefault } from "../services/settingsCatalogue";
 import { settingsRefresh } from "../services/settingsRefresh";
 import type { IssueFilterMode } from "../types";
 import { runSerializedConfigWrite, updateAppConfig } from "../utils/updateAppConfig";
@@ -42,7 +43,7 @@ interface RustAppConfig {
 	ide: string;
 	default_font_size: number;
 	close_behavior: CloseBehavior;
-	background?: { hide_dock_icon?: boolean; tray_icon?: TrayIconPreference };
+	background?: { hide_dock_icon?: boolean; tray_icon?: TrayIconPreference; webview_unload_minutes?: number };
 	confirm_before_quit: boolean;
 	confirm_before_closing_tab: boolean;
 	max_tab_name_length: number;
@@ -83,6 +84,8 @@ interface RustAppConfig {
 	show_scrollbar_marks?: boolean;
 	block_folding_enabled?: boolean;
 	index_strategy?: string;
+	index_memory_budget_mb?: number;
+	attachment_max_bytes?: number;
 	standby_timeout_minutes?: number;
 	custom_launchers?: CustomLauncher[];
 	inline_blame_enabled?: boolean;
@@ -278,6 +281,9 @@ interface SettingsStoreState {
 	blockFoldingEnabled: boolean;
 	indexStrategy: "disabled" | "active_only" | "active_and_switch" | "all_sequential";
 	standbyTimeoutMinutes: number;
+	indexMemoryBudgetMb: number;
+	attachmentMaxBytes: number;
+	webviewUnloadMinutes: number;
 	customLaunchers: CustomLauncher[];
 	inlineBlameEnabled: boolean;
 	/**
@@ -343,6 +349,9 @@ function createSettingsStore() {
 		blockFoldingEnabled: true,
 		indexStrategy: "active_and_switch",
 		standbyTimeoutMinutes: 5,
+		indexMemoryBudgetMb: settingNumberDefault("app.index_memory_budget_mb"),
+		attachmentMaxBytes: settingNumberDefault("app.attachment_max_bytes"),
+		webviewUnloadMinutes: settingNumberDefault("app.background.webview_unload_minutes"),
 		customLaunchers: [],
 		inlineBlameEnabled: true,
 		egoExecutable: "",
@@ -419,6 +428,10 @@ function createSettingsStore() {
 		values.blockFoldingEnabled = config.block_folding_enabled ?? true;
 		values.indexStrategy = (config.index_strategy as SettingsStoreState["indexStrategy"]) ?? "active_and_switch";
 		values.standbyTimeoutMinutes = config.standby_timeout_minutes ?? 5;
+		values.indexMemoryBudgetMb = config.index_memory_budget_mb ?? settingNumberDefault("app.index_memory_budget_mb");
+		values.attachmentMaxBytes = config.attachment_max_bytes ?? settingNumberDefault("app.attachment_max_bytes");
+		values.webviewUnloadMinutes =
+			config.background?.webview_unload_minutes ?? settingNumberDefault("app.background.webview_unload_minutes");
 		values.customLaunchers = config.custom_launchers ?? [];
 		values.inlineBlameEnabled = config.inline_blame_enabled ?? true;
 		values.egoExecutable = config.ego_executable ?? "";
@@ -439,7 +452,11 @@ function createSettingsStore() {
 			ide: values.ide,
 			default_font_size: values.defaultFontSize,
 			close_behavior: values.closeBehavior,
-			background: { hide_dock_icon: values.hideDockIcon, tray_icon: values.trayIcon },
+			background: {
+				hide_dock_icon: values.hideDockIcon,
+				tray_icon: values.trayIcon,
+				webview_unload_minutes: values.webviewUnloadMinutes,
+			},
 			confirm_before_quit: values.confirmBeforeQuit,
 			confirm_before_closing_tab: values.confirmBeforeClosingTab,
 			max_tab_name_length: values.maxTabNameLength,
@@ -476,6 +493,8 @@ function createSettingsStore() {
 			show_scrollbar_marks: values.showScrollbarMarks,
 			block_folding_enabled: values.blockFoldingEnabled,
 			index_strategy: values.indexStrategy,
+			index_memory_budget_mb: values.indexMemoryBudgetMb,
+			attachment_max_bytes: values.attachmentMaxBytes,
 			standby_timeout_minutes: values.standbyTimeoutMinutes,
 			custom_launchers: [...values.customLaunchers],
 			inline_blame_enabled: values.inlineBlameEnabled,
@@ -540,7 +559,17 @@ function createSettingsStore() {
 							.filter(([key]) => snapshot[key] !== savedFields[key])
 							.map(([key, value]) => [
 								key,
-								key === "background" ? { ...fresh.background, ...fields.background } : value,
+								key === "background"
+									? {
+											...fresh.background,
+											...Object.fromEntries(
+												Object.entries(fields.background).filter(
+													([name, next]) =>
+														JSON.stringify(next) !== JSON.stringify(JSON.parse(savedFields.background ?? "{}")[name]),
+												),
+											),
+										}
+									: value,
 							]),
 					),
 				);
@@ -725,6 +754,22 @@ function createSettingsStore() {
 
 		setStandbyTimeoutMinutes(minutes: number): void {
 			setState("standbyTimeoutMinutes", Math.max(0, Math.min(60, minutes)));
+			save();
+		},
+
+		setIndexMemoryBudgetMb(value: number): void {
+			if (!Number.isSafeInteger(value) || value < 0) return;
+			setState("indexMemoryBudgetMb", value);
+			save();
+		},
+		setAttachmentMaxBytes(value: number): void {
+			if (!Number.isSafeInteger(value) || value < 1) return;
+			setState("attachmentMaxBytes", value);
+			save();
+		},
+		setWebviewUnloadMinutes(value: number): void {
+			if (!Number.isSafeInteger(value) || value < 0) return;
+			setState("webviewUnloadMinutes", value);
 			save();
 		},
 

@@ -2346,6 +2346,15 @@ pub(super) fn handle_debug_unified(
         Err(e) => return e,
     };
     match action {
+        "frame_workload_dump" => {
+            if !addr.ip().is_loopback() {
+                return serde_json::json!({"error": "frame_workload_dump is restricted to localhost connections"});
+            }
+            super::log_routes::eval_debug_script(
+                state,
+                "return window.__TUIC__.frameWorkload.dump('mcp-manual')",
+            )
+        }
         "invoke_js" => {
             if !addr.ip().is_loopback() {
                 return serde_json::json!({"error": "invoke_js is restricted to localhost connections"});
@@ -2364,6 +2373,7 @@ pub(super) fn handle_debug_unified(
                 "agent_detection": "Agent detection pipeline diagnostics. Optional session_id (omit for all sessions).",
                 "logs": "App log entries (info/warn/error mirrored from JS). Params: level, source, limit (default 50).",
                 "sessions": "All PTY sessions with pid, cwd, foreground process info.",
+                "frame_workload_dump": "Persist enabled frame recorder; async result in eval_js logs. Requires responsive desktop JS.",
                 "invoke_js": "Execute JS in the main WebView (localhost only). Use `return expr` for output. Result + captured console output logged as source='eval_js'. Read via logs(source='eval_js', limit=1)."
             },
             "invoke_js_guide": {

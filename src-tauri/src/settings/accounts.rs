@@ -20,6 +20,8 @@ pub(super) const ID: &str = "github_accounts";
 #[derive(Deserialize, schemars::JsonSchema)]
 #[serde(tag = "action", rename_all = "snake_case", deny_unknown_fields)]
 pub enum GithubAction {
+    /// Enumerate owner metadata and credential presence, never credential values.
+    ListAccounts {},
     BeginCloudLogin {
         #[serde(default)]
         additional: bool,
@@ -96,6 +98,16 @@ impl GithubSettings {
                 "confirmationClass": "ordinary"
             }
         });
+        let mut source = super::catalogue::schema::<crate::github_auth::TokenSource>();
+        source["x-setting"] = json!({
+            "sensitivity":"public", "apply":"live",
+            "effect":"Reports the runtime GitHub credential source without revealing credentials.",
+            "operations":["get"], "confirmationClass":"ordinary"
+        });
+        // Only provenance is public here: never register the sibling auth.secret projection.
+        schema["properties"]["auth"] = json!({
+            "type":"object", "properties":{"source":source}, "required":["source"]
+        });
         schema
     }
 
@@ -158,6 +170,12 @@ impl GithubSettings {
 
     pub async fn perform(&self, action: GithubAction) -> Result<Value, Failure> {
         let owner_action = match action {
+            GithubAction::ListAccounts {} => {
+                let snapshot = self.read().await?;
+                return Ok(
+                    json!({"accounts":snapshot["accounts"], "revision":snapshot["revision"], "persisted":false}),
+                );
+            }
             GithubAction::BeginCloudLogin { additional } => {
                 return self
                     .login

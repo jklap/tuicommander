@@ -4,3 +4,5 @@
 @media (max-width: 800px) { .page input, .page select { max-width: 100%; } }
 
 .upstreams { margin-top: 16px; }
+
+.page > [data-settings-page-header] { margin-bottom: 8px; }
