@@ -99,6 +99,34 @@ describe("CanvasTerminal bounded viewport marker planner", () => {
 		]);
 	});
 
+	// Catches: rescanning the accumulated prefix makes long-prompt classification quadratic.
+	it("classifies each ownership-read chunk once instead of rescanning the prefix", async () => {
+		let accesses = 0;
+		const count = 8192;
+		const rows = Array.from({ length: count }, () => ({
+			get text() {
+				accesses++;
+				return "  pasted context";
+			},
+			isWrapped: false,
+		}));
+		expect(await readMarkerPromptBoundary(0, count, async (from, to) => rows.slice(from, to))).toEqual({
+			end: count,
+			resolved: false,
+		});
+		// Each nonwrapped row needs at most the output and answer-marker checks.
+		expect(accesses).toBeLessThanOrEqual(count * 2);
+	});
+
+	// Catches: incremental chunk scans forget the preceding blank row at the boundary.
+	it("recognizes blank-separated output at the first row of a later chunk", async () => {
+		const rows = snapshots(["❯ Question", ...Array.from({ length: 254 }, () => "  context"), "", "  💬 Answer"]);
+		expect(await readMarkerPromptBoundary(0, rows.length, async (from, to) => rows.slice(from, to))).toEqual({
+			end: 256,
+			resolved: true,
+		});
+	});
+
 	// Catches: a failed ownership read is promoted to an empty prompt and exposes quoted markers.
 	it("does not classify a failed prompt read as an output boundary", async () => {
 		expect(await readMarkerPromptBoundary(0, 100, async () => null)).toBeNull();

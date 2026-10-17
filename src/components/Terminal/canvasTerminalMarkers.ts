@@ -68,15 +68,14 @@ export async function readMarkerPromptBoundary(
 	end: number,
 	readRows: (start: number, end: number) => Promise<RowSnapshot[] | null>,
 ): Promise<PromptBoundary | null> {
-	const rows: RowSnapshot[] = [];
 	for (let from = start; from < end; from += 256) {
 		// Include the previous row so the wire wrap flag at a chunk boundary is preserved.
 		const overlap = from > start ? 1 : 0;
 		const chunk = await readRows(from - overlap, Math.min(from + 256, end));
 		if (!chunk) return null;
-		rows.push(...chunk.slice(overlap));
-		const next = promptEnd(0, rows.length, (i) => rows[i] ?? null);
-		if (next < rows.length) return { end: start + next, resolved: true };
+		// The preceding row supplies blank separation; only the new rows are classified.
+		const next = promptEnd(0, chunk.length, (i) => chunk[i] ?? null);
+		if (next < chunk.length) return { end: from - overlap + next, resolved: true };
 	}
 	return { end, resolved: false };
 }

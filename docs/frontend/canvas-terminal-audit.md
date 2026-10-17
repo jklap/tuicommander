@@ -339,3 +339,11 @@ agent-aware command submission helper.
 ### Soft-wrap text fidelity
 
 Backend selection and logical-row extraction retain real spaces at soft-wrap margins. Mobile CLI log rendering uses serialized `wrapped` boundaries rather than word-length guesses when metadata is present. Older daemon rows without this field retain the existing prose reflow fallback. This changes extracted text, not canvas layout or styling.
+
+### Prompt ownership after reflow (#1389-3a47)
+
+Accepting changed frame geometry invalidates cached prompt boundaries and rejects
+ownership reads started with old coordinates, even if an interim old-frame paint
+refilled the cache after the resize request. Prefix reads classify each 256-row
+chunk once and retain one preceding row for blank separation and wrap semantics;
+they do not rescan the accumulated prefix.

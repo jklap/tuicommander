@@ -1664,6 +1664,9 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 
 		// When geometry changes, viewport is entirely different — must clear and repaint
 		if (geomChanged) {
+			// Interim old-frame paints can refill ownership after the resize request.
+			// Accepting reflow must invalidate those boundaries and in-flight reads too.
+			scroll.clearCache();
 			selection.clear();
 			stopSelectionScroll();
 			rowMap.clear();
