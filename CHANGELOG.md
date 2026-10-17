@@ -6,6 +6,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+- Add a mobile key-bar down arrow while CLI or Chat output is scrolled back; tap it to return to the latest output without sending terminal input (#1975-4a38).
 - Remove Telegram setup from mobile Settings; desktop Settings remains the configuration owner (#1976-711e).
 
 - Stream Telegram status and AI Chat answers with receipt/working reactions, request-scoped final replies, and bounded queue/failure notices (#1959-162a).

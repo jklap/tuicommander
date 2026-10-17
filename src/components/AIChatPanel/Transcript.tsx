@@ -267,6 +267,9 @@ export interface TranscriptSearchRef {
 }
 
 export interface TranscriptProps {
+	/** Let a host expose the existing follow state and jump action outside the transcript. */
+	onAtBottomChange?: (atBottom: boolean) => void;
+	onRegisterScrollToBottom?: (jump: (() => void) | undefined) => void;
 	/** Terminal-only reading layout; the agent scopes Claude Bash descriptions. */
 	terminalAgent?: string;
 	/** Lets a containing terminal route its Find action to this transcript. */
@@ -514,6 +517,7 @@ export const Transcript: Component<TranscriptProps> = (props) => {
 			if (container && stickToBottom && !touchActive) {
 				container.scrollTop = container.scrollHeight;
 				lastScrollTop = container.scrollTop;
+				props.onAtBottomChange?.(true);
 			}
 		});
 	});
@@ -523,8 +527,11 @@ export const Transcript: Component<TranscriptProps> = (props) => {
 		if (container) {
 			container.scrollTop = container.scrollHeight;
 			lastScrollTop = container.scrollTop;
+			props.onAtBottomChange?.(true);
 		}
 	};
+	props.onRegisterScrollToBottom?.(scrollToBottom);
+	onCleanup(() => props.onRegisterScrollToBottom?.(undefined));
 	const onTouchEnd = () => {
 		touchActive = false;
 		if (stickToBottom) scrollToBottom();
@@ -532,6 +539,7 @@ export const Transcript: Component<TranscriptProps> = (props) => {
 	const onScroll = () => {
 		if (!container) return;
 		const atBottom = container.scrollHeight - container.clientHeight - container.scrollTop <= 1;
+		props.onAtBottomChange?.(atBottom);
 		if (atBottom) stickToBottom = true;
 		else if (container.scrollTop < lastScrollTop) stickToBottom = false;
 		lastScrollTop = container.scrollTop;
