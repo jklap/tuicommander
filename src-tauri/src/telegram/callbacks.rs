@@ -53,7 +53,7 @@ impl Runtime {
 
     pub async fn callback(&mut self, value: &Value) -> Result<bool, Error> {
         self.retire_registration();
-        let Some(peer) = self.registered_peer().map(str::to_owned) else {
+        let Some(peer) = self.recipient_peer() else {
             return Ok(false);
         };
         let Some(query) = value.get("callback_query") else {

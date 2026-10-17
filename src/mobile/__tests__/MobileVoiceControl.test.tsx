@@ -321,3 +321,24 @@ it("aborts recognition and ignores late results when the screen is left", async 
 	expect(input.value).toBe("keep draft");
 	expect(rpc).not.toHaveBeenCalled();
 });
+
+it("keeps voice start and stop reachable from More without losing the tap gesture", async () => {
+	// catches: moving phone voice into More loses arming, disarming, or the iOS gesture.
+	mount();
+	await screen.findByRole("button", { name: "Start voice conversation" });
+	fireEvent.click(screen.getByRole("button", { name: "More session actions" }));
+	const overflow = screen
+		.getAllByRole("button", { name: "Start voice conversation" })
+		.find((button) => !button.closest("header"))!;
+	fireEvent.click(overflow);
+	expect(voice.armHandsFree).toHaveBeenCalledWith("s1");
+	await waitFor(() =>
+		expect(screen.getByRole("button", { name: "More session actions" }).getAttribute("aria-expanded")).toBe("false"),
+	);
+	fireEvent.click(screen.getByRole("button", { name: "More session actions" }));
+	const stop = screen
+		.getAllByRole("button", { name: "Stop voice conversation" })
+		.find((button) => !button.closest("header"))!;
+	fireEvent.click(stop);
+	await waitFor(() => expect(voice.disarmHandsFree).toHaveBeenCalledOnce());
+});

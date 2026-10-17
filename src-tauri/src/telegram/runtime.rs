@@ -66,13 +66,10 @@ impl Runtime {
         })
     }
     pub fn live(&self, peer: &str, pty: &str, epoch: u64) -> bool {
-        self.registered_peer() == Some(peer) && live(&self.state, peer, pty, epoch)
+        self.recipient_peer().as_deref() == Some(peer) && live(&self.state, peer, pty, epoch)
     }
-    pub fn current(&self) -> Result<(String, u64), Error> {
-        let pty = self
-            .state
-            .live_pty_for_peer(self.registered_peer().ok_or(Error::NotRegistered)?)
-            .ok_or(Error::State)?;
+    pub fn current(&self, peer: &str) -> Result<(String, u64), Error> {
+        let pty = self.state.live_pty_for_peer(peer).ok_or(Error::State)?;
         let state = self
             .state
             .session_state_with_shell(&pty)
@@ -110,7 +107,26 @@ impl Runtime {
             .to_session
             .get(sid)
             .map(|entry| entry.value().clone());
-        if self.registered_peer() != Some(caller)
+        // Inbound selection can change while an earlier recipient is replying.
+        // Explicit takeover revokes pending correlations in clear_registration.
+        let request = match &input {
+            Input::Begin { request_id }
+            | Input::Activity { request_id, .. }
+            | Input::Finish { request_id, .. } => self
+                .requests
+                .iter()
+                .find(|request| &request.id == request_id),
+            _ => None,
+        };
+        let authorized = request.map_or_else(
+            || self.recipient_peer().as_deref() == Some(caller),
+            |request| {
+                request.peer == caller
+                    && (request.completed.is_some()
+                        || self.pending.iter().any(|(id, _)| id == &request.id))
+            },
+        );
+        if !authorized
             || bound
                 .as_deref()
                 .and_then(|peer| self.state.resolve_peer_ref_checked(peer).ok().flatten())
@@ -122,6 +138,9 @@ impl Runtime {
         match input {
             Input::Register {} => unreachable!(),
             Input::Unregister {} => {
+                if self.registered_peer() != Some(caller) {
+                    return Err(Error::NotRegistered);
+                }
                 self.clear_registration();
                 Ok(json!({"registered":false}))
             }
@@ -138,7 +157,7 @@ impl Runtime {
                     }
                     return Err(Error::State);
                 }
-                let current = self.current().ok();
+                let current = self.current(caller).ok();
                 let (pty, epoch) = current.clone().unwrap_or_default();
                 let interrupt = if current.is_some() {
                     Some(super::stop::arm(&self.state, caller, &pty, epoch)?)
@@ -251,7 +270,7 @@ impl Runtime {
             .is_ok_and(|result| result == Value::Bool(true));
         self.stage("received");
         let text = envelope["text"].as_str();
-        let Some(peer) = self.registered_peer() else {
+        let Some(peer) = self.recipient_peer() else {
             self.state
                 .telegram_recent
                 .lock()
@@ -265,7 +284,7 @@ impl Runtime {
                 .await?;
             return Ok(json!({"accepted":false}));
         };
-        mail.recipient = peer.into();
+        mail.recipient = peer;
         // Subscribe before delivery: ACP may wake as soon as the mail is stored.
         let recipient = super::streaming::Recipient::capture(&self.state, &mail.recipient);
         let result = super::native::offer(&self.state, &self.adapter_sid, &mail).await;
@@ -346,7 +365,7 @@ impl Runtime {
         }
         let Some(pty) = self
             .state
-            .live_pty_for_peer(self.registered_peer().unwrap_or_default())
+            .live_pty_for_peer(&self.recipient_peer().unwrap_or_default())
         else {
             return;
         };
@@ -354,7 +373,7 @@ impl Runtime {
             if let Some(request) = self.requests.iter().find(|r| {
                 r.completed.is_none()
                     && r.working
-                    && r.peer == self.registered_peer().unwrap_or_default()
+                    && r.peer == self.recipient_peer().unwrap_or_default()
             }) && let AppEvent::ProgressRecorded { payload, .. } = &event
             {
                 if payload["entry"]["type"] == "done" {
