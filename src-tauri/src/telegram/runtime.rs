@@ -68,11 +68,8 @@ impl Runtime {
     pub fn live(&self, peer: &str, pty: &str, epoch: u64) -> bool {
         self.recipient_peer().as_deref() == Some(peer) && live(&self.state, peer, pty, epoch)
     }
-    pub fn current(&self) -> Result<(String, u64), Error> {
-        let pty = self
-            .state
-            .live_pty_for_peer(&self.recipient_peer().ok_or(Error::NotRegistered)?)
-            .ok_or(Error::State)?;
+    pub fn current(&self, peer: &str) -> Result<(String, u64), Error> {
+        let pty = self.state.live_pty_for_peer(peer).ok_or(Error::State)?;
         let state = self
             .state
             .session_state_with_shell(&pty)
@@ -110,7 +107,26 @@ impl Runtime {
             .to_session
             .get(sid)
             .map(|entry| entry.value().clone());
-        if self.recipient_peer().as_deref() != Some(caller)
+        // Inbound selection can change while an earlier recipient is replying.
+        // Explicit takeover revokes pending correlations in clear_registration.
+        let request = match &input {
+            Input::Begin { request_id }
+            | Input::Activity { request_id, .. }
+            | Input::Finish { request_id, .. } => self
+                .requests
+                .iter()
+                .find(|request| &request.id == request_id),
+            _ => None,
+        };
+        let authorized = request.map_or_else(
+            || self.recipient_peer().as_deref() == Some(caller),
+            |request| {
+                request.peer == caller
+                    && (request.completed.is_some()
+                        || self.pending.iter().any(|(id, _)| id == &request.id))
+            },
+        );
+        if !authorized
             || bound
                 .as_deref()
                 .and_then(|peer| self.state.resolve_peer_ref_checked(peer).ok().flatten())
@@ -141,7 +157,7 @@ impl Runtime {
                     }
                     return Err(Error::State);
                 }
-                let current = self.current().ok();
+                let current = self.current(caller).ok();
                 let (pty, epoch) = current.clone().unwrap_or_default();
                 let interrupt = if current.is_some() {
                     Some(super::stop::arm(&self.state, caller, &pty, epoch)?)

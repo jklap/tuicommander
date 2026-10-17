@@ -929,6 +929,130 @@ async fn connecting_another_ai_chat_keeps_the_inflight_telegram_reply() {
     );
 }
 
+// Catches: fallback selection rejects an explicit correlated reply or lets the new chat steal it.
+#[tokio::test]
+async fn correlated_reply_tools_keep_the_original_chat_until_explicit_takeover() {
+    let (_dir, paths) = setup();
+    let server = FakeServer::start(vec![]).await;
+    let mut runtime = super::tests::outbound_tests::runtime(paths, server.address).await;
+    runtime.clear_registration();
+    runtime
+        .state
+        .config
+        .write()
+        .ai_chat_peer_ids
+        .insert("/first".into(), PEER.into());
+    let _first = runtime.state.acp.test_peer_journal(PEER);
+    runtime.deliver(mail(7)).await.unwrap();
+
+    let other = "33333333-3333-4333-8333-333333333333";
+    let registered = crate::mcp_http::mcp_transport::local_peer_call_with_message_id(
+        &runtime.state,
+        &json!({"action":"register","tuic_session":other,"name":"second"}),
+        Some("second-mcp"),
+        None,
+    )
+    .await;
+    assert!(registered.get("error").is_none(), "{registered}");
+    runtime
+        .state
+        .config
+        .write()
+        .ai_chat_peer_ids
+        .insert("/second".into(), other.into());
+    let _second = runtime.state.acp.test_peer_journal(other);
+    assert_eq!(runtime.recipient_peer().as_deref(), Some(other));
+    assert_eq!(
+        runtime
+            .tool(
+                other,
+                "second-mcp",
+                Input::Finish {
+                    request_id: "tg:test-bot:7".into(),
+                    text: "Stolen answer".into(),
+                }
+            )
+            .await
+            .unwrap_err(),
+        super::Error::NotRegistered
+    );
+    assert_eq!(
+        runtime
+            .tool(
+                PEER,
+                "second-mcp",
+                Input::Finish {
+                    request_id: "tg:test-bot:7".into(),
+                    text: "Forged binding".into(),
+                }
+            )
+            .await
+            .unwrap_err(),
+        super::Error::NotRegistered
+    );
+    assert_eq!(
+        runtime
+            .tool(
+                PEER,
+                "target-mcp",
+                Input::Send {
+                    text: "Unsolicited".into(),
+                    buttons: vec![],
+                }
+            )
+            .await
+            .unwrap_err(),
+        super::Error::NotRegistered
+    );
+    runtime
+        .tool(
+            PEER,
+            "target-mcp",
+            Input::Begin {
+                request_id: "tg:test-bot:7".into(),
+            },
+        )
+        .await
+        .unwrap();
+    runtime
+        .tool(
+            PEER,
+            "target-mcp",
+            Input::Activity {
+                request_id: "tg:test-bot:7".into(),
+                text: "Working".into(),
+            },
+        )
+        .await
+        .unwrap();
+    finish(&mut runtime, "tg:test-bot:7", "Original answer")
+        .await
+        .unwrap();
+    finish(&mut runtime, "tg:test-bot:7", "Duplicate")
+        .await
+        .unwrap();
+    assert_eq!(finals(&server), ["Original answer"]);
+    runtime.deliver(mail(8)).await.unwrap();
+    assert_eq!(runtime.requests[1].peer, other);
+
+    runtime
+        .tool(PEER, "target-mcp", Input::Register {})
+        .await
+        .unwrap();
+    runtime.deliver(mail(9)).await.unwrap();
+    runtime
+        .tool(other, "second-mcp", Input::Register {})
+        .await
+        .unwrap();
+    assert_eq!(
+        finish(&mut runtime, "tg:test-bot:9", "Revoked answer")
+            .await
+            .unwrap_err(),
+        super::Error::NotRegistered
+    );
+    assert_eq!(finals(&server), ["Original answer"]);
+}
+
 // Catches: saved chat identities without a live connection suppress the no-agent response.
 #[tokio::test]
 async fn telegram_no_agent_reply_requires_no_live_owner_or_chat() {
