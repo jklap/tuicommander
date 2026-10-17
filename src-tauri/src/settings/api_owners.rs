@@ -21,6 +21,8 @@ pub enum OwnerAction {
     Upstreams {
         operation: crate::settings::upstream_credentials::CredentialAction,
     },
+    // DEFERRED (2026-10-17) — typed interactive Ego login needs a separate owner contract
+    // after feature freeze; services/egoLogin.ts remains a human UI workflow, not a Settings action.
     Ego {
         #[serde(rename = "expectedRevision")]
         expected_revision: String,

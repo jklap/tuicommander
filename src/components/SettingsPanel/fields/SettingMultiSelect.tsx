@@ -10,6 +10,8 @@ export interface SettingMultiSelectProps extends SettingFieldProps {
 
 export const SettingMultiSelect: Component<SettingMultiSelectProps> = (props) => (
 	<SettingField
+		settingId={props.settingId}
+		data-setting-id={props["data-setting-id"]}
 		label={props.label}
 		hint={props.hint}
 		row={props.row}
@@ -23,6 +25,7 @@ export const SettingMultiSelect: Component<SettingMultiSelectProps> = (props) =>
 					{(option) => (
 						<label class={s.choice}>
 							<input
+								data-setting-id={props.settingId ?? props["data-setting-id"]}
 								type="checkbox"
 								checked={props.value.includes(option.value)}
 								disabled={props.disabled}

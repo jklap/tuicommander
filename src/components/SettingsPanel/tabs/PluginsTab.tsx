@@ -170,17 +170,31 @@ const PluginRow: Component<{ plugin: PluginState; onClose?: () => void; onOpenSe
 				<div class={ps.pluginActions}>
 					<div class={ps.pluginActionsRow}>
 						<Show when={props.onOpenSettings}>
-							<button class={s.testBtn} onClick={() => props.onOpenSettings?.()}>
+							<button
+								data-non-setting="Navigate to a plugin settings or dashboard page"
+								class={s.testBtn}
+								onClick={() => props.onOpenSettings?.()}
+							>
 								Settings
 							</button>
 						</Show>
 						<Show when={updateEntry()}>
-							<button class={ps.installBtn} onClick={handleUpdate} disabled={updating()}>
+							<button
+								data-non-setting="Plugin package installation, update or removal workflow"
+								class={ps.installBtn}
+								onClick={handleUpdate}
+								disabled={updating()}
+							>
 								{updating() ? "..." : "Update"}
 							</button>
 						</Show>
 						<Show when={hasReadme()}>
-							<button class={ps.docsBtn} onClick={handleOpenReadme} title="View plugin documentation">
+							<button
+								data-non-setting="Open plugin documentation"
+								class={ps.docsBtn}
+								onClick={handleOpenReadme}
+								title="View plugin documentation"
+							>
 								?
 							</button>
 						</Show>
@@ -188,6 +202,7 @@ const PluginRow: Component<{ plugin: PluginState; onClose?: () => void; onOpenSe
 							<summary class={s.testBtn}>Manage plugin</summary>{" "}
 							<label class={s.toggle}>
 								<input
+									data-setting-id="app.disabled_plugin_ids"
 									type="checkbox"
 									aria-label={`Enable ${props.plugin.manifest?.name ?? props.plugin.id}`}
 									checked={props.plugin.enabled}
@@ -196,6 +211,7 @@ const PluginRow: Component<{ plugin: PluginState; onClose?: () => void; onOpenSe
 								/>
 							</label>
 							<button
+								data-non-setting="Show or hide plugin runtime logs"
 								class={ps.logsBtn}
 								classList={{ [ps.logsActive]: showLogs() }}
 								onClick={() => setShowLogs(!showLogs())}
@@ -205,6 +221,7 @@ const PluginRow: Component<{ plugin: PluginState; onClose?: () => void; onOpenSe
 							</button>
 							<Show when={!props.plugin.builtIn}>
 								<button
+									data-non-setting="Plugin package installation, update or removal workflow"
 									class={ps.uninstallBtn}
 									onClick={handleUninstall}
 									disabled={uninstalling()}
@@ -219,6 +236,7 @@ const PluginRow: Component<{ plugin: PluginState; onClose?: () => void; onOpenSe
 						{(entry) => (
 							<div class={ps.pluginActionsRow}>
 								<button
+									data-non-setting="Navigate to a plugin settings or dashboard page"
 									class={ps.dashboardBtn}
 									onClick={async () => {
 										// Close the Settings panel first so the dashboard becomes visible
@@ -315,7 +333,12 @@ const BrowseRow: Component<{ entry: RegistryEntry }> = (props) => {
 
 				<div class={ps.pluginActions}>
 					<Show when={!isInstalled() || updateAvailable()}>
-						<button class={ps.installBtn} onClick={handleInstall} disabled={installing()}>
+						<button
+							data-non-setting="Plugin package installation, update or removal workflow"
+							class={ps.installBtn}
+							onClick={handleInstall}
+							disabled={installing()}
+						>
 							{installing() ? "..." : updateAvailable() ? "Update" : "Install"}
 						</button>
 					</Show>
@@ -421,6 +444,7 @@ export const PluginsTab: Component<{
 					breadcrumb="Plugins / Manage plugins"
 				/>
 				<button
+					data-non-setting="Open plugin documentation"
 					class={ps.docsLink}
 					onClick={() => {
 						if (isTauri()) {
@@ -449,6 +473,7 @@ export const PluginsTab: Component<{
 			<Show when={activeSubTab() === "installed"}>
 				<SectionCard title="Installed plugins">
 					<SettingToggle
+						settingId="app.auto_update_plugins_enabled"
 						row
 						checked={settingsStore.state.autoUpdatePluginsEnabled}
 						onChange={(v) => settingsStore.setAutoUpdatePluginsEnabled(v)}
@@ -494,10 +519,20 @@ export const PluginsTab: Component<{
 					<Show when={isTauri()}>
 						<div class={ps.installRow}>
 							<ContextualHelp label="Local install" />
-							<button class={s.testBtn} onClick={handleInstallFromFolder} disabled={installing()}>
+							<button
+								data-non-setting="Plugin package installation, update or removal workflow"
+								class={s.testBtn}
+								onClick={handleInstallFromFolder}
+								disabled={installing()}
+							>
 								{installing() ? "Installing..." : "Install from folder..."}
 							</button>
-							<button class={s.testBtn} onClick={handleInstallFromZip} disabled={installing()}>
+							<button
+								data-non-setting="Plugin package installation, update or removal workflow"
+								class={s.testBtn}
+								onClick={handleInstallFromZip}
+								disabled={installing()}
+							>
 								{installing() ? "Installing..." : "Install from ZIP..."}
 							</button>
 							<Show when={fileInstallError()}>
@@ -516,6 +551,7 @@ export const PluginsTab: Component<{
 							Discover plugins from the community registry.
 						</p>
 						<button
+							data-non-setting="Explicit plugin-registry discovery"
 							class={ps.refreshBtn}
 							onClick={() => registryStore.refresh()}
 							disabled={registryStore.state.loading}

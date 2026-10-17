@@ -166,6 +166,7 @@ export const GeneralTab: Component<{ onOpenAiChat?: () => void }> = (props) => {
 				source="Application updates"
 				actions={
 					<button
+						data-non-setting="Explicit update discovery; does not change update preferences"
 						class={s.testBtn}
 						onClick={() => {
 							updaterStore.checkForUpdate().catch((err: unknown) => appLogger.debug("app", "Update check failed", err));
@@ -245,7 +246,12 @@ export const GeneralTab: Component<{ onOpenAiChat?: () => void }> = (props) => {
 							{() => (
 								<div>
 									<Show when={!cliStatus()?.installed || !cliStatus()?.version_match}>
-										<button class={s.testBtn} onClick={handleInstallCli} disabled={cliInstalling()}>
+										<button
+											data-non-setting="Install, update or remove an optional CLI binary; not a stored setting"
+											class={s.testBtn}
+											onClick={handleInstallCli}
+											disabled={cliInstalling()}
+										>
 											{cliInstalling()
 												? t("general.btn.installing", "Installing...")
 												: cliStatus()?.installed
@@ -254,7 +260,11 @@ export const GeneralTab: Component<{ onOpenAiChat?: () => void }> = (props) => {
 										</button>
 									</Show>
 									<Show when={cliStatus()?.installed}>
-										<button class={s.testBtn} onClick={handleUninstallCli}>
+										<button
+											data-non-setting="Install, update or remove an optional CLI binary; not a stored setting"
+											class={s.testBtn}
+											onClick={handleUninstallCli}
+										>
 											{t("general.btn.uninstallCli", "Uninstall")}
 										</button>
 									</Show>
@@ -283,14 +293,23 @@ export const GeneralTab: Component<{ onOpenAiChat?: () => void }> = (props) => {
 								<Show
 									when={mdkbStatus()?.available}
 									fallback={
-										<button class={s.testBtn} onClick={handleInstallMdkb} disabled={mdkbInstalling()}>
+										<button
+											data-non-setting="Install, update or remove an optional CLI binary; not a stored setting"
+											class={s.testBtn}
+											onClick={handleInstallMdkb}
+											disabled={mdkbInstalling()}
+										>
 											{mdkbInstalling()
 												? t("general.btn.installing", "Installing...")
 												: t("general.btn.installMdkb", "Install MDKB")}
 										</button>
 									}
 								>
-									<button class={s.testBtn} onClick={handleUninstallMdkb}>
+									<button
+										data-non-setting="Install, update or remove an optional CLI binary; not a stored setting"
+										class={s.testBtn}
+										onClick={handleUninstallMdkb}
+									>
 										{t("general.btn.uninstallMdkb", "Uninstall")}
 									</button>
 								</Show>
@@ -313,7 +332,11 @@ export const GeneralTab: Component<{ onOpenAiChat?: () => void }> = (props) => {
 									hint={launchers().length ? `${launchers().length} custom launchers` : "No custom launchers"}
 								>
 									{() => (
-										<button class={s.testBtn} onClick={addLauncher}>
+										<button
+											data-non-setting="Create or remove a stable custom-launcher record through its owner"
+											class={s.testBtn}
+											onClick={addLauncher}
+										>
 											{t("general.btn.addLauncher", "Add launcher")}
 										</button>
 									)}
@@ -331,23 +354,30 @@ export const GeneralTab: Component<{ onOpenAiChat?: () => void }> = (props) => {
 										>
 											<div style={{ display: "flex", gap: "8px", "align-items": "center", "margin-bottom": "6px" }}>
 												<input
+													data-setting-id="app.custom_launchers.{id}.enabled"
 													type="checkbox"
 													checked={launcher.enabled}
 													title={t("general.label.launcherEnabled", "Enabled")}
 													onChange={(e) => updateLauncher(launcher.id, { enabled: e.currentTarget.checked })}
 												/>
 												<Input
+													data-setting-id="app.custom_launchers.{id}.name"
 													type="text"
 													value={launcher.name}
 													placeholder={t("general.placeholder.launcherName", "Name")}
 													onInput={(e) => updateLauncher(launcher.id, { name: e.currentTarget.value })}
 													style={{ flex: "1" }}
 												/>
-												<button class={s.testBtn} onClick={() => removeLauncher(launcher.id)}>
+												<button
+													data-non-setting="Create or remove a stable custom-launcher record through its owner"
+													class={s.testBtn}
+													onClick={() => removeLauncher(launcher.id)}
+												>
 													{t("general.btn.remove", "Remove")}
 												</button>
 											</div>
 											<Input
+												data-setting-id="app.custom_launchers.{id}.executable"
 												type="text"
 												value={launcher.executable}
 												placeholder={t(
@@ -358,6 +388,7 @@ export const GeneralTab: Component<{ onOpenAiChat?: () => void }> = (props) => {
 												style={{ width: "100%", "margin-bottom": "6px" }}
 											/>
 											<Textarea
+												data-setting-id="app.custom_launchers.{id}.args"
 												value={launcher.args.join("\n")}
 												placeholder={"--goto\n{file}:{line}:{column}"}
 												rows={3}
@@ -377,7 +408,11 @@ export const GeneralTab: Component<{ onOpenAiChat?: () => void }> = (props) => {
 					title="AI chat defaults"
 					description="Models, permissions and workspace access for new conversations."
 				>
-					<button class={s.testBtn} onClick={() => props.onOpenAiChat?.()}>
+					<button
+						data-non-setting="Navigate to AI Chat settings without changing configuration"
+						class={s.testBtn}
+						onClick={() => props.onOpenAiChat?.()}
+					>
 						Open AI Chat settings
 					</button>
 				</SectionCard>
@@ -386,6 +421,7 @@ export const GeneralTab: Component<{ onOpenAiChat?: () => void }> = (props) => {
 				{/* A picker with one option is not a choice. */}
 				<Show when={AVAILABLE_LOCALES.length > 1}>
 					<SettingSelect
+						settingId="app.language"
 						row
 						label={t("general.label.language", "Language")}
 						value={settingsStore.state.language}
@@ -396,6 +432,7 @@ export const GeneralTab: Component<{ onOpenAiChat?: () => void }> = (props) => {
 				</Show>
 
 				<SettingToggle
+					settingId="app.show_last_prompt"
 					row
 					checked={settingsStore.state.showLastPrompt}
 					onChange={(v) => settingsStore.setShowLastPrompt(v)}
@@ -406,15 +443,15 @@ export const GeneralTab: Component<{ onOpenAiChat?: () => void }> = (props) => {
 			<SectionCard title={t("general.heading.confirmations", "Confirmations")}>
 				<Show when={isTauri()}>
 					<SettingSelect
+						settingId="app.close_behavior"
+						unavailableValues={settingsStore.state.trayIcon === "never" ? ["background"] : []}
 						row
 						label={t("general.label.closeBehavior", "When closing the main window")}
 						value={settingsStore.state.closeBehavior}
 						onChange={(value) => settingsStore.setCloseBehavior(value as CloseBehavior)}
 						options={[
 							{ value: "ask", label: t("general.closeBehavior.ask", "Ask") },
-							...(settingsStore.state.trayIcon === "never"
-								? []
-								: [{ value: "background", label: t("general.closeBehavior.background", "Background") }]),
+							{ value: "background", label: t("general.closeBehavior.background", "Background") },
 							{ value: "quit", label: t("general.closeBehavior.quit", "Quit") },
 						]}
 						hint={t(
@@ -426,6 +463,7 @@ export const GeneralTab: Component<{ onOpenAiChat?: () => void }> = (props) => {
 
 				<Show when={isTauri()}>
 					<SettingSelect
+						settingId="app.background.tray_icon"
 						row
 						label={t("general.label.trayIcon", "Tray and menu-bar icon")}
 						value={settingsStore.state.trayIcon}
@@ -444,6 +482,7 @@ export const GeneralTab: Component<{ onOpenAiChat?: () => void }> = (props) => {
 
 				<Show when={isTauri() && isMacOS()}>
 					<SettingToggle
+						settingId="app.background.hide_dock_icon"
 						row
 						checked={settingsStore.state.hideDockIcon}
 						onChange={(enabled) => settingsStore.setHideDockIcon(enabled)}
@@ -452,6 +491,7 @@ export const GeneralTab: Component<{ onOpenAiChat?: () => void }> = (props) => {
 					/>
 				</Show>
 				<SettingToggle
+					settingId="app.confirm_before_quit"
 					row
 					checked={settingsStore.state.confirmBeforeQuit}
 					onChange={(v) => settingsStore.setConfirmBeforeQuit(v)}
@@ -460,6 +500,7 @@ export const GeneralTab: Component<{ onOpenAiChat?: () => void }> = (props) => {
 				/>
 
 				<SettingToggle
+					settingId="app.confirm_before_closing_tab"
 					row
 					checked={settingsStore.state.confirmBeforeClosingTab}
 					onChange={(v) => settingsStore.setConfirmBeforeClosingTab(v)}
@@ -469,6 +510,7 @@ export const GeneralTab: Component<{ onOpenAiChat?: () => void }> = (props) => {
 			</SectionCard>
 			<SectionCard title={t("general.heading.powerManagement", "Power Management")}>
 				<SettingToggle
+					settingId="app.prevent_sleep_when_busy"
 					row
 					checked={settingsStore.state.preventSleepWhenBusy}
 					onChange={(v) => settingsStore.setPreventSleepWhenBusy(v)}
@@ -478,6 +520,7 @@ export const GeneralTab: Component<{ onOpenAiChat?: () => void }> = (props) => {
 
 				<ExpertSetting configKey="app.standby_timeout_minutes" value={settingsStore.state.standbyTimeoutMinutes}>
 					<SettingSlider
+						settingId="app.standby_timeout_minutes"
 						row
 						label="Auto-Standby Timeout"
 						value={settingsStore.state.standbyTimeoutMinutes}
@@ -492,6 +535,7 @@ export const GeneralTab: Component<{ onOpenAiChat?: () => void }> = (props) => {
 
 				<ExpertSetting configKey="app.index_strategy" value={settingsStore.state.indexStrategy}>
 					<SettingSelect
+						settingId="app.index_strategy"
 						row
 						label="Content Indexing"
 						value={settingsStore.state.indexStrategy}
@@ -508,8 +552,49 @@ export const GeneralTab: Component<{ onOpenAiChat?: () => void }> = (props) => {
 					/>
 				</ExpertSetting>
 			</SectionCard>
+			<SectionCard title="Resource Limits">
+				<ExpertSetting configKey="app.index_memory_budget_mb" value={settingsStore.state.indexMemoryBudgetMb}>
+					<SettingInput
+						settingId="app.index_memory_budget_mb"
+						row
+						type="number"
+						label="Content index memory budget (MB)"
+						value={String(settingsStore.state.indexMemoryBudgetMb)}
+						onInput={(value) => value.trim() !== "" && settingsStore.setIndexMemoryBudgetMb(Number(value))}
+						hint="Total memory available for content search indexes before older indexes are dropped."
+					/>
+				</ExpertSetting>
+				<ExpertSetting configKey="app.attachment_max_bytes" value={settingsStore.state.attachmentMaxBytes}>
+					<SettingInput
+						settingId="app.attachment_max_bytes"
+						row
+						type="number"
+						label="Maximum attachment size (bytes)"
+						value={String(settingsStore.state.attachmentMaxBytes)}
+						onInput={(value) => value.trim() !== "" && settingsStore.setAttachmentMaxBytes(Number(value))}
+						hint="Maximum size of one attachment. Existing attachments are not changed."
+					/>
+				</ExpertSetting>
+				<Show when={isTauri()}>
+					<ExpertSetting
+						configKey="app.background.webview_unload_minutes"
+						value={settingsStore.state.webviewUnloadMinutes}
+					>
+						<SettingInput
+							settingId="app.background.webview_unload_minutes"
+							row
+							type="number"
+							label="Background WebView unload delay (minutes)"
+							value={String(settingsStore.state.webviewUnloadMinutes)}
+							onInput={(value) => value.trim() !== "" && settingsStore.setWebviewUnloadMinutes(Number(value))}
+							hint="Unload the hidden WebView after this delay. Zero keeps it loaded; terminal sessions keep running."
+						/>
+					</ExpertSetting>
+				</Show>
+			</SectionCard>
 			<SectionCard title={t("general.heading.updates", "Updates")}>
 				<SettingToggle
+					settingId="app.auto_update_enabled"
 					row
 					checked={settingsStore.state.autoUpdateEnabled}
 					onChange={(v) => settingsStore.setAutoUpdateEnabled(v)}
@@ -518,6 +603,7 @@ export const GeneralTab: Component<{ onOpenAiChat?: () => void }> = (props) => {
 				/>
 
 				<SettingToggle
+					settingId="app.defer_update_relaunch"
 					row
 					checked={settingsStore.state.deferUpdateRelaunch}
 					onChange={(v) => settingsStore.setDeferUpdateRelaunch(v)}
@@ -529,6 +615,7 @@ export const GeneralTab: Component<{ onOpenAiChat?: () => void }> = (props) => {
 				/>
 
 				<SettingToggle
+					settingId="app.eager_resume_after_update"
 					row
 					checked={settingsStore.state.eagerResumeAfterUpdate}
 					onChange={(v) => settingsStore.setEagerResumeAfterUpdate(v)}
@@ -541,6 +628,7 @@ export const GeneralTab: Component<{ onOpenAiChat?: () => void }> = (props) => {
 
 				<ExpertSetting configKey="app.update_channel" value={settingsStore.state.updateChannel}>
 					<SettingSelect
+						settingId="app.update_channel"
 						row
 						label={t("general.label.updateChannel", "Update Channel")}
 						value={settingsStore.state.updateChannel}
@@ -576,6 +664,7 @@ export const GeneralTab: Component<{ onOpenAiChat?: () => void }> = (props) => {
 					when={isTauri()}
 					fallback={
 						<SettingInput
+							settingId="app.ego_executable"
 							row
 							label={t("general.label.egoExecutable", "ego executable")}
 							value={settingsStore.state.egoExecutable}
@@ -598,11 +687,15 @@ export const GeneralTab: Component<{ onOpenAiChat?: () => void }> = (props) => {
 					>
 						{() => (
 							<div>
-								<button class={s.testBtn} onClick={handleSelectEgo}>
+								<button data-setting-id="app.ego_executable" class={s.testBtn} onClick={handleSelectEgo}>
 									{t("general.btn.selectEgo", "Select…")}
 								</button>
 								<Show when={settingsStore.isAcpConfigured()}>
-									<button class={s.testBtn} onClick={() => settingsStore.setEgoExecutable("")}>
+									<button
+										data-setting-id="app.ego_executable"
+										class={s.testBtn}
+										onClick={() => settingsStore.setEgoExecutable("")}
+									>
 										{t("general.btn.clearEgo", "Clear")}
 									</button>
 								</Show>
@@ -611,6 +704,7 @@ export const GeneralTab: Component<{ onOpenAiChat?: () => void }> = (props) => {
 					</SettingRow>
 				</Show>
 				<SettingInput
+					settingId="app.ego_profile"
 					row
 					label={t("general.label.egoProfile", "ego profile")}
 					value={settingsStore.state.egoProfile}
@@ -622,6 +716,7 @@ export const GeneralTab: Component<{ onOpenAiChat?: () => void }> = (props) => {
 					)}
 				/>
 				<SettingInput
+					settingId="app.ai_chat_workspace"
 					row
 					label={t("general.label.aiChatWorkspace", "AI Chat workspace")}
 					value={workspaceDraft()}
@@ -643,6 +738,7 @@ export const GeneralTab: Component<{ onOpenAiChat?: () => void }> = (props) => {
 			</SectionCard>
 			<SectionCard title={t("developerTools.heading.ide", "IDE")}>
 				<SettingSelect
+					settingId="app.ide"
 					row
 					label={t("general.label.defaultIde", "Default IDE")}
 					value={settingsStore.state.ide}
@@ -658,6 +754,7 @@ export const GeneralTab: Component<{ onOpenAiChat?: () => void }> = (props) => {
 						{t("general.hint.experimentalWarning", "These features are under active development and may be unstable.")}
 					</p>
 					<SettingToggle
+						settingId="app.experimental_features_enabled"
 						row
 						checked={settingsStore.state.experimentalFeaturesEnabled}
 						onChange={(enabled) => settingsStore.setExperimentalFeaturesEnabled(enabled)}

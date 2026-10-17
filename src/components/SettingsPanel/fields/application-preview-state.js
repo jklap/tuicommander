@@ -14,6 +14,9 @@ const [state, setState] = createStore({
   preventSleepWhenBusy: false,
   standbyTimeoutMinutes: 5,
   indexStrategy: "active_and_switch",
+  indexMemoryBudgetMb: 1024,
+  attachmentMaxBytes: 26214400,
+  webviewUnloadMinutes: 10,
   autoUpdateEnabled: true,
   deferUpdateRelaunch: true,
   eagerResumeAfterUpdate: true,
@@ -42,7 +45,7 @@ export const IDE_NAMES = { vscode: "VS Code", cursor: "Cursor", none: "None" };
 export const updaterStore = { state: { checking: false, downloading: false, available: false, version: null, error: null, unsupported: "Illustrative fixture: update status has not been checked." }, checkForUpdate: async () => {
 } };
 const [repoState, setRepoState] = createStore({ repositories: {}, groups: { work: { id: "work", name: "Work", color: "#4a9eff", collapsed: false, repoOrder: [] }, personal: { id: "personal", name: "Personal projects with a longer group name", color: "#a578d4", collapsed: false, repoOrder: [] } }, groupOrder: ["work", "personal"] });
-export const repositoriesStore = { state: repoState, renameGroup: (id, name) => {
+export const repositoriesStore = { state: repoState, getAllReposOrdered: () => [], renameGroup: (id, name) => {
   if (Object.values(repoState.groups).some((g) => g.id !== id && g.name === name)) return false;
   setRepoState("groups", id, "name", name);
   return true;
@@ -66,8 +69,13 @@ export const appLogger = { error: () => {
 export const isTauri = () => true;
 export const isMacOS = () => true;
 export const openDialog = async () => null;
-export const invoke = async (cmd) => ({ get_home_directory: "/workspace",
+export const invoke = async (cmd, args) => {
+ if (cmd === "settings_action") { const path = args.request.paths?.[0]; return { revision: "illustrative-only", values: { [path]: {stored: 10, effective: 10, source: "illustrative fixture"} } }; }
+ return ({ get_home_directory: "/workspace",
  list_installed_mcp_integrations: [], get_agent_mcp_status: {supported:true,installed:false,config_path:null,shared_settings_file:false}, get_cli_status: { installed: true, path: "/usr/local/bin/tuic", version_match: true, auto_updatable: true }, mdkb_status: { available: true, connected: false, binaryPath: "/usr/local/bin/mdkb", version: "fixture" }, list_audio_output_devices: [{ name: "Illustrative speakers", is_default: true }] })[cmd];
+};
+export const settingsRefresh = { register: reader => { let active = true; void reader.read().then(snapshot => { if (active) reader.apply(snapshot); }); return () => { active = false; }; } };
+export const reportSettingsConflicts = () => {};
 export const ExpertSetting = (props) => props.children;
 
 export const rpc=async(cmd)=>({

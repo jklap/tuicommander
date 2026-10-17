@@ -1,5 +1,6 @@
 import { type Component, createEffect, createSignal, For, Index, on, onCleanup, Show } from "solid-js";
 import { useConfirmDialog } from "../../../../hooks/useConfirmDialog";
+import { settingOptions } from "../../../../services/settingsCatalogue";
 import { reportSettingsConflicts, settingsRefresh } from "../../../../services/settingsRefresh";
 import { appLogger } from "../../../../stores/appLogger";
 import {
@@ -108,6 +109,7 @@ const HeaderRows: Component<{
 		<div style={{ display: "flex", "align-items": "center", "justify-content": "space-between" }}>
 			<span class={s.hint}>Secret headers</span>
 			<button
+				data-non-setting="Add or remove a secret-header draft row; the owner Save commits it"
 				type="button"
 				class={s.copyBtn}
 				title="Add secret header"
@@ -122,6 +124,7 @@ const HeaderRows: Component<{
 			{(row, index) => (
 				<div style={{ display: "grid", "grid-template-columns": "minmax(0, 1fr) minmax(0, 1fr) auto", gap: "8px" }}>
 					<Input
+						data-setting-id="upstreams.servers.{id}.headers.{name}.name"
 						type="text"
 						class={s.input}
 						aria-label={`Header name ${index + 1}`}
@@ -143,12 +146,14 @@ const HeaderRows: Component<{
 						aria-label={`Header secret ${index + 1}`}
 						autocomplete="new-password"
 						placeholder={row().saved ? "Saved secret (leave blank to keep)" : "Secret value"}
+						data-setting-id="upstreams.servers.{id}.credentials.headers.{name}.status"
 						value={row().value}
 						onInput={(e) =>
 							props.onChange(props.rows.map((r, i) => (i === index ? { ...r, value: e.currentTarget.value } : r)))
 						}
 					/>
 					<button
+						data-non-setting="Add or remove a secret-header draft row; the owner Save commits it"
 						type="button"
 						class={s.textBtn}
 						title={`Remove header ${index + 1}`}
@@ -603,6 +608,7 @@ export const UpstreamMcpPanel: Component = () => {
 				title="Upstream MCP Servers"
 				headingActions={
 					<button
+						data-non-setting="Open, close or cancel the upstream editor"
 						class={s.copyBtn}
 						onClick={() => {
 							setShowAdd((v) => !v);
@@ -635,6 +641,7 @@ export const UpstreamMcpPanel: Component = () => {
 					>
 						<div style={{ display: "grid", gap: "8px" }}>
 							<Input
+								data-setting-id="upstreams.servers.{id}.name"
 								type="text"
 								class={s.input}
 								placeholder="Name (e.g. context7, github)"
@@ -646,15 +653,23 @@ export const UpstreamMcpPanel: Component = () => {
 								}}
 							/>
 							<Select
+								data-setting-id="upstreams.servers.{id}.transport.type"
 								class={s.input}
 								value={form().transportType}
 								onChange={(e) => setForm((f) => ({ ...f, transportType: e.currentTarget.value as "http" | "stdio" }))}
 							>
-								<option value="http">HTTP (Streamable MCP)</option>
-								<option value="stdio">stdio (process)</option>
+								<For
+									each={settingOptions("upstreams.servers.{id}.transport.type", {
+										http: "HTTP (Streamable MCP)",
+										stdio: "stdio (process)",
+									})}
+								>
+									{(option) => <option value={option.value}>{option.label}</option>}
+								</For>
 							</Select>
 							<Show when={form().transportType === "http"}>
 								<Input
+									data-setting-id="upstreams.servers.{id}.transport.url"
 									type="text"
 									class={s.input}
 									placeholder="URL (e.g. http://localhost:8080/mcp)"
@@ -667,6 +682,7 @@ export const UpstreamMcpPanel: Component = () => {
 									</label>
 									<ContextualHelp label="Authentication" />
 									<Select
+										data-setting-id="upstreams.servers.{id}.auth.type"
 										class={s.input}
 										value={form().authMethod}
 										onChange={(e) =>
@@ -674,12 +690,19 @@ export const UpstreamMcpPanel: Component = () => {
 										}
 										style={{ flex: 1 }}
 									>
-										<option value="bearer">Bearer token</option>
-										<option value="oauth2">OAuth 2.1</option>
+										<For
+											each={settingOptions("upstreams.servers.{id}.auth.type", {
+												bearer: "Bearer token",
+												oauth2: "OAuth 2.1",
+											})}
+										>
+											{(option) => <option value={option.value}>{option.label}</option>}
+										</For>
 									</Select>
 								</div>
 								<Show when={form().authMethod === "bearer"}>
 									<Input
+										data-setting-id="upstreams.servers.{id}.auth.token"
 										type="password"
 										class={s.input}
 										placeholder="API key for remote MCP servers (optional, stored in OS keychain)"
@@ -694,6 +717,7 @@ export const UpstreamMcpPanel: Component = () => {
 								/>
 								<Show when={form().authMethod === "oauth2"}>
 									<Input
+										data-setting-id="upstreams.servers.{id}.auth.client_id"
 										type="text"
 										class={s.input}
 										placeholder="Client ID (leave blank to auto-register)"
@@ -701,6 +725,7 @@ export const UpstreamMcpPanel: Component = () => {
 										onInput={(e) => setForm((f) => ({ ...f, oauthClientId: e.currentTarget.value }))}
 									/>
 									<Input
+										data-setting-id="upstreams.servers.{id}.auth.client_secret"
 										type="password"
 										class={s.input}
 										placeholder="Client Secret (optional, for confidential clients)"
@@ -708,6 +733,7 @@ export const UpstreamMcpPanel: Component = () => {
 										onInput={(e) => setForm((f) => ({ ...f, oauthClientSecret: e.currentTarget.value }))}
 									/>
 									<Input
+										data-setting-id="upstreams.servers.{id}.auth.scopes"
 										type="text"
 										class={s.input}
 										placeholder="Scopes (optional, space-separated)"
@@ -721,6 +747,7 @@ export const UpstreamMcpPanel: Component = () => {
 							</Show>
 							<Show when={form().transportType === "stdio"}>
 								<Input
+									data-setting-id="upstreams.servers.{id}.transport.command"
 									type="text"
 									class={s.input}
 									placeholder="Command (e.g. npx)"
@@ -728,6 +755,7 @@ export const UpstreamMcpPanel: Component = () => {
 									onInput={(e) => setForm((f) => ({ ...f, command: e.currentTarget.value }))}
 								/>
 								<Input
+									data-setting-id="upstreams.servers.{id}.transport.args"
 									type="text"
 									class={s.input}
 									placeholder="Args (space-separated, e.g. -y @modelcontextprotocol/server-filesystem /path)"
@@ -735,6 +763,7 @@ export const UpstreamMcpPanel: Component = () => {
 									onInput={(e) => setForm((f) => ({ ...f, args: e.currentTarget.value }))}
 								/>
 								<Input
+									data-setting-id="upstreams.servers.{id}.transport.cwd"
 									type="text"
 									class={s.input}
 									placeholder="Working directory (optional)"
@@ -746,6 +775,7 @@ export const UpstreamMcpPanel: Component = () => {
 								<label style={{ "font-size": "12px", color: "var(--text-dimmed)" }}>Timeout (s):</label>
 								<ContextualHelp label="Timeout (s):" />
 								<Input
+									data-setting-id="upstreams.servers.{id}.timeout_secs"
 									type="number"
 									class={s.input}
 									value={form().timeout}
@@ -759,10 +789,16 @@ export const UpstreamMcpPanel: Component = () => {
 						    right-aligned row, so the pair is never squeezed by the timeout field
 						    and both buttons use the shared save/cancel styling. */}
 							<div style={{ display: "flex", gap: "8px", "justify-content": "flex-end" }}>
-								<button class={s.saveBtn} onClick={addUpstream} disabled={saving()}>
+								<button
+									data-non-setting="Create, update or remove a stable upstream through its owner"
+									class={s.saveBtn}
+									onClick={addUpstream}
+									disabled={saving()}
+								>
 									{saving() ? "Adding…" : "Add"}
 								</button>
 								<button
+									data-non-setting="Open, close or cancel the upstream editor"
 									class={s.testBtn}
 									onClick={() => {
 										setShowAdd(false);
@@ -799,6 +835,7 @@ export const UpstreamMcpPanel: Component = () => {
 									{/* Enable toggle */}
 									<div class={s.toggle} style={{ "margin-right": "4px" }}>
 										<input
+											data-setting-id="upstreams.servers.{id}.enabled"
 											type="checkbox"
 											checked={server.enabled}
 											onChange={(e) => toggleUpstream(server.id, e.currentTarget.checked)}
@@ -892,6 +929,7 @@ export const UpstreamMcpPanel: Component = () => {
 											when={st()?.status === "authenticating"}
 											fallback={
 												<button
+													data-non-setting="Open, close or cancel the upstream editor"
 													class={s.textBtn}
 													style={{
 														color: st()?.status === "needs_auth" ? "var(--warning, #e5c07b)" : "var(--info, #61afef)",
@@ -915,6 +953,7 @@ export const UpstreamMcpPanel: Component = () => {
 											}
 										>
 											<button
+												data-non-setting="Typed upstream credential or OAuth workflow"
 												class={s.textBtn}
 												style={{ color: "var(--warning, #e5c07b)" }}
 												title="Cancel authorization"
@@ -929,6 +968,7 @@ export const UpstreamMcpPanel: Component = () => {
 										</Show>
 									</Show>
 									<button
+										data-non-setting="Open, close or cancel the upstream editor"
 										class={s.copyBtn}
 										style={{ "flex-shrink": 0 }}
 										title="Edit"
@@ -940,6 +980,7 @@ export const UpstreamMcpPanel: Component = () => {
 									</button>
 									{/* Reconnect */}
 									<button
+										data-non-setting="Reconnect the current upstream runtime without editing configuration"
 										class={s.copyBtn}
 										style={{ "flex-shrink": 0 }}
 										title="Reconnect"
@@ -956,6 +997,7 @@ export const UpstreamMcpPanel: Component = () => {
 									</button>
 									{/* Remove */}
 									<button
+										data-non-setting="Create, update or remove a stable upstream through its owner"
 										class={s.copyBtn}
 										title="Remove"
 										onClick={() => removeUpstream(server.id, server.name)}
@@ -983,6 +1025,7 @@ export const UpstreamMcpPanel: Component = () => {
 													<label style={{ "font-size": "12px", color: "var(--text-dimmed)" }}>URL</label>
 													<ContextualHelp label="URL" />
 													<Input
+														data-setting-id="upstreams.servers.{id}.transport.url"
 														type="text"
 														class={s.input}
 														value={editForm().url}
@@ -993,14 +1036,21 @@ export const UpstreamMcpPanel: Component = () => {
 													<label style={{ "font-size": "12px", color: "var(--text-dimmed)" }}>Authentication</label>
 													<ContextualHelp label="Authentication" />
 													<Select
+														data-setting-id="upstreams.servers.{id}.auth.type"
 														class={s.input}
 														value={editForm().authMethod}
 														onChange={(e) =>
 															setEditForm((f) => ({ ...f, authMethod: e.currentTarget.value as "bearer" | "oauth2" }))
 														}
 													>
-														<option value="bearer">Bearer token</option>
-														<option value="oauth2">OAuth 2.1</option>
+														<For
+															each={settingOptions("upstreams.servers.{id}.auth.type", {
+																bearer: "Bearer token",
+																oauth2: "OAuth 2.1",
+															})}
+														>
+															{(option) => <option value={option.value}>{option.label}</option>}
+														</For>
 													</Select>
 												</div>
 												<Show when={editForm().authMethod === "bearer"}>
@@ -1008,6 +1058,7 @@ export const UpstreamMcpPanel: Component = () => {
 														<label style={{ "font-size": "12px", color: "var(--text-dimmed)" }}>Bearer token</label>
 														<ContextualHelp label="Bearer token" />
 														<Input
+															data-setting-id="upstreams.servers.{id}.auth.token"
 															type="password"
 															class={s.input}
 															placeholder="Enter new token (leave blank to keep current)"
@@ -1018,6 +1069,7 @@ export const UpstreamMcpPanel: Component = () => {
 															Stored in OS keychain. Leave blank to keep current token.
 														</p>
 														<button
+															data-non-setting="Typed upstream credential or OAuth workflow"
 															type="button"
 															class={s.textBtn}
 															style={{ "margin-top": "4px" }}
@@ -1036,6 +1088,7 @@ export const UpstreamMcpPanel: Component = () => {
 													<div>
 														<label style={{ "font-size": "12px", color: "var(--text-dimmed)" }}>OAuth client ID</label>
 														<Input
+															data-setting-id="upstreams.servers.{id}.auth.client_id"
 															type="text"
 															class={s.input}
 															placeholder="Leave blank to auto-register"
@@ -1047,6 +1100,7 @@ export const UpstreamMcpPanel: Component = () => {
 														<label style={{ "font-size": "12px", color: "var(--text-dimmed)" }}>Client Secret</label>
 														<ContextualHelp label="Client Secret" />
 														<Input
+															data-setting-id="upstreams.servers.{id}.auth.client_secret"
 															type="password"
 															class={s.input}
 															placeholder="Optional, for confidential clients"
@@ -1058,6 +1112,7 @@ export const UpstreamMcpPanel: Component = () => {
 														<label style={{ "font-size": "12px", color: "var(--text-dimmed)" }}>Scopes</label>
 														<ContextualHelp label="Scopes" />
 														<Input
+															data-setting-id="upstreams.servers.{id}.auth.scopes"
 															type="text"
 															class={s.input}
 															placeholder="Optional, space-separated"
@@ -1072,6 +1127,7 @@ export const UpstreamMcpPanel: Component = () => {
 													<label style={{ "font-size": "12px", color: "var(--text-dimmed)" }}>Command</label>
 													<ContextualHelp label="Command" />
 													<Input
+														data-setting-id="upstreams.servers.{id}.transport.command"
 														type="text"
 														class={s.input}
 														value={editForm().command}
@@ -1081,6 +1137,7 @@ export const UpstreamMcpPanel: Component = () => {
 												<div>
 													<label style={{ "font-size": "12px", color: "var(--text-dimmed)" }}>Args</label>
 													<Input
+														data-setting-id="upstreams.servers.{id}.transport.args"
 														type="text"
 														class={s.input}
 														value={editForm().args}
@@ -1091,6 +1148,7 @@ export const UpstreamMcpPanel: Component = () => {
 													<label style={{ "font-size": "12px", color: "var(--text-dimmed)" }}>Working directory</label>
 													<ContextualHelp label="Working directory" />
 													<Input
+														data-setting-id="upstreams.servers.{id}.transport.cwd"
 														type="text"
 														class={s.input}
 														value={editForm().cwd}
@@ -1103,6 +1161,7 @@ export const UpstreamMcpPanel: Component = () => {
 												<label style={{ "font-size": "12px", color: "var(--text-dimmed)" }}>Timeout (s):</label>
 												<ContextualHelp label="Timeout (s):" />
 												<Input
+													data-setting-id="upstreams.servers.{id}.timeout_secs"
 													type="number"
 													class={s.input}
 													value={editForm().timeout}
@@ -1134,10 +1193,16 @@ export const UpstreamMcpPanel: Component = () => {
 												</div>
 											</Show>
 											<div style={{ display: "flex", gap: "8px", "justify-content": "flex-end" }}>
-												<button class={s.saveBtn} onClick={() => saveEdit(server)} disabled={saving()}>
+												<button
+													data-non-setting="Create, update or remove a stable upstream through its owner"
+													class={s.saveBtn}
+													onClick={() => saveEdit(server)}
+													disabled={saving()}
+												>
 													{saving() ? "Saving…" : "Save"}
 												</button>
 												<button
+													data-non-setting="Open, close or cancel the upstream editor"
 													class={s.testBtn}
 													onClick={() => {
 														setEditingId(null);

@@ -587,6 +587,7 @@ export const KeyboardShortcutsTab: Component = () => {
 									style={{ display: "flex", "align-items": "center", gap: "8px" }}
 								>
 									<KeyComboCapture
+										settingId="app.global_hotkey"
 										value={settingsStore.state.globalHotkey ? tauriToDisplay(settingsStore.state.globalHotkey) : ""}
 										onChange={handleGlobalHotkeyChange}
 										placeholder={t("settings.globalHotkeyPlaceholder", "Click to set hotkey")}
@@ -594,6 +595,7 @@ export const KeyboardShortcutsTab: Component = () => {
 									/>
 									<Show when={settingsStore.state.globalHotkey}>
 										<button
+											data-setting-id="keybindings.bindings.{action}.key"
 											class={w.secondaryButton}
 											onClick={clearGlobalHotkey}
 											style={{
@@ -619,6 +621,7 @@ export const KeyboardShortcutsTab: Component = () => {
 			<SectionCard title="Shortcut groups">
 				<div class={w.shortcutSearch}>
 					<Input
+						data-non-setting="Filter keyboard shortcut rows"
 						ref={inputRef}
 						type="text"
 						placeholder={t("helpPanel.searchPlaceholder", "Search shortcuts...")}
@@ -668,6 +671,7 @@ export const KeyboardShortcutsTab: Component = () => {
 															</kbd>
 															<Show when={shortcut.action}>
 																<button
+																	data-setting-id="keybindings.bindings.{action}.key"
 																	onClick={() => startEditing(shortcut.action!)}
 																	title="Edit shortcut"
 																	class={w.rebindButton}
@@ -676,6 +680,7 @@ export const KeyboardShortcutsTab: Component = () => {
 																</button>
 																<Show when={keybindingsStore.isOverridden(shortcut.action!)}>
 																	<button
+																		data-setting-id="keybindings.bindings.{action}.key"
 																		onClick={() => keybindingsStore.resetAction(shortcut.action!)}
 																		title="Reset to default"
 																		style={{
@@ -761,6 +766,7 @@ export const KeyboardShortcutsTab: Component = () => {
 														{cmd.keys || t("helpPanel.unbound", "unbound")}
 													</kbd>
 													<button
+														data-setting-id="keybindings.bindings.{action}.key"
 														onClick={() => startEditing(cmd.action)}
 														title="Edit shortcut"
 														style={{
@@ -779,6 +785,7 @@ export const KeyboardShortcutsTab: Component = () => {
 													</button>
 													<Show when={keybindingsStore.isOverridden(cmd.action)}>
 														<button
+															data-setting-id="keybindings.bindings.{action}.key"
 															onClick={() => keybindingsStore.resetAction(cmd.action)}
 															title="Reset to default"
 															style={{
@@ -822,6 +829,7 @@ export const KeyboardShortcutsTab: Component = () => {
 
 			<div style={{ "margin-top": "16px", "text-align": "right" }}>
 				<button
+					data-setting-id="keybindings.bindings.{action}.key"
 					class={s.hint}
 					onClick={() => keybindingsStore.resetAll()}
 					style={{
@@ -897,6 +905,7 @@ const RecordingIndicator: Component<{
 				>
 					<span>Already used by "{props.conflict!.action}"</span>
 					<button
+						data-setting-id="keybindings.bindings.{action}.key"
 						onMouseDown={(e) => {
 							e.preventDefault();
 							props.onConfirmReplace();
