@@ -199,3 +199,11 @@ ownership signal. Recipient isolation uses `connection_id` instead. The running
 pre-v2 TUIC returns HTTP 404 for `/design-mode/extension`; the product sidebar
 prints the exact endpoint and restart requirement while retaining cards. Native
 Edge checks remain outstanding.
+
+## Round 5 recheck (2026-10-17)
+
+- `ioreg -n Root -d1`: `IOConsoleLocked = No` (13:01 CEST).
+- `screencapture -x` from the managed shell succeeded (6.3 MB PNG, exit 0): no Screen Recording denial for the shell.
+- The MacControl tool is not exposed to this session (ToolSearch "maccontrol": no match), so the MacControl-specific prompt could not be re-read.
+- Trusted GUI input is unavailable: `osascript` System Events fails with error -1743 (not authorized to send Apple events). `cliclick` exists but Accessibility was not probed, to avoid a permission dialog on the Boss screen.
+- Result: S0 items (a), (b), (e), (f) stay BLOCKED on trusted input. No new S0 pass is claimed.
