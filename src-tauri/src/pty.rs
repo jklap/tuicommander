@@ -2740,12 +2740,11 @@ impl ChunkProcessor {
                                             && session.choice_prompt.is_none()
                                     })
                             });
-                        if confident_wait {
-                            if let Some(question) =
+                        if confident_wait
+                            && let Some(question) =
                                 crate::output_parser::parse_ego_free_text_question(screen)
-                            {
-                                events.push(question);
-                            }
+                        {
+                            events.push(question);
                         }
                     }
                 }
