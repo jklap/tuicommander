@@ -3288,3 +3288,18 @@ or `operation:{action:"clear_token"}`. Both actions use the existing CircleCI
 owner; replies contain only token presence. Clearing the stored token does not
 remove `CIRCLE_TOKEN` or the CircleCI CLI configuration. The Git & GitHub page
 continues to show the effective token source. No transport returns the token.
+
+#### Byte-bounded MCP-compatible terminal output
+
+`GET /sessions/{id}/output?format=mcp&byte_budget=4096` (or `format=mcp_raw`)
+uses the same validator and immutable snapshot pager as MCP `session output`.
+`byte_budget` must be an integer from 1024 to 65536. The compact JSON response,
+including the page envelope, fits that UTF-8 byte budget; HTTP/MCP framing does
+not count. It returns `encoding:"json-text"`, `chunk`, `offset`, `total_bytes`,
+`continuation`, `omitted_fields`, and `expires_after_seconds`. Concatenate chunk
+values, then parse JSON. Continue on the same session and format with the opaque
+`continuation` query parameter until it is null. A token defaults to 4096 bytes
+when the budget is omitted. Snapshots expire after 300 seconds, restart or cache
+eviction; invalid or expired tokens fail explicitly. Concurrent output cannot
+change a captured snapshot. Other output formats keep their existing contract.
+See [the full paging and inventory contract](../backend/mcp-http.md#compact-inventories-and-byte-bounded-response-snapshots).

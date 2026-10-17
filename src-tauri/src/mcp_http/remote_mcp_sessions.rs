@@ -74,6 +74,11 @@ pub(super) fn resolve(state: &AppState, args: &Value) -> Option<Result<(String, 
 }
 
 pub(super) async fn call(state: &Arc<AppState>, host: &str, id: &str, args: &Value) -> Value {
+    if args["action"] == "output"
+        && let Err(error) = super::response_pages::budget(args)
+    {
+        return error;
+    }
     if id.trim().is_empty() {
         return failure(host, "session_id must not be empty");
     }
@@ -152,21 +157,36 @@ pub(super) async fn call(state: &Arc<AppState>, host: &str, id: &str, args: &Val
                     "mcp"
                 },
             );
-            for key in ["limit", "from_line", "from_byte", "since_cursor"] {
+            for key in [
+                "limit",
+                "from_line",
+                "from_byte",
+                "since_cursor",
+                "byte_budget",
+            ] {
                 if let Some(value) = args[key].as_u64() {
                     query.append_pair(key, &value.to_string());
                 }
+            }
+            if let Some(token) = args["continuation"].as_str() {
+                query.append_pair("continuation", token);
             }
         }
         state.remote.http_client().get(url)
     };
     match request(host, request_builder).await {
         Ok(mut value) => {
-            if action == "output" && value.get("exited").is_none() {
+            if action == "output"
+                && value.get("exited").is_none()
+                && value["encoding"] != "json-text"
+            {
                 return failure(
                     host,
                     "daemon does not support MCP output parity; update the daemon",
                 );
+            }
+            if value["encoding"] == "json-text" {
+                return value;
             }
             value["connection_id"] = json!(host);
             if let Some(note) = value["continuation"].as_str() {

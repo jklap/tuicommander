@@ -1848,6 +1848,7 @@ impl Default for GitHubState {
 /// The MCP half of [`AppState`] (#678-9a75): Streamable-HTTP sessions, the
 /// upstream proxy registry, OAuth flows, and the tool-search index they feed.
 pub struct McpState {
+    pub(crate) response_pages: parking_lot::Mutex<crate::mcp_http::response_pages::ResponsePages>,
     /// Active MCP Streamable HTTP sessions (session_id -> metadata for TTL reaping + client identity)
     pub sessions: DashMap<String, McpSessionMeta>,
     /// Upstream MCP proxy registry — aggregates tools from all connected upstreams.
@@ -1878,6 +1879,7 @@ pub struct McpState {
 impl Default for McpState {
     fn default() -> Self {
         Self {
+            response_pages: parking_lot::Mutex::default(),
             sessions: DashMap::new(),
             upstream_registry: Arc::new(crate::mcp_proxy::registry::UpstreamRegistry::new()),
             oauth_flow_manager: Arc::new(crate::mcp_oauth::flow::OAuthFlowManager::new()),
@@ -3188,6 +3190,16 @@ impl AppState {
         since: u64,
         limit: usize,
     ) -> (Vec<AgentMessage>, bool, u64) {
+        self.read_agent_inbox(tuic_session, since, limit, true)
+    }
+
+    pub(crate) fn read_agent_inbox(
+        &self,
+        tuic_session: &str,
+        since: u64,
+        limit: usize,
+        acknowledge: bool,
+    ) -> (Vec<AgentMessage>, bool, u64) {
         let gate_entry = self
             .active_agent_waiters
             .entry(tuic_session.to_string())
@@ -3209,6 +3221,14 @@ impl AppState {
         if has_more {
             messages.pop();
         }
+        if !acknowledge {
+            let missed_count = self
+                .agent_inbox_evictions
+                .get(tuic_session)
+                .map(|n| *n)
+                .unwrap_or(0);
+            return (messages, has_more, missed_count);
+        }
         let missed_count = self
             .agent_inbox_evictions
             .remove(tuic_session)
@@ -3219,6 +3239,37 @@ impl AppState {
             .map(|message| message.timestamp)
             .max()
             .unwrap_or(since);
+        let message_ids: Vec<_> = messages.iter().map(|message| message.id.clone()).collect();
+        self.acknowledge_agent_snapshot_locked(tuic_session, read_through, &message_ids, &mut gate);
+        (messages, has_more, missed_count)
+    }
+
+    /// A byte-paged read acknowledges only the immutable snapshot, never newer mail.
+    pub(crate) fn acknowledge_agent_snapshot(
+        &self,
+        tuic_session: &str,
+        cursor: u64,
+        message_ids: &[String],
+        missed_count: u64,
+    ) {
+        let entry = self
+            .active_agent_waiters
+            .entry(tuic_session.to_string())
+            .or_default();
+        let mut gate = entry.lock();
+        if let Some(mut count) = self.agent_inbox_evictions.get_mut(tuic_session) {
+            *count = count.saturating_sub(missed_count);
+        }
+        self.acknowledge_agent_snapshot_locked(tuic_session, cursor, message_ids, &mut gate);
+    }
+
+    fn acknowledge_agent_snapshot_locked(
+        &self,
+        tuic_session: &str,
+        read_through: u64,
+        message_ids: &[String],
+        gate: &mut AgentDeliveryGate,
+    ) {
         // Publish the read position while holding the delivery gate. A sender
         // cannot see a full inbox between this observation and cursor advancement.
         let mut cursor = self
@@ -3230,9 +3281,9 @@ impl AppState {
         }
         // Reading is delivery, even when a terminal wake was queued first or a
         // sender has buffered mail but has not yet assigned its wake owner.
-        for message in &messages {
+        for id in message_ids {
             gate.owners
-                .insert(message.id.clone(), AgentDeliveryOwner::WaiterObserved);
+                .insert(id.clone(), AgentDeliveryOwner::WaiterObserved);
         }
         gate.urgent_notices
             .retain(|_, notice| notice.through > read_through);
@@ -3265,7 +3316,6 @@ impl AppState {
             gate.orchestrator_wake_needed_through = None;
         }
         gate.reset_orchestrator_wake_budget_if_observed();
-        (messages, has_more, missed_count)
     }
 
     /// Record one marker emission or one submitted turn for `session_id`.

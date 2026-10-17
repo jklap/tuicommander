@@ -2379,3 +2379,64 @@ or `operation:{action:"clear_token"}`. Both actions use the existing CircleCI
 owner; replies contain only token presence. Clearing the stored token does not
 remove `CIRCLE_TOKEN` or the CircleCI CLI configuration. The Git & GitHub page
 continues to show the effective token source. No transport returns the token.
+
+### Compact inventories and byte-bounded response snapshots
+
+`session action=list session_id=<address>` resolves one session through the same
+address resolver as other session actions. `agent action=list_peers to=<address>`
+uses the send recipient resolver; `connection_id` or `connection/peer` selects a
+remote owner. Missing or ambiguous targets return errors, not empty success.
+Both inventories accept `compact=true`. Rows keep identity/address fields,
+`state`, `activity_age_ms`, and `omitted_fields`. Unknown state is `"unknown"`;
+unknown activity age is `null`, never zero. The omitted-field list names removed
+fields. A failed remote inventory remains an error or `connection_errors`, not
+proof that no peers exist. Activity age comes from the backend session snapshot;
+a peer without a live terminal has unknown state and age.
+
+For `agent action=inbox` and `session action=output`, set
+`byte_budget=4096` (integer range 1024–65536) to request an immutable snapshot:
+
+```json
+{"encoding":"json-text","chunk":"...","offset":0,"total_bytes":49162,"continuation":"opaque token","omitted_fields":[],"expires_after_seconds":300}
+```
+
+The budget counts **UTF-8 bytes of the compact JSON page object**, including its
+escaped `chunk` and all page-envelope fields. It excludes JSON-RPC, MCP content
+blocks, HTTP headers, and transport framing. Even one oversized item is split;
+UTF-8 codepoints stay whole. Concatenate decoded `chunk` strings in page order,
+then parse the resulting JSON to obtain the original response. No fields or
+retained text are removed. `total_bytes` and `offset` refer to that reconstructed
+JSON text, not the escaped page object. `continuation=null` marks the final page.
+
+Repeat the same action, target and connection with the returned `continuation`.
+A continuation defaults to a 4096-byte budget if `byte_budget` is omitted. Tokens
+are bound to the inbox owner or output caller and operation/target; changed
+window arguments do not recapture the snapshot. Repeating a page is safe.
+Snapshots expire 300 seconds after capture, on restart, or when the shared cache
+needs space (128 snapshots, 32 MiB of serialized snapshot text). Invalid,
+foreign, expired or evicted tokens fail explicitly with `restart_required` when
+applicable. Start a new read; do not treat the error as an empty result.
+
+The inbox read cursor advances only when the final chunk is returned. A partial
+or abandoned read does not consume mail or its eviction count. Final-page replay
+does not acknowledge later evictions again. Explicit `since=0` remains replay,
+and cursor advancement remains monotonic. Concurrent new mail stays unread;
+concurrent terminal output does not alter an existing snapshot. Inbox retention
+loss is still reported as `missed_count`; expired terminal retention is still
+reported by the existing output-window metadata. A captured snapshot remains
+readable even if its source ring rolls over. The byte bound cannot recover data
+already lost before capture.
+
+Without `byte_budget` or a token, existing response shapes and cursor behavior
+stay unchanged. Errors remain errors; an error detail that itself exceeds the
+budget becomes `response_error_exceeds_byte_budget` with an explicit omission.
+The shared native handlers own validation and paging. MCP, the IPC MCP bridge,
+and HTTP `format=mcp|mcp_raw` use those handlers; the remote output proxy forwards
+byte budgets and tokens without rewriting the bounded envelope.
+
+Fixture provenance: `src-tauri/src/fixtures/mcp-output-2005.txt` captures the
+49,162-byte response cited in the 2026-10-17 MCP usage audit, coordinator transcript
+result line 168437. It is historical terminal text, not a current-state assertion.
+`src-tauri/src/fixtures/mcp-inbox-2005.txt` captures the audit's 49,609-byte inbox
+response, private TUIC transcript result line 3239. The regression also covers
+multibyte and escaped oversized inbox content.

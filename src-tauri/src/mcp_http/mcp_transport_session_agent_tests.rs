@@ -4874,3 +4874,49 @@ fn softwrap_1977_session_output_preserves_recorded_spaces() {
         assert!(data.starts_with(&expected), "scroll={scroll}: {data:?}");
     }
 }
+
+// Catches: output chunks recapture a moving ring instead of completing the retained snapshot.
+#[test]
+fn budgeted_terminal_output_snapshot_survives_concurrent_output() {
+    let state = test_state();
+    let sid = "budget-output";
+    let source = "界\"\n".repeat(9000);
+    let mut ring = crate::OutputRingBuffer::new(100000);
+    ring.write(source.as_bytes());
+    state
+        .session_maps
+        .output_buffers
+        .insert(sid.into(), parking_lot::Mutex::new(ring));
+    let original = session_output(
+        &state,
+        &serde_json::json!({"action":"output","session_id":sid,"format":"raw","from_byte":0,"limit":100000}),
+    );
+    let mut args = serde_json::json!({"action":"output","session_id":sid,"format":"raw","from_byte":0,"limit":100000,"byte_budget":4096});
+    let mut text = String::new();
+    loop {
+        let page = session_output(&state, &args);
+        assert!(serde_json::to_vec(&page).unwrap().len() <= 4096);
+        text.push_str(page["chunk"].as_str().unwrap());
+        if page["continuation"].is_null() {
+            break;
+        }
+        state
+            .session_maps
+            .output_buffers
+            .get(sid)
+            .unwrap()
+            .lock()
+            .write(b"new output");
+        args["continuation"] = page["continuation"].clone();
+    }
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&text).unwrap(),
+        original
+    );
+    let missing = handle_session(
+        &state,
+        &serde_json::json!({"action":"list","session_id":"absent","compact":true}),
+        None,
+    );
+    assert!(missing.get("error").is_some());
+}

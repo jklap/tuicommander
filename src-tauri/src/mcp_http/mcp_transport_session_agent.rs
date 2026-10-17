@@ -808,6 +808,35 @@ pub(super) fn handle_session(
     args: &serde_json::Value,
     mcp_session_id: Option<&str>,
 ) -> serde_json::Value {
+    if args["action"] == "output" {
+        let budget = match super::response_pages::budget(args) {
+            Ok(budget) => budget,
+            Err(error) => return error,
+        };
+        if let Some(budget) = budget {
+            let operation = format!("output:{}:{}", args["connection_id"], args["session_id"]);
+            return state
+                .mcp
+                .response_pages
+                .lock()
+                .page(
+                    mcp_session_id.unwrap_or("ipc"),
+                    &operation,
+                    args,
+                    budget,
+                    || handle_session_unpaged(state, args, mcp_session_id),
+                )
+                .0;
+        }
+    }
+    handle_session_unpaged(state, args, mcp_session_id)
+}
+
+fn handle_session_unpaged(
+    state: &Arc<AppState>,
+    args: &serde_json::Value,
+    mcp_session_id: Option<&str>,
+) -> serde_json::Value {
     let action = match require_action(args, "session", SESSION_ACTIONS) {
         Ok(a) => a,
         Err(e) => return e,
@@ -843,6 +872,14 @@ pub(super) fn handle_session(
             }
         }
         "list" => {
+            let scoped_session = if args.get("session_id").is_some() {
+                match require_session_id(state, args, "list") {
+                    Ok(id) => Some(id),
+                    Err(error) => return error,
+                }
+            } else {
+                None
+            };
             let caller_tuic = mcp_session_id
                 .and_then(|sid| state.mcp.to_session.get(sid))
                 .map(|entry| entry.value().clone());
@@ -867,6 +904,7 @@ pub(super) fn handle_session(
                 .session_maps
                 .sessions
                 .iter()
+                .filter(|entry| scoped_session.as_ref().is_none_or(|id| entry.key() == id))
                 .map(|entry| {
                     let id = entry.key().clone();
                     let s = entry.value().lock();
@@ -984,6 +1022,18 @@ pub(super) fn handle_session(
                         "agent_state",
                         agent_state.map(serde_json::Value::String),
                     );
+                    session["activity_age_ms"] = session_state
+                        .as_ref()
+                        .map(|snapshot| {
+                            if snapshot.last_activity_ms == 0 {
+                                serde_json::Value::Null
+                            } else {
+                                serde_json::json!(
+                                    now_unix_ms().saturating_sub(snapshot.last_activity_ms)
+                                )
+                            }
+                        })
+                        .unwrap_or(serde_json::Value::Null);
                     session
                 })
                 .collect();
@@ -1001,6 +1051,13 @@ pub(super) fn handle_session(
                 let mut value = to_json_or_error(&row);
                 value["is_caller"] = serde_json::json!(false);
                 if let Some(remote_state) = row.state.as_ref() {
+                    value["activity_age_ms"] = if remote_state.last_activity_ms > 0 {
+                        serde_json::json!(
+                            now_unix_ms().saturating_sub(remote_state.last_activity_ms)
+                        )
+                    } else {
+                        serde_json::Value::Null
+                    };
                     if let Some(shell_state) = remote_state.shell_state.as_ref() {
                         value["shell_state"] = serde_json::json!(shell_state);
                     }
@@ -1024,6 +1081,35 @@ pub(super) fn handle_session(
                         row["connection_id"] == host
                     }
                 });
+            }
+            if let Some(id) = scoped_session {
+                sessions.retain(|row| {
+                    [
+                        "session_id",
+                        "tuic_session",
+                        "address",
+                        "alias",
+                        "display_name",
+                        "name",
+                    ]
+                    .iter()
+                    .any(|key| row[*key] == id)
+                        || row["session_id"]
+                            .as_str()
+                            .is_some_and(|value| value.starts_with(&id))
+                });
+                if sessions.len() > 1 {
+                    return serde_json::json!({"error":"Session address is ambiguous"});
+                }
+                if sessions.is_empty() {
+                    return serde_json::json!({"error":"Session not found"});
+                }
+            }
+            if args["compact"] == true {
+                sessions = sessions
+                    .iter()
+                    .map(super::response_pages::compact)
+                    .collect();
             }
             serde_json::json!(sessions)
         }

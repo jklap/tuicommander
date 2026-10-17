@@ -5998,3 +5998,97 @@ async fn ego_child_without_session_header_binds_through_process_ancestry() {
     let _ = parent.wait();
     assert_eq!(bound, vec![TEST_UUID_A.to_string()]);
 }
+
+// Catches: one oversized UTF-8 inbox item bypasses the byte bound or consumes unread text.
+#[test]
+fn oversized_mcp_item_respects_byte_budget_and_continues() {
+    let state = test_state();
+    register_peer(&state, TEST_UUID_A, "budget", "mcp-budget");
+    let content = "界\"\n".repeat(9000);
+    state.push_agent_inbox(
+        TEST_UUID_A,
+        crate::state::AgentMessage {
+            id: "large".into(),
+            from_tuic_session: "lead".into(),
+            from_name: "lead".into(),
+            content: content.clone(),
+            timestamp: 1000,
+            delivered_via_channel: false,
+        },
+    );
+    let mut args = serde_json::json!({"action":"inbox", "byte_budget":4096});
+    let mut text = String::new();
+    let mut pages = 0;
+    loop {
+        let page = handle_messaging(&state, &args, Some("mcp-budget"));
+        let bytes = serde_json::to_vec(&page).unwrap().len();
+        assert!(bytes <= 4096, "oversized inbox response: {bytes} bytes");
+        text.push_str(page["chunk"].as_str().unwrap());
+        pages += 1;
+        if page["continuation"].is_null() {
+            break;
+        }
+        assert_eq!(
+            state
+                .agent_read_cursor
+                .get(TEST_UUID_A)
+                .map(|v| *v)
+                .unwrap_or(0),
+            0
+        );
+        if pages == 1 {
+            state.push_agent_inbox(
+                TEST_UUID_A,
+                crate::state::AgentMessage {
+                    id: "new".into(),
+                    from_tuic_session: "lead".into(),
+                    from_name: "lead".into(),
+                    content: "new mail".into(),
+                    timestamp: 2000,
+                    delivered_via_channel: false,
+                },
+            );
+        }
+        args["continuation"] = page["continuation"].clone();
+    }
+    let result: serde_json::Value = serde_json::from_str(&text).unwrap();
+    assert_eq!(result["messages"][0]["content"], content);
+    assert_eq!(*state.agent_read_cursor.get(TEST_UUID_A).unwrap(), 1000);
+    assert!(pages > 1);
+    let next = handle_messaging(
+        &state,
+        &serde_json::json!({"action":"inbox"}),
+        Some("mcp-budget"),
+    );
+    assert_eq!(next["count"], 1);
+    assert_eq!(next["messages"][0]["id"], "new");
+}
+
+// Catches: compact scoped lookup turns unknown state or an unresolved recipient into idle/empty success.
+#[test]
+fn compact_inventory_keeps_unknown_state_and_scoped_recipient_errors() {
+    let state = test_state();
+    register_peer(&state, TEST_UUID_A, "one", "mcp-one");
+    register_peer(&state, TEST_UUID_B, "two", "mcp-two");
+    let result = handle_messaging(
+        &state,
+        &serde_json::json!({"action":"list_peers","to":"one","compact":true}),
+        Some("mcp-one"),
+    );
+    assert_eq!(result["peers"].as_array().unwrap().len(), 1);
+    assert_eq!(result["peers"][0]["tuic_session"], TEST_UUID_A);
+    assert_eq!(result["peers"][0]["state"], "unknown");
+    assert!(result["peers"][0]["activity_age_ms"].is_null());
+    assert!(
+        result["peers"][0]["omitted_fields"]
+            .as_array()
+            .unwrap()
+            .contains(&serde_json::json!("orchestrator"))
+    );
+    let missing = handle_messaging(
+        &state,
+        &serde_json::json!({"action":"list_peers","to":"missing"}),
+        Some("mcp-one"),
+    );
+    assert!(missing.get("error").is_some());
+}

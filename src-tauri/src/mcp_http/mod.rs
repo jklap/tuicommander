@@ -27,6 +27,7 @@ mod mcp_transport_catalogue;
 mod mcp_transport_peer;
 pub(crate) mod mcp_transport_session_agent;
 mod open_markdown_routes;
+pub(crate) mod response_pages;
 
 mod mcp_work_item;
 mod plugin_docs;

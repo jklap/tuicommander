@@ -1049,3 +1049,7 @@ or `operation:{action:"clear_token"}`. Both actions use the existing CircleCI
 owner; replies contain only token presence. Clearing the stored token does not
 remove `CIRCLE_TOKEN` or the CircleCI CLI configuration. The Git & GitHub page
 continues to show the effective token source. No transport returns the token.
+
+MCP passthrough calls use the same native inbox/output byte-budget validator and
+snapshot pager as `POST /mcp` and HTTP MCP-compatible output; no separate IPC
+paging implementation is added. See [the paging contract](../backend/mcp-http.md#compact-inventories-and-byte-bounded-response-snapshots).

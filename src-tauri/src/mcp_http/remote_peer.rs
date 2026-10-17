@@ -636,10 +636,25 @@ fn qualify_rows(value: &mut Value, host: &str) {
     }
 }
 
-async fn directory(state: &Arc<AppState>, args: Value) -> Value {
+async fn directory(state: &Arc<AppState>, mut args: Value) -> Value {
+    if let Some((host, recipient)) = args["to"]
+        .as_str()
+        .and_then(|to| to.split_once('/'))
+        .map(|(host, recipient)| (host.to_string(), recipient.to_string()))
+    {
+        if args["connection_id"]
+            .as_str()
+            .is_some_and(|requested| requested != host)
+        {
+            return json!({"error":"Recipient and connection_id disagree"});
+        }
+        args["connection_id"] = json!(host);
+        args["to"] = json!(recipient);
+    }
     let mut local = super::mcp_transport::local_peer_call(state, &args, None).await;
     qualify_rows(&mut local, "local");
     let mut peers = local["peers"].as_array().cloned().unwrap_or_default();
+    let local_error = local.get("error").is_some() && local["error"] != "Recipient not found";
     let ids: Vec<_> = if let Some(id) = args["connection_id"].as_str() {
         vec![id.to_string()]
     } else {
@@ -652,7 +667,10 @@ async fn directory(state: &Arc<AppState>, args: Value) -> Value {
     };
     let mut failures = Vec::new();
     if args["connection_id"] == "local" {
-        return json!({"peers": peers});
+        return local;
+    }
+    if local_error && args.get("connection_id").is_none() {
+        failures.push(local);
     }
     if args.get("connection_id").is_some() {
         peers.clear();
@@ -668,18 +686,22 @@ async fn directory(state: &Arc<AppState>, args: Value) -> Value {
         let mut remote = link
             .call(
                 None,
-                json!({"action":"list_peers", "path":args.get("path")}),
+                json!({"action":"list_peers", "path":args.get("path"),
+                    "compact":args.get("compact"), "to":args.get("to")}),
             )
             .await;
         qualify_rows(&mut remote, &id);
         if let Some(rows) = remote["peers"].as_array() {
             peers.extend(rows.iter().cloned());
-        } else {
+        } else if remote["error"] != "Recipient not found" {
             failures.push(error(&id, remote));
         }
     }
     if args.get("connection_id").is_some() && !failures.is_empty() {
         return failures.remove(0);
+    }
+    if args["to"].is_string() && peers.is_empty() && failures.is_empty() {
+        return json!({"error":"Recipient not found"});
     }
     let mut result = json!({"peers":peers});
     if !failures.is_empty() {
