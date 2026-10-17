@@ -92,6 +92,8 @@ describe("mobile viewed agent exit", () => {
 		await fireEvent.input(input, { target: { value: "pwd" } });
 		await fireEvent.click(view.getByRole("button", { name: "Send" }));
 		await waitFor(() => expect(rpc).toHaveBeenCalledWith("write_pty", { sessionId: "exit-ego", data: "pwd" }));
+		await waitFor(() => expect(rpc).toHaveBeenCalledWith("write_pty", { sessionId: "exit-ego", data: "\r" }));
+		await waitFor(() => expect((view.getByRole("button", { name: "Send" }) as HTMLButtonElement).disabled).toBe(false));
 		expect(rpc.mock.calls.some(([method]) => method === "submit_agent_reply")).toBe(false);
 	});
 
