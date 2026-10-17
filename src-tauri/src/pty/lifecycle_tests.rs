@@ -3464,6 +3464,92 @@ fn standby_direct_child_records_group_and_wakes_prompt() {
     );
 }
 
+// Catches: desktop input reaches the PTY queue but never resumes its stopped shell.
+#[cfg(all(unix, feature = "desktop"))]
+#[tokio::test]
+async fn desktop_raw_input_wakes_parked_shell_after_agent_exit() {
+    let fixture = StandbyJobPty::new();
+    fixture
+        .state
+        .write_pty_parts("standby-job", &[b"done\n"])
+        .unwrap();
+    fixture.until("STANDBY_SHELL> ");
+    assert_eq!(standby_session(&fixture.state, "standby-job"), Ok(true));
+
+    write_pty_parts_off_thread(
+        fixture.state.clone(),
+        "standby-job".into(),
+        vec!["printf 'DESKTOP_INPUT_EXECUTED\\n'\n".into()],
+    )
+    .await
+    .unwrap();
+    assert!(
+        !fixture
+            .state
+            .session_maps
+            .standby_sessions
+            .contains_key("standby-job"),
+        "desktop input left the shell SIGSTOPped"
+    );
+    let output = fixture.until("STANDBY_SHELL> ");
+    assert!(
+        output.contains("\r\nDESKTOP_INPUT_EXECUTED\r\n"),
+        "shell did not execute desktop input: {output}"
+    );
+    assert_eq!(fixture.foreground(), fixture.shell);
+}
+
+// Catches: visibility and remote input only change the badge, not the stopped shell.
+#[cfg(unix)]
+#[tokio::test]
+async fn visible_and_http_input_wake_parked_shell_after_agent_exit() {
+    use tower::ServiceExt;
+    for desktop_visible in [false, true] {
+        let fixture = StandbyJobPty::new();
+        fixture
+            .state
+            .write_pty_parts("standby-job", &[b"done\n"])
+            .unwrap();
+        fixture.until("STANDBY_SHELL> ");
+        assert_eq!(standby_session(&fixture.state, "standby-job"), Ok(true));
+        if desktop_visible {
+            crate::background_mode::hidden::set_visible(&fixture.state, "standby-job", true, true);
+            fixture
+                .state
+                .write_pty_parts("standby-job", &[b"printf 'VISIBLE_INPUT_EXECUTED\\n'\n"])
+                .unwrap();
+        } else {
+            let response = crate::mcp_http::build_router(fixture.state.clone(), false, true)
+                .oneshot(
+                    axum::http::Request::builder()
+                        .method("POST")
+                        .uri("/sessions/standby-job/write")
+                        .header("content-type", "application/json")
+                        .body(axum::body::Body::from(
+                            r#"{"data":"printf 'VISIBLE_INPUT_EXECUTED\\n'\n"}"#,
+                        ))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), axum::http::StatusCode::OK);
+        }
+        let output = fixture.until("STANDBY_SHELL> ");
+        assert!(
+            output.contains("\r\nVISIBLE_INPUT_EXECUTED\r\n"),
+            "shell did not execute input after wake: {output}"
+        );
+        assert_eq!(fixture.foreground(), fixture.shell);
+        assert!(
+            !fixture
+                .state
+                .session_maps
+                .standby_sessions
+                .contains_key("standby-job")
+        );
+    }
+}
+
 // Catches: dropping the last remote observer immediately re-enables SIGSTOP.
 #[cfg(unix)]
 #[test]

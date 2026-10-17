@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+- Wake standby shells before desktop raw input, even when tab visibility did not change again; reuse the remote input wake path (#1986-1236).
+
+- Clear stale mobile agent and question controls from fresh session snapshots after agent exit, restoring CLI and shell input even when the output socket pauses (#1985-45bd).
+
 - Use Start/Stop voice call labels in the phone More menu, consistent with the tablet header (#1979-89e1, #1981-0caf).
 
 - Allow explicit mobile replies while an agent awaits input without requiring an idle shell; keep recognized question controls and show the actual refusal reason without losing the answer (#1980-47b7).
