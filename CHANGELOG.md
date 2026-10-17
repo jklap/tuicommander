@@ -6,6 +6,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+- Live Settings refresh after MCP writes, with value-free change generations, dirty-edit preservation and reconnect recovery (#1788-2163).
 - Do not restore ego question badges or notification sounds from answered selectors retained above a newer composer (#1997-eb30).
 
 - Keep the CLI answer gutter continuous across internal blank rows and section headings between marked answers, without including trailing unmarked prose or tool output (#1998-d826).

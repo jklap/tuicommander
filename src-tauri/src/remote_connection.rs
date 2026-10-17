@@ -424,6 +424,8 @@ pub async fn delete_remote_connection(
 #[cfg(feature = "desktop")]
 #[tauri::command]
 pub async fn set_remote_connection_password(id: String, password: String) -> Result<(), String> {
+    // DEFERRED (2026-10-17) — #1989-22fe: this legacy transport has no AppState;
+    // facade credential writes publish generations, but this adapter still needs owner wiring.
     set_connection_password(&id, &password)
 }
 

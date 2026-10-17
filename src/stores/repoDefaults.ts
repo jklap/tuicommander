@@ -1,5 +1,6 @@
 import { createStore } from "solid-js/store";
 import { invoke } from "../invoke";
+import { reportSettingsConflicts, settingsRefresh } from "../services/settingsRefresh";
 import { createConfigDeltaWriter } from "../utils/configDeltaWriter";
 import { appLogger } from "./appLogger";
 
@@ -57,78 +58,97 @@ const INITIAL_DEFAULTS: RepoDefaults = {
 	autoDeleteOnPrClose: "off",
 };
 
-const repoDefaultsWriter = createConfigDeltaWriter<Record<string, unknown>>("save_repo_defaults");
+type RepoDefaultsConfig = {
+	base_branch?: string;
+	copy_ignored_files?: boolean;
+	copy_untracked_files?: boolean;
+	setup_script?: string;
+	run_script?: string;
+	archive_script?: string;
+	worktree_storage?: WorktreeStorage;
+	prompt_on_create?: boolean;
+	delete_branch_on_remove?: boolean;
+	auto_archive_merged?: boolean;
+	orphan_cleanup?: OrphanCleanup;
+	orphan_cleanup_countdown_seconds?: number;
+	pr_merge_strategy?: MergeStrategy;
+	after_merge?: WorktreeAfterMerge;
+	auto_fetch_interval_minutes?: number;
+	auto_delete_on_pr_close?: AutoDeleteOnPrClose;
+};
+
+const repoDefaultsWriter = createConfigDeltaWriter<RepoDefaultsConfig>("save_repo_defaults");
 
 function createRepoDefaultsStore() {
 	const [state, setState] = createStore<RepoDefaults>({ ...INITIAL_DEFAULTS });
 
+	function renderedDefaults(loaded: RepoDefaultsConfig): RepoDefaults {
+		return {
+			baseBranch: loaded.base_branch ?? INITIAL_DEFAULTS.baseBranch,
+			copyIgnoredFiles: loaded.copy_ignored_files ?? INITIAL_DEFAULTS.copyIgnoredFiles,
+			copyUntrackedFiles: loaded.copy_untracked_files ?? INITIAL_DEFAULTS.copyUntrackedFiles,
+			setupScript: loaded.setup_script ?? INITIAL_DEFAULTS.setupScript,
+			runScript: loaded.run_script ?? INITIAL_DEFAULTS.runScript,
+			archiveScript: loaded.archive_script ?? INITIAL_DEFAULTS.archiveScript,
+			worktreeStorage: loaded.worktree_storage ?? INITIAL_DEFAULTS.worktreeStorage,
+			promptOnCreate: loaded.prompt_on_create ?? INITIAL_DEFAULTS.promptOnCreate,
+			deleteBranchOnRemove: loaded.delete_branch_on_remove ?? INITIAL_DEFAULTS.deleteBranchOnRemove,
+			autoArchiveMerged: loaded.auto_archive_merged ?? INITIAL_DEFAULTS.autoArchiveMerged,
+			orphanCleanup: loaded.orphan_cleanup ?? INITIAL_DEFAULTS.orphanCleanup,
+			orphanCleanupCountdownSeconds:
+				loaded.orphan_cleanup_countdown_seconds ?? INITIAL_DEFAULTS.orphanCleanupCountdownSeconds,
+			prMergeStrategy: loaded.pr_merge_strategy ?? INITIAL_DEFAULTS.prMergeStrategy,
+			afterMerge: loaded.after_merge ?? INITIAL_DEFAULTS.afterMerge,
+			autoFetchIntervalMinutes: loaded.auto_fetch_interval_minutes ?? INITIAL_DEFAULTS.autoFetchIntervalMinutes,
+			autoDeleteOnPrClose: loaded.auto_delete_on_pr_close ?? INITIAL_DEFAULTS.autoDeleteOnPrClose,
+		};
+	}
+
+	function wire() {
+		return {
+			base_branch: state.baseBranch,
+			copy_ignored_files: state.copyIgnoredFiles,
+			copy_untracked_files: state.copyUntrackedFiles,
+			setup_script: state.setupScript,
+			run_script: state.runScript,
+			archive_script: state.archiveScript,
+			worktree_storage: state.worktreeStorage,
+			prompt_on_create: state.promptOnCreate,
+			delete_branch_on_remove: state.deleteBranchOnRemove,
+			auto_archive_merged: state.autoArchiveMerged,
+			orphan_cleanup: state.orphanCleanup,
+			orphan_cleanup_countdown_seconds: state.orphanCleanupCountdownSeconds,
+			pr_merge_strategy: state.prMergeStrategy,
+			after_merge: state.afterMerge,
+			auto_fetch_interval_minutes: state.autoFetchIntervalMinutes,
+			auto_delete_on_pr_close: state.autoDeleteOnPrClose,
+		};
+	}
+
 	function save(): void {
-		repoDefaultsWriter
-			.save({
-				base_branch: state.baseBranch,
-				copy_ignored_files: state.copyIgnoredFiles,
-				copy_untracked_files: state.copyUntrackedFiles,
-				setup_script: state.setupScript,
-				run_script: state.runScript,
-				archive_script: state.archiveScript,
-				worktree_storage: state.worktreeStorage,
-				prompt_on_create: state.promptOnCreate,
-				delete_branch_on_remove: state.deleteBranchOnRemove,
-				auto_archive_merged: state.autoArchiveMerged,
-				orphan_cleanup: state.orphanCleanup,
-				orphan_cleanup_countdown_seconds: state.orphanCleanupCountdownSeconds,
-				pr_merge_strategy: state.prMergeStrategy,
-				after_merge: state.afterMerge,
-				auto_fetch_interval_minutes: state.autoFetchIntervalMinutes,
-				auto_delete_on_pr_close: state.autoDeleteOnPrClose,
-			})
-			.catch((err) => appLogger.error("config", "Failed to save repo defaults", err));
+		repoDefaultsWriter.save(wire()).catch((err) => appLogger.error("config", "Failed to save repo defaults", err));
 	}
 
 	return {
 		state,
+		startRemoteSync(): () => void {
+			return settingsRefresh.register({
+				section: "repo_defaults",
+				read: () => invoke<RepoDefaultsConfig>("load_repo_defaults"),
+				apply: (loaded) => {
+					const merged = repoDefaultsWriter.adopt(loaded ?? {}, wire());
+					setState(renderedDefaults(merged.value));
+					reportSettingsConflicts(merged.conflicts);
+				},
+			});
+		},
 
 		async hydrate(): Promise<void> {
 			try {
-				const loaded = await invoke<{
-					base_branch?: string;
-					copy_ignored_files?: boolean;
-					copy_untracked_files?: boolean;
-					setup_script?: string;
-					run_script?: string;
-					archive_script?: string;
-					worktree_storage?: WorktreeStorage;
-					prompt_on_create?: boolean;
-					delete_branch_on_remove?: boolean;
-					auto_archive_merged?: boolean;
-					orphan_cleanup?: OrphanCleanup;
-					orphan_cleanup_countdown_seconds?: number;
-					pr_merge_strategy?: MergeStrategy;
-					after_merge?: WorktreeAfterMerge;
-					auto_fetch_interval_minutes?: number;
-					auto_delete_on_pr_close?: AutoDeleteOnPrClose;
-				} | null>("load_repo_defaults");
+				const loaded = await invoke<RepoDefaultsConfig | null>("load_repo_defaults");
 				repoDefaultsWriter.loaded(loaded ?? {});
 				if (loaded) {
-					setState({
-						baseBranch: loaded.base_branch ?? INITIAL_DEFAULTS.baseBranch,
-						copyIgnoredFiles: loaded.copy_ignored_files ?? INITIAL_DEFAULTS.copyIgnoredFiles,
-						copyUntrackedFiles: loaded.copy_untracked_files ?? INITIAL_DEFAULTS.copyUntrackedFiles,
-						setupScript: loaded.setup_script ?? INITIAL_DEFAULTS.setupScript,
-						runScript: loaded.run_script ?? INITIAL_DEFAULTS.runScript,
-						archiveScript: loaded.archive_script ?? INITIAL_DEFAULTS.archiveScript,
-						worktreeStorage: loaded.worktree_storage ?? INITIAL_DEFAULTS.worktreeStorage,
-						promptOnCreate: loaded.prompt_on_create ?? INITIAL_DEFAULTS.promptOnCreate,
-						deleteBranchOnRemove: loaded.delete_branch_on_remove ?? INITIAL_DEFAULTS.deleteBranchOnRemove,
-						autoArchiveMerged: loaded.auto_archive_merged ?? INITIAL_DEFAULTS.autoArchiveMerged,
-						orphanCleanup: loaded.orphan_cleanup ?? INITIAL_DEFAULTS.orphanCleanup,
-						orphanCleanupCountdownSeconds:
-							loaded.orphan_cleanup_countdown_seconds ?? INITIAL_DEFAULTS.orphanCleanupCountdownSeconds,
-						prMergeStrategy: loaded.pr_merge_strategy ?? INITIAL_DEFAULTS.prMergeStrategy,
-						afterMerge: loaded.after_merge ?? INITIAL_DEFAULTS.afterMerge,
-						autoFetchIntervalMinutes: loaded.auto_fetch_interval_minutes ?? INITIAL_DEFAULTS.autoFetchIntervalMinutes,
-						autoDeleteOnPrClose: loaded.auto_delete_on_pr_close ?? INITIAL_DEFAULTS.autoDeleteOnPrClose,
-					});
+					setState(renderedDefaults(loaded));
 				}
 			} catch (err) {
 				appLogger.debug("config", "Failed to hydrate repo defaults", err);

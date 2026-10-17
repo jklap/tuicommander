@@ -1,6 +1,7 @@
 import { batch } from "solid-js";
-import { createStore, produce } from "solid-js/store";
+import { createStore, produce, reconcile } from "solid-js/store";
 import { invoke } from "../invoke";
+import { settingsRefresh } from "../services/settingsRefresh";
 import { subscribeEvents } from "../transport";
 import { setRemoteBaseUrlLookup, setRemoteTokenLookup } from "../transportRuntime";
 import { ensureAgentConfigs, invalidateAgentConfigs } from "./agentConfigs";
@@ -223,6 +224,25 @@ function createRemoteConnectionsStore() {
 	// ---------------------------------------------------------------------------
 
 	const actions = {
+		startRemoteSync(): () => void {
+			return settingsRefresh.register({
+				section: "connections",
+				read: () => invoke<RemoteConnection[]>("list_remote_connections"),
+				apply: (connections) => {
+					const fresh = Object.fromEntries(
+						(connections ?? []).map((connection) => [
+							connection.id,
+							{
+								...state.connections[connection.id],
+								connection,
+								status: state.connections[connection.id]?.status ?? "disconnected",
+							} as ConnectionState,
+						]),
+					);
+					setState("connections", reconcile(fresh));
+				},
+			});
+		},
 		/** Load connections and their live status, then follow the status pushes. */
 		async hydrate(): Promise<void> {
 			if (hydrated) return;

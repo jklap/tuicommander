@@ -3272,6 +3272,10 @@ Telegram replies now use TUIC-driven receipt (👀), working (👨‍💻), wait
 
 Rows returned by session `format=log` output and the `format=log|text` WebSocket include `wrapped: boolean` alongside `spans` and `cols`. True means the next row continues this logical line: concatenate span text verbatim, with no added space or newline. False means a hard line boundary. A finalized log row can wrap into the first current-screen row. Wrapped rows preserve real trailing spaces. The field is also present in the desktop `read_vt_log` response. MCP session text output applies these boundaries before redaction.
 
+### Settings change stream
+
+`GET /events` publishes `settings-changed` with `{section: string, generation: number, persisted: boolean, applied: boolean}` after a durable settings-facade write. A persisted apply failure also emits a hint, with `applied: false`; its structured error carries the same generation. A refusal or failed persistence emits no hint. Successful reads expose the current generation, while owner `revision` remains the compare-and-swap token. The counter is process-local and resets after restart: clients must refetch their active settings snapshots after SSE connect, reconnect or `lagged`, not compare generations across process lifetimes. Values and credentials are never included in the event.
+
 ### CircleCI credential settings (#1991-bd88)
 
 The machine-scoped `circleci.token` descriptor is write-only. Read

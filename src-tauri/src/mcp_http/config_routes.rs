@@ -186,13 +186,17 @@ pub(super) async fn get_notification_config() -> impl IntoResponse {
 pub(super) async fn put_notification_config(
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
     auth: Option<Extension<Authenticated>>,
+    State(state): State<Arc<AppState>>,
     Json(request): Json<crate::config::ConfigSaveRequest<crate::config::NotificationConfig>>,
 ) -> impl IntoResponse {
     if let Err(resp) = require_local_or_auth(&addr, auth.is_some()) {
         return resp;
     }
     match crate::config::save_notification_config(request.base, request.config) {
-        Ok(()) => (StatusCode::OK, Json(serde_json::json!({"ok": true}))),
+        Ok(()) => {
+            crate::settings::api::publish_change(&state, "notifications", true);
+            (StatusCode::OK, Json(serde_json::json!({"ok": true})))
+        }
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(serde_json::json!({"error": e})),
@@ -212,13 +216,17 @@ pub(super) async fn get_config_defaults_http() -> impl IntoResponse {
 pub(super) async fn put_ui_prefs(
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
     auth: Option<Extension<Authenticated>>,
+    State(state): State<Arc<AppState>>,
     Json(request): Json<crate::config::ConfigSaveRequest<crate::config::UIPrefsConfig>>,
 ) -> impl IntoResponse {
     if let Err(resp) = require_local_or_auth(&addr, auth.is_some()) {
         return resp;
     }
     match crate::config::save_ui_prefs(request.base, request.config) {
-        Ok(()) => (StatusCode::OK, Json(serde_json::json!({"ok": true}))),
+        Ok(()) => {
+            crate::settings::api::publish_change(&state, "preferences", true);
+            (StatusCode::OK, Json(serde_json::json!({"ok": true})))
+        }
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(serde_json::json!({"error": e})),
@@ -233,13 +241,17 @@ pub(super) async fn get_repo_settings() -> impl IntoResponse {
 pub(super) async fn put_repo_settings(
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
     auth: Option<Extension<Authenticated>>,
+    State(state): State<Arc<AppState>>,
     Json(request): Json<crate::config::ConfigSaveRequest<crate::config::RepoSettingsMap>>,
 ) -> impl IntoResponse {
     if let Err(resp) = require_local_or_auth(&addr, auth.is_some()) {
         return resp;
     }
     match crate::config::save_repo_settings(request.base, request.config) {
-        Ok(()) => (StatusCode::OK, Json(serde_json::json!({"ok": true}))),
+        Ok(()) => {
+            crate::settings::api::publish_change(&state, "repositories", true);
+            (StatusCode::OK, Json(serde_json::json!({"ok": true})))
+        }
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(serde_json::json!({"error": e})),
@@ -270,6 +282,7 @@ pub(super) async fn put_repositories(
         Ok(changed) => {
             if changed {
                 state.notify_repositories_changed();
+                crate::settings::api::publish_change(&state, "repositories_registration", true);
             }
             (StatusCode::OK, Json(serde_json::json!({"ok": true})))
         }
@@ -321,13 +334,17 @@ pub(super) async fn get_pane_layout() -> impl IntoResponse {
 pub(super) async fn put_pane_layout(
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
     auth: Option<Extension<Authenticated>>,
+    State(state): State<Arc<AppState>>,
     Json(request): Json<crate::config::ConfigSaveRequest<serde_json::Value>>,
 ) -> impl IntoResponse {
     if let Err(resp) = require_local_or_auth(&addr, auth.is_some()) {
         return resp;
     }
     match crate::config::save_pane_layout(request.base, request.config) {
-        Ok(()) => (StatusCode::OK, Json(serde_json::json!({"ok": true}))),
+        Ok(()) => {
+            crate::settings::api::publish_change(&state, "pane_layout", true);
+            (StatusCode::OK, Json(serde_json::json!({"ok": true})))
+        }
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(serde_json::json!({"error": e})),
@@ -375,13 +392,17 @@ pub(super) async fn get_prompt_library() -> impl IntoResponse {
 pub(super) async fn put_prompt_library(
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
     auth: Option<Extension<Authenticated>>,
+    State(state): State<Arc<AppState>>,
     Json(request): Json<crate::config::ConfigSaveRequest<crate::config::PromptLibraryConfig>>,
 ) -> impl IntoResponse {
     if let Err(resp) = require_local_or_auth(&addr, auth.is_some()) {
         return resp;
     }
     match crate::config::save_prompt_library(request.base, request.config) {
-        Ok(()) => (StatusCode::OK, Json(serde_json::json!({"ok": true}))),
+        Ok(()) => {
+            crate::settings::api::publish_change(&state, "prompts", true);
+            (StatusCode::OK, Json(serde_json::json!({"ok": true})))
+        }
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(serde_json::json!({"error": e})),
@@ -398,13 +419,17 @@ pub(super) async fn get_repo_defaults() -> impl IntoResponse {
 pub(super) async fn put_repo_defaults(
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
     auth: Option<Extension<Authenticated>>,
+    State(state): State<Arc<AppState>>,
     Json(request): Json<crate::config::ConfigSaveRequest<crate::config::RepoDefaultsConfig>>,
 ) -> impl IntoResponse {
     if let Err(resp) = require_local_or_auth(&addr, auth.is_some()) {
         return resp;
     }
     match crate::config::save_repo_defaults(request.base, request.config) {
-        Ok(()) => (StatusCode::OK, Json(serde_json::json!({"ok": true}))),
+        Ok(()) => {
+            crate::settings::api::publish_change(&state, "repo_defaults", true);
+            (StatusCode::OK, Json(serde_json::json!({"ok": true})))
+        }
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(serde_json::json!({"error": e})),
@@ -474,13 +499,17 @@ pub(super) async fn get_keybindings() -> impl IntoResponse {
 pub(super) async fn put_keybindings(
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
     auth: Option<Extension<Authenticated>>,
+    State(state): State<Arc<AppState>>,
     Json(request): Json<crate::config::ConfigSaveRequest<serde_json::Value>>,
 ) -> impl IntoResponse {
     if let Err(resp) = require_local_or_auth(&addr, auth.is_some()) {
         return resp;
     }
     match crate::config::save_keybindings(request.base, request.config) {
-        Ok(()) => (StatusCode::OK, Json(serde_json::json!({"ok": true}))),
+        Ok(()) => {
+            crate::settings::api::publish_change(&state, "keybindings", true);
+            (StatusCode::OK, Json(serde_json::json!({"ok": true})))
+        }
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(serde_json::json!({"error": e})),
@@ -497,13 +526,17 @@ pub(super) async fn get_agents_config() -> impl IntoResponse {
 pub(super) async fn put_agents_config(
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
     auth: Option<Extension<Authenticated>>,
+    State(state): State<Arc<AppState>>,
     Json(request): Json<crate::config::ConfigSaveRequest<crate::config::AgentsConfig>>,
 ) -> impl IntoResponse {
     if let Err(resp) = require_local_or_auth(&addr, auth.is_some()) {
         return resp;
     }
     match crate::config::save_agents_config(request.base, request.config) {
-        Ok(()) => (StatusCode::OK, Json(serde_json::json!({"ok": true}))),
+        Ok(()) => {
+            crate::settings::api::publish_change(&state, "agents", true);
+            (StatusCode::OK, Json(serde_json::json!({"ok": true})))
+        }
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(serde_json::json!({"error": e})),
@@ -646,7 +679,10 @@ pub(super) async fn put_remote_connection(
         request.base,
         request.connection,
     ) {
-        Ok(()) => Json(serde_json::json!({"ok": true})).into_response(),
+        Ok(()) => {
+            crate::settings::api::publish_change(&state, "connections", true);
+            Json(serde_json::json!({"ok": true})).into_response()
+        }
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(serde_json::json!({"error": e})),
@@ -690,12 +726,14 @@ pub(super) async fn delete_remote_connection(
     // Same reason as the IPC command: the vault key is the connection's UUID, so
     // a secret left behind belongs to an id nothing can name again.
     if let Err(e) = crate::remote_connection::set_connection_password(&id, "") {
+        crate::settings::api::publish_change(&state, "connections", false);
         return (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(serde_json::json!({"error": e})),
         )
             .into_response();
     }
+    crate::settings::api::publish_change(&state, "connections", true);
     Json(serde_json::json!({"ok": true})).into_response()
 }
 

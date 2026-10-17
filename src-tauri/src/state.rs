@@ -362,6 +362,8 @@ pub enum AppEvent {
     /// every save — including the client that just wrote it.
     #[serde(rename = "repositories-changed")]
     RepositoriesChanged,
+    #[serde(rename = "settings-changed")]
+    SettingsChanged(crate::settings::changes::SettingsChanged),
     #[serde(rename = "open-markdown-tabs-changed")]
     OpenMarkdownTabsChanged,
     /// Directory contents changed (non-git filesystem watcher)
@@ -4440,6 +4442,20 @@ impl AppState {
         }
     }
 
+    /// Dual-emit the same value-free payload; there is no bus-to-window forwarder.
+    pub(crate) fn publish_settings_changed(
+        &self,
+        notice: crate::settings::changes::SettingsChanged,
+    ) {
+        let _ = self
+            .event_bus
+            .send(AppEvent::SettingsChanged(notice.clone()));
+        #[cfg(feature = "desktop")]
+        if let Some(app) = self.app_handle.read().as_ref() {
+            let _ = app.emit("settings-changed", &notice);
+        }
+    }
+
     /// Default rate limit expiry when no retry_after_ms is provided (120s).
     const RATE_LIMIT_DEFAULT_EXPIRY_MS: u64 = 120_000;
 
@@ -5347,6 +5363,7 @@ impl AppState {
             | AppEvent::McpConfirm { .. }
             | AppEvent::McpConfirmResolved { .. }
             | AppEvent::OpenMarkdownTabsChanged
+            | AppEvent::SettingsChanged(_)
             | AppEvent::RepositoriesChanged
             | AppEvent::DirChanged { .. }
             | AppEvent::SessionWorktreeDeclared { .. }

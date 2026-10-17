@@ -2447,6 +2447,13 @@ Needs an iPhone (iOS 16.4+, 18.4+ preferred), the desktop TUICommander running a
 
 - [ ] [VISUAL] #1982-ee68: After the backend rebuild, capture the same tab-separated Claude Edit in Chat at 390 px in Commander and Paper. Expand tool activity and its edit; confirm full-width old/new backgrounds, aligned columns and horizontal scrolling. From phone CLI tap Read file edits in Chat, then CLI; verify terminal history and draft remain intact, with CLI following the latest output. Includes Rust projection changes, so Boss must restart make dev or rebuild release when ready; no Rust hot reload.
 
+## Settings MCP live refresh (#1788-2163)
+
+- [ ] After a Boss-controlled `make dev` restart or release rebuild, patch settings through an isolated instance's published settings API while Settings is open. Verify desktop and browser update without a save echo.
+- [ ] Keep an unsaved field while MCP changes an untouched field, then the same field. Verify the draft survives and the conflict notice appears. Reconnect the browser and verify a fresh snapshot after the process generation resets.
+- [ ] In a remote machine's Agents/Upstreams editor, change settings on that daemon and verify only that machine reloads; local settings must not change. No Boss sessions or live credentials were used by automated verification.
+
+- [ ] #1788-2163 critic fixes: after Boss rebuilds/restarts Rust, interrupt only a remote daemon event stream while health stays connected, then change settings and reconnect. Verify that owner refreshes after the generation resets, without reloading local or other remote settings. Keep a launch-instruction draft and issue two rapid repository-default edits during a settings refresh; verify the draft survives and both nonconflicting edits persist. No desktop restart was performed by the agent.
 - [ ] After the next backend restart, check Claude trust, external-import and Bash permission dialogs in mobile CLI: all options and the footer must remain visible (#1987-606c). Rust changes require a manual restart to load.
 
 - [ ] After a manual Rust rebuild/restart, answer an ego selector and submit an ordinary prompt: no orange awaiting dot or question sound from the answered selector; a real new question still alerts (#1997-eb30).

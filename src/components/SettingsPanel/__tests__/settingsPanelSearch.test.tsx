@@ -105,6 +105,12 @@ async function openResult(container: HTMLElement, query: string, tab: string, ro
 describe("SettingsPanel search", () => {
 	beforeEach(() => {
 		vi.clearAllMocks();
+		mockInvoke.mockImplementation(async (command: string) => {
+			if (command === "load_mcp_upstreams") return { servers: [] };
+			if (command === "list_remote_connections" || command === "remote_connection_statuses") return [];
+			if (command === "discover_ssh_hosts") return { hosts: [], hashed_count: 0 };
+			return undefined;
+		});
 		vi.spyOn(appLogger, "warn").mockImplementation(() => {});
 		vi.spyOn(appLogger, "error").mockImplementation(() => {});
 		vi.mocked(settingsStore.isAiChatEnabled).mockReturnValue(false);

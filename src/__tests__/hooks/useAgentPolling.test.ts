@@ -1142,7 +1142,7 @@ describe("useAgentPolling", () => {
 				await tick(0);
 
 				expect(
-					[...listeners.keys()].filter((name) => name.startsWith("remote")),
+					[...listeners.keys()].filter((name) => name.startsWith("remote") && name !== "remote-connection-status"),
 					"a mirrored event must need no subscription of its own",
 				).toEqual([]);
 
