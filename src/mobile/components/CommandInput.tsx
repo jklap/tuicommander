@@ -113,7 +113,12 @@ export function CommandInput(props: CommandInputProps) {
 	const [choiceSending, setChoiceSending] = createSignal(false);
 	const [codexNotesMode, setCodexNotesMode] = createSignal(false);
 	const atomicReply = () =>
-		props.managedSession && props.awaitingInput && !props.choicePrompt && !props.codexQuestionOpen && !codexNotesMode();
+		props.managedSession &&
+		props.awaitingInput &&
+		!props.choicePrompt &&
+		!props.questionText &&
+		!props.codexQuestionOpen &&
+		!codexNotesMode();
 	// A multi-question form replaces its prompt without an empty frame between
 	// the answered question and the next one, so a new prompt re-arms the buttons too.
 	// Keyed on content, not object identity: an identical snapshot redelivered
@@ -335,9 +340,15 @@ export function CommandInput(props: CommandInputProps) {
 					submitted: boolean;
 					acknowledged: boolean;
 					reason?: string;
+					detail?: string;
 				}>("submit_agent_reply", { sessionId: props.sessionId, input: text });
 				if (!receipt.submitted) {
-					toastsStore.add("Reply not sent", receipt.reason ?? "The session is not ready for a reply", "error", true);
+					toastsStore.add(
+						"Reply not sent",
+						receipt.detail ?? receipt.reason ?? "The session is not ready for a reply",
+						"error",
+						true,
+					);
 					return;
 				}
 				if (!receipt.acknowledged) {
@@ -357,8 +368,14 @@ export function CommandInput(props: CommandInputProps) {
 						const result: unknown = JSON.parse(err.body);
 						const reason =
 							typeof result === "object" && result !== null && "reason" in result ? result.reason : undefined;
-						if (reason === "session_not_found") msg = "This session has ended";
-						else if (reason === "agent_not_ready") msg = "The agent is busy. Check the session before retrying.";
+						const detail =
+							typeof result === "object" && result !== null && "detail" in result ? result.detail : undefined;
+						if (typeof detail === "string" && detail.trim()) msg = detail;
+						else if (reason === "session_not_found") msg = "This session has ended";
+						else if (reason === "agent_not_ready")
+							msg = props.awaitingInput
+								? "The agent is waiting for input. Check its question before retrying."
+								: "The agent is busy. Check the session before retrying.";
 						else if (reason === "partial_composer")
 							msg = "The agent already has a draft. Check the session before retrying.";
 						else if (err.status === 409) msg = "The session is not ready. Check it before retrying.";
