@@ -65,8 +65,10 @@ export const SettingSelect: Component<{
 		when={props.row}
 		fallback={
 			<div class={s.group}>
-				<label>{props.label}</label>
-				<ContextualHelp label={props.label} hint={props.hint} />
+				<div class={s.helpLabel}>
+					<label>{props.label}</label>
+					<ContextualHelp label={props.label} hint={props.hint} />
+				</div>
 				<Select value={props.value} onChange={(e) => props.onChange(e.currentTarget.value)}>
 					<For each={props.options}>{(opt) => <option value={opt.value}>{opt.label}</option>}</For>
 				</Select>
@@ -111,8 +113,10 @@ export const SettingSlider: Component<{
 		when={props.row}
 		fallback={
 			<div class={s.group}>
-				<label>{props.label}</label>
-				<ContextualHelp label={props.label} hint={props.hint} />
+				<div class={s.helpLabel}>
+					<label>{props.label}</label>
+					<ContextualHelp label={props.label} hint={props.hint} />
+				</div>
 				<div class={s.slider}>
 					<input
 						type="range"
@@ -167,8 +171,10 @@ export const SettingInput: Component<{
 		when={props.row}
 		fallback={
 			<div class={s.group}>
-				<label>{props.label}</label>
-				<ContextualHelp label={props.label} hint={props.hint} />
+				<div class={s.helpLabel}>
+					<label>{props.label}</label>
+					<ContextualHelp label={props.label} hint={props.hint} />
+				</div>
 				<Input
 					type={props.type ?? "text"}
 					value={props.value}

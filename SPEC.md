@@ -1148,7 +1148,7 @@ Internal voice settings refresh resolves devices, model state, installed voices 
 
 ### Settings restyle foundation (1936-0caa)
 
-The approved 2026-10-16 Settings restyle starts with a stable 1136px maximum shell and shared presentation-only vocabulary. Existing lazy mounting, persisted navigation width, configuration sources and save boundaries remain unchanged. Individual page adoption is separate work.
+The approved 2026-10-16 Settings restyle uses a stable 1136px maximum shell and shared presentation-only vocabulary across Application, Workspace, AI, Integrations, loaded plugin pages and repository pages. Existing lazy mounting, persisted navigation width, configuration sources and save boundaries remain unchanged. Search uses static and loaded-plugin catalogues without mounting all pages; expert results reveal the requested control without changing the persisted Expert preference. Section links wait for the selected page to mount and retain retired-tab mappings. Plugin loading/read failures stay inside the editor, and unloaded plugins cannot retain editors or search entries. S10 adds integrated boundary coverage and documentation; Commander/Paper visual comparison remains a separate capture gate.
 
 ### Terminal ego provider recovery
 

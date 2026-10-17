@@ -531,8 +531,10 @@ export const GeneralTab: Component = () => {
 					}
 				>
 					<div class={s.group}>
-						<label>{t("general.label.egoExecutable", "ego executable")}</label>
-						<ContextualHelp label="ego executable" />
+						<div class={s.helpLabel}>
+							<label>{t("general.label.egoExecutable", "ego executable")}</label>
+							<ContextualHelp label="ego executable" />
+						</div>
 						<Show
 							when={settingsStore.isAcpConfigured()}
 							fallback={

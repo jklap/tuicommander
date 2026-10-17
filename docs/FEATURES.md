@@ -3150,7 +3150,7 @@ AI Chat can pin repository context per conversation. A separate composer control
 
 ### Settings layout foundation
 
-Settings shares a responsive shell (1136px maximum, 80vh height) and reusable theme-aware cards, rows, status summaries and scoped action presentation. Existing settings behavior is unchanged; page-by-page adoption follows separately.
+Settings shares a responsive shell (1136px maximum, 80vh height) and reusable theme-aware cards, rows, status summaries and scoped action presentation across global, plugin and repository pages. Catalogue search preserves lazy page loading and reveals expert matches without changing Expert Mode. Section links retain their page mappings; plugin loading, read failures and unloads remain local to their scoped editors. Existing settings ownership and save behavior are unchanged.
 
 Pocket spoken replies keep a missing selected voice visible and downloadable; while its download is absent, a ready bundle speaks with its own language default.
 
