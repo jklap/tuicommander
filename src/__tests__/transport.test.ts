@@ -2144,6 +2144,12 @@ describe("transport", () => {
 				body: { account: "selected", reference: githubReference, request: githubRequest },
 			});
 
+			// Catches: cancellation losing plugin/request identity in browser transport.
+			expect(mapCommandToHttp("plugin_http_cancel", { pluginId: "my-plugin", requestId: "req-1" })).toEqual({
+				method: "POST",
+				path: "/api/plugins/my-plugin/http/cancel",
+				body: { requestId: "req-1" },
+			});
 			// plugin_http_fetch
 			const hf = mapCommandToHttp("plugin_http_fetch", {
 				pluginId: "my-plugin",
@@ -2152,6 +2158,7 @@ describe("transport", () => {
 				headers: { "Content-Type": "application/json" },
 				body: "{}",
 				account: "acct-1",
+				requestId: "req-1",
 			});
 			expect(hf.method).toBe("POST");
 			expect(hf.path).toBe("/api/plugins/my-plugin/http");
@@ -2162,6 +2169,7 @@ describe("transport", () => {
 				headers: { "Content-Type": "application/json" },
 				body: "{}",
 				account: "acct-1",
+				requestId: "req-1",
 			});
 
 			// plugin_read_session_output — with and without maxLines

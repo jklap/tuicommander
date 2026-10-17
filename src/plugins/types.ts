@@ -390,6 +390,8 @@ export interface HttpResponse {
 
 /** Options for an HTTP fetch request. */
 export interface HttpFetchOptions {
+	/** Cancels the backend request, including response body collection. */
+	signal?: AbortSignal;
 	/** HTTP method (default: "GET") */
 	method?: string;
 	/** Request headers */
