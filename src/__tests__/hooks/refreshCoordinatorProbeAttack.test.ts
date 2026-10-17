@@ -72,6 +72,29 @@ describe("refresh coordinator checkout probe (#1317, critic round 2)", () => {
 		vi.advanceTimersByTime(61_000);
 	}
 
+	// Catches: stale sidebar membership kills a repo-root coordinator on worktree removal.
+	it("preserves a repo-root tab misfiled under a removed worktree", async () => {
+		const tid = addWorktreeWithTerminal("gone", "/wt/gone");
+		terminalsStore.update(tid, { cwd: "/repo", placementPath: "/wt/gone" });
+		await refresh("/repo");
+		expect(closeTerminal).not.toHaveBeenCalledWith(tid, true);
+		expect(terminalsStore.get(tid)).toBeDefined();
+		expect(repositoriesStore.findOwnerForTerminal(tid)?.workspaceId).toBe("main");
+		expect(repositoriesStore.get("/repo")?.workspaces.gone).toBeUndefined();
+	});
+
+	// Catches: a cwd read before the asynchronous checkout probe kills a terminal that left it.
+	it("preserves a terminal that leaves the worktree while its checkout probe is pending", async () => {
+		const tid = addWorktreeWithTerminal("gone", "/wt/gone");
+		probe = async () => {
+			terminalsStore.update(tid, { cwd: "/repo" });
+			return { branch: "", is_git_repo: false };
+		};
+		await refresh("/repo");
+		expect(closeTerminal).not.toHaveBeenCalledWith(tid, true);
+		expect(repositoriesStore.findOwnerForTerminal(tid)?.workspaceId).toBe("main");
+	});
+
 	it("a really deleted worktree is closed and its row removed in the same refresh", async () => {
 		// Bug caught: the probe reads "keep" for a path that is gone (inverted is_git_repo),
 		// leaving a ghost row with a dead terminal forever.

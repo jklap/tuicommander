@@ -261,12 +261,12 @@ Right-click an HTTP(S) terminal link (including localhost) and choose **Start in
 
 ### 1.10 Move Terminal to Worktree
 
-MCP worktree creation without an explicit session spawn places only its
-same-repository caller in the new workspace. Agents working through `git -C`
-can declare an existing worktree with `session action=declare_worktree
-worktree_path=/absolute/path`. The backend validates ownership, moves only the
-caller and persists the association through restart. Shell cwd and other tabs
-remain unchanged. See [MCP backend](backend/mcp-http.md).
+MCP worktree creation registers the new workspace without moving a caller whose
+cwd is outside it. Agents working through `git -C` can record an association with
+`session action=declare_worktree worktree_path=/absolute/path`. That association
+does not override cwd for tab placement or removal. Removing or recycling a
+worktree closes only terminals whose current cwd lies inside it; unrelated tabs
+filed under a stale workspace survive and are re-homed. See [MCP backend](backend/mcp-http.md).
 
 - Right-click a terminal tab → "Move to Worktree" submenu lists available worktrees (excluding the current one)
 - Selecting a worktree sends `cd` to the PTY; OSC 7 auto-reassigns the terminal to the target branch

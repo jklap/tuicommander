@@ -227,7 +227,7 @@ function collectTerminalSnapshots(): Map<string, Map<string, SavedTerminal[]>> {
 
 /** Attach a backend PTY session to the best matching repo/branch.
  * Remote sessions may use a cwd below a repo or outside every configured repo,
- * so reconnect must use the same ancestor matching and active-branch fallback
+ * so reconnect must use the same cwd-based repository/workspace matching
  * as the live session-created path. */
 function assignSessionToRepoBranch(
 	sessionId: string,
@@ -272,6 +272,7 @@ function assignSessionToRepoBranch(
 	// is still reachable (the session exists, reconcile re-homes it on registration)
 	// and consolidation is opt-in, so this waits for a real report rather than a
 	// speculative change to what the badge counts.
+	terminalsStore.setRepoPath(terminalId, null);
 	globalWorkspaceStore.promote(terminalId, MANUAL_SCOPE);
 
 	// Which repo the user would have to register to fix this. Without it the
@@ -782,13 +783,7 @@ export async function initApp(deps: AppInitDeps) {
 		if (event.payload.__tuic_origin !== undefined) return;
 		const record = event.payload.record;
 		const id = adoptSuspendedSession(record, deps.getDefaultFontSize());
-		assignSessionToRepoBranch(
-			record.session_id,
-			id,
-			record.worktree?.path ?? record.cwd,
-			deps.registerRepo,
-			deps.refreshAllBranchStats,
-		);
+		assignSessionToRepoBranch(record.session_id, id, record.cwd, deps.registerRepo, deps.refreshAllBranchStats);
 	}).catch((err) => appLogger.error("app", "Failed to register session-suspended listener", err));
 
 	listen<{ session_id: string; alias: string; __tuic_origin?: unknown }>("term-alias-assigned", (event) => {
@@ -1082,7 +1077,7 @@ export async function initApp(deps: AppInitDeps) {
 				// name came from: every OSC/intent title is synced back as non-custom.
 				nameFromSpawn: session.display_name_from_spawn === true,
 				parentSession: session.parent_session ?? null,
-				placementPath: session.worktree_path ?? null,
+				placementPath: null,
 				...(session.tuic_session ? { tuicSession: session.tuic_session } : {}),
 				...(session.state?.agent_type !== undefined ? { agentType: parseAgentType(session.state.agent_type) } : {}),
 				// The Context bar mounts once intent or prompt is known. Waiting for the
@@ -1101,13 +1096,7 @@ export async function initApp(deps: AppInitDeps) {
 			});
 			if (session.is_remote) remoteSessionTabs.set(session.session_id, id);
 
-			assignSessionToRepoBranch(
-				session.session_id,
-				id,
-				session.worktree_path ?? session.cwd,
-				deps.registerRepo,
-				deps.refreshAllBranchStats,
-			);
+			assignSessionToRepoBranch(session.session_id, id, session.cwd, deps.registerRepo, deps.refreshAllBranchStats);
 		}
 		terminalsStore.setActive(terminalsStore.getIds()[0]);
 	}
@@ -1146,13 +1135,7 @@ export async function initApp(deps: AppInitDeps) {
 		});
 		for (const record of Object.values(records ?? {})) {
 			const id = adoptSuspendedSession(record, deps.getDefaultFontSize());
-			assignSessionToRepoBranch(
-				record.session_id,
-				id,
-				record.worktree?.path ?? record.cwd,
-				deps.registerRepo,
-				deps.refreshAllBranchStats,
-			);
+			assignSessionToRepoBranch(record.session_id, id, record.cwd, deps.registerRepo, deps.refreshAllBranchStats);
 		}
 	} catch (error) {
 		appLogger.error("app", "Failed to restore suspended sessions", error);

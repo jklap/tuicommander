@@ -5,6 +5,7 @@ import { paneLayoutStore } from "../../stores/paneLayout";
 import { repoSettingsStore } from "../../stores/repoSettings";
 import { repositoriesStore } from "../../stores/repositories";
 import { paneLayoutKey, savedPaneLayouts } from "../../stores/savedPaneLayouts";
+import { reconcileTerminalOwnership } from "../../stores/terminalOwnership";
 import { terminalsStore } from "../../stores/terminals";
 import type { SavedTerminal } from "../../types";
 import { resolveAgentResume, verifyAndBuildResumeCommand } from "../../utils/agentSession";
@@ -138,9 +139,6 @@ export function createBranchSelectionCoordinator(deps: BranchSelectionCoordinato
 				fontSize: terminal.fontSize,
 				name: terminal.name,
 				cwd: terminal.cwd,
-				placementPath: terminal.tuicSession
-					? repositoriesStore.get(repoPath)?.declaredWorktrees?.[terminal.tuicSession]?.worktreePath
-					: undefined,
 				awaitingInput: null,
 				tuicSession: terminal.tuicSession ?? crypto.randomUUID(),
 				agentType: terminal.agentType ?? null,
@@ -167,6 +165,7 @@ export function createBranchSelectionCoordinator(deps: BranchSelectionCoordinato
 			// Same reason as handleAddTerminalToWorkspace: a restore knows its repo.
 			terminalsStore.setRepoPath(id, repoPath);
 			repositoriesStore.addTerminalToWorkspace(repoPath, workspaceId, id);
+			reconcileTerminalOwnership(id);
 			restoredIds.push({ id, terminal, resolution });
 		}
 		return restoredIds;

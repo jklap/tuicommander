@@ -31,8 +31,8 @@ describe("worktree placement lifecycle regressions", () => {
 		terminalsStore._testCancelPendingTimers();
 	});
 
-	// Catches: a repository refresh reconciles the creator back to its unchanged shell cwd.
-	it("keeps the worktree creator in its new workspace after ownership reconciliation", async () => {
+	// Catches: creation and reconciliation move a root coordinator into a checkout it never entered.
+	it("keeps a repo-root worktree creator in its actual cwd workspace", async () => {
 		await testInScopeAsync(async () => {
 			const id = terminalsStore.add(makeTerminal({ sessionId: "creator-pty", cwd: REPO, agentType: "codex" }));
 			terminalsStore.setRepoPath(id, REPO);
@@ -54,15 +54,15 @@ describe("worktree placement lifecycle regressions", () => {
 					spawn_session: false,
 				},
 			});
-			expect(repositoriesStore.findOwnerForTerminal(id)?.workspaceId).toBe("feature");
+			expect(repositoriesStore.findOwnerForTerminal(id)?.workspaceId).toBe("main");
 			reconcileTerminalOwnership();
-			expect(repositoriesStore.findOwnerForTerminal(id)?.workspaceId).toBe("feature");
+			expect(repositoriesStore.findOwnerForTerminal(id)?.workspaceId).toBe("main");
 			expect(terminalsStore.get(id)?.cwd).toBe(REPO);
 		});
 	});
 
-	// Catches: cold restart restores the snapshot but loses the durable declaration on reconciliation.
-	it("keeps a declared worktree after restoring a saved agent whose shell cwd stayed in main", async () => {
+	// Catches: cold restart trusts a stale declaration instead of the saved cwd.
+	it("restores a saved root agent under main despite a stale worktree declaration", async () => {
 		await testInScopeAsync(async () => {
 			const repo = repositoriesStore.get(REPO);
 			if (!repo) throw new Error("fixture repository missing");
@@ -107,9 +107,9 @@ describe("worktree placement lifecycle regressions", () => {
 			await new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve())));
 			const id = terminalsStore.getIds().find((id) => terminalsStore.get(id)?.tuicSession === "stable-peer");
 			if (!id) throw new Error("saved agent was not restored");
-			expect(repositoriesStore.findOwnerForTerminal(id)?.workspaceId).toBe("feature");
+			expect(repositoriesStore.findOwnerForTerminal(id)?.workspaceId).toBe("main");
 			reconcileTerminalOwnership();
-			expect(repositoriesStore.findOwnerForTerminal(id)?.workspaceId).toBe("feature");
+			expect(repositoriesStore.findOwnerForTerminal(id)?.workspaceId).toBe("main");
 			expect(terminalsStore.get(id)?.cwd).toBe(REPO);
 		});
 	});

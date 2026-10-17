@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+- Preserve unrelated repo-root tabs when a worktree is removed or recycled; terminal placement and cleanup follow cwd instead of stale workspace membership (#1999-95b0).
+
 - Discover and manage the write-only CircleCI credential through the shared Settings owner across MCP, IPC and HTTP (#1991-bd88).
 
 - Add desktop and mobile terminal Chat view for exact-bound ego sessions through the documented local transcript v1 export, with tool cards, goal continuation notices and compaction resets (#1969-ac9b).

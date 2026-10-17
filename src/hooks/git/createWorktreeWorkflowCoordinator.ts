@@ -5,7 +5,7 @@ import { autofixBranchName } from "../../stores/autofix";
 import { githubStore } from "../../stores/github";
 import { repoSettingsStore } from "../../stores/repoSettings";
 import { repositoriesStore } from "../../stores/repositories";
-import { terminalsStore } from "../../stores/terminals";
+import { closeWorktreeTerminals, removeWorktreeWorkspace } from "../../stores/terminalOwnership";
 import type { WorkspaceLifecycleStatus } from "../../stores/workspaceIdentity";
 import { effectiveMergeMethod, isMergeHeadChanged, isMergeMethodNotAllowed } from "../../utils/prMerge";
 import { reportActionError } from "../../utils/reportActionError";
@@ -178,37 +178,12 @@ export function createWorktreeWorkflowCoordinator(deps: WorktreeWorkflowCoordina
 		}
 	};
 
-	/** Merge a worktree branch into target, then archive/delete based on setting.
-	 *  When the branch has an open PR, uses GitHub API with the configured merge strategy.
-	 *  Falls back to local git merge if no PR is found or GitHub API fails. */
-	/** Close all terminals whose cwd is inside a worktree path. One that will not close does not
-	 *  stop the rest; the failures are thrown together once every terminal was tried. */
-	const closeTerminalsInWorktree = async (wtPath: string) => {
-		const failures: unknown[] = [];
-		for (const termId of terminalsStore.getIds()) {
-			const terminal = terminalsStore.get(termId);
-			if (terminal?.cwd && (terminal.cwd === wtPath || terminal.cwd.startsWith(wtPath + "/"))) {
-				try {
-					await deps.closeTerminal(termId, true);
-				} catch (err) {
-					failures.push(err);
-				}
-			}
-		}
-		if (failures.length > 0) {
-			throw new AggregateError(failures, `${failures.length} terminal(s) could not be closed`);
-		}
-	};
+	/** All cleanup entry points share the same cwd-based close authority. */
+	const closeTerminalsInWorktree = (worktreePath: string) => closeWorktreeTerminals(worktreePath, deps.closeTerminal);
 
-	/** Close every terminal filed under one workspace. */
 	const closeTerminalsForBranch = async (repoPath: string, workspaceId: string) => {
-		const repoState = repositoriesStore.get(repoPath);
-		const branch = repoState?.workspaces[workspaceId];
-		if (branch) {
-			for (const termId of branch.terminals) {
-				await deps.closeTerminal(termId, true);
-			}
-		}
+		const worktreePath = repositoriesStore.get(repoPath)?.workspaces[workspaceId]?.worktreePath;
+		if (worktreePath) await closeTerminalsInWorktree(worktreePath);
 	};
 
 	/** Merge one workspace's branch into `targetBranch`, then dispose of that
@@ -261,7 +236,7 @@ export function createWorktreeWorkflowCoordinator(deps: WorktreeWorkflowCoordina
 					return;
 				}
 				deps.setStatusInfo(`Merged ${branchName} via GitHub (${action === "archive" ? "archived" : "deleted"})`);
-				repositoriesStore.removeWorkspace(repoPath, workspaceId);
+				removeWorktreeWorkspace(repoPath, workspaceId);
 				await refreshAllBranchStats(repoPath);
 				return;
 			}
@@ -419,7 +394,7 @@ export function createWorktreeWorkflowCoordinator(deps: WorktreeWorkflowCoordina
 		deps.setStatusInfo(`${branchName} → ${targetBranch}: ${carried} (${result.action})`);
 
 		// Drop the row from the sidebar
-		repositoriesStore.removeWorkspace(repoPath, workspaceId);
+		removeWorktreeWorkspace(repoPath, workspaceId);
 
 		// Refresh to pick up updated branch stats
 		await refreshAllBranchStats(repoPath);
