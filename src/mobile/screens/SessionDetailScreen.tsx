@@ -513,40 +513,42 @@ export function SessionDetailScreen(props: SessionDetailScreenProps) {
 					agentType={sessionState()?.agent_type as string | null | undefined}
 				/>
 			</Show>
-			<TerminalKeybar
-				showScrollToBottom={chat.active() ? !chat.atBottom() : !cliAtBottom()}
-				onScrollToBottom={() => (chat.active() ? chat.scrollToBottom() : jumpCli?.())}
-				sessionId={props.session.session_id}
-				agentType={sessionState()?.agent_type as string | null | undefined}
-				awaitingInput={sessionState()?.awaiting_input}
-				choicePromptOpen={!!sessionState()?.choice_prompt}
-				questionConfident={sessionState()?.question_confident}
-				sessionExists={props.sessionExists}
-				onCommandWidgetOpen={() => setCommandWidgetOpen(true)}
-				onSlashRequest={() => insertComposerText?.("/")}
-				onInputKeyRequest={(key) => requestComposerInputKey?.(key)}
-			/>
-			<CommandInput
-				serverVoiceRecording={voice.recording()}
-				onBrowserDictating={setBrowserDictating}
-				sessionId={props.session.session_id}
-				managedSession={!!sessionState()?.agent_type}
-				awaitingInput={sessionState()?.awaiting_input}
-				sessionExists={props.sessionExists}
-				prefillValue={inputPrefill()}
-				ptyInputLine={ptyInputLine()}
-				agentType={sessionState()?.agent_type ?? null}
-				slashItems={sessionState()?.slash_menu_items}
-				choicePrompt={agentType() === "ego" && !egoQuestionOpen() ? undefined : sessionState()?.choice_prompt}
-				questionText={egoQuestionOpen() && !sessionState()?.choice_prompt ? sessionState()?.question_text : undefined}
-				codexQuestionOpen={codexQuestionOpen()}
-				onRegisterInsertText={(fn) => {
-					insertComposerText = fn;
-				}}
-				onRegisterInputKey={(fn) => {
-					requestComposerInputKey = fn;
-				}}
-			/>
+			<div class={styles.controls}>
+				<TerminalKeybar
+					showScrollToBottom={chat.active() ? !chat.atBottom() : !cliAtBottom()}
+					onScrollToBottom={() => (chat.active() ? chat.scrollToBottom() : jumpCli?.())}
+					sessionId={props.session.session_id}
+					agentType={sessionState()?.agent_type as string | null | undefined}
+					awaitingInput={sessionState()?.awaiting_input}
+					choicePromptOpen={!!sessionState()?.choice_prompt}
+					questionConfident={sessionState()?.question_confident}
+					sessionExists={props.sessionExists}
+					onCommandWidgetOpen={() => setCommandWidgetOpen(true)}
+					onSlashRequest={() => insertComposerText?.("/")}
+					onInputKeyRequest={(key) => requestComposerInputKey?.(key)}
+				/>
+				<CommandInput
+					serverVoiceRecording={voice.recording()}
+					onBrowserDictating={setBrowserDictating}
+					sessionId={props.session.session_id}
+					managedSession={!!sessionState()?.agent_type}
+					awaitingInput={sessionState()?.awaiting_input}
+					sessionExists={props.sessionExists}
+					prefillValue={inputPrefill()}
+					ptyInputLine={ptyInputLine()}
+					agentType={sessionState()?.agent_type ?? null}
+					slashItems={sessionState()?.slash_menu_items}
+					choicePrompt={agentType() === "ego" && !egoQuestionOpen() ? undefined : sessionState()?.choice_prompt}
+					questionText={egoQuestionOpen() && !sessionState()?.choice_prompt ? sessionState()?.question_text : undefined}
+					codexQuestionOpen={codexQuestionOpen()}
+					onRegisterInsertText={(fn) => {
+						insertComposerText = fn;
+					}}
+					onRegisterInputKey={(fn) => {
+						requestComposerInputKey = fn;
+					}}
+				/>
+			</div>
 			<Show when={commandWidgetOpen()}>
 				<CommandWidget
 					sessionId={props.session.session_id}
