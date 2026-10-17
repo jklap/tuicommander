@@ -43,6 +43,7 @@ pub fn tool_definition() -> Value {
                         "once_at":{"type":["string","null"],"description":"Exact UTC occurrence returned by the host; preserve on unchanged schedule edits"},
                         "once_local":{"type":["string","null"],"description":"Local YYYY-MM-DDTHH:MM:SS; cron must be empty"},
                         "created_by_session":{"type":["string","null"],"description":"Ignored on create; host owns provenance"},
+                        "next_run_ms":{"type":["integer","null"],"readOnly":true,"description":"Computed next occurrence returned by create; ignored when a saved reply is reused for update or preview_definition"},
                         "cron":{"type":"string"}, "timezone":{"type":"string","description":"IANA zone; defaults to local on creation"},
                         "enabled":{"type":"boolean"}, "grace_secs":{"type":"integer","minimum":1},
                         "overlap":{"type":"string","enum":["skip"]}, "max_duration_secs":{"type":"integer","minimum":1},

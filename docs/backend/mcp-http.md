@@ -2201,7 +2201,9 @@ Create returns the saved fields plus `next_run_ms` and the resolved
 positive integer and cannot accompany cron or `once_local`. The stored `once_at`
 preserves the exact UTC instant across DST folds. Preserve it for unchanged
 schedule edits, or clear it when changing the schedule. Computed `next_run_ms` is
-read-only and is ignored when a reply is passed to update or preview.
+read-only and is ignored when a reply is passed to update or preview. The MCP
+schema declares this field as a read-only nullable integer so a saved reply also
+passes the closed-object update/definition-preview property boundary.
 
 MCP creation requires a bound agent session. The host sets `created_by_session`;
 input cannot impersonate a creator, and updates preserve the original creator.
