@@ -1,9 +1,9 @@
 # Git Operations
 
-Backend-authored creator placement uses the terminal's existing `placementPath`
-so ownership reconciliation preserves its workspace independently of shell cwd.
-Cold saved-terminal restoration recovers explicit placement from the repository's
-`declaredWorktrees` entry keyed by `tuicSession`; the saved cwd remains unchanged.
+Terminal placement uses reported cwd, not `placementPath` or a persisted
+`declaredWorktrees` association. Creating a checkout through `git -C` does not
+move the caller's process or its tab into that checkout. Cold saved-terminal
+restoration and reconnect also resolve the workspace from cwd.
 
 **Modules:** `src-tauri/crates/tuic-git/src/{git,git_cli,git_graph,git_locks,git_reads,worktree,cow}.rs` (domain), `src-tauri/src/{git,git_graph,worktree}.rs` (app adapters)
 
@@ -509,3 +509,17 @@ not just live PTYs. Both cwd descendants and worktree placement hold the checkou
 Shared allocation skips these users; removal, archive, branch deletion and orphan
 cleanup refuse them even after force or session confirmation. Storage read errors
 fail closed. Lifecycle removal retires matching core worktree bell offers.
+
+### Worktree removal and terminal ownership
+
+Frontend removal events, post-merge cleanup and refresh pruning share cwd-based
+terminal cleanup. Workspace terminal arrays are a display index, not authority to
+close a PTY. The cleanup reads each terminal's current reported cwd immediately
+before closing it and uses directory-boundary, separator-independent containment.
+Missing cwd is not permission to close. Surviving tabs from a removed row are
+reconciled to their cwd workspace or parked in the Global Workspace.
+
+Creation declarations remain backend metadata. They do not override cwd for tab
+placement on creation, OSC 7, reload or saved-tab restore. A repo-root session waits
+for the root workspace to be discovered rather than joining the selected linked
+worktree.

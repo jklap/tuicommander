@@ -1,5 +1,6 @@
 import { createStore, reconcile } from "solid-js/store";
 import { invoke } from "../invoke";
+import { reportSettingsConflicts, settingsRefresh } from "../services/settingsRefresh";
 import { toCamelKeys, toSnakeKeys } from "../utils/caseKeys";
 import { createConfigDeltaWriter } from "../utils/configDeltaWriter";
 import { appLogger } from "./appLogger";
@@ -277,6 +278,39 @@ function createRepoSettingsStore() {
 	};
 
 	const actions = {
+		startRemoteSync(): () => void {
+			const stopSettings = settingsRefresh.register({
+				section: "repositories",
+				read: () => invoke<{ repos: Record<string, Record<string, unknown>> }>("load_repo_settings"),
+				apply: (remote) => {
+					const local = {
+						repos: Object.fromEntries(
+							Object.entries(state.settings).map(([path, value]) => [path, toSnakeKeys(value)]),
+						),
+					};
+					const merged = repoSettingsWriter.adopt(remote ?? { repos: {} }, local);
+					setState("settings", reconcile(fromWire(merged.value.repos as Record<string, Record<string, unknown>>)));
+					reportSettingsConflicts(merged.conflicts);
+				},
+			});
+			const stopLocal = settingsRefresh.register({
+				section: "repo_local",
+				read: async () =>
+					Object.fromEntries(
+						await Promise.all(
+							Object.keys(state.localConfigs).map(
+								async (path) =>
+									[path, await invoke<RepoLocalConfig | null>("load_repo_local_config", { repoPath: path })] as const,
+							),
+						),
+					),
+				apply: (configs) => setState("localConfigs", reconcile(configs)),
+			});
+			return () => {
+				stopSettings();
+				stopLocal();
+			};
+		},
 		/** Load settings from Rust backend; migrate from localStorage on first run */
 		async hydrate(): Promise<void> {
 			try {

@@ -1,8 +1,9 @@
-import { batch, onCleanup } from "solid-js";
+import { onCleanup } from "solid-js";
 import { invoke, listen } from "../invoke";
 import { activityStore } from "../stores/activityStore";
 import { appLogger } from "../stores/appLogger";
 import { repositoriesStore } from "../stores/repositories";
+import { reconcileTerminalOwnership, removeWorktreeWorkspace } from "../stores/terminalOwnership";
 import { terminalsStore } from "../stores/terminals";
 import { workItemLinksStore } from "../stores/workItemLinks";
 import { pathBasename, pathDirname } from "../utils/pathUtils";
@@ -47,7 +48,7 @@ interface WorktreeRemovedPayload {
 export async function switchToCreatedWorktree(
 	deps: WorktreeSwitchDeps,
 	repoPath: string,
-	workspaceId: string,
+	_workspaceId: string,
 	branch: string,
 	worktreePath: string,
 ): Promise<void> {
@@ -63,18 +64,10 @@ export async function switchToCreatedWorktree(
 		return;
 	}
 
-	// Plain shells can safely move: reassign the tab and then change its CWD.
+	// Request the shell move, but keep its current placement until OSC 7 confirms cwd.
+	// A failed cd must not file a repo-root tab under a removable linked checkout.
 	if (activeTerm?.sessionId) {
 		const terminalId = activeTerm.id;
-		const currentMapping = repositoriesStore.findOwnerForTerminal(terminalId);
-
-		batch(() => {
-			if (currentMapping) {
-				repositoriesStore.removeTerminalFromWorkspace(currentMapping.repoPath, currentMapping.workspaceId, terminalId);
-			}
-			repositoriesStore.addTerminalToWorkspace(repoPath, workspaceId, terminalId);
-		});
-
 		await invoke("write_pty", {
 			sessionId: activeTerm.sessionId,
 			data: `cd ${shellEscape(worktreePath)}\n`,
@@ -108,7 +101,7 @@ export async function pruneRemovedWorktree(
 	if (workspace.terminals.length > 0) {
 		await closeTerminalsForBranch(repoPath, workspaceId);
 	}
-	repositoriesStore.removeWorkspace(repoPath, workspaceId);
+	removeWorktreeWorkspace(repoPath, workspaceId);
 	appLogger.info("git", `Worktree removed — pruned sidebar row "${workspaceId}"`, { repoPath });
 }
 
@@ -137,20 +130,15 @@ function applyWorktreePlacement(payload: WorktreeCreatedPayload): void {
 			parentRepoPath: null,
 		});
 	}
-	// Placement changes the sidebar index, never the agent process or shell cwd.
+	// Creating a checkout does not change the caller's cwd (agents often use git -C).
+	// Reconcile from cwd so a root coordinator never becomes a child-worktree tab.
 	const creatorId = payload.creator_session ? terminalsStore.findBySessionId(payload.creator_session) : undefined;
-	const owner = creatorId ? repositoriesStore.findOwnerForTerminal(creatorId) : undefined;
-	if (creatorId && owner?.repoPath === repo_path && !payload.spawn_session) {
-		terminalsStore.update(creatorId, { placementPath: worktree_path });
-	}
-	if (creatorId && owner?.repoPath === repo_path && owner.workspaceId !== workspace_id && !payload.spawn_session) {
-		batch(() => {
-			repositoriesStore.removeTerminalFromWorkspace(repo_path, owner.workspaceId, creatorId);
-			repositoriesStore.addTerminalToWorkspace(repo_path, workspace_id, creatorId);
-			if (terminalsStore.state.activeId === creatorId) {
-				repositoriesStore.setActiveWorkspace(repo_path, workspace_id);
-			}
-		});
+	if (
+		creatorId &&
+		repositoriesStore.findOwnerForTerminal(creatorId)?.repoPath === repo_path &&
+		!payload.spawn_session
+	) {
+		reconcileTerminalOwnership(creatorId);
 	}
 }
 

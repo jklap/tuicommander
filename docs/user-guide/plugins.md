@@ -46,6 +46,35 @@ GitHub Work, Jira and GitLab use Tasks-owned `data/work-items.json` for provider
 If an older GitHub Work installation reports `Configurable plugin requires a settings schema`, first install the app and plugin versions that use `work-items.json`. With the app stopped, back up the old `data/config.json` and move it to `data/work-items.json` in that plugin's installed directory. Do not overwrite an existing destination or change the file contents. Restart the app and check that the plugin loads. This is a one-time operator action; the app does not read the old file as a fallback.
 
 
+### GitHub Work post-login verification
+
+The account HTTP port, runtime catalog and account-scoped B6/B7 ports are already integrated. A recorded-fixture pass is not proof of desktop loading or a successful account login.
+
+An operator can run a read-only check after login:
+
+1. Start a **separate desktop verification instance** with `TUIC_APP_INSTANCE=github-work-check`. Do this only when you can release the global dictation shortcut and microphone. An agent must not start a second desktop app. Do not use the production instance or its sessions.
+2. In that instance, install and enable GitHub Work. Complete GitHub device-flow login in Settings, with `repo read:project` consent. Configure the account and repository in Tasks. An old authorization without Projects access needs new consent.
+3. Select an accessible issue URL, PR URL and Projects v2 node ID (`PVT_...`). The project must have a single-select Status field. Confirm the verification instance's HTTP port; it must not be `9876`.
+4. Set these non-secret values once in your shell:
+
+   ```sh
+   export GH_WORK_CHECK_URL=http://127.0.0.1:9877
+   export GH_WORK_CHECK_ACCOUNT=github.com
+   export GH_WORK_CHECK_ISSUE=https://github.com/OWNER/REPO/issues/NUMBER
+   export GH_WORK_CHECK_PR=https://github.com/OWNER/REPO/pull/NUMBER
+   export GH_WORK_CHECK_PROJECT=PVT_REPLACE_WITH_PROJECT_NODE_ID
+   ```
+
+After login and setup, the check is one command from the checkout:
+
+```sh
+node scripts/github-work-live-check.mjs "$GH_WORK_CHECK_URL" "$GH_WORK_CHECK_ACCOUNT" "$GH_WORK_CHECK_ISSUE" "$GH_WORK_CHECK_PR" "$GH_WORK_CHECK_PROJECT" --isolated-desktop
+```
+
+The explicit flag confirms that the selected port belongs to the isolated desktop; the script cannot identify an instance from its port alone. The script refuses port `9876` and non-loopback URLs. It does not start an app, inspect credential stores, authenticate or change GitHub data. It checks the real desktop plugin loaded state, then imports a fresh installed module graph and uses temporary local registrations with the real Rust account ports. This is not a second activation of the installed plugin. It reads search, issue/PR detail, bounded comment pages, duplicate candidates, B6 threads, B7 action state and Projects board/roadmap data. It allows at most 24 port calls and waits at most 90 seconds for its result. The report contains check names and counts, not response bodies or credentials. Exit `0` means these reads passed; exit `1` identifies the failed stage; exit `2` means invalid arguments. A timeout does not cancel an in-flight backend read.
+
+This probe does **not** prove Tasks rendering, the actual Tasks registry's unload cleanup, start-work delivery or live mutations. Those remain separate checks. Shut down only the verification instance when finished. Until the operator runs it, the account/desktop integration criterion remains unchecked.
+
 ### Settings → Plugins → Installed
 
 The Installed tab lists all installed plugins:

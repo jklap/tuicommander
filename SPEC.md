@@ -428,8 +428,10 @@ MCP callers can declare an existing linked worktree through
 `session action=declare_worktree worktree_path=/absolute/path`. Ownership comes
 from the immutable PTY launch directory and registered Git worktrees. The
 caller-only association persists under stable `TUIC_SESSION`, survives restart
-and does not change shell cwd or acquire cleanup ownership. MCP creation
-without a session spawn also places only the same-repository creator.
+and does not change shell cwd or acquire cleanup ownership. Tab placement follows
+cwd, not this association, during creation, OSC 7, reconnect and restore. Removing
+or recycling a worktree closes only terminals whose current cwd lies inside that
+checkout. A stale sidebar membership never authorizes closing an unrelated tab.
 
 
 Every workspace created by TUICommander is a linked Git worktree. Its refs and
@@ -1098,7 +1100,23 @@ GitHub provides a full normal-comment count, so an increase is detected even bey
 
 Shared wake (B6, #1807-4f1f): `session_wake::ensure_live` serializes durable resume with suspension. Tab open, submit and peer mail use this path; input waits in the existing ready-window queue. Failed creation retains the durable tab. IPC `resume_session` maps to `POST /sessions/wake`; MCP list/status expose retained sessions as `hibernated`.
 
-## Mobile Claude terminal Chat view
+## ego terminal Chat view
+
+ego PTY terminals use the existing Chat adapter registry, bounded view log,
+one-second ticker, IPC/HTTP snapshot and SSE wake. Exact binding comes from the
+live foreground PID and ego's lease, with its process-owned `EGO_HOME`; there is
+no newest-session fallback. Content is read only through documented local
+transcript v1: `ego export SESSION --format transcript --after SEQ`.
+The configured absolute ego executable must support this contract. Header version
+and session identity are checked before events are accepted. Completed messages
+render once (preview deltas are omitted); tools retain their start/result identity.
+Goal continuations and compaction checkpoints are notices. Rebinding resets the
+epoch, including compaction successors. Unbound or unreadable sessions explain why
+Chat is unavailable. Desktop and mobile reuse `TerminalChatTranscript`; no ACP
+connection or second event subscription is created. Compose, dictation targeting
+and answer marker rendering remain on the existing terminal paths.
+
+## Mobile Claude and ego terminal Chat view
 
 Phone sessions offer a direct **Read file edits in Chat** action while CLI is
 active. The terminal stays mounted. Chat edit tool disclosures render bounded
@@ -1106,8 +1124,7 @@ old/new blocks, preserve tabs with four-space tab stops and scroll long lines
 horizontally. Claude Edit projection retains diff content through tool completion;
 failed calls remain labelled failed, not represented as applied edits.
 
-
-Claude PTY sessions offer CLI / Chat in the existing mobile header. The shared
+Claude and ego PTY sessions offer CLI / Chat in the existing mobile header. The shared
 `TerminalChatTranscript` owns rendering, visibility-paused keepalive and backend
 unavailability. Mobile injects wakes from `useSessions`; it opens no additional
 EventSource. Both hosts defer Claude binding to the backend. Mobile retains the
@@ -1183,3 +1200,15 @@ The session detail CLI/Chat projection uses the same TerminalChatTranscript and 
 ### Mobile Telegram setup removal (#1976-711e)
 
 Mobile Settings does not mount or offer Telegram setup. Desktop Settings retains the shared Telegram configuration controls and existing backend transports.
+
+### Settings MCP live refresh contract
+
+The shared settings facade publishes `{section, generation, persisted, applied}` after durable writes, including vault-only and partial-persist outcomes. The monotonic counter is process-local, is never persisted, and does not replace owner CAS revisions or hash credentials. Desktop and SSE carry the same value-free payload. Frontend read/apply coordination preserves dirty intent and acknowledged baselines, suppresses obsolete writes and stale reads, scopes remote events by connection, and refetches active owners after reconnect.
+
+### CircleCI Settings owner (#1991-bd88)
+
+Settings discovery includes the write-only machine setting `circleci.token`.
+Typed `set_token` and `clear_token` actions share the existing token owner across
+MCP, IPC and HTTP. Readback reports stored presence only (`set`, `unset`,
+`unavailable`), never a secret. Git & GitHub keeps its effective-source status;
+removing a stored token leaves environment and CircleCI CLI fallbacks unchanged.

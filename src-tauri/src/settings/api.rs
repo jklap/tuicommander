@@ -4,7 +4,10 @@ use crate::AppState;
 use schemars::JsonSchema;
 use serde::Deserialize;
 use serde_json::{Value, json};
-use std::sync::Arc;
+use std::sync::{
+    Arc,
+    atomic::{AtomicU64, Ordering},
+};
 
 #[path = "api_owners.rs"]
 mod owners;
@@ -69,6 +72,21 @@ pub fn request_schema() -> Value {
     }
     approval(&mut schema);
     schema
+}
+
+static GENERATION: AtomicU64 = AtomicU64::new(0);
+
+/// Shared by facade commits and the pre-existing AppConfig owner save seam.
+/// This cursor never fingerprints credentials or changes an owner's CAS revision.
+pub(crate) fn publish_change(state: &AppState, section: &str, applied: bool) -> u64 {
+    let generation = GENERATION.fetch_add(1, Ordering::SeqCst) + 1;
+    state.publish_settings_changed(super::changes::SettingsChanged {
+        section: section.to_owned(),
+        generation,
+        persisted: true,
+        applied,
+    });
+    generation
 }
 
 pub struct Settings {
@@ -156,7 +174,59 @@ impl Settings {
         })
     }
 
+    /// Generation is a process-local invalidation cursor, not an owner CAS revision.
     pub async fn execute(
+        &self,
+        state: &Arc<AppState>,
+        action: Action,
+        caller: &Caller,
+        approval: Option<&str>,
+    ) -> Result<Value, Failure> {
+        let (section, durable_success) = match &action {
+            Action::Transaction(
+                Request::Set { store, .. }
+                | Request::Reset { store, .. }
+                | Request::Patch { store, .. },
+            ) => (Some(store.clone()), false),
+            Action::Perform(Perform::Perform { owner, .. }) => {
+                (Some(owner.section().to_owned()), owner.success_is_durable())
+            }
+            _ => (None, false),
+        };
+        let mut outcome = self.execute_inner(state, action, caller, approval).await;
+        let persisted = match &outcome {
+            Ok(value) => {
+                value["persisted"] == true || (durable_success && value.get("error").is_none())
+            }
+            Err(error) => error.persisted,
+        };
+        if let Some(section) = section.filter(|_| persisted) {
+            let applied = outcome
+                .as_ref()
+                .is_ok_and(|value| value["applied"].as_bool().unwrap_or(true));
+            let generation = publish_change(state, &section, applied);
+            match &mut outcome {
+                Ok(value) => {
+                    if let Some(object) = value.as_object_mut() {
+                        object.insert("generation".into(), json!(generation));
+                        object.insert("persisted".into(), json!(true));
+                        object.insert("applied".into(), json!(applied));
+                    }
+                }
+                Err(error) => error.generation = Some(generation),
+            }
+        } else if let Ok(value) = &mut outcome
+            && let Some(object) = value.as_object_mut()
+        {
+            object.insert(
+                "generation".into(),
+                json!(GENERATION.load(Ordering::SeqCst)),
+            );
+        }
+        outcome
+    }
+
+    async fn execute_inner(
         &self,
         state: &Arc<AppState>,
         action: Action,

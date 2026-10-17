@@ -10,8 +10,10 @@ import {
 	toHeadlessAgentChoice,
 } from "../agents";
 import { invoke } from "../invoke";
+import { reportSettingsConflicts, settingsRefresh } from "../services/settingsRefresh";
 import { rpc } from "../transport";
 import { getRemoteBaseUrl, getRepoConnection } from "../transportRuntime";
+import { createConfigDeltaWriter } from "../utils/configDeltaWriter";
 import { buildEnvFromEntries, type EnvVarEntry } from "../utils/envVars";
 import { appLogger } from "./appLogger";
 
@@ -82,9 +84,8 @@ function clone<T>(obj: T): T {
 	return JSON.parse(JSON.stringify(obj));
 }
 
-export function createAgentConfigsStore(io: AgentConfigIO = defaultIO) {
-	let savedBase: AgentsConfig | null = null;
-	let saveTail: Promise<void> | null = null;
+export function createAgentConfigsStore(io: AgentConfigIO = defaultIO, connectionId?: string) {
+	const writer = createConfigDeltaWriter<AgentsConfig>("save_agents_config", "config", io.save);
 	const [state, setState] = createStore<AgentConfigsState>({
 		agents: {},
 		hibernate_idle_minutes: 60,
@@ -95,32 +96,35 @@ export function createAgentConfigsStore(io: AgentConfigIO = defaultIO) {
 		loadError: null,
 	});
 
+	function wire(): AgentsConfig {
+		return {
+			agents: clone(state.agents),
+			hibernate_idle_minutes: state.hibernate_idle_minutes,
+			hibernate_scope: state.hibernate_scope,
+			headless_agent: state.headless_agent ?? undefined,
+			launch_instructions: state.launch_instructions ?? undefined,
+		};
+	}
+
+	function applyLoaded(config: AgentsConfig): void {
+		setState(
+			produce((s) => {
+				s.agents = config.agents ?? {};
+				s.hibernate_idle_minutes = config.hibernate_idle_minutes ?? 60;
+				s.hibernate_scope = config.hibernate_scope ?? "background_only";
+				s.headless_agent = toHeadlessAgentChoice(config.headless_agent ?? "");
+				s.launch_instructions = config.launch_instructions ?? null;
+				s.loaded = true;
+				s.loadError = null;
+			}),
+		);
+	}
+
 	/** Save changes since the last acknowledged snapshot. */
 	async function saveToDisk(): Promise<void> {
 		try {
-			if (!state.loaded || !savedBase) throw new Error("Agent config has not loaded; save refused");
-			const full: AgentsConfig = {
-				agents: clone(state.agents),
-				hibernate_idle_minutes: state.hibernate_idle_minutes,
-				hibernate_scope: state.hibernate_scope,
-				headless_agent: state.headless_agent ?? undefined,
-				launch_instructions: state.launch_instructions ?? undefined,
-			};
-			const write = async () => {
-				if (!savedBase) throw new Error("Agent config has not loaded; save refused");
-				await io.save(savedBase, full);
-				savedBase = full;
-			};
-			const operation = saveTail ? saveTail.then(write) : write();
-			const settled = operation.then(
-				() => undefined,
-				() => undefined,
-			);
-			saveTail = settled;
-			void settled.then(() => {
-				if (saveTail === settled) saveTail = null;
-			});
-			await operation;
+			if (!state.loaded) throw new Error("Agent config has not loaded; save refused");
+			await writer.save(wire());
 		} catch (err) {
 			appLogger.error("config", "Failed to save agent config", err);
 			throw err;
@@ -128,6 +132,19 @@ export function createAgentConfigsStore(io: AgentConfigIO = defaultIO) {
 	}
 
 	const actions = {
+		startRemoteSync(): () => void {
+			return settingsRefresh.register({
+				section: "agents",
+				connectionId,
+				read: io.load,
+				apply: (remote) => {
+					if (!state.loaded) return;
+					const merged = writer.adopt(remote, wire());
+					applyLoaded(merged.value);
+					reportSettingsConflicts(merged.conflicts);
+				},
+			});
+		},
 		async setHibernate(minutes: number, scope: "background_only" | "always"): Promise<void> {
 			if (!Number.isInteger(minutes) || minutes < 0 || minutes > 1440) return;
 			setState({ hibernate_idle_minutes: minutes, hibernate_scope: scope });
@@ -137,18 +154,8 @@ export function createAgentConfigsStore(io: AgentConfigIO = defaultIO) {
 		async hydrate(): Promise<void> {
 			try {
 				const config = await io.load();
-				savedBase = clone(config);
-				setState(
-					produce((s) => {
-						s.agents = config.agents ?? {};
-						s.hibernate_idle_minutes = config.hibernate_idle_minutes ?? 60;
-						s.hibernate_scope = config.hibernate_scope ?? "background_only";
-						s.headless_agent = toHeadlessAgentChoice(config.headless_agent ?? "");
-						s.launch_instructions = config.launch_instructions ?? null;
-						s.loaded = true;
-						s.loadError = null;
-					}),
-				);
+				writer.loaded(config);
+				applyLoaded(config);
 			} catch (err) {
 				appLogger.error("config", "Failed to hydrate agent configs", err);
 				setState({ loaded: false, loadError: err instanceof Error ? err.message : String(err) });
@@ -583,6 +590,17 @@ const machineHydrations = new Map<string, Promise<void>>();
 
 /** The key a machine is cached under. Local is the empty id — there is no connection. */
 const LOCAL_MACHINE = "";
+let liveSync = false;
+const syncStops = new Map<string, () => void>();
+export function startAgentSettingsSync(): () => void {
+	liveSync = true;
+	for (const [key, store] of machineStores) if (!syncStops.has(key)) syncStops.set(key, store.startRemoteSync());
+	return () => {
+		liveSync = false;
+		for (const stop of syncStops.values()) stop();
+		syncStops.clear();
+	};
+}
 
 /**
  * The store holding one machine's run configs, created on first use.
@@ -596,8 +614,9 @@ export function agentConfigsFor(connectionId?: string | null): AgentConfigStore 
 	const key = connectionId ?? LOCAL_MACHINE;
 	let store = machineStores.get(key);
 	if (!store) {
-		store = createAgentConfigsStore(connectionId ? remoteIO(connectionId) : defaultIO);
+		store = createAgentConfigsStore(connectionId ? remoteIO(connectionId) : defaultIO, connectionId ?? undefined);
 		machineStores.set(key, store);
+		if (liveSync) syncStops.set(key, store.startRemoteSync());
 	}
 	return store;
 }
@@ -629,6 +648,8 @@ export function ensureAgentConfigs(connectionId?: string | null): Promise<AgentC
  */
 export function invalidateAgentConfigs(connectionId: string): void {
 	if (!connectionId) return;
+	syncStops.get(connectionId)?.();
+	syncStops.delete(connectionId);
 	machineStores.delete(connectionId);
 	machineHydrations.delete(connectionId);
 }

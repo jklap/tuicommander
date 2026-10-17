@@ -2,6 +2,8 @@
 pub mod accounts;
 pub mod agents;
 pub mod catalogue;
+pub mod changes;
+pub mod circleci;
 pub mod ego;
 mod ego_schema;
 pub mod model;
@@ -125,3 +127,8 @@ mod upstream_credentials_tests;
 
 #[cfg(test)]
 mod api_tests;
+
+#[cfg(test)]
+mod circleci_tests;
+#[cfg(feature = "desktop")]
+pub(crate) mod legacy;

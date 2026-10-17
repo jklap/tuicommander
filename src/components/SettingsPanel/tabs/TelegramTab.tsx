@@ -1,6 +1,7 @@
 import { type Component, createSignal, For, onCleanup, onMount, Show } from "solid-js";
 import { t } from "../../../i18n";
 import { invoke } from "../../../invoke";
+import { settingsRefresh } from "../../../services/settingsRefresh";
 import { HttpRpcError } from "../../../transport";
 import { Input } from "../../ui/Input";
 import { SettingStatus, SettingToggle } from "../SettingFields";
@@ -89,6 +90,15 @@ export const TelegramTab: Component = () => {
 			setBusy(false);
 		}
 	}
+	onCleanup(
+		settingsRefresh.register({
+			section: "telegram",
+			read: () => invoke<TelegramSettings>("telegram_settings"),
+			apply: (incoming) => {
+				setSettings(incoming);
+			},
+		}),
+	);
 	onMount(() => {
 		void refresh();
 		timer = setInterval(() => {

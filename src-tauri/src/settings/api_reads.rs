@@ -17,6 +17,17 @@ impl Settings {
             return Err(Error::new("settings", "out_of_range"));
         }
         match store {
+            "circleci" => {
+                if *target != Target::Machine {
+                    return Err(Error::new(store, "not_found"));
+                }
+                let paths = paths.to_vec();
+                tokio::task::spawn_blocking(move || {
+                    super::super::circleci::snapshot(&paths).map(Some)
+                })
+                .await
+                .map_err(|_| Error::new(store, "store_failed"))?
+            }
             "prompts" if paths.iter().any(|path| path == "/prompts") => {
                 if *target != Target::Instance {
                     return Err(Error::new(store, "not_found"));
