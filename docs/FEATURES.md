@@ -126,7 +126,7 @@ Durable workflow run storage records event history, pinned graph revisions, node
 
 ## 1. Terminal Management
 
-Adjacent `💬` answer paragraphs share one continuous green left bar without a background tint (Paper uses its darker success green for contrast), including blank rows between them. An unmarked prose paragraph after a blank row ends the answer; an uninterrupted indented continuation stays inside. Lists, tables, quotations and fenced code remain attached to the answer. A non-answer output row or prompt ends the region. The CLI blanks only the marker glyph cells; selection and search retain their grid coordinates. Clipboard copy removes answer-prefix markers through the same helper used by AI Chat answer buttons (including mobile) and selectable Answers text. Inline emoji and fenced examples stay literal. Chat uses the same answer extent and strips every paragraph marker.
+Adjacent `💬` answer paragraphs share one continuous green left bar without a background tint (Paper uses its darker success green for contrast), including blank rows between them. An unmarked prose paragraph after a blank row ends the answer; an uninterrupted indented continuation stays inside. The CLI gutter joins separate marked answer sections across internal blank rows and indented section headings when a later marked answer closes the gap. Trailing unmarked prose, unmarked list siblings, tools, prompts and status rows stay outside that gutter; extracted Answers and Chat keep their semantic paragraph boundaries. Lists, tables, quotations and fenced code remain attached to the answer. A non-answer output row or prompt ends the region. The CLI blanks only the marker glyph cells; selection and search retain their grid coordinates. Clipboard copy removes answer-prefix markers through the same helper used by AI Chat answer buttons (including mobile) and selectable Answers text. Inline emoji and fenced examples stay literal. Chat uses the same answer extent and strips every paragraph marker.
 
 Terminal prompt colours apply to Chat user messages only. The CLI grid retains prompt scrollbar ticks and answers-only prompt grouping without tinting prompt rows.
 
@@ -261,12 +261,12 @@ Right-click an HTTP(S) terminal link (including localhost) and choose **Start in
 
 ### 1.10 Move Terminal to Worktree
 
-MCP worktree creation without an explicit session spawn places only its
-same-repository caller in the new workspace. Agents working through `git -C`
-can declare an existing worktree with `session action=declare_worktree
-worktree_path=/absolute/path`. The backend validates ownership, moves only the
-caller and persists the association through restart. Shell cwd and other tabs
-remain unchanged. See [MCP backend](backend/mcp-http.md).
+MCP worktree creation registers the new workspace without moving a caller whose
+cwd is outside it. Agents working through `git -C` can record an association with
+`session action=declare_worktree worktree_path=/absolute/path`. That association
+does not override cwd for tab placement or removal. Removing or recycling a
+worktree closes only terminals whose current cwd lies inside it; unrelated tabs
+filed under a stale workspace survive and are re-homed. See [MCP backend](backend/mcp-http.md).
 
 - Right-click a terminal tab → "Move to Worktree" submenu lists available worktrees (excluding the current one)
 - Selecting a worktree sends `cd` to the PTY; OSC 7 auto-reassigns the terminal to the target branch
@@ -2316,7 +2316,7 @@ Unsupported actions are hidden. Menus close on outside tap or Escape and use
 ### 18.11 Standalone CSS
 - Mobile human replies can answer an awaiting agent even while its shell remains busy and no question was recognized. Recognized native questions keep their direct answer controls. Rejected replies retain the draft and show the backend reason instead of a generic busy message.
 - The mobile composer offers browser dictation directly next to Send (44 px touch targets) when `SpeechRecognition` or `webkitSpeechRecognition` is available. Interim and final speech append to the draft without focusing the textarea or sending; tap again to stop. Editing the draft cancels recognition and keeps the edit exactly; the mic becomes available again when the browser confirms the previous session has ended. Errors also retain the microphone claim until that confirmation, so repeated taps cannot overlap recognition sessions. Late results from the cancelled recording are ignored. Errors keep the draft and show a toast. It uses the configured dictation language, falling back to the browser language for automatic detection. Browser dictation and server hands-free conversation cannot record together.
-- Mobile CLI and Chat output show a down-arrow to the right of Send, level with the composer submit button, while scrolled back. It has its own touch target and never covers the key bar. Tap it to return to the latest output; it hides at the bottom and never sends a terminal key.
+- Mobile CLI and Chat output show a floating down-arrow at the bottom-right of the output area while scrolled back, at least 8px above the key bar and outside the composer. It has its own touch target and never covers the key bar. Tap it to return to the latest output; it hides at the bottom and never sends a terminal key.
 - Mobile Settings → Input → Autocorrect and spellcheck enables keyboard correction and sentence capitalization for the terminal prompt and mobile Chat composers by default. Disable it for literal command entry. The preference stays on this device across reloads; file and code editors keep spellcheck off.
 - Dictated mobile drafts survive reload without automatic terminal input. Send or the first edit reconciles the restored draft with the current terminal line, preserving cleared text without duplicating text still present.
 - iPhone Home Screen availability remains device-dependent: [WebKit bug 225298](https://bugs.webkit.org/show_bug.cgi?id=225298#c3) documents the historical standalone restriction; Safari's [14.1 release notes](https://webkit.org/blog/11648/new-webkit-features-in-safari-14-1/) require Siri enabled. Feature detection and error handling apply; Safari tab support does not prove PWA support.
@@ -3183,6 +3183,18 @@ Telegram replies now use TUIC-driven receipt (👀), working (👨‍💻), wait
 
 Terminal text fidelity: soft-wrap rows preserve original spaces in session text, mobile CLI output, copied selections and ego question labels; explicit hard breaks remain. Chat uses its separate transcript source.
 
+### Settings MCP live refresh
+
+Durable settings-facade writes publish a value-free process-local generation to desktop and SSE clients. Open settings consumers reread affected sections without saving; dirty edits survive, stale reads are discarded, and reconnect refetches snapshots. Vault-only credential writes and persisted apply failures also invalidate readers. Remote notices remain scoped to their owning connection.
+
+### Catalogue-backed Settings inspection
+
+Settings includes a typed All settings expert inspector with explicit owner/path binding, revision-checked single-field edits, dirty-draft preservation and human confirmation recovery. Native controls expose catalogue identities, shared enums use owner metadata and search includes inspector descriptors. General exposes index-memory, attachment-size and WebView-unload resource limits. Per-ID ledgers document separate domain/legacy/read-only controls; CircleCI/corrections ownership and transient PR-filter persistence remain follow-ups.
+
+### Assisted Settings startup: published boundary
+
+[Startup workflow documentation](backend/settings-startup.md) covers GitHub device/Enterprise actions, read-only credential-source provenance and configured Ego settings/readback, with explicit owner revisions, human confirmation and partial-persistence recovery. Typed account enumeration and configured Ego interactive login start/status are published. Login returns a human-operated terminal and bounded handle; closed and expired handles never imply authentication success. Complete schema-only onboarding remains subject to integration verification.
+
 ### CircleCI Settings owner (#1991-bd88)
 
 Settings discovery includes the write-only machine setting `circleci.token`.
@@ -3194,3 +3206,7 @@ removing a stored token leaves environment and CircleCI CLI fallbacks unchanged.
 ### Generated launch playbook
 
 Settings > Agents selects generated Markers, Working with the user, Waiting, Git/worktrees, Process safety and child-only Children modules. Global and per-agent additions append after the modules; an explicit all-off switch suppresses the entire prompt. Effective previews use the selected machine. Exact old default copies migrate away without duplication.
+
+### Opt-in frame workload evidence
+
+The debug frame recorder retains bounded real grid arrivals and immutable paint inputs, dumps on a recovered freeze/long paint or on demand, and replays production grid painting with per-frame timings. It is off by default, requires perfDebug, and stores sensitive terminal content separately from the numeric journal. See [Persistent stall evidence](backend/stall-journal.md). The synthetic smoke fixture is not a real-stall RED.

@@ -1,4 +1,6 @@
-import { type Component, createEffect, createSignal, Show } from "solid-js";
+import { type Component, createEffect, createSignal, Show, untrack } from "solid-js";
+import type { SettingId } from "../../../services/settingsCatalogue";
+import { reportSettingsConflicts } from "../../../services/settingsRefresh";
 import s from "../Settings.module.css";
 import a from "./AgentsTab.module.css";
 
@@ -14,6 +16,7 @@ export function missingMarkers(text: string, required: readonly string[]): strin
  */
 export const LaunchInstructionsEditor: Component<{
 	id: string;
+	settingId: SettingId;
 	label: string;
 	value: string | undefined;
 	fallback: string | undefined;
@@ -24,7 +27,14 @@ export const LaunchInstructionsEditor: Component<{
 	onSave: (text: string | undefined) => void;
 }> = (props) => {
 	const [draft, setDraft] = createSignal(props.value ?? "");
-	createEffect(() => setDraft(props.value ?? ""));
+	let acknowledged = props.value ?? "";
+	createEffect(() => {
+		const incoming = props.value ?? "";
+		const current = untrack(draft);
+		if (current === acknowledged) setDraft(incoming);
+		else if (incoming !== acknowledged && incoming !== current) reportSettingsConflicts(["/"]);
+		acknowledged = incoming;
+	});
 	const save = () => {
 		if (draft() !== (props.value ?? "")) props.onSave(draft());
 	};
@@ -43,6 +53,7 @@ export const LaunchInstructionsEditor: Component<{
 						</pre>
 						<button
 							type="button"
+							data-setting-id={props.settingId}
 							class={a.smallBtn}
 							disabled={props.fallback === undefined}
 							onClick={() => props.onSave("")}
@@ -54,6 +65,7 @@ export const LaunchInstructionsEditor: Component<{
 			>
 				<p class={s.hint}>User additions only — enabled modules and global additions still apply.</p>
 				<textarea
+					data-setting-id={props.settingId}
 					id={props.id}
 					class={`${a.formInput} ${a.mono}`}
 					rows={10}
@@ -64,7 +76,15 @@ export const LaunchInstructionsEditor: Component<{
 				/>
 			</Show>
 			<Show when={props.value !== undefined}>
-				<button type="button" class={a.smallBtn} onClick={() => props.onSave(undefined)}>
+				<button
+					data-setting-id={props.settingId}
+					type="button"
+					class={a.smallBtn}
+					onClick={() => {
+						setDraft("");
+						props.onSave(undefined);
+					}}
+				>
 					{props.resetLabel}
 				</button>
 			</Show>

@@ -65,8 +65,8 @@ it("ignores quoted markers and markers inside item prose", () => {
 	expect(planSuggestOverlay(rows.length, (i) => rows[i] ?? null).blocks).toEqual([]);
 });
 
-// Catches: the reported Claude list answers disappearing, or headings becoming answers.
-it("recognizes every answer in the recorded WTNXT session without its headings", () => {
+// Catches: the reported Claude list answers disappearing, or gutter headings becoming extracted answers.
+it("joins the recorded WTNXT gutter without extracting its headings as answers", () => {
 	const rows = recordedWtnxt.text
 		.trimEnd()
 		.split("\n")
@@ -78,7 +78,7 @@ it("recognizes every answer in the recorded WTNXT session without its headings",
 	const answerRows = new Set(plan.blocks.filter((b) => b.kind === "answer").map((b) => b.row));
 	for (const [i, row] of rows.entries()) {
 		if (row.text.includes("Correzioni all'") || row.text.includes("Proposte principali"))
-			expect(answerRows.has(i)).toBe(false);
+			expect(answerRows.has(i)).toBe(true);
 		if (/^ {4}- /.test(row.text)) expect(answerRows.has(i)).toBe(true);
 	}
 	const turn = buildAnswersTurn(rows, false);

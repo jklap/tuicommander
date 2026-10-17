@@ -2,10 +2,12 @@ import QRCode from "qrcode";
 import { type Component, createEffect, createResource, createSignal, For, onCleanup, onMount, Show } from "solid-js";
 import { useConfirmDialog } from "../../../../hooks/useConfirmDialog";
 import { t } from "../../../../i18n";
+import { reportSettingsConflicts, settingsRefresh } from "../../../../services/settingsRefresh";
 import { appLogger } from "../../../../stores/appLogger";
 import { rpc } from "../../../../transport";
 import { cx } from "../../../../utils";
 import { writeClipboard } from "../../../../utils/clipboard";
+import { mergeSettingsSnapshot } from "../../../../utils/mergeSettingsSnapshot";
 import { ConfirmDialog } from "../../../ConfirmDialog";
 import { Input } from "../../../ui/Input";
 import { Select } from "../../../ui/Select";
@@ -119,19 +121,55 @@ export const RemoteAccessPanel: Component = () => {
 			});
 	});
 
+	function formSnapshot() {
+		return {
+			enabled: raEnabled(),
+			port: raPort(),
+			username: raUsername(),
+			tokenDuration: tokenDuration(),
+			ipv6: ipv6Enabled(),
+			relayEnabled: relayEnabled(),
+			relayUrl: relayUrl(),
+			relayToken: relayToken(),
+			relaySessionId: relaySessionId(),
+		};
+	}
+	let acknowledgedForm = formSnapshot();
+	function adoptConfig(config: AppConfig) {
+		const incoming = {
+			enabled: config.services.server.enabled,
+			port: config.services.server.port,
+			username: config.services.auth.username,
+			tokenDuration: config.services.auth.session_token_duration_secs ?? 2592000,
+			ipv6: config.services.server.ipv6_enabled ?? false,
+			relayEnabled: config.services.relay.enabled ?? false,
+			relayUrl: config.services.relay.url || "wss://relay.tuicommander.com",
+			relayToken: config.services.relay.token ?? "",
+			relaySessionId: config.services.relay.session_id ?? "",
+		};
+		const merged = mergeSettingsSnapshot(acknowledgedForm, formSnapshot(), incoming);
+		acknowledgedForm = incoming;
+		const value = merged.value;
+		setRaEnabled(value.enabled);
+		setRaPort(value.port);
+		setRaUsername(value.username);
+		setRaHasPassword(config.services.auth.password_hash.length > 0);
+		setTokenDuration(value.tokenDuration);
+		setIpv6Enabled(value.ipv6);
+		setRelayEnabled(value.relayEnabled);
+		setRelayUrl(value.relayUrl);
+		setRelayToken(value.relayToken);
+		setRelaySessionId(value.relaySessionId);
+		reportSettingsConflicts(merged.conflicts);
+	}
+	onCleanup(
+		settingsRefresh.register({ section: "app", read: () => rpc<AppConfig>("load_config"), apply: adoptConfig }),
+	);
+
 	const loadRemoteConfig = async () => {
 		try {
 			const config = await rpc<AppConfig>("load_config");
-			setRaEnabled(config.services.server.enabled);
-			setRaPort(config.services.server.port);
-			setRaUsername(config.services.auth.username);
-			setRaHasPassword(config.services.auth.password_hash.length > 0);
-			setTokenDuration(config.services.auth.session_token_duration_secs ?? 2592000);
-			setIpv6Enabled(config.services.server.ipv6_enabled ?? false);
-			setRelayEnabled(config.services.relay.enabled ?? false);
-			setRelayUrl(config.services.relay.url || "wss://relay.tuicommander.com");
-			setRelayToken(config.services.relay.token ?? "");
-			setRelaySessionId(config.services.relay.session_id ?? "");
+			adoptConfig(config);
 		} catch (e) {
 			appLogger.warn("config", "Failed to load remote access config, using defaults", e);
 		}
@@ -223,6 +261,7 @@ export const RemoteAccessPanel: Component = () => {
 			/>
 			<SectionCard title="Connection status">
 				<SettingToggle
+					settingId="app.services.server.enabled"
 					row
 					checked={raEnabled()}
 					onChange={(val) => {
@@ -247,6 +286,7 @@ export const RemoteAccessPanel: Component = () => {
 									{(id, descriptionId) => (
 										<>
 											<Input
+												data-setting-id="app.services.server.port"
 												id={id}
 												aria-describedby={descriptionId()}
 												type="number"
@@ -273,6 +313,7 @@ export const RemoteAccessPanel: Component = () => {
 									{(id, descriptionId) => (
 										<>
 											<Input
+												data-setting-id="app.services.auth.username"
 												id={id}
 												aria-describedby={descriptionId()}
 												type="text"
@@ -297,6 +338,7 @@ export const RemoteAccessPanel: Component = () => {
 										<>
 											<div class={s.passwordRow}>
 												<Input
+													data-setting-id="app.services.auth.password_hash"
 													id={id}
 													aria-describedby={descriptionId()}
 													type={raShowPassword() ? "text" : "password"}
@@ -311,6 +353,7 @@ export const RemoteAccessPanel: Component = () => {
 													onChange={() => savePassword(raPassword())}
 												/>
 												<button
+													data-non-setting="Change only visibility of the unsaved password input"
 													class={s.toggleBtn}
 													onClick={() => setRaShowPassword(!raShowPassword())}
 													title={
@@ -350,6 +393,7 @@ export const RemoteAccessPanel: Component = () => {
 												fallback={<code class={s.url}>{activeIp() ?? "Not available"}</code>}
 											>
 												<Select
+													data-non-setting="Displayed connection URL address selection; no persistence"
 													id={id}
 													aria-describedby={descriptionId()}
 													class={s.input}
@@ -385,6 +429,7 @@ export const RemoteAccessPanel: Component = () => {
 
 							<ExpertSetting configKey="app.services.auth.session_token_duration_secs" value={tokenDuration()}>
 								<SettingSelect
+									settingId="app.services.auth.session_token_duration_secs"
 									row
 									label={t("services.label.tokenDuration", "Session Token Duration")}
 									value={String(tokenDuration())}
@@ -424,6 +469,7 @@ export const RemoteAccessPanel: Component = () => {
 										{connectUrl()}
 									</code>
 									<button
+										data-non-setting="Copy the displayed connection URL"
 										class={s.copyBtn}
 										onClick={copyUrl}
 										title={t("services.btn.copyUrl", "Copy URL to clipboard")}
@@ -446,6 +492,7 @@ export const RemoteAccessPanel: Component = () => {
 
 					<ExpertSetting configKey="app.services.server.ipv6_enabled" value={ipv6Enabled()}>
 						<SettingToggle
+							settingId="app.services.server.ipv6_enabled"
 							row
 							checked={ipv6Enabled()}
 							onChange={(val) => {
@@ -463,8 +510,7 @@ export const RemoteAccessPanel: Component = () => {
 					</ExpertSetting>
 				</Show>
 			</SectionCard>
-			<SectionCard title="Tailscale HTTPS">
-				<ContextualHelp label="Tailscale HTTPS" />
+			<SectionCard title="Tailscale HTTPS" help={<ContextualHelp label="Tailscale HTTPS" />}>
 				<Show when={!tailscaleState()}>
 					<p class={s.hint}>Tailscale status not checked.</p>
 				</Show>
@@ -488,6 +534,7 @@ export const RemoteAccessPanel: Component = () => {
 									<div class={s.mcpStatusRow}>
 										<span class={s.mcpStatusText}>{statusText}</span>
 										<button
+											data-non-setting="Explicit Tailscale runtime discovery"
 											class={s.testBtn}
 											onClick={async () => {
 												try {
@@ -526,7 +573,12 @@ export const RemoteAccessPanel: Component = () => {
 					consequence="Regenerating the token revokes shared token URLs and disconnects active remote sessions."
 				>
 					<ContextualHelp label="Regenerate remote token" />
-					<button class={s.testBtn} disabled={regenerating()} onClick={regenerateToken}>
+					<button
+						data-setting-id="app.services.auth.session_token"
+						class={s.testBtn}
+						disabled={regenerating()}
+						onClick={regenerateToken}
+					>
 						{regenerating()
 							? t("services.btn.regenerating", "Regenerating...")
 							: t("services.btn.regenerateToken", "Regenerate Token")}
@@ -539,6 +591,7 @@ export const RemoteAccessPanel: Component = () => {
 
 			<SectionCard title={t("services.heading.cloudRelay", "Cloud Relay")}>
 				<SettingToggle
+					settingId="app.services.relay.enabled"
 					row
 					checked={relayEnabled()}
 					onChange={(val) => {
@@ -566,6 +619,7 @@ export const RemoteAccessPanel: Component = () => {
 				{/* URL and token render with the relay off: it starts only once enabled
 			    AND both are set (relay_client.rs), so they are configured first. */}
 				<SettingInput
+					settingId="app.services.relay.url"
 					row
 					label={t("services.label.relayUrl", "Relay Server URL")}
 					value={relayUrl()}
@@ -579,6 +633,7 @@ export const RemoteAccessPanel: Component = () => {
 				/>
 
 				<SettingInput
+					settingId="app.services.relay.token"
 					row
 					label={t("services.label.relayToken", "Bearer Token")}
 					value={relayToken()}
@@ -615,8 +670,15 @@ export const RemoteAccessPanel: Component = () => {
 					<div class={s.group}>
 						<label>{t("services.label.relaySessionId", "Session ID")}</label>
 						<div class={s.passwordRow}>
-							<Input type="text" class={s.input} value={relaySessionId()} readOnly />
+							<Input
+								data-non-setting="Read-only relay-issued session identity"
+								type="text"
+								class={s.input}
+								value={relaySessionId()}
+								readOnly
+							/>
 							<button
+								data-non-setting="Rotate the runtime relay-session identity through its existing owner"
 								class={s.toggleBtn}
 								onClick={() => {
 									const id = crypto.randomUUID();

@@ -7,6 +7,7 @@ import { mockInvoke } from "../../../__tests__/mocks/tauri";
 vi.mock("../../../stores/settings", () => ({
 	settingsStore: {
 		state: {
+			customLaunchers: [],
 			ide: "vscode",
 			font: "JetBrains Mono",
 			defaultFontSize: 12,
@@ -105,6 +106,12 @@ async function openResult(container: HTMLElement, query: string, tab: string, ro
 describe("SettingsPanel search", () => {
 	beforeEach(() => {
 		vi.clearAllMocks();
+		mockInvoke.mockImplementation(async (command: string) => {
+			if (command === "load_mcp_upstreams") return { servers: [] };
+			if (command === "list_remote_connections" || command === "remote_connection_statuses") return [];
+			if (command === "discover_ssh_hosts") return { hosts: [], hashed_count: 0 };
+			return undefined;
+		});
 		vi.spyOn(appLogger, "warn").mockImplementation(() => {});
 		vi.spyOn(appLogger, "error").mockImplementation(() => {});
 		vi.mocked(settingsStore.isAiChatEnabled).mockReturnValue(false);
@@ -285,10 +292,18 @@ describe("SettingsPanel search", () => {
 			// It lives on General, like MDKB, not behind the AI Chat flag.
 			const { container } = open();
 			fireEvent.input(searchInput(container), { target: { value: "ego executable" } });
-			expect(resultRows(container)).toHaveLength(1);
+			const rows = resultRows(container);
+			expect(rows).toHaveLength(2);
+			expect(rows.map((row) => row.textContent)).toEqual([
+				expect.stringContaining("General"),
+				expect.stringContaining("All settings (Expert)"),
+			]);
+			expect(rows.every((row) => !row.textContent?.includes("AI Chat"))).toBe(true);
 		});
 
-		it("offers no desktop-only control in a browser", () => {
+		// Catches: a browser result opening the unavailable native hotkey recorder
+		// instead of the machine-owned, HTTP-capable catalogue inspector.
+		it("offers the machine hotkey inspector but not the desktop recorder in a browser", () => {
 			(globalThis as Record<string, unknown>).__TAURI_SHIM__ = true;
 			// Browser mode talks HTTP; no backend listens in a unit test
 			vi.stubGlobal(
@@ -297,7 +312,15 @@ describe("SettingsPanel search", () => {
 			);
 			const { container } = open();
 			fireEvent.input(searchInput(container), { target: { value: "global hotkey" } });
-			expect(resultRows(container)).toHaveLength(0);
+			const rows = resultRows(container);
+			expect(rows).toHaveLength(1);
+			expect(rows[0].textContent).toContain("All settings (Expert)");
+			expect(rows[0].textContent).not.toContain("Keyboard Shortcuts");
+			fireEvent.click(rows[0]);
+			expect(container.querySelector("select[data-non-setting='Select an owner field to inspect']")).toHaveProperty(
+				"value",
+				"app.global_hotkey",
+			);
 		});
 	});
 });

@@ -1,5 +1,6 @@
 import { type Component, createSignal, For, onCleanup, onMount, Show } from "solid-js";
 import { t } from "../../../i18n";
+import { settingsRefresh } from "../../../services/settingsRefresh";
 import { appLogger } from "../../../stores/appLogger";
 import { githubStore } from "../../../stores/github";
 import type {
@@ -108,6 +109,7 @@ export const GitHubTab: Component = () => {
 	const [copied, setCopied] = createSignal(false);
 	const [avatarBroken, setAvatarBroken] = createSignal(false);
 	const [diagnostics, setDiagnostics] = createSignal<GitHubDiagnostics | null>(null);
+	// DEFERRED (2026-10-17) — CircleCI settings catalogue owner is tracked in 1991-bd88.
 	const [circleCiStatus, setCircleCiStatus] = createSignal<CircleCiTokenStatus | null>(null);
 	const [circleCiToken, setCircleCiToken] = createSignal("");
 	const [circleCiError, setCircleCiError] = createSignal<string | null>(null);
@@ -137,6 +139,36 @@ export const GitHubTab: Component = () => {
 
 	let pollTimer: ReturnType<typeof setTimeout> | undefined;
 	let cancelled = false;
+
+	const readAccounts = async () => {
+		const repoPaths = activeRepos().map((repo) => repo.path);
+		const [accounts, auth, resolutions] = await Promise.all([
+			rpc<GitHubAccount[]>("github_list_accounts"),
+			rpc<AuthStatus>("github_auth_status"),
+			rpc<Record<string, RepoResolutionDto>>("github_resolve_repos", { repoPaths }),
+		]);
+		return { accounts, auth, resolutions };
+	};
+	for (const section of ["github_accounts", "github_bindings"])
+		onCleanup(
+			settingsRefresh.register({
+				section,
+				read: readAccounts,
+				apply: (snapshot) => {
+					setAccounts(snapshot.accounts);
+					setAuthStatus(snapshot.auth);
+					setResolutions(snapshot.resolutions);
+				},
+			}),
+		);
+
+	onCleanup(
+		settingsRefresh.register({
+			section: "circleci",
+			read: () => rpc<CircleCiTokenStatus>("circleci_token_status"),
+			apply: setCircleCiStatus,
+		}),
+	);
 
 	onMount(() => {
 		fetchStatus();
@@ -446,7 +478,7 @@ export const GitHubTab: Component = () => {
 			<SettingPageHeader
 				title="Git & GitHub"
 				description="Manage accounts, monitoring, and defaults for your repositories."
-				scope="Application"
+				scope="Application defaults"
 				breadcrumb="Workspace / Git & GitHub"
 			/>
 			<SectionCard title="GitHub Authentication">
@@ -463,10 +495,18 @@ export const GitHubTab: Component = () => {
 						</div>
 						<div class={g.userCode}>{deviceCode()!.user_code}</div>
 						<div class={g.actions} style="justify-content: center">
-							<button class={cx(g.btn)} onClick={copyCode}>
+							<button
+								data-non-setting="Copy the device-login code without changing authentication"
+								class={cx(g.btn)}
+								onClick={copyCode}
+							>
 								{copied() ? "Copied!" : "Copy code"}
 							</button>
-							<button class={cx(g.btn)} onClick={() => handleOpenUrl(deviceCode()!.verification_uri)}>
+							<button
+								data-non-setting="Open the provider verification page"
+								class={cx(g.btn)}
+								onClick={() => handleOpenUrl(deviceCode()!.verification_uri)}
+							>
 								Open GitHub
 							</button>
 						</div>
@@ -474,7 +514,11 @@ export const GitHubTab: Component = () => {
 							Waiting for authorization<span class={g.pollingDots}>...</span>
 						</div>
 						<div class={g.actions} style="justify-content: center; margin-top: 12px">
-							<button class={cx(g.btn, g.btnDanger)} onClick={cancelPolling}>
+							<button
+								data-non-setting="Typed GitHub authentication or account lifecycle workflow; not an independently editable field"
+								class={cx(g.btn, g.btnDanger)}
+								onClick={cancelPolling}
+							>
 								Cancel
 							</button>
 						</div>
@@ -517,7 +561,12 @@ export const GitHubTab: Component = () => {
 					{/* Only show logout for OAuth tokens — env tokens are managed externally */}
 					<Show when={authStatus()?.source === "oauth"}>
 						<div class={g.actions}>
-							<button class={cx(g.btn, g.btnDanger)} onClick={logout} disabled={loading()}>
+							<button
+								data-non-setting="Typed GitHub authentication or account lifecycle workflow; not an independently editable field"
+								class={cx(g.btn, g.btnDanger)}
+								onClick={logout}
+								disabled={loading()}
+							>
 								{loading() ? "Logging out..." : "Logout"}
 							</button>
 						</div>
@@ -526,10 +575,20 @@ export const GitHubTab: Component = () => {
 					<Show when={authStatus()?.source === "env"}>
 						<div class={s.hint}>Token provided via environment variable (GH_TOKEN or GITHUB_TOKEN).</div>
 						<div class={g.actions}>
-							<button class={cx(g.btn)} onClick={() => startLogin()} disabled={loading()}>
+							<button
+								data-non-setting="Typed GitHub authentication or account lifecycle workflow; not an independently editable field"
+								class={cx(g.btn)}
+								onClick={() => startLogin()}
+								disabled={loading()}
+							>
 								{loading() ? "Starting..." : "Switch to OAuth"}
 							</button>
-							<button class={cx(g.btn, g.btnDanger)} onClick={disconnect} disabled={loading()}>
+							<button
+								data-non-setting="Typed GitHub authentication or account lifecycle workflow; not an independently editable field"
+								class={cx(g.btn, g.btnDanger)}
+								onClick={disconnect}
+								disabled={loading()}
+							>
 								Disconnect
 							</button>
 						</div>
@@ -604,7 +663,12 @@ export const GitHubTab: Component = () => {
 							and organization repositories.
 						</div>
 						<div class={g.actions} style="justify-content: center">
-							<button class={cx(g.btn, g.btnPrimary)} onClick={() => startLogin()} disabled={loading()}>
+							<button
+								data-non-setting="Typed GitHub authentication or account lifecycle workflow; not an independently editable field"
+								class={cx(g.btn, g.btnPrimary)}
+								onClick={() => startLogin()}
+								disabled={loading()}
+							>
 								{loading() ? "Starting..." : "Login with GitHub"}
 							</button>
 						</div>
@@ -619,6 +683,7 @@ export const GitHubTab: Component = () => {
 			<Show when={!polling() && authStatus()?.authenticated}>
 				<SectionCard title="Pull Requests">
 					<SettingToggle
+						settingId="app.auto_show_pr_popover"
 						row
 						checked={settingsStore.state.autoShowPrPopover}
 						onChange={(v) => settingsStore.setAutoShowPrPopover(v)}
@@ -628,6 +693,7 @@ export const GitHubTab: Component = () => {
 
 					<SettingToggle
 						row
+						data-setting-exclusion="transient.app.pr_hide_drafts"
 						checked={settingsStore.state.prHideDrafts}
 						onChange={(v) => {
 							settingsStore.setPrHideDrafts(v);
@@ -639,6 +705,7 @@ export const GitHubTab: Component = () => {
 
 					<SettingToggle
 						row
+						data-setting-exclusion="transient.app.pr_hide_conflicting"
 						checked={settingsStore.state.prHideConflicting}
 						onChange={(v) => settingsStore.setPrHideConflicting(v)}
 						label="Hide Conflicting PRs"
@@ -647,6 +714,7 @@ export const GitHubTab: Component = () => {
 
 					<SettingToggle
 						row
+						data-setting-exclusion="transient.app.pr_hide_ci_failing"
 						checked={settingsStore.state.prHideCiFailing}
 						onChange={(v) => settingsStore.setPrHideCiFailing(v)}
 						label="Hide CI Failing PRs"
@@ -658,6 +726,7 @@ export const GitHubTab: Component = () => {
 						value={repoDefaultsStore.state.autoDeleteOnPrClose}
 					>
 						<SettingSelect
+							settingId="repo_defaults.auto_delete_on_pr_close"
 							row
 							label="Auto-Delete on PR Close"
 							value={repoDefaultsStore.state.autoDeleteOnPrClose}
@@ -673,6 +742,7 @@ export const GitHubTab: Component = () => {
 				</SectionCard>
 				<SectionCard title="Issues">
 					<SettingToggle
+						settingId="app.issue_filter"
 						row
 						checked={settingsStore.state.issueFilter !== "disabled"}
 						onChange={(v) => githubStore.setIssueFilter(v ? "assigned" : "disabled")}
@@ -682,6 +752,7 @@ export const GitHubTab: Component = () => {
 
 					<Show when={settingsStore.state.issueFilter !== "disabled"}>
 						<SettingSelect
+							settingId="app.issue_filter"
 							row
 							label="Issue Filter"
 							value={settingsStore.state.issueFilter}
@@ -706,6 +777,7 @@ export const GitHubTab: Component = () => {
 					</p>
 
 					<SettingSelect
+						settingId="repo_defaults.base_branch"
 						row
 						label="Default Base Branch"
 						value={repoDefaultsStore.state.baseBranch}
@@ -721,6 +793,7 @@ export const GitHubTab: Component = () => {
 
 					<ExpertSetting configKey="repo_defaults.copy_ignored_files" value={repoDefaultsStore.state.copyIgnoredFiles}>
 						<SettingToggle
+							settingId="repo_defaults.copy_ignored_files"
 							row
 							checked={repoDefaultsStore.state.copyIgnoredFiles}
 							onChange={(v) => repoDefaultsStore.setCopyIgnoredFiles(v)}
@@ -733,6 +806,7 @@ export const GitHubTab: Component = () => {
 						value={repoDefaultsStore.state.copyUntrackedFiles}
 					>
 						<SettingToggle
+							settingId="repo_defaults.copy_untracked_files"
 							row
 							checked={repoDefaultsStore.state.copyUntrackedFiles}
 							onChange={(v) => repoDefaultsStore.setCopyUntrackedFiles(v)}
@@ -746,6 +820,7 @@ export const GitHubTab: Component = () => {
 							<ContextualHelp label="Default Setup Script" />
 						</div>
 						<Textarea
+							data-setting-id="repo_defaults.setup_script"
 							id="default-setup-script"
 							value={repoDefaultsStore.state.setupScript}
 							onInput={(e) => repoDefaultsStore.setSetupScript(e.currentTarget.value)}
@@ -761,6 +836,7 @@ export const GitHubTab: Component = () => {
 							<ContextualHelp label="Default Run Script" />
 						</div>
 						<Textarea
+							data-setting-id="repo_defaults.run_script"
 							id="default-run-script"
 							value={repoDefaultsStore.state.runScript}
 							onInput={(e) => repoDefaultsStore.setRunScript(e.currentTarget.value)}
@@ -776,6 +852,7 @@ export const GitHubTab: Component = () => {
 							<ContextualHelp label="Default Archive Script" />
 						</div>
 						<Textarea
+							data-setting-id="repo_defaults.archive_script"
 							id="default-archive-script"
 							value={repoDefaultsStore.state.archiveScript}
 							onInput={(e) => repoDefaultsStore.setArchiveScript(e.currentTarget.value)}
@@ -792,6 +869,7 @@ export const GitHubTab: Component = () => {
 
 					<ExpertSetting configKey="repo_defaults.worktree_storage" value={repoDefaultsStore.state.worktreeStorage}>
 						<SettingSelect
+							settingId="repo_defaults.worktree_storage"
 							row
 							label="Storage Strategy"
 							value={repoDefaultsStore.state.worktreeStorage}
@@ -807,6 +885,7 @@ export const GitHubTab: Component = () => {
 					</ExpertSetting>
 
 					<SettingToggle
+						settingId="repo_defaults.prompt_on_create"
 						row
 						checked={repoDefaultsStore.state.promptOnCreate}
 						onChange={(v) => repoDefaultsStore.setPromptOnCreate(v)}
@@ -815,6 +894,7 @@ export const GitHubTab: Component = () => {
 					/>
 
 					<SettingToggle
+						settingId="repo_defaults.delete_branch_on_remove"
 						row
 						checked={repoDefaultsStore.state.deleteBranchOnRemove}
 						onChange={(v) => repoDefaultsStore.setDeleteBranchOnRemove(v)}
@@ -826,6 +906,7 @@ export const GitHubTab: Component = () => {
 						value={repoDefaultsStore.state.autoArchiveMerged}
 					>
 						<SettingToggle
+							settingId="repo_defaults.auto_archive_merged"
 							row
 							checked={repoDefaultsStore.state.autoArchiveMerged}
 							onChange={(v) => repoDefaultsStore.setAutoArchiveMerged(v)}
@@ -836,6 +917,7 @@ export const GitHubTab: Component = () => {
 
 					<ExpertSetting configKey="repo_defaults.orphan_cleanup" value={repoDefaultsStore.state.orphanCleanup}>
 						<SettingSelect
+							settingId="repo_defaults.orphan_cleanup"
 							row
 							label="Orphan Worktree Cleanup"
 							value={repoDefaultsStore.state.orphanCleanup}
@@ -854,6 +936,7 @@ export const GitHubTab: Component = () => {
 						value={repoDefaultsStore.state.orphanCleanupCountdownSeconds}
 					>
 						<SettingSelect
+							settingId="repo_defaults.orphan_cleanup_countdown_seconds"
 							row
 							label="Safe orphan cleanup countdown"
 							value={String(repoDefaultsStore.state.orphanCleanupCountdownSeconds)}
@@ -864,6 +947,7 @@ export const GitHubTab: Component = () => {
 					</ExpertSetting>
 
 					<SettingSelect
+						settingId="repo_defaults.pr_merge_strategy"
 						row
 						label="PR Merge Strategy"
 						value={repoDefaultsStore.state.prMergeStrategy}
@@ -878,6 +962,7 @@ export const GitHubTab: Component = () => {
 
 					<ExpertSetting configKey="repo_defaults.after_merge" value={repoDefaultsStore.state.afterMerge}>
 						<SettingSelect
+							settingId="repo_defaults.after_merge"
 							row
 							label="After Merge Behavior"
 							value={repoDefaultsStore.state.afterMerge}
@@ -896,6 +981,7 @@ export const GitHubTab: Component = () => {
 						value={repoDefaultsStore.state.autoFetchIntervalMinutes}
 					>
 						<SettingSelect
+							settingId="repo_defaults.auto_fetch_interval_minutes"
 							row
 							label="Auto-Fetch Interval"
 							value={String(repoDefaultsStore.state.autoFetchIntervalMinutes)}
@@ -925,7 +1011,11 @@ export const GitHubTab: Component = () => {
 						// account exists or a repo needs one, and it stays visible then.
 						<ExpertSetting configKey="github_accounts.accounts" value={accounts()}>
 							<div class={g.actions} style={{ "margin-top": "16px" }}>
-								<button class={cx(g.btn)} onClick={() => setShowAddPanel(true)}>
+								<button
+									data-non-setting="Open the account-creation editor"
+									class={cx(g.btn)}
+									onClick={() => setShowAddPanel(true)}
+								>
 									Add another GitHub account
 								</button>
 							</div>
@@ -952,7 +1042,11 @@ export const GitHubTab: Component = () => {
 										</div>
 									</div>
 									<div class={g.actions}>
-										<button class={cx(g.btn, g.btnDanger)} onClick={() => removeAccount(acc.id)}>
+										<button
+											data-non-setting="Typed GitHub authentication or account lifecycle workflow; not an independently editable field"
+											class={cx(g.btn, g.btnDanger)}
+											onClick={() => removeAccount(acc.id)}
+										>
 											Remove
 										</button>
 									</div>
@@ -967,7 +1061,12 @@ export const GitHubTab: Component = () => {
 						<div class={s.group}>
 							<label>Add another github.com account</label>
 							<div class={g.actions}>
-								<button class={cx(g.btn, g.btnPrimary)} onClick={() => startLogin(true)} disabled={loading()}>
+								<button
+									data-non-setting="Typed GitHub authentication or account lifecycle workflow; not an independently editable field"
+									class={cx(g.btn, g.btnPrimary)}
+									onClick={() => startLogin(true)}
+									disabled={loading()}
+								>
 									{loading() ? "Starting..." : "Add github.com account"}
 								</button>
 							</div>
@@ -979,6 +1078,7 @@ export const GitHubTab: Component = () => {
 								<ContextualHelp label="Add Enterprise account" />
 							</div>
 							<Input
+								data-setting-id="github_accounts.accounts.{id}.host.host"
 								type="text"
 								id="github-enterprise-host"
 								placeholder="ghe.example.com"
@@ -986,7 +1086,12 @@ export const GitHubTab: Component = () => {
 								onInput={(e) => setNewHost(e.currentTarget.value)}
 							/>
 							<div class={g.actions}>
-								<button class={cx(g.btn, g.btnPrimary)} onClick={addAccount} disabled={addingAccount()}>
+								<button
+									data-non-setting="Typed GitHub authentication or account lifecycle workflow; not an independently editable field"
+									class={cx(g.btn, g.btnPrimary)}
+									onClick={addAccount}
+									disabled={addingAccount()}
+								>
 									{addingAccount() ? "Validating..." : "Add account"}
 								</button>
 							</div>
@@ -1004,14 +1109,25 @@ export const GitHubTab: Component = () => {
 						type="password"
 						aria-label="CircleCI read-only token"
 						placeholder={t("github.circleCiPlaceholder", "CircleCI read-only token")}
+						data-setting-id="circleci.token"
 						value={circleCiToken()}
 						onInput={(e) => setCircleCiToken(e.currentTarget.value)}
 					/>
 					<div class={g.actions}>
-						<button class={g.btn} data-ready={circleCiToken().trim() ? "true" : undefined} onClick={saveCircleCiToken}>
+						<button
+							data-setting-id="circleci.token"
+							class={g.btn}
+							data-ready={circleCiToken().trim() ? "true" : undefined}
+							onClick={saveCircleCiToken}
+						>
 							{t("github.circleCiSave", "Save token")}
 						</button>
-						<button class={g.btn} onClick={removeCircleCiToken} disabled={!circleCiStatus()?.configured}>
+						<button
+							data-setting-id="circleci.token"
+							class={g.btn}
+							onClick={removeCircleCiToken}
+							disabled={!circleCiStatus()?.configured}
+						>
 							{t("github.circleCiRemove", "Remove token")}
 						</button>
 					</div>
@@ -1053,6 +1169,7 @@ export const GitHubTab: Component = () => {
 												</Show>
 												<Show when={res().status === "needs-bind"}>
 													<Select
+														data-setting-id="github_bindings.bindings.{key}.remote_name"
 														class={g.bindSelect}
 														value={chosenRemote()[repo.path] ?? res().candidates?.[0]?.remote_name ?? ""}
 														onChange={(e) => setChosenRemote({ ...chosenRemote(), [repo.path]: e.currentTarget.value })}
@@ -1069,12 +1186,17 @@ export const GitHubTab: Component = () => {
 											</div>
 											<div class={g.actions}>
 												<Show when={res().status === "bound"}>
-													<button class={cx(g.btn)} onClick={() => unbindRepo(repo.path)}>
+													<button
+														data-non-setting="Typed registered-repository account-binding workflow"
+														class={cx(g.btn)}
+														onClick={() => unbindRepo(repo.path)}
+													>
 														Unbind
 													</button>
 												</Show>
 												<Show when={res().status === "needs-bind"}>
 													<button
+														data-non-setting="Typed registered-repository account-binding workflow"
 														class={cx(g.btn, g.btnPrimary)}
 														onClick={() => {
 															const remote = chosenRemote()[repo.path] ?? res().candidates?.[0]?.remote_name ?? "";

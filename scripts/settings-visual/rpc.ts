@@ -1,7 +1,9 @@
+import commander from '../../src-tauri/src/themes/commander.json';
+import paper from '../../src-tauri/src/themes/vscode-light.json';
 import perimeter from '../../src/__tests__/fixtures/ego-perimeter/effective-default.json';
-export const isTauri=()=>true;
+export const isTauri=()=>new URLSearchParams(location.search).get('browser')!=='1';
 export const owningConnectionFor=()=>undefined;
-export const buildHttpUrl=(p:string)=>'http://127.0.0.1:15387/blocked'+p;
+export const buildHttpUrl=(p:string)=>'http://127.0.0.1:15391/blocked'+p;
 export class HttpRpcError extends Error {}
 export const listen=async()=>()=>{};
 export const subscribeEvents=async()=>()=>{};
@@ -12,6 +14,11 @@ export const appLogger={info(){},warn(){},error(){},debug(){}};
 export const calls:string[]=[];
 const config={shell:null,font_family:'monospace',font_size:13,theme:'commander',mcp_server_enabled:true,disabled_native_tools:[],collapse_tools:false,services:{server:{enabled:false,port:9876,ipv6_enabled:false},auth:{username:'',password_hash:'',session_token_duration_secs:86400,lan_auth_bypass:false},relay:{enabled:false,url:'',session_id:''}}};
 export async function invoke(cmd:string,args?:any):Promise<any>{calls.push(cmd);switch(cmd){
+case 'list_themes': return [themeEntry('commander', commander), themeEntry('vscode-light', paper)];
+case 'plugin_settings_action': return pluginAction(args);
+case 'list_discovered_ssh_hosts': return {hosts:[],hashed_count:0};
+case 'list_ssh_agent_keys': return {keys:[],agent_type:'fixture'};
+case 'list_remote_connections': case 'remote_connection_statuses': return [];
 case 'load_config':return structuredClone(config);
 case 'get_config_defaults':return {};
 case 'get_home_directory':return '/workspace';
@@ -40,3 +47,25 @@ case 'load_agents_config':return {agents:{},hibernate_idle_minutes:60,hibernate_
 default:return undefined;
 }}
 export const rpc=invoke;
+
+// Explicit, isolated visual scenarios. These are synthetic UI fixtures, not live service evidence.
+export const scenario = new URLSearchParams(location.search).get('state') ?? 'ready';
+export const pluginField = {id:'plugins.fixture.endpoint',path:'/endpoint',label:'endpoint',schema:{type:'string',title:'Server endpoint'},operations:['get','set','reset'],sensitivity:'public',order:0,default:'https://example.test'};
+export const pluginManifest = {id:'fixture',name:'Fixture integration',version:'1.0.0',minAppVersion:'1.0.0',description:'Isolated visual fixture',main:'main.js',capabilities:[],settings:{schema:{type:'object',additionalProperties:false,properties:{endpoint:{type:'string',title:'Server endpoint','x-setting':{sensitivity:'public',apply:'live',effect:'Endpoint changes',operations:['get','set','reset'],confirmationClass:'ordinary'}}}},defaults:{endpoint:'https://example.test'}}};
+let revision = 0;
+async function pluginAction(args:any) {
+ if(args.action.action==='describe') return {fields:{[pluginField.id]:pluginField},collections:[],gaps:[],exclusions:[]};
+ if(args.action.action==='get') {
+  if(scenario==='loading') return new Promise(()=>{});
+  if(scenario==='error') throw new Error('Isolated visual read failure');
+  return {revision:`r${++revision}`,values:{'/endpoint':{effective:revision>1?'https://latest.example.test':'https://example.test',source:'stored'}}};
+ }
+ if(scenario==='stale') throw new Error('Isolated visual revision conflict');
+ return {effects:[],restart:[]};
+}
+
+// Shipped palettes, projected to the Rust list_themes response, not service state.
+function themeEntry(key: string, source: typeof commander) {
+ const aliases: Record<string,string> = {background:'bg_primary',surface:'bg_secondary',surfaceElevated:'bg_tertiary',highlight:'bg_highlight',foreground:'fg_primary',foregroundSecondary:'fg_secondary',mutedForeground:'fg_muted',accentHover:'accent_hover',accentForeground:'text_on_accent',errorForeground:'text_on_error',successForeground:'text_on_success'};
+ return {key,name:source.name,terminal:{background:source.background,foreground:source.foreground,cursor:source.cursorColor,cursor_accent:source.cursorAccent,selection_background:source.selectionBackground,ansi:[source.black,source.red,source.green,source.yellow,source.blue,source.purple,source.cyan,source.white,source.brightBlack,source.brightRed,source.brightGreen,source.brightYellow,source.brightBlue,source.brightPurple,source.brightCyan,source.brightWhite]},app_chrome:Object.fromEntries(Object.entries(source.appChrome).map(([name,value])=>[aliases[name]??name,value]))};
+}

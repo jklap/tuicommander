@@ -308,6 +308,7 @@ fn event_type_name(event: &AppEvent) -> &str {
         AppEvent::McpConfirm { .. } => "mcp-confirm",
         AppEvent::McpConfirmResolved { .. } => "mcp-confirm-resolved",
         AppEvent::AcpNotice(_) => "acp-notice",
+        AppEvent::SettingsChanged(_) => "settings-changed",
         AppEvent::RepositoriesChanged => "repositories-changed",
         AppEvent::OpenMarkdownTabsChanged => "open-markdown-tabs-changed",
         AppEvent::DirChanged { .. } => "dir-changed",
@@ -501,6 +502,7 @@ fn event_payload(event: &AppEvent) -> serde_json::Value {
         // `/acp` routes use, so a client needs no per-transport translation.
         AppEvent::AcpNotice(notice) => serde_json::json!(notice),
         // Payload-free: the receiver re-reads `repositories.json` itself.
+        AppEvent::SettingsChanged(notice) => serde_json::json!(notice),
         AppEvent::RepositoriesChanged => serde_json::json!({}),
         AppEvent::DirChanged { dir_path } => {
             serde_json::json!({ "dir_path": dir_path })

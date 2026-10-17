@@ -1,7 +1,8 @@
-import { type Component, createSignal, For, Match, onMount, Show, Switch } from "solid-js";
+import { type Component, createSignal, For, Match, onCleanup, onMount, Show, Switch } from "solid-js";
 import { t } from "../../../i18n";
 import { type EgoCliClient, egoCli } from "../../../services/egoCli";
 import { startEgoLogin } from "../../../services/egoLogin";
+import { settingsRefresh } from "../../../services/settingsRefresh";
 import { appLogger } from "../../../stores/appLogger";
 import { toastsStore } from "../../../stores/toasts";
 import type { EgoCliError, EgoCredential, EgoProviders } from "../../../types/ego";
@@ -73,6 +74,17 @@ export const AiChatTab: Component<{
 			setBusy(false);
 		}
 	};
+
+	onCleanup(
+		settingsRefresh.register({
+			section: "ego",
+			read: () => client().providers(false),
+			apply: (snapshot) => {
+				setData(snapshot);
+				setError(null);
+			},
+		}),
+	);
 
 	onMount(() => {
 		void attempt(() => client().providers(false));
@@ -186,6 +198,7 @@ export const AiChatTab: Component<{
 								{(id, descriptionId) => (
 									<div class={layout.modelControls}>
 										<Select
+											data-setting-id="ego.model"
 											id={id}
 											aria-describedby={descriptionId()}
 											disabled={busy()}
@@ -213,6 +226,7 @@ export const AiChatTab: Component<{
 											</For>
 										</Select>
 										<button
+											data-non-setting="Explicit configured-Ego provider discovery; never runs during describe"
 											class={s.testBtn}
 											disabled={busy()}
 											onClick={() => void attempt(() => client().providers(true))}
@@ -235,7 +249,12 @@ export const AiChatTab: Component<{
 						)}
 					>
 						{() => (
-							<button class={s.testBtn} disabled={busy()} onClick={() => void attempt(() => client().providers(true))}>
+							<button
+								data-non-setting="Explicit configured-Ego provider discovery; never runs during describe"
+								class={s.testBtn}
+								disabled={busy()}
+								onClick={() => void attempt(() => client().providers(true))}
+							>
 								{t("providers.refresh", "Refresh from providers")}
 							</button>
 						)}
@@ -259,6 +278,7 @@ export const AiChatTab: Component<{
 										badges={<CredentialBadge credential={provider.credential} />}
 										actions={
 											<button
+												data-non-setting="Open the configured Ego interactive login; the human handles authentication"
 												class={s.testBtn}
 												aria-label={`${t("providers.login", "Login")} to ${provider.name}`}
 												onClick={() => login(provider.name)}

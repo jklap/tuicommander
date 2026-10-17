@@ -35,6 +35,7 @@ pub mod work_items;
 pub use tuic_core::app_instance;
 pub(crate) mod app_logger;
 pub(crate) mod changelog;
+mod frame_workload;
 mod stall_journal;
 pub(crate) use tuic_terminal::chrome;
 pub(crate) mod circleci;
@@ -2132,6 +2133,7 @@ pub fn run() {
             pty::terminal_request_frame,
             pty::ack_terminal_frame,
             frontend_liveness::frontend_heartbeat,
+            frame_workload::save_frame_workload,
             pty::terminal_exit_alt_screen,
             pty::terminal_scroll,
             pty::terminal_scroll_to_offset,
@@ -2386,11 +2388,11 @@ pub fn run() {
             config::load_app_config,
             save_app_config,
             boot_commands::load_notification_config_async,
-            config::save_notification_config,
+            settings::legacy::save_notification_config,
             boot_commands::load_ui_prefs_async,
-            config::save_ui_prefs,
+            settings::legacy::save_ui_prefs,
             boot_commands::load_repo_settings_async,
-            config::save_repo_settings,
+            settings::legacy::save_repo_settings,
             config::set_branch_label,
             config::load_repo_local_config,
             config::save_repo_local_config,
@@ -2406,15 +2408,15 @@ pub fn run() {
             mcp_oauth::commands::cancel_mcp_upstream_oauth,
             config::check_has_custom_settings,
             boot_commands::load_repo_defaults_async,
-            config::save_repo_defaults,
+            settings::legacy::save_repo_defaults,
             boot_commands::load_repositories_async,
             config::save_repositories,
             config::list_stale_temp_repository_candidates,
             config::repair_stale_temp_repositories,
             config::load_pane_layout,
-            config::save_pane_layout,
+            settings::legacy::save_pane_layout,
             boot_commands::load_prompt_library_async,
-            config::save_prompt_library,
+            settings::legacy::save_prompt_library,
             boot_commands::load_notes_async,
             config::save_notes,
             config::save_note_image,
@@ -2424,9 +2426,9 @@ pub fn run() {
             boot_commands::load_activity_async,
             config::save_activity,
             boot_commands::load_keybindings_async,
-            config::save_keybindings,
+            settings::legacy::save_keybindings,
             boot_commands::load_agents_config_async,
-            config::save_agents_config,
+            settings::legacy::save_agents_config,
             config::get_config_defaults,
             agent_hook_commands::set_agent_hook_instrumentation,
             agent_hook_commands::get_agent_hook_state,

@@ -1,6 +1,7 @@
-import { type Component, createEffect, createSignal, For, onMount, Show } from "solid-js";
+import { type Component, createEffect, createSignal, For, onCleanup, Show } from "solid-js";
 import { createStore, reconcile } from "solid-js/store";
 import { t } from "../../../../i18n";
+import { settingsRefresh } from "../../../../services/settingsRefresh";
 import { appLogger } from "../../../../stores/appLogger";
 import { rpc } from "../../../../transport";
 import { writeClipboard } from "../../../../utils/clipboard";
@@ -33,18 +34,24 @@ export const LocalMcpPanel: Component = () => {
 	const [bridgeInfoOpen, setBridgeInfoOpen] = createSignal(false);
 	const [snippetCopied, setSnippetCopied] = createSignal(false);
 
-	onMount(async () => {
-		try {
-			const config = await rpc<AppConfig>("load_config");
-			setDisabledNativeTools(config.disabled_native_tools ?? []);
-			setSettingsEnabled(config.settings_mcp_enabled ?? false);
-			setCollapseTools(config.collapse_tools ?? false);
-		} catch (e) {
-			appLogger.warn("config", "Failed to load native tool config, using defaults", e);
-		} finally {
-			setNativeToolsLoaded(true);
-		}
-	});
+	onCleanup(
+		settingsRefresh.register({
+			section: "app",
+			read: () =>
+				rpc<AppConfig>("load_config").catch((error) => {
+					appLogger.warn("config", "Failed to load native tool config, using defaults", error);
+					setNativeToolsLoaded(true);
+					return undefined;
+				}),
+			apply: (config) => {
+				if (!config) return;
+				setDisabledNativeTools(config.disabled_native_tools ?? []);
+				setSettingsEnabled(config.settings_mcp_enabled ?? false);
+				setCollapseTools(config.collapse_tools ?? false);
+				setNativeToolsLoaded(true);
+			},
+		}),
+	);
 
 	return (
 		<div class={`${s.section} ${layout.page}`}>
@@ -102,6 +109,7 @@ export const LocalMcpPanel: Component = () => {
 
 				<div class={s.group}>
 					<button
+						data-non-setting="Show the bridge integration instructions; not a preference"
 						class={s.mcpDisclosure}
 						onClick={() => {
 							const opening = !bridgeInfoOpen();
@@ -128,6 +136,7 @@ export const LocalMcpPanel: Component = () => {
 							<div class={s.mcpSnippetWrap}>
 								<pre class={s.mcpSnippetPre}>{bridgeInfo()!.config_snippet}</pre>
 								<button
+									data-non-setting="Copy the existing MCP bridge integration snippet"
 									class={s.mcpSnippetCopy}
 									onClick={() => {
 										writeClipboard(bridgeInfo()!.config_snippet)
@@ -154,6 +163,7 @@ export const LocalMcpPanel: Component = () => {
 					>
 						{(id, descriptionId) => (
 							<input
+								data-setting-id="app.collapse_tools"
 								id={id}
 								aria-describedby={descriptionId()}
 								class={s.rowSwitch}
@@ -188,6 +198,7 @@ export const LocalMcpPanel: Component = () => {
 								<SettingRow label={tool.name} hint={tool.summary} help={tool.description}>
 									{(id, descriptionId) => (
 										<input
+											data-setting-id="app.disabled_native_tools"
 											id={id}
 											aria-describedby={descriptionId()}
 											class={s.rowSwitch}

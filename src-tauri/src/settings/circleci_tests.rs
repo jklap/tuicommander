@@ -29,12 +29,25 @@ async fn circleci_discovery_and_write_only_readback() {
         execute(&state, read()).await["values"]["/token"]["stored"]["status"],
         "unset"
     );
+    let mut events = state.event_bus.subscribe();
     let written = execute(
         &state,
         perform(json!({"action":"set_token","token":"circleci-settings-canary"})),
     )
     .await;
     assert_eq!(written["token"]["status"], "set", "{written}");
+    // Catches: merging a new credential owner without wiring its live-refresh receipt.
+    match events
+        .try_recv()
+        .expect("durable CircleCI write must refresh settings")
+    {
+        crate::state::AppEvent::SettingsChanged(notice) => {
+            assert_eq!(notice.section, "circleci");
+            assert!(notice.persisted);
+            assert_eq!(Some(notice.generation), written["generation"].as_u64());
+        }
+        other => panic!("unexpected settings event: {other:?}"),
+    }
     let snapshot = execute(&state, read()).await;
     assert_eq!(snapshot["values"]["/token"]["stored"]["status"], "set");
     assert!(!format!("{description}{written}{snapshot}").contains("circleci-settings-canary"));

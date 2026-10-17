@@ -790,3 +790,15 @@ The settings Voice picker combines `speechVoices` (installed) with the language-
 snapshot. `useAgentPolling.applySessionState` applies it from both lifecycle
 catch-up and push snapshots; omission clears it. It never changes shell busy
 semantics, awaiting state, or turn completion.
+
+### Settings reload coordination
+
+`services/settingsRefresh.ts` owns one disposable settings-event subscription per window. Readers register a section and optional remote connection, plus separate read and non-saving apply functions. It coalesces same-turn hints, deduplicates each owner/section generation, invalidates older in-flight reads and refetches on SSE resync. Replacement reads wait for the invalidated operation to settle, crossing the IPC read-deduplication boundary. A remote-machine hint only reaches readers registered for that connection.
+
+App settings, notifications, preferences, repository defaults and overrides, registration metadata, agent configurations, prompts, pane layout, tunnels, connection metadata and upstream lists adopt reads without bootstrap migration. Mounted owner pages also refresh GitHub, ego, Telegram and plugin settings. Dirty form fields remain local; same-field conflicts produce a content-free notice. `createConfigDeltaWriter.adopt` advances the backend baseline. The existing save tail rebases queued edits onto that baseline: unrelated local changes still persist, while conflicting remote leaves are not overwritten automatically. Component-local launch-instruction drafts also survive incoming saved values until blur or explicit reset.
+
+Snapshot adoption merges object leaves. Arrays are atomic owner values: concurrent changes to the same list retain the local list and report a conflict instead of guessing an index-based merge. A remote disconnect cancels in-flight adoption; reconnect clears that owner's generation cursor and fetches a fresh snapshot. Successful daemon mirror stream subscriptions and owner-scoped lag notifications also trigger this resync, even when the health status stayed connected.
+
+## Startup workflow state versus Settings state
+
+[Settings startup workflows](../backend/settings-startup.md) separates device-login state, human confirmation, owner CAS revisions and process-local invalidation generations. A terminal command exiting is not authentication success. `services/egoLogin.ts` remains the UI login entry point. Schema-only consumers use the typed Ego owner `begin_login`/`login_status` workflow; status reads the configured credential owner after termination and provider refresh determines the displayed model state. The typed inspector blocks another write after partial/unknown persistence until authoritative readback, and retains a dirty draft's original CAS revision across incoming refreshes.

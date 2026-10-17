@@ -16,6 +16,12 @@ export const TIPS: Tip[] = [
 		shortcut: null,
 	},
 	{
+		feature: "All settings inspector",
+		description:
+			"Open Settings → All settings (Expert) for typed catalogue fields without a dedicated page. Select the owner and existing record key, then read before saving. Credentials stay in their domain workflows.",
+		shortcut: null,
+	},
+	{
 		feature: "ego terminal Chat view",
 		description:
 			"Switch an ego terminal from CLI to Chat to read completed replies and folded tool calls. Configure an ego executable with local transcript v1 support first; use CLI for interactive prompts.",
@@ -363,7 +369,7 @@ export const TIPS: Tip[] = [
 	{
 		feature: "Plugin File Previews",
 		description:
-			"Install preview plugins from Settings > Plugins > Browse to open DOCX and XLSX files or inspect, filter, explain, and edit SQLite databases directly from the File Browser.",
+			"Install preview plugins from Settings > Manage plugins > Browse to open DOCX and XLSX files or inspect, filter, explain, and edit SQLite databases directly from the File Browser.",
 		shortcut: null,
 	},
 	{

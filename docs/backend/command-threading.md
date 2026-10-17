@@ -326,3 +326,5 @@ The async `suspended_session_action` command and its HTTP route both call `suspe
 
 `force_retry_provider_recovery_command` is async and runs the shared input-lock
 transaction and agent command writer in `spawn_blocking`, not on the main thread.
+
+`save_frame_workload` is async. Recording validation, filesystem writes, sync and rotation run inside `spawn_blocking`, never on the desktop IPC thread. HTTP uses the same function and writer admission bound.

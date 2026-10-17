@@ -377,13 +377,6 @@ export function getShortcutSections(): ShortcutSection[] {
 	];
 }
 
-/** Pencil SVG icon for the edit button */
-const PencilIcon = () => (
-	<svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
-		<path d="M12.146.854a.5.5 0 0 1 .708 0l2.292 2.292a.5.5 0 0 1 0 .708l-9.5 9.5a.5.5 0 0 1-.168.11l-4 1.5a.5.5 0 0 1-.65-.65l1.5-4a.5.5 0 0 1 .11-.168l9.5-9.5zM11.207 2.5 3.5 10.207 2.293 13.707l3.5-1.207L13.5 4.793 11.207 2.5z" />
-	</svg>
-);
-
 /** Reset icon (counter-clockwise arrow) */
 const ResetIcon = () => (
 	<svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
@@ -594,6 +587,7 @@ export const KeyboardShortcutsTab: Component = () => {
 									style={{ display: "flex", "align-items": "center", gap: "8px" }}
 								>
 									<KeyComboCapture
+										settingId="app.global_hotkey"
 										value={settingsStore.state.globalHotkey ? tauriToDisplay(settingsStore.state.globalHotkey) : ""}
 										onChange={handleGlobalHotkeyChange}
 										placeholder={t("settings.globalHotkeyPlaceholder", "Click to set hotkey")}
@@ -601,6 +595,7 @@ export const KeyboardShortcutsTab: Component = () => {
 									/>
 									<Show when={settingsStore.state.globalHotkey}>
 										<button
+											data-setting-id="keybindings.bindings.{action}.key"
 											class={w.secondaryButton}
 											onClick={clearGlobalHotkey}
 											style={{
@@ -623,130 +618,116 @@ export const KeyboardShortcutsTab: Component = () => {
 				</SectionCard>
 			</Show>
 
-			<h3 class={w.srOnly}>Actions</h3>
-			<div class={w.shortcutSearch}>
-				<Input
-					ref={inputRef}
-					type="text"
-					placeholder={t("helpPanel.searchPlaceholder", "Search shortcuts...")}
-					value={filter()}
-					onInput={(e) => setFilter(e.currentTarget.value)}
-				/>
+			<SectionCard title="Shortcut groups">
+				<div class={w.shortcutSearch}>
+					<Input
+						data-non-setting="Filter keyboard shortcut rows"
+						ref={inputRef}
+						type="text"
+						placeholder={t("helpPanel.searchPlaceholder", "Search shortcuts...")}
+						value={filter()}
+						onInput={(e) => setFilter(e.currentTarget.value)}
+					/>
 
-				<p class={s.hint}>
-					{t("helpPanel.editableNote", "Click the pencil icon to rebind a shortcut. Press Escape to cancel.")}
-				</p>
-			</div>
-			<For each={filteredSections()}>
-				{(section) => (
-					<div class={w.shortcutCategory}>
-						<label>{section.title}</label>
-						<table class={w.shortcuts}>
-							<For each={section.shortcuts}>
-								{(shortcut) => (
-									<tr style={{ cursor: "default" }}>
-										<td style={{ padding: "4px 8px", "font-size": "var(--font-base)", color: "var(--fg-primary)" }}>
-											{shortcut.description}
-										</td>
-										<td style={{ width: "140px", padding: "4px 8px", "vertical-align": "middle" }}>
-											<Show
-												when={editingAction() === shortcut.action}
-												fallback={
-													<div class={w.binding}>
-														<kbd
-															style={{
-																display: "inline-block",
-																padding: "2px 8px",
-																background:
-																	shortcut.action && keybindingsStore.isOverridden(shortcut.action)
-																		? "var(--accent-subtle, rgba(100, 149, 237, 0.15))"
-																		: "var(--bg-tertiary)",
-																border: "1px solid var(--border)",
-																"border-radius": "var(--radius-md)",
-																"font-family": "var(--font-mono)",
-																"font-size": "var(--font-sm)",
-																color:
-																	shortcut.action && keybindingsStore.isOverridden(shortcut.action)
-																		? "var(--accent)"
-																		: "var(--fg-secondary)",
-															}}
-														>
-															{shortcut.keys || "Not set"}
-														</kbd>
-														<Show when={shortcut.action}>
-															<button
-																onClick={() => startEditing(shortcut.action!)}
-																title="Edit shortcut"
+					<p class={s.hint}>
+						{t("helpPanel.editableNote", "Click Rebind to change a shortcut. Press Escape to cancel.")}
+					</p>
+				</div>
+				<For each={filteredSections()}>
+					{(section) => (
+						<div class={w.shortcutCategory}>
+							<label>{section.title}</label>
+							<table class={w.shortcuts}>
+								<For each={section.shortcuts}>
+									{(shortcut) => (
+										<tr style={{ cursor: "default" }}>
+											<td style={{ padding: "4px 8px", "font-size": "var(--font-base)", color: "var(--fg-primary)" }}>
+												{shortcut.description}
+											</td>
+											<td style={{ width: "140px", padding: "4px 8px", "vertical-align": "middle" }}>
+												<Show
+													when={editingAction() === shortcut.action}
+													fallback={
+														<div class={w.binding}>
+															<kbd
 																style={{
-																	background: "none",
-																	border: "none",
-																	cursor: "pointer",
-																	color: "var(--fg-muted)",
-																	padding: "2px",
-																	"border-radius": "var(--radius-sm)",
-																	display: "flex",
-																	"align-items": "center",
-																	opacity: "0.5",
-																	transition: "opacity 0.15s",
-																}}
-																onMouseEnter={(e) => {
-																	e.currentTarget.style.opacity = "1";
-																}}
-																onMouseLeave={(e) => {
-																	e.currentTarget.style.opacity = "0.5";
+																	display: "inline-block",
+																	padding: "2px 8px",
+																	background:
+																		shortcut.action && keybindingsStore.isOverridden(shortcut.action)
+																			? "var(--accent-subtle, rgba(100, 149, 237, 0.15))"
+																			: "var(--bg-tertiary)",
+																	border: "1px solid var(--border)",
+																	"border-radius": "var(--radius-md)",
+																	"font-family": "var(--font-mono)",
+																	"font-size": "var(--font-sm)",
+																	color:
+																		shortcut.action && keybindingsStore.isOverridden(shortcut.action)
+																			? "var(--accent)"
+																			: "var(--fg-secondary)",
 																}}
 															>
-																<PencilIcon /> Rebind
-															</button>
-															<Show when={keybindingsStore.isOverridden(shortcut.action!)}>
+																{shortcut.keys || "Not set"}
+															</kbd>
+															<Show when={shortcut.action}>
 																<button
-																	onClick={() => keybindingsStore.resetAction(shortcut.action!)}
-																	title="Reset to default"
-																	style={{
-																		background: "none",
-																		border: "none",
-																		cursor: "pointer",
-																		color: "var(--fg-muted)",
-																		padding: "2px",
-																		"border-radius": "var(--radius-sm)",
-																		display: "flex",
-																		"align-items": "center",
-																		opacity: "0.5",
-																		transition: "opacity 0.15s",
-																	}}
-																	onMouseEnter={(e) => {
-																		e.currentTarget.style.opacity = "1";
-																	}}
-																	onMouseLeave={(e) => {
-																		e.currentTarget.style.opacity = "0.5";
-																	}}
+																	data-setting-id="keybindings.bindings.{action}.key"
+																	onClick={() => startEditing(shortcut.action!)}
+																	title="Edit shortcut"
+																	class={w.rebindButton}
 																>
-																	<ResetIcon /> Reset
+																	Rebind
 																</button>
+																<Show when={keybindingsStore.isOverridden(shortcut.action!)}>
+																	<button
+																		data-setting-id="keybindings.bindings.{action}.key"
+																		onClick={() => keybindingsStore.resetAction(shortcut.action!)}
+																		title="Reset to default"
+																		style={{
+																			background: "none",
+																			border: "none",
+																			cursor: "pointer",
+																			color: "var(--fg-muted)",
+																			padding: "2px",
+																			"border-radius": "var(--radius-sm)",
+																			display: "flex",
+																			"align-items": "center",
+																			opacity: "0.5",
+																			transition: "opacity 0.15s",
+																		}}
+																		onMouseEnter={(e) => {
+																			e.currentTarget.style.opacity = "1";
+																		}}
+																		onMouseLeave={(e) => {
+																			e.currentTarget.style.opacity = "0.5";
+																		}}
+																	>
+																		<ResetIcon /> Reset
+																	</button>
+																</Show>
 															</Show>
-														</Show>
-														<Show when={!shortcut.action}>
-															<span class={w.rebindSlot} aria-hidden="true" />
-														</Show>
-													</div>
-												}
-											>
-												<RecordingIndicator
-													conflict={conflict()}
-													onKeyDown={handleKeyDown}
-													onCancel={cancelEditing}
-													onConfirmReplace={confirmConflictReplace}
-												/>
-											</Show>
-										</td>
-									</tr>
-								)}
-							</For>
-						</table>
-					</div>
-				)}
-			</For>
-
+															<Show when={!shortcut.action}>
+																<span class={w.rebindSlot} aria-hidden="true" />
+															</Show>
+														</div>
+													}
+												>
+													<RecordingIndicator
+														conflict={conflict()}
+														onKeyDown={handleKeyDown}
+														onCancel={cancelEditing}
+														onConfirmReplace={confirmConflictReplace}
+													/>
+												</Show>
+											</td>
+										</tr>
+									)}
+								</For>
+							</table>
+						</div>
+					)}
+				</For>
+			</SectionCard>
 			<Show when={pluginCommandRows().length > 0}>
 				<div class={w.shortcutCategory}>
 					<label>{t("helpPanel.pluginCommands", "Plugin Commands")}</label>
@@ -785,6 +766,7 @@ export const KeyboardShortcutsTab: Component = () => {
 														{cmd.keys || t("helpPanel.unbound", "unbound")}
 													</kbd>
 													<button
+														data-setting-id="keybindings.bindings.{action}.key"
 														onClick={() => startEditing(cmd.action)}
 														title="Edit shortcut"
 														style={{
@@ -799,10 +781,11 @@ export const KeyboardShortcutsTab: Component = () => {
 															opacity: "0.5",
 														}}
 													>
-														<PencilIcon /> Rebind
+														Rebind
 													</button>
 													<Show when={keybindingsStore.isOverridden(cmd.action)}>
 														<button
+															data-setting-id="keybindings.bindings.{action}.key"
 															onClick={() => keybindingsStore.resetAction(cmd.action)}
 															title="Reset to default"
 															style={{
@@ -846,6 +829,7 @@ export const KeyboardShortcutsTab: Component = () => {
 
 			<div style={{ "margin-top": "16px", "text-align": "right" }}>
 				<button
+					data-setting-id="keybindings.bindings.{action}.key"
 					class={s.hint}
 					onClick={() => keybindingsStore.resetAll()}
 					style={{
@@ -921,6 +905,7 @@ const RecordingIndicator: Component<{
 				>
 					<span>Already used by "{props.conflict!.action}"</span>
 					<button
+						data-setting-id="keybindings.bindings.{action}.key"
 						onMouseDown={(e) => {
 							e.preventDefault();
 							props.onConfirmReplace();

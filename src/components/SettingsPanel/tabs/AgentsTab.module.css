@@ -4,6 +4,7 @@
   display: flex;
   flex-direction: column;
   gap: 1px;
+  margin-top: 16px;
   background: var(--border);
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
@@ -91,7 +92,7 @@
 
 .badge[data-type="limited"] {
   background: rgba(210, 153, 34, 0.15);
-  color: var(--warning);
+  color: var(--attention);
 }
 
 .badge[data-type="mcp"] {
@@ -668,3 +669,7 @@
   color: var(--fg-secondary);
   font: 12px/1.5 var(--font-mono);
 }
+
+.page > [data-settings-page-header] { margin-bottom: 8px; }
+
+.machineScope:empty { display: none; }

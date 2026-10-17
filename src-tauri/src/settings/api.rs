@@ -4,7 +4,10 @@ use crate::AppState;
 use schemars::JsonSchema;
 use serde::Deserialize;
 use serde_json::{Value, json};
-use std::sync::Arc;
+use std::sync::{
+    Arc,
+    atomic::{AtomicU64, Ordering},
+};
 
 #[path = "api_owners.rs"]
 mod owners;
@@ -18,6 +21,7 @@ pub enum Action {
     Transaction(Request),
     Perform(Perform),
     Refresh(Refresh),
+    Frontend(Frontend),
 }
 
 #[derive(Deserialize, JsonSchema)]
@@ -52,6 +56,13 @@ pub enum Refresh {
     Refresh { store: String },
 }
 
+/// Runtime UI registrations contain identifiers only, never callbacks or launch commands.
+#[derive(Deserialize, JsonSchema)]
+#[serde(tag = "action", rename_all = "snake_case", deny_unknown_fields)]
+pub enum Frontend {
+    PublishPluginKeybindingActions { actions: Vec<String> },
+}
+
 pub fn request_schema() -> Value {
     let mut schema = super::catalogue::schema::<Action>();
     fn approval(schema: &mut Value) {
@@ -69,6 +80,21 @@ pub fn request_schema() -> Value {
     }
     approval(&mut schema);
     schema
+}
+
+static GENERATION: AtomicU64 = AtomicU64::new(0);
+
+/// Shared by facade commits and the pre-existing AppConfig owner save seam.
+/// This cursor never fingerprints credentials or changes an owner's CAS revision.
+pub(crate) fn publish_change(state: &AppState, section: &str, applied: bool) -> u64 {
+    let generation = GENERATION.fetch_add(1, Ordering::SeqCst) + 1;
+    state.publish_settings_changed(super::changes::SettingsChanged {
+        section: section.to_owned(),
+        generation,
+        persisted: true,
+        applied,
+    });
+    generation
 }
 
 pub struct Settings {
@@ -103,7 +129,9 @@ impl Settings {
         let ego = Arc::new(super::ego::EgoSettingsStore::new(state.clone())?);
         registry.register(Service::new(catalogue.clone(), ego.clone()))?;
         register!(super::registration::RegistrationStore::default());
-        register!(super::ui_owners::UiSettingsStore::keybindings());
+        register!(super::ui_owners::UiSettingsStore::keybindings_with_actions(
+            state.plugin_keybinding_actions.clone()
+        ));
         register!(super::ui_owners::UiSettingsStore::pane_layout());
         register!(super::upstreams::UpstreamsSettingsStore::new(
             state.mcp.upstream_registry.clone(),
@@ -156,7 +184,59 @@ impl Settings {
         })
     }
 
+    /// Generation is a process-local invalidation cursor, not an owner CAS revision.
     pub async fn execute(
+        &self,
+        state: &Arc<AppState>,
+        action: Action,
+        caller: &Caller,
+        approval: Option<&str>,
+    ) -> Result<Value, Failure> {
+        let (section, durable_success) = match &action {
+            Action::Transaction(
+                Request::Set { store, .. }
+                | Request::Reset { store, .. }
+                | Request::Patch { store, .. },
+            ) => (Some(store.clone()), false),
+            Action::Perform(Perform::Perform { owner, .. }) => {
+                (Some(owner.section().to_owned()), owner.success_is_durable())
+            }
+            _ => (None, false),
+        };
+        let mut outcome = self.execute_inner(state, action, caller, approval).await;
+        let persisted = match &outcome {
+            Ok(value) => {
+                value["persisted"] == true || (durable_success && value.get("error").is_none())
+            }
+            Err(error) => error.persisted,
+        };
+        if let Some(section) = section.filter(|_| persisted) {
+            let applied = outcome
+                .as_ref()
+                .is_ok_and(|value| value["applied"].as_bool().unwrap_or(true));
+            let generation = publish_change(state, &section, applied);
+            match &mut outcome {
+                Ok(value) => {
+                    if let Some(object) = value.as_object_mut() {
+                        object.insert("generation".into(), json!(generation));
+                        object.insert("persisted".into(), json!(true));
+                        object.insert("applied".into(), json!(applied));
+                    }
+                }
+                Err(error) => error.generation = Some(generation),
+            }
+        } else if let Ok(value) = &mut outcome
+            && let Some(object) = value.as_object_mut()
+        {
+            object.insert(
+                "generation".into(),
+                json!(GENERATION.load(Ordering::SeqCst)),
+            );
+        }
+        outcome
+    }
+
+    async fn execute_inner(
         &self,
         state: &Arc<AppState>,
         action: Action,
@@ -221,6 +301,25 @@ impl Settings {
                     self.registry.execute_as(request, caller, approval).await?
                 };
                 serde_json::to_value(reply).map_err(|_| Error::new("settings", "store_failed"))
+            }
+            Action::Frontend(Frontend::PublishPluginKeybindingActions { actions }) => {
+                if actions.len() > 4096
+                    || actions.iter().any(|action| {
+                        action.len() > 256
+                            || !action.starts_with("plugin:")
+                            || action.split(':').count() != 3
+                            || action
+                                .split(':')
+                                .any(|part| part.is_empty() || part.chars().any(char::is_control))
+                    })
+                {
+                    return Err(Error::new("keybindings", "out_of_range"));
+                }
+                let mut actions = actions;
+                actions.sort();
+                actions.dedup();
+                *state.plugin_keybinding_actions.write() = Some(actions);
+                Ok(json!({"persisted":false,"applied":true}))
             }
             Action::Refresh(Refresh::Refresh { store }) => {
                 if store != "ego" {

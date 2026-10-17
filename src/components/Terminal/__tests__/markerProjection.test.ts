@@ -32,7 +32,7 @@ describe("recorded terminal marker layout", () => {
 				hiddenRows: hiddenMarkerRows(plan.blocks),
 				hiddenAnswerMarkers: plan.answerMarkers,
 			});
-			const baseline = capture.source.agent === "claude" ? 195 : 375;
+			const baseline = capture.source.agent === "claude" ? 235 : 415;
 			expect(textAt(baseline, 2)).toBe("intent: Verifying terminal display (Display check)");
 		});
 		it(`${capture.source.agent}: removes the suggest and hard-wrap rows`, () => {
@@ -57,8 +57,8 @@ describe("recorded terminal marker layout", () => {
 			expect(first).toBeGreaterThanOrEqual(0);
 			const glyph =
 				String.fromCodePoint(nextRow.codepoints[first]) + (nextRow.codepoints[first] === 0x273b ? "\uFE0E" : "");
-			// The echoed prompt and answer each contain a two-row suggest token.
-			expect(fillText).toHaveBeenCalledWith(glyph, first * 10, (nextRow.index - 4) * 20 + 15);
+			// Only the output suggest is omitted; the prompt quotation stays visible.
+			expect(fillText).toHaveBeenCalledWith(glyph, first * 10, (nextRow.index - 2) * 20 + 15);
 		});
 	}
 	it("marked paragraph starts use the same indent as unmarked continuations", () => {

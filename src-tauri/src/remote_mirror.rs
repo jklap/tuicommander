@@ -163,8 +163,9 @@ pub(crate) const ORIGIN_MARKER: &str = "__tuic_origin";
 /// `state.rs` ignores `RemoteMirrored`, and `/events`, where a client that
 /// asked for the mirror wants it.
 #[cfg_attr(all(not(feature = "desktop"), not(test)), allow(dead_code))]
-const WINDOW_MIRRORABLE_EVENTS: [&str; 15] = [
+const WINDOW_MIRRORABLE_EVENTS: [&str; 16] = [
     "session-state-changed",
+    "settings-changed",
     "session-closed",
     "progress-recorded",
     "workflow-run-changed",
@@ -304,7 +305,8 @@ fn apply_frame(state: &Arc<AppState>, connection_id: &str, frame: &Frame) -> boo
     // deliver a toast from a chunk already buffered when that happens.
     if matches!(
         frame.event.as_str(),
-        "mcp-toast"
+        "settings-changed"
+            | "mcp-toast"
             | "mcp-confirm"
             | "mcp-confirm-resolved"
             | "review-progress"
@@ -318,6 +320,12 @@ fn apply_frame(state: &Arc<AppState>, connection_id: &str, frame: &Frame) -> boo
     ) && state.remote.base_url(connection_id).is_none()
     {
         return false;
+    }
+    // A missed daemon frame invalidates only this owner's readers. Never
+    // forward `lagged`: local SSE clients would resync unrelated owners too.
+    if frame.event == "lagged" {
+        crate::remote_runtime::resync_connected(state, connection_id);
+        return true;
     }
     let reseed = match frame.event.as_str() {
         "session-state-changed" => {
@@ -452,6 +460,11 @@ async fn consume_stream(
         .map_err(|e| e.without_url().to_string())?;
     if !response.status().is_success() {
         return Err(format!("GET /events answered {}", response.status()));
+    }
+    // Health probes can stay connected across an SSE-only interruption or a
+    // daemon restart. Each successful subscription starts a fresh hint epoch.
+    if state.remote.base_url(connection_id).as_deref() == Some(base_url) {
+        crate::remote_runtime::resync_connected(state, connection_id);
     }
     let mut decoder = FrameDecoder::default();
     let mut stream = response.bytes_stream();
@@ -1066,6 +1079,84 @@ mod tests {
         let mut rx = state.event_bus.subscribe();
         drop_connection(&state, "vps");
         assert!(rx.try_recv().is_err());
+    }
+
+    // Catches: a restarted daemon's reset generation remaining below the old
+    // high-water mark because health never observed a disconnection.
+    #[tokio::test]
+    async fn stream_resubscription_resyncs_only_its_connected_owner() {
+        let mut server = mockito::Server::new_async().await;
+        let route = server
+            .mock("GET", "/events")
+            .with_header("content-type", "text/event-stream")
+            .with_body("")
+            .expect(2)
+            .create_async()
+            .await;
+        let state = Arc::new(make_test_app_state());
+        state
+            .remote
+            .force_connected_for_test("a", &server.url(), None);
+        state
+            .remote
+            .force_connected_for_test("b", "http://other:9876", None);
+        let mut rx = state.event_bus.subscribe();
+        for _ in 0..2 {
+            consume_stream(
+                &state,
+                &reqwest::Client::new(),
+                "a",
+                &server.url(),
+                None,
+                STREAM_IDLE_TIMEOUT,
+            )
+            .await
+            .expect("subscription ended cleanly");
+            match rx
+                .try_recv()
+                .expect("successful subscription resyncs readers")
+            {
+                AppEvent::RemoteConnectionStatusChanged { payload } => {
+                    assert_eq!(payload["id"], "a");
+                    assert_eq!(payload["status"], "connected");
+                }
+                other => panic!("expected owner resync, got {other:?}"),
+            }
+            assert!(rx.try_recv().is_err(), "other owners must not resync");
+        }
+        route.assert_async().await;
+    }
+
+    // Catches: daemon lag propagating as a global SSE resync or failing to
+    // invalidate settings while reseeding only terminal rows.
+    #[test]
+    fn lagged_resyncs_only_its_owner_and_requests_session_reseed() {
+        let state = Arc::new(make_test_app_state());
+        state
+            .remote
+            .force_connected_for_test("a", "http://daemon:9876", None);
+        state
+            .remote
+            .force_connected_for_test("b", "http://other:9876", None);
+        let mut rx = state.event_bus.subscribe();
+        let frame = Frame {
+            event: "lagged".into(),
+            data: r#"{"missed":3}"#.into(),
+        };
+        assert!(apply_frame(&state, "a", &frame));
+        match rx.try_recv().expect("lag invalidates the owner") {
+            AppEvent::RemoteConnectionStatusChanged { payload } => assert_eq!(payload["id"], "a"),
+            other => panic!("expected owner resync, got {other:?}"),
+        }
+        assert!(
+            rx.try_recv().is_err(),
+            "no global lagged event or other owner resync"
+        );
+        apply_frame(&state, "disconnected", &frame);
+        assert!(
+            rx.try_recv().is_err(),
+            "disconnected owners stay disconnected"
+        );
     }
 
     #[tokio::test]

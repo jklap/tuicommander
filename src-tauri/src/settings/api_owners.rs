@@ -32,6 +32,30 @@ pub enum OwnerAction {
     },
 }
 
+impl OwnerAction {
+    pub(super) fn section(&self) -> &str {
+        match self {
+            Self::GithubAccounts { .. } => "github_accounts",
+            Self::Connections { .. } => "connections",
+            Self::Circleci { .. } => "circleci",
+            Self::Telegram { .. } => "telegram",
+            Self::Upstreams { .. } => "upstreams",
+            Self::Ego { .. } => "ego",
+            #[cfg(feature = "dictation")]
+            Self::Voice { .. } => "voice",
+        }
+    }
+
+    // These owner APIs return presence/readback rather than a transaction receipt.
+    // Their successful return follows the durable owner write, including vault-only edits.
+    pub(super) fn success_is_durable(&self) -> bool {
+        matches!(
+            self,
+            Self::Connections { .. } | Self::Circleci { .. } | Self::Telegram { .. }
+        )
+    }
+}
+
 impl Settings {
     pub(super) async fn perform(
         &self,
@@ -66,13 +90,10 @@ impl Settings {
                 expected_revision,
                 operation,
             } => {
-                let ego = self.ego.clone();
-                let reply = tokio::task::spawn_blocking(move || {
-                    ego.auth_edit(&expected_revision, operation)
-                })
-                .await
-                .map_err(|_| Error::new("ego", "store_failed"))??;
-                serde_json::to_value(reply).map_err(|_| Error::new("ego", "store_failed"))
+                self.ego
+                    .clone()
+                    .perform_auth(expected_revision, operation)
+                    .await
             }
             #[cfg(feature = "dictation")]
             OwnerAction::Voice { operation } => {

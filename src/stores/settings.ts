@@ -1,7 +1,10 @@
+import { createSignal } from "solid-js";
 import { createStore } from "solid-js/store";
 import appChoiceOptions from "../../src-tauri/src/settings/app_choice_options.json";
 import { setLocale } from "../i18n";
 import { invoke } from "../invoke";
+import { settingNumberDefault } from "../services/settingsCatalogue";
+import { settingsRefresh } from "../services/settingsRefresh";
 import type { IssueFilterMode } from "../types";
 import { runSerializedConfigWrite, updateAppConfig } from "../utils/updateAppConfig";
 import { appLogger } from "./appLogger";
@@ -40,7 +43,7 @@ interface RustAppConfig {
 	ide: string;
 	default_font_size: number;
 	close_behavior: CloseBehavior;
-	background?: { hide_dock_icon?: boolean; tray_icon?: TrayIconPreference };
+	background?: { hide_dock_icon?: boolean; tray_icon?: TrayIconPreference; webview_unload_minutes?: number };
 	confirm_before_quit: boolean;
 	confirm_before_closing_tab: boolean;
 	max_tab_name_length: number;
@@ -81,6 +84,8 @@ interface RustAppConfig {
 	show_scrollbar_marks?: boolean;
 	block_folding_enabled?: boolean;
 	index_strategy?: string;
+	index_memory_budget_mb?: number;
+	attachment_max_bytes?: number;
 	standby_timeout_minutes?: number;
 	custom_launchers?: CustomLauncher[];
 	inline_blame_enabled?: boolean;
@@ -276,6 +281,9 @@ interface SettingsStoreState {
 	blockFoldingEnabled: boolean;
 	indexStrategy: "disabled" | "active_only" | "active_and_switch" | "all_sequential";
 	standbyTimeoutMinutes: number;
+	indexMemoryBudgetMb: number;
+	attachmentMaxBytes: number;
+	webviewUnloadMinutes: number;
 	customLaunchers: CustomLauncher[];
 	inlineBlameEnabled: boolean;
 	/**
@@ -341,6 +349,9 @@ function createSettingsStore() {
 		blockFoldingEnabled: true,
 		indexStrategy: "active_and_switch",
 		standbyTimeoutMinutes: 5,
+		indexMemoryBudgetMb: settingNumberDefault("app.index_memory_budget_mb"),
+		attachmentMaxBytes: settingNumberDefault("app.attachment_max_bytes"),
+		webviewUnloadMinutes: settingNumberDefault("app.background.webview_unload_minutes"),
 		customLaunchers: [],
 		inlineBlameEnabled: true,
 		egoExecutable: "",
@@ -361,68 +372,176 @@ function createSettingsStore() {
 	// Compare with this window's normalized local state, never a fresh disk load:
 	// another window may have changed even fields owned by this same store.
 	let savedFields: Record<string, string> = {};
+	let savedRender: Partial<SettingsStoreState> = {};
+	const [conflicts, setConflicts] = createSignal<string[]>([]);
+	let stopRemoteSync: (() => void) | undefined;
+
+	function renderedConfig(config: RustAppConfig): SettingsStoreState {
+		const values = {} as SettingsStoreState;
+		values.font = validateFont(config.font_family);
+		values.fontWeight = config.font_weight || DEFAULTS.fontWeight;
+		values.ide = validateIde(config.ide);
+		values.defaultFontSize = config.default_font_size || DEFAULTS.fontSize;
+		values.shell = config.shell || null;
+		values.theme = config.theme || DEFAULT_THEME;
+		values.closeBehavior = config.close_behavior ?? "ask";
+		values.hideDockIcon = config.background?.hide_dock_icon ?? true;
+		values.trayIcon = config.background?.tray_icon ?? "background_only";
+		values.confirmBeforeQuit = config.confirm_before_quit ?? true;
+		values.confirmBeforeClosingTab = config.confirm_before_closing_tab ?? true;
+		values.maxTabNameLength = config.max_tab_name_length || 25;
+		values.splitTabMode = config.split_tab_mode === "unified" ? "unified" : "separate";
+		const tom = config.tab_ordering_mode;
+		values.tabOrderingMode = tom === "terminals-first" || tom === "free" ? tom : "grouped-by-type";
+		values.tabCyclingAllTypes = config.tab_cycling_all_types ?? false;
+		values.tabTreeEnabled = config.tab_tree_enabled ?? false;
+		values.chatMuteIntermediateText = config.chat_mute_intermediate_text ?? true;
+		values.autoShowPrPopover = config.auto_show_pr_popover ?? true;
+		values.preventSleepWhenBusy = config.prevent_sleep_when_busy ?? false;
+		values.autoUpdateEnabled = config.auto_update_enabled ?? true;
+		values.autoUpdatePluginsEnabled = config.auto_update_plugins_enabled ?? true;
+		values.deferUpdateRelaunch = config.defer_update_relaunch ?? true;
+		values.eagerResumeAfterUpdate = config.eager_resume_after_update ?? true;
+		values.language = config.language || "en";
+		const channel = config.update_channel;
+		values.updateChannel = channel === "nightly" || channel === "beta" ? channel : "stable";
+		values.disabledAgents = config.disabled_agents ?? [];
+		values.intentTabTitle = config.intent_tab_title ?? true;
+		values.progressTracking = config.progress_tracking ?? true;
+		values.copyOnSelect = config.copy_on_select ?? true;
+		values.osc52Clipboard = config.osc52_clipboard ?? true;
+		values.showLastPrompt = config.show_last_prompt ?? true;
+		values.bellStyle = (config.bell_style || "visual") as SettingsStoreState["bellStyle"];
+		values.suggestFollowups = config.suggest_followups ?? true;
+		values.globalHotkey = config.global_hotkey ?? null;
+		values.issueFilter = validateIssueFilter(config.issue_filter || null);
+		values.prHideDrafts = config.pr_hide_drafts ?? false;
+		values.prHideConflicting = config.pr_hide_conflicting ?? false;
+		values.prHideCiFailing = config.pr_hide_ci_failing ?? false;
+		values.experimentalFeaturesEnabled = config.experimental_features_enabled ?? false;
+		values.scrollbackReflow = config.scrollback_reflow ?? true;
+		const cs = config.cursor_style;
+		values.cursorStyle = cs === "block" || cs === "underline" ? cs : "bar";
+		values.terminalRenderer = validateTerminalRenderer(config.terminal_renderer || null);
+		values.showBlockTimestamps = config.show_block_timestamps ?? true;
+		values.showScrollbarMarks = config.show_scrollbar_marks ?? true;
+		values.blockFoldingEnabled = config.block_folding_enabled ?? true;
+		values.indexStrategy = (config.index_strategy as SettingsStoreState["indexStrategy"]) ?? "active_and_switch";
+		values.standbyTimeoutMinutes = config.standby_timeout_minutes ?? 5;
+		values.indexMemoryBudgetMb = config.index_memory_budget_mb ?? settingNumberDefault("app.index_memory_budget_mb");
+		values.attachmentMaxBytes = config.attachment_max_bytes ?? settingNumberDefault("app.attachment_max_bytes");
+		values.webviewUnloadMinutes =
+			config.background?.webview_unload_minutes ?? settingNumberDefault("app.background.webview_unload_minutes");
+		values.customLaunchers = config.custom_launchers ?? [];
+		values.inlineBlameEnabled = config.inline_blame_enabled ?? true;
+		values.egoExecutable = config.ego_executable ?? "";
+		values.egoProfile = config.ego_profile ?? "";
+		values.aiChatWorkspace = config.ai_chat_workspace ?? "";
+		return values;
+	}
 
 	/** The single mapping from settings state to config fields. Foreign-owned
 	 *  services, mcp_server_enabled and global_hotkey stay outside this projection. */
-	function ownedFields() {
+	function ownedFields(values: SettingsStoreState = state) {
 		return {
-			shell: state.shell,
-			font_family: state.font,
-			font_size: state.defaultFontSize,
-			font_weight: state.fontWeight,
-			theme: state.theme,
-			ide: state.ide,
-			default_font_size: state.defaultFontSize,
-			close_behavior: state.closeBehavior,
-			background: { hide_dock_icon: state.hideDockIcon, tray_icon: state.trayIcon },
-			confirm_before_quit: state.confirmBeforeQuit,
-			confirm_before_closing_tab: state.confirmBeforeClosingTab,
-			max_tab_name_length: state.maxTabNameLength,
-			split_tab_mode: state.splitTabMode,
-			tab_ordering_mode: state.tabOrderingMode,
-			tab_cycling_all_types: state.tabCyclingAllTypes,
-			tab_tree_enabled: state.tabTreeEnabled,
-			chat_mute_intermediate_text: state.chatMuteIntermediateText,
-			auto_show_pr_popover: state.autoShowPrPopover,
-			prevent_sleep_when_busy: state.preventSleepWhenBusy,
-			auto_update_enabled: state.autoUpdateEnabled,
-			auto_update_plugins_enabled: state.autoUpdatePluginsEnabled,
-			defer_update_relaunch: state.deferUpdateRelaunch,
-			eager_resume_after_update: state.eagerResumeAfterUpdate,
-			language: state.language,
-			update_channel: state.updateChannel,
-			disabled_agents: [...state.disabledAgents],
-			intent_tab_title: state.intentTabTitle,
-			progress_tracking: state.progressTracking,
-			suggest_followups: state.suggestFollowups,
-			copy_on_select: state.copyOnSelect,
-			osc52_clipboard: state.osc52Clipboard,
-			show_last_prompt: state.showLastPrompt,
-			bell_style: state.bellStyle,
-			issue_filter: state.issueFilter,
-			pr_hide_drafts: state.prHideDrafts,
-			pr_hide_conflicting: state.prHideConflicting,
-			pr_hide_ci_failing: state.prHideCiFailing,
-			experimental_features_enabled: state.experimentalFeaturesEnabled,
-			scrollback_reflow: state.scrollbackReflow,
-			cursor_style: state.cursorStyle,
-			terminal_renderer: state.terminalRenderer,
-			show_block_timestamps: state.showBlockTimestamps,
-			show_scrollbar_marks: state.showScrollbarMarks,
-			block_folding_enabled: state.blockFoldingEnabled,
-			index_strategy: state.indexStrategy,
-			standby_timeout_minutes: state.standbyTimeoutMinutes,
-			custom_launchers: [...state.customLaunchers],
-			inline_blame_enabled: state.inlineBlameEnabled,
-			ego_executable: state.egoExecutable,
-			ego_profile: state.egoProfile,
-			ai_chat_workspace: state.aiChatWorkspace,
+			shell: values.shell,
+			font_family: values.font,
+			font_size: values.defaultFontSize,
+			font_weight: values.fontWeight,
+			theme: values.theme,
+			ide: values.ide,
+			default_font_size: values.defaultFontSize,
+			close_behavior: values.closeBehavior,
+			background: {
+				hide_dock_icon: values.hideDockIcon,
+				tray_icon: values.trayIcon,
+				webview_unload_minutes: values.webviewUnloadMinutes,
+			},
+			confirm_before_quit: values.confirmBeforeQuit,
+			confirm_before_closing_tab: values.confirmBeforeClosingTab,
+			max_tab_name_length: values.maxTabNameLength,
+			split_tab_mode: values.splitTabMode,
+			tab_ordering_mode: values.tabOrderingMode,
+			tab_cycling_all_types: values.tabCyclingAllTypes,
+			tab_tree_enabled: values.tabTreeEnabled,
+			chat_mute_intermediate_text: values.chatMuteIntermediateText,
+			auto_show_pr_popover: values.autoShowPrPopover,
+			prevent_sleep_when_busy: values.preventSleepWhenBusy,
+			auto_update_enabled: values.autoUpdateEnabled,
+			auto_update_plugins_enabled: values.autoUpdatePluginsEnabled,
+			defer_update_relaunch: values.deferUpdateRelaunch,
+			eager_resume_after_update: values.eagerResumeAfterUpdate,
+			language: values.language,
+			update_channel: values.updateChannel,
+			disabled_agents: [...values.disabledAgents],
+			intent_tab_title: values.intentTabTitle,
+			progress_tracking: values.progressTracking,
+			suggest_followups: values.suggestFollowups,
+			copy_on_select: values.copyOnSelect,
+			osc52_clipboard: values.osc52Clipboard,
+			show_last_prompt: values.showLastPrompt,
+			bell_style: values.bellStyle,
+			issue_filter: values.issueFilter,
+			pr_hide_drafts: values.prHideDrafts,
+			pr_hide_conflicting: values.prHideConflicting,
+			pr_hide_ci_failing: values.prHideCiFailing,
+			experimental_features_enabled: values.experimentalFeaturesEnabled,
+			scrollback_reflow: values.scrollbackReflow,
+			cursor_style: values.cursorStyle,
+			terminal_renderer: values.terminalRenderer,
+			show_block_timestamps: values.showBlockTimestamps,
+			show_scrollbar_marks: values.showScrollbarMarks,
+			block_folding_enabled: values.blockFoldingEnabled,
+			index_strategy: values.indexStrategy,
+			index_memory_budget_mb: values.indexMemoryBudgetMb,
+			attachment_max_bytes: values.attachmentMaxBytes,
+			standby_timeout_minutes: values.standbyTimeoutMinutes,
+			custom_launchers: [...values.customLaunchers],
+			inline_blame_enabled: values.inlineBlameEnabled,
+			ego_executable: values.egoExecutable,
+			ego_profile: values.egoProfile,
+			ai_chat_workspace: values.aiChatWorkspace,
 		} satisfies Partial<RustAppConfig>;
 	}
 
 	/** Immutable values also detect edits to nested launcher arguments. */
 	function snapshotFields(fields: ReturnType<typeof ownedFields>): Record<string, string> {
 		return Object.fromEntries(Object.entries(fields).map(([key, value]) => [key, JSON.stringify(value)]));
+	}
+
+	/** No migration, save, setter side effects or dirty-state reset on a remote read. */
+	function applyConfig(config: RustAppConfig, preserveDirty: boolean): void {
+		const incoming = renderedConfig(config);
+		const conflicting: string[] = [];
+		const patch: Partial<SettingsStoreState> = { ...incoming };
+		for (const key of Object.keys(incoming) as (keyof SettingsStoreState)[]) {
+			const local = JSON.stringify(state[key]);
+			const base = JSON.stringify(savedRender[key]);
+			const next = JSON.stringify(incoming[key]);
+			if (preserveDirty && local !== base) {
+				delete patch[key];
+				if (next !== base && next !== local) conflicting.push(key);
+			}
+		}
+		setState(patch);
+		baseConfig = config;
+		savedRender = JSON.parse(JSON.stringify(incoming));
+		savedFields = snapshotFields(ownedFields(incoming));
+		setConflicts(conflicting);
+		setLocale(state.language);
+		if (preserveDirty && saveTimer) {
+			clearTimeout(saveTimer);
+			saveTimer = null;
+			if (conflicting.length === 0 && JSON.stringify(snapshotFields(ownedFields())) !== JSON.stringify(savedFields))
+				save();
+		}
+		if (conflicting.length > 0) {
+			toastsStore.add(
+				"Settings changed elsewhere",
+				"Your unsaved edits were kept. Review them before saving again.",
+				"warn",
+			);
+		}
 	}
 
 	/** Apply only local edits to a fresh document. The backend derives its delta
@@ -440,13 +559,24 @@ function createSettingsStore() {
 							.filter(([key]) => snapshot[key] !== savedFields[key])
 							.map(([key, value]) => [
 								key,
-								key === "background" ? { ...fresh.background, ...fields.background } : value,
+								key === "background"
+									? {
+											...fresh.background,
+											...Object.fromEntries(
+												Object.entries(fields.background).filter(
+													([name, next]) =>
+														JSON.stringify(next) !== JSON.stringify(JSON.parse(savedFields.background ?? "{}")[name]),
+												),
+											),
+										}
+									: value,
 							]),
 					),
 				);
 			});
 			savedFields = snapshot; // failed saves keep their edits pending for a later attempt
 			baseConfig = config; // keep the cache (loadFontFromConfig) current
+			savedRender = renderedConfig(config);
 		} catch (err) {
 			appLogger.error("config", "Failed to save config", err);
 		}
@@ -469,6 +599,22 @@ function createSettingsStore() {
 	}
 
 	const actions = {
+		conflicts,
+		/** App-lifetime, idempotent subscription; teardown also invalidates pending reads. */
+		startRemoteSync(): () => void {
+			if (!stopRemoteSync)
+				stopRemoteSync = settingsRefresh.register({
+					section: "app",
+					read: () => runSerializedConfigWrite(() => invoke<RustAppConfig>("load_config")),
+					apply: (config) => {
+						if (hydrated) applyConfig(config, true);
+					},
+				});
+			return () => {
+				stopRemoteSync?.();
+				stopRemoteSync = undefined;
+			};
+		},
 		/** Load settings from Rust config; migrate from localStorage on first run */
 		async hydrate(options?: { notifyOnError?: boolean }): Promise<boolean> {
 			try {
@@ -489,65 +635,7 @@ function createSettingsStore() {
 
 				const config = await invoke<RustAppConfig>("load_config");
 				baseConfig = config;
-				setState("font", validateFont(config.font_family));
-				setState("fontWeight", config.font_weight || DEFAULTS.fontWeight);
-				setState("ide", validateIde(config.ide));
-				setState("defaultFontSize", config.default_font_size || DEFAULTS.fontSize);
-				setState("shell", config.shell || null);
-				setState("theme", config.theme || DEFAULT_THEME);
-				setState("closeBehavior", config.close_behavior ?? "ask");
-				setState("hideDockIcon", config.background?.hide_dock_icon ?? true);
-				setState("trayIcon", config.background?.tray_icon ?? "background_only");
-				setState("confirmBeforeQuit", config.confirm_before_quit ?? true);
-				setState("confirmBeforeClosingTab", config.confirm_before_closing_tab ?? true);
-				setState("maxTabNameLength", config.max_tab_name_length || 25);
-				setState("splitTabMode", config.split_tab_mode === "unified" ? "unified" : "separate");
-				const tom = config.tab_ordering_mode;
-				setState("tabOrderingMode", tom === "terminals-first" || tom === "free" ? tom : "grouped-by-type");
-				setState("tabCyclingAllTypes", config.tab_cycling_all_types ?? false);
-				setState("tabTreeEnabled", config.tab_tree_enabled ?? false);
-				setState("chatMuteIntermediateText", config.chat_mute_intermediate_text ?? true);
-				setState("autoShowPrPopover", config.auto_show_pr_popover ?? true);
-				setState("preventSleepWhenBusy", config.prevent_sleep_when_busy ?? false);
-				setState("autoUpdateEnabled", config.auto_update_enabled ?? true);
-				setState("autoUpdatePluginsEnabled", config.auto_update_plugins_enabled ?? true);
-				setState("deferUpdateRelaunch", config.defer_update_relaunch ?? true);
-				setState("eagerResumeAfterUpdate", config.eager_resume_after_update ?? true);
-				setState("language", config.language || "en");
-				setLocale(config.language || "en");
-				const channel = config.update_channel;
-				setState("updateChannel", channel === "nightly" || channel === "beta" ? channel : "stable");
-				setState("disabledAgents", config.disabled_agents ?? []);
-				setState("intentTabTitle", config.intent_tab_title ?? true);
-				setState("progressTracking", config.progress_tracking ?? true);
-				setState("copyOnSelect", config.copy_on_select ?? true);
-				setState("osc52Clipboard", config.osc52_clipboard ?? true);
-				setState("showLastPrompt", config.show_last_prompt ?? true);
-				setState("bellStyle", (config.bell_style || "visual") as SettingsStoreState["bellStyle"]);
-				setState("suggestFollowups", config.suggest_followups ?? true);
-				setState("globalHotkey", config.global_hotkey ?? null);
-				setState("issueFilter", validateIssueFilter(config.issue_filter || null));
-				setState("prHideDrafts", config.pr_hide_drafts ?? false);
-				setState("prHideConflicting", config.pr_hide_conflicting ?? false);
-				setState("prHideCiFailing", config.pr_hide_ci_failing ?? false);
-				setState("experimentalFeaturesEnabled", config.experimental_features_enabled ?? false);
-				setState("scrollbackReflow", config.scrollback_reflow ?? true);
-				const cs = config.cursor_style;
-				setState("cursorStyle", cs === "block" || cs === "underline" ? cs : "bar");
-				setState("terminalRenderer", validateTerminalRenderer(config.terminal_renderer || null));
-				setState("showBlockTimestamps", config.show_block_timestamps ?? true);
-				setState("showScrollbarMarks", config.show_scrollbar_marks ?? true);
-				setState("blockFoldingEnabled", config.block_folding_enabled ?? true);
-				setState(
-					"indexStrategy",
-					(config.index_strategy as SettingsStoreState["indexStrategy"]) ?? "active_and_switch",
-				);
-				setState("standbyTimeoutMinutes", config.standby_timeout_minutes ?? 5);
-				setState("customLaunchers", config.custom_launchers ?? []);
-				setState("inlineBlameEnabled", config.inline_blame_enabled ?? true);
-				setState("egoExecutable", config.ego_executable ?? "");
-				setState("egoProfile", config.ego_profile ?? "");
-				setState("aiChatWorkspace", config.ai_chat_workspace ?? "");
+				applyConfig(config, false);
 				savedFields = snapshotFields(ownedFields());
 				hydrated = true;
 				return true;
@@ -666,6 +754,22 @@ function createSettingsStore() {
 
 		setStandbyTimeoutMinutes(minutes: number): void {
 			setState("standbyTimeoutMinutes", Math.max(0, Math.min(60, minutes)));
+			save();
+		},
+
+		setIndexMemoryBudgetMb(value: number): void {
+			if (!Number.isSafeInteger(value) || value < 0) return;
+			setState("indexMemoryBudgetMb", value);
+			save();
+		},
+		setAttachmentMaxBytes(value: number): void {
+			if (!Number.isSafeInteger(value) || value < 1) return;
+			setState("attachmentMaxBytes", value);
+			save();
+		},
+		setWebviewUnloadMinutes(value: number): void {
+			if (!Number.isSafeInteger(value) || value < 0) return;
+			setState("webviewUnloadMinutes", value);
 			save();
 		},
 

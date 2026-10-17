@@ -96,7 +96,10 @@ describe("independent settings windows", () => {
 		expect(reopened.state.hideDockIcon).toBe(false);
 		expect(reopened.state.ide).toBe("zed");
 		expect(reopened.state.defaultFontSize).toBe(18);
-		expect(packets[0].config.background).toEqual({ hide_dock_icon: false, tray_icon: "background_only" });
+		// An absent tray field keeps the owner default; a Dock-only edit must not
+		// materialize unrelated defaults or overwrite another writer's intent.
+		expect(packets[0].config.background).toEqual({ hide_dock_icon: false });
+		expect(reopened.state.trayIcon).toBe("background_only");
 		expect(
 			packets
 				.slice(1)
@@ -156,8 +159,15 @@ describe("independent settings windows", () => {
 	it("retries unsaved edits after a failed save", async () => {
 		const window = await openWindow();
 		rejectNextSave = true;
+		const { appLogger } = await import("../../stores/appLogger");
+		const error = vi.spyOn(appLogger, "error").mockImplementation(() => {});
 		window.setIde("zed");
-		await flushSave();
+		try {
+			await flushSave();
+			expect(error.mock.calls).toEqual([["config", "Failed to save config", expect.any(Error)]]);
+		} finally {
+			error.mockRestore();
+		}
 		expect(packets).toHaveLength(0);
 		window.toggleAgent("gemini");
 		await flushSave();

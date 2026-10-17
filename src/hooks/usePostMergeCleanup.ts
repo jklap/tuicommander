@@ -2,6 +2,7 @@ import type { StepId } from "../components/PostMergeCleanupDialog/PostMergeClean
 import { invoke } from "../invoke";
 import { appLogger } from "../stores/appLogger";
 import { repositoriesStore } from "../stores/repositories";
+import { removeWorktreeWorkspace } from "../stores/terminalOwnership";
 
 export interface CleanupConfig {
 	repoPath: string;
@@ -157,7 +158,7 @@ export async function executeCleanup(config: CleanupConfig): Promise<void> {
 
 	// Update frontend state
 	if (didDeleteLocal) {
-		repositoriesStore.removeWorkspace(repoPath, workspaceId);
+		removeWorktreeWorkspace(repoPath, workspaceId);
 	}
 	repositoriesStore.bumpGitRevision(repoPath);
 }

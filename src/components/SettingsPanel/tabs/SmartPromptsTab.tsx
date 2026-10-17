@@ -176,7 +176,12 @@ const VariableDropdown: Component<{
 
 	return (
 		<div class={sp.varDropdownWrap}>
-			<button class={sp.varDropdownBtn} onClick={() => setOpen(!open())} type="button">
+			<button
+				data-non-setting="Open or close a structured Smart Prompt editor"
+				class={sp.varDropdownBtn}
+				onClick={() => setOpen(!open())}
+				type="button"
+			>
 				Insert variable...
 				<span class={sp.varChevron} classList={{ [sp.varChevronOpen]: open() }}>
 					&#9660;
@@ -191,6 +196,7 @@ const VariableDropdown: Component<{
 								<For each={vars}>
 									{(v) => (
 										<button
+											data-setting-id="prompts.prompts.{id}.text"
 											class={sp.varItem}
 											type="button"
 											onClick={() => {
@@ -302,6 +308,7 @@ const PromptEditor: Component<{
 					{(id, descriptionId) => (
 						<div>
 							<Input
+								data-setting-id="prompts.prompts.{id}.label"
 								id={id}
 								aria-describedby={descriptionId()}
 								type="text"
@@ -318,6 +325,7 @@ const PromptEditor: Component<{
 					{(id, descriptionId) => (
 						<div>
 							<Input
+								data-setting-id="prompts.prompts.{id}.text"
 								id={id}
 								aria-describedby={descriptionId()}
 								type="text"
@@ -334,6 +342,7 @@ const PromptEditor: Component<{
 					{(id, descriptionId) => (
 						<div>
 							<Textarea
+								data-setting-id="prompts.prompts.{id}.text"
 								id={id}
 								aria-describedby={descriptionId()}
 								value={props.prompt.content}
@@ -354,6 +363,7 @@ const PromptEditor: Component<{
 									{(placement) => (
 										<label class={sp.placementCheck}>
 											<input
+												data-setting-id="prompts.prompts.{id}.text"
 												type="checkbox"
 												checked={props.prompt.placement?.includes(placement) ?? false}
 												onChange={() => handlePlacementToggle(placement)}
@@ -373,6 +383,7 @@ const PromptEditor: Component<{
 						{(id, descriptionId) => (
 							<div>
 								<Select
+									data-setting-id="prompts.prompts.{id}.text"
 									id={id}
 									aria-describedby={descriptionId()}
 									value={props.prompt.executionMode ?? "inject"}
@@ -406,6 +417,7 @@ const PromptEditor: Component<{
 							{(id, descriptionId) => (
 								<div>
 									<Select
+										data-setting-id="prompts.prompts.{id}.text"
 										id={id}
 										aria-describedby={descriptionId()}
 										value={props.prompt.injectTarget ?? "compose"}
@@ -435,6 +447,7 @@ const PromptEditor: Component<{
 								<div>
 									<label class={sp.autoExecLabel}>
 										<input
+											data-setting-id="prompts.prompts.{id}.text"
 											id={id}
 											aria-describedby={descriptionId()}
 											class={s.rowSwitch}
@@ -457,6 +470,7 @@ const PromptEditor: Component<{
 						{(id, descriptionId) => (
 							<div>
 								<Select
+									data-setting-id="prompts.prompts.{id}.text"
 									id={id}
 									aria-describedby={descriptionId()}
 									value={props.prompt.preferredAgent ?? ""}
@@ -499,6 +513,7 @@ const PromptEditor: Component<{
 						{(id, descriptionId) => (
 							<div>
 								<Select
+									data-setting-id="prompts.prompts.{id}.text"
 									id={id}
 									aria-describedby={descriptionId()}
 									value={props.prompt.outputTarget ?? ""}
@@ -526,6 +541,7 @@ const PromptEditor: Component<{
 						{(id, descriptionId) => (
 							<div>
 								<Textarea
+									data-setting-id="prompts.prompts.{id}.text"
 									id={id}
 									aria-describedby={descriptionId()}
 									rows={3}
@@ -547,6 +563,7 @@ const PromptEditor: Component<{
 					{() => (
 						<div>
 							<KeyComboCapture
+								settingId="prompts.prompts.{id}.text"
 								value={props.prompt.shortcut ?? ""}
 								onChange={handleShortcutChange}
 								placeholder="Click to set shortcut"
@@ -558,7 +575,11 @@ const PromptEditor: Component<{
 				{/* Actions */}
 				<div class={sp.editorActions}>
 					<Show when={isBuiltIn() && isOverridden()}>
-						<button class={sp.smallBtn} onClick={handleReset}>
+						<button
+							data-non-setting="Reset, remove or create a stable Smart Prompt through its owner"
+							class={sp.smallBtn}
+							onClick={handleReset}
+						>
 							Reset to Default
 						</button>
 					</Show>
@@ -570,7 +591,11 @@ const PromptEditor: Component<{
 					scope={props.prompt.name}
 					consequence="This permanently removes this custom prompt."
 				>
-					<button class={sp.dangerBtn} onClick={handleDelete}>
+					<button
+						data-non-setting="Reset, remove or create a stable Smart Prompt through its owner"
+						class={sp.dangerBtn}
+						onClick={handleDelete}
+					>
 						Delete
 					</button>
 				</DangerZone>
@@ -620,6 +645,7 @@ const PromptRow: Component<{ prompt: SavedPrompt; onEdit: (id: string) => void; 
 				actions={
 					<>
 						<button
+							data-non-setting="Open or close a structured Smart Prompt editor"
 							class={s.testBtn}
 							aria-label={`Edit ${props.prompt.name}`}
 							title={`Edit ${props.prompt.name}`}
@@ -629,6 +655,7 @@ const PromptRow: Component<{ prompt: SavedPrompt; onEdit: (id: string) => void; 
 							Edit
 						</button>
 						<input
+							data-setting-id="prompts.prompts.{id}.text"
 							class={s.rowSwitch}
 							type="checkbox"
 							role="switch"
@@ -680,6 +707,8 @@ const CategoryGroup: Component<{
 // Main tab
 // ---------------------------------------------------------------------------
 
+// The prompts owner stores the structured SavedPrompt envelope in each record's text.
+// These controls edit that envelope; they do not introduce parallel persisted fields.
 export const SmartPromptsTab: Component = () => {
 	const [selected, setSelected] = createSignal<string | null>(null);
 	const selectedPrompt = () => getAllSmartPrompts().find((prompt) => prompt.id === selected());
@@ -728,7 +757,7 @@ export const SmartPromptsTab: Component = () => {
 			<SettingPageHeader
 				title="Smart Prompts"
 				description="Configure reusable actions and their execution behavior."
-				scope="Application"
+				scope="Application defaults"
 				breadcrumb="AI / Smart Prompts"
 			/>
 			<SectionCard
@@ -741,6 +770,7 @@ export const SmartPromptsTab: Component = () => {
 				>
 					{(id, descriptionId) => (
 						<Select
+							data-setting-id="agents.headless_agent"
 							id={id}
 							aria-describedby={descriptionId()}
 							value={agentConfigsStore.getHeadlessAgent() ?? ""}
@@ -774,13 +804,19 @@ export const SmartPromptsTab: Component = () => {
 						</Select>
 					)}
 				</SettingRow>
-				<p class={s.hint}>{detection.loading() ? "Detecting..." : ""}</p>
+				<Show when={detection.loading()}>
+					<p class={s.hint}>Detecting...</p>
+				</Show>
 			</SectionCard>
 
 			<SectionCard
 				title="Prompt library"
 				actions={
-					<button class={s.testBtn} onClick={handleNewPrompt}>
+					<button
+						data-non-setting="Reset, remove or create a stable Smart Prompt through its owner"
+						class={s.testBtn}
+						onClick={handleNewPrompt}
+					>
 						+ New Smart Prompt
 					</button>
 				}

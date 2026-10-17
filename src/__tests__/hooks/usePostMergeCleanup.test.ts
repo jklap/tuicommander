@@ -59,7 +59,7 @@ describe("executeCleanup", () => {
 			return Promise.resolve(undefined);
 		});
 		mockGetBranches.mockReturnValue({
-			branches: { "feature/login": { terminals: [] } },
+			workspaces: { "feature/login": { terminals: [] } },
 		});
 	});
 

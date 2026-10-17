@@ -4,7 +4,7 @@ import { fireEvent, render } from "@solidjs/testing-library";
 
 vi.mock("../../stores/settings", () => ({
 	settingsStore: {
-		state: { ide: "vscode", font: "JetBrains Mono", defaultFontSize: 12 },
+		state: { ide: "vscode", font: "JetBrains Mono", defaultFontSize: 12, customLaunchers: [] },
 		setIde: vi.fn(),
 		setFont: vi.fn(),
 		isAiChatEnabled: vi.fn().mockReturnValue(false),
@@ -134,6 +134,18 @@ describe("SettingsPanel — repo context", () => {
 		expect(activeItem!.textContent).toBe("my-repo");
 	});
 
+	it("keeps sidebar swatches in the shared control column and preserves color updates", () => {
+		// Catches: the custom color label makes the legacy grid place swatches before the row label.
+		const { container } = render(() => <SettingsPanel {...defaultProps} />);
+		const label = Array.from(container.querySelectorAll("label")).find((item) => item.textContent === "Sidebar Color")!;
+		const row = label.closest(".settingRow");
+		expect(row).not.toBeNull();
+		expect(row!.querySelector(".settingRowText")?.textContent).toContain("Color-code this repo in the sidebar");
+		const swatch = row!.querySelector<HTMLButtonElement>(".settingRowControl button[title='Red']")!;
+		fireEvent.click(swatch);
+		expect(repoSettingsStore.update).toHaveBeenLastCalledWith("/repo", { color: "#FF6B6B" });
+	});
+
 	it("shows a repo-specific Design Mode URL field", () => {
 		const { container } = render(() => <SettingsPanel {...defaultProps} />);
 		const field = container.querySelector<HTMLInputElement>("#repo-dev-server-url");
@@ -206,8 +218,9 @@ describe("SettingsPanel — repo context", () => {
 		const { container } = render(() => <SettingsPanel {...defaultProps} />);
 		const generalItem = Array.from(container.querySelectorAll(".navItem")).find((n) => n.textContent === "General")!;
 		fireEvent.click(generalItem);
-		const h3 = container.querySelector(".section h3");
-		expect(h3!.textContent).toBe("General");
+		const headings = Array.from(container.querySelectorAll(".section h3")).map((heading) => heading.textContent);
+		expect(headings).toContain("Local tools");
+		expect(headings).toContain("General");
 		// Reset button gone when on global section
 		expect(container.querySelector(".footerReset")).toBeNull();
 	});

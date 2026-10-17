@@ -1,6 +1,7 @@
 import { createSignal } from "solid-js";
 import { createStore, produce, reconcile } from "solid-js/store";
 import { invoke } from "../invoke";
+import { reportSettingsConflicts, settingsRefresh } from "../services/settingsRefresh";
 import { createConfigDeltaWriter } from "../utils/configDeltaWriter";
 import { appLogger } from "./appLogger";
 
@@ -300,7 +301,7 @@ function createPaneLayoutStore() {
 	// Debounced persistence — serializes tree+groups directly (no `this` needed)
 	let saveTimer: ReturnType<typeof setTimeout> | null = null;
 
-	function writeLayout(): Promise<void> {
+	function layoutSnapshot(): PaneLayoutState {
 		const groups: Record<string, PaneGroup> = {};
 		for (const key of Object.keys(state.groups)) {
 			const g = state.groups[key];
@@ -315,7 +316,11 @@ function createPaneLayoutStore() {
 			groups,
 			activeGroupId: state.activeGroupId,
 		};
-		return layoutWriter.save(snapshot);
+		return snapshot;
+	}
+
+	function writeLayout(): Promise<void> {
+		return layoutWriter.save(layoutSnapshot());
 	}
 
 	function scheduleSave(): void {
@@ -328,6 +333,26 @@ function createPaneLayoutStore() {
 
 	const result = {
 		state,
+		startRemoteSync(): () => void {
+			return settingsRefresh.register({
+				section: "pane_layout",
+				read: () => invoke<PaneLayoutState>("load_pane_layout"),
+				apply: (remote) => {
+					const merged = layoutWriter.adopt(
+						remote ?? { root: null, groups: {}, activeGroupId: null },
+						layoutSnapshot(),
+					);
+					const pendingSave = saveTimer !== null;
+					if (saveTimer) {
+						clearTimeout(saveTimer);
+						saveTimer = null;
+					}
+					result.restore(merged.value);
+					if (pendingSave && !merged.conflicts.length) scheduleSave();
+					reportSettingsConflicts(merged.conflicts);
+				},
+			});
+		},
 
 		/** Read the tree root. Call treeRevision() first to subscribe to changes. */
 		getRoot(): PaneNode | null {

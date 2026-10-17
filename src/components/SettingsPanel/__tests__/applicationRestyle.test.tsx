@@ -4,12 +4,13 @@ import { fireEvent, render, waitFor } from "@solidjs/testing-library";
 import { createSignal } from "solid-js";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const { invoke, testSound, setVolume, setAudioDevice, setAutoToastCards } = vi.hoisted(() => ({
+const { invoke, testSound, setVolume, setAudioDevice, setAutoToastCards, setSoundEnabled } = vi.hoisted(() => ({
 	invoke: vi.fn(),
 	testSound: vi.fn(),
 	setVolume: vi.fn(),
 	setAudioDevice: vi.fn(),
 	setAutoToastCards: vi.fn(),
+	setSoundEnabled: vi.fn(),
 }));
 vi.mock("../../../invoke", () => ({ invoke }));
 vi.mock("../../../transport", () => ({ isTauri: () => true }));
@@ -38,7 +39,7 @@ vi.mock("../../../stores/notifications", () => ({
 		setAudioDevice,
 		setAutoToastCards,
 		setEnabled: vi.fn(),
-		setSoundEnabled: vi.fn(),
+		setSoundEnabled,
 		setSilenceRemoteCompletions: vi.fn(),
 		setToastsInBell: vi.fn(),
 		setPrNativeNotifications: vi.fn(),
@@ -46,6 +47,7 @@ vi.mock("../../../stores/notifications", () => ({
 	},
 }));
 
+import { settingsCatalogue } from "../../../generated/settingsCatalogue";
 import { SettingInput, SettingSelect, SettingSlider, SettingToggle } from "../SettingFields";
 import { SettingsShell } from "../SettingsShell";
 import { NotificationsTab } from "../tabs/NotificationsTab";
@@ -65,6 +67,18 @@ describe("Application Settings restyle contracts", () => {
 		expect(invoke).toHaveBeenCalledExactlyOnceWith("list_audio_output_devices");
 		fireEvent.change(view.getByRole("combobox"), { target: { value: "USB speakers" } });
 		expect(setAudioDevice).toHaveBeenCalledWith("USB speakers");
+	});
+
+	// Catches: a finite dynamic sound row presenting one descriptor but writing another event.
+	it("dynamic_sound_ids_match_the_actual_owner_callback", () => {
+		const view = render(() => <NotificationsTab />);
+		const ids = Object.keys(settingsCatalogue.fields).filter((id) => id.startsWith("notifications.sounds."));
+		for (const id of ids) {
+			const control = view.container.querySelector(`input[data-setting-id="${id}"]`);
+			expect(control).not.toBeNull();
+			fireEvent.change(control!, { target: { checked: false } });
+			expect(setSoundEnabled).toHaveBeenLastCalledWith(id.slice("notifications.sounds.".length), false);
+		}
 	});
 
 	// Catches: moving the volume control previews continuously while dragging or routes a per-client preference to audio config.
@@ -163,4 +177,26 @@ describe("Application Settings restyle contracts", () => {
 		expect(view.getByRole("textbox", { name: "Search settings" })).toHaveValue("");
 		expect(view.getByRole("option", { name: "Appearance" })).toBeInTheDocument();
 	});
+});
+
+// Catches: asynchronously populated repository options leave the compact picker on General.
+it("selects the active repository when its navigation option arrives", () => {
+	const [tabs, setTabs] = createSignal([{ key: "general", label: "General" }]);
+	const view = render(() => (
+		<SettingsShell
+			visible
+			title="Settings"
+			onClose={() => {}}
+			activeTab="repo:/fixture"
+			onTabChange={() => {}}
+			tabs={tabs()}
+		>
+			<p>Repository</p>
+		</SettingsShell>
+	));
+	setTabs([
+		{ key: "general", label: "General" },
+		{ key: "repo:/fixture", label: "Fixture repository" },
+	]);
+	expect(view.getByRole("combobox", { name: "Settings page" })).toHaveValue("repo:/fixture");
 });

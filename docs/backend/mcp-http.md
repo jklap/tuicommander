@@ -1297,9 +1297,9 @@ the same shared core.
 
 The lifecycle event includes `creator_session` resolved from the MCP binding,
 never from a caller-supplied session id, and the requested `spawn_session` flag.
-Without a spawn request, only the creator already placed in the same repository
-moves into the new workspace. Other tabs and an inactive tab selection stay in
-place. This changes placement only, without changing the agent process cwd.
+Without a spawn request, the same-repository creator is reconciled from its
+reported cwd. A root coordinator does not move into a worktree merely because it
+created it. Other tabs and the active workspace selection stay in place.
 
 When the MCP client identifies as Claude Code (detected via `clientInfo.name` at initialize time), the `repo action=worktree_create` response includes an additional `cc_agent_hint` field:
 
@@ -2146,7 +2146,8 @@ worktrees are discovered without recreating or deleting them.
 
 The response and `session-worktree-declared` event use the worktree lifecycle
 payload, with `creator_session` naming the caller and `spawn_session=false`.
-Only that tab moves. Its real cwd, sibling tabs and an inactive selection stay
+The frontend reconciles the caller from its reported cwd; a caller outside that
+checkout stays in its cwd workspace. Sibling tabs and the active selection stay
 unchanged. Retrying the same declaration is idempotent.
 
 The stable `TUIC_SESSION` association is stored in the owning repository's
@@ -2154,14 +2155,16 @@ The stable `TUIC_SESSION` association is stored in the owning repository's
 caller snapshot moves to the target workspace; sibling snapshots are preserved.
 After a restart or WebView reconnect, HTTP `GET /sessions` and IPC
 `list_active_sessions` return the declared `worktree_path` and `worktree_branch`
-while `cwd` remains the actual shell directory. The frontend restores placement
-from that worktree path. Declaration does not acquire worktree cleanup ownership.
+while `cwd` remains the reported shell directory. The frontend restores tab
+placement from cwd, not the declared worktree path. Declaration does not acquire
+worktree cleanup ownership.
 A concurrent repository edit can return a configuration conflict; retry the
 declaration after refreshing rather than overwriting that edit.
 
-The explicit placement remains authoritative over later shell cwd notifications
-until another declaration changes it. The frontend retains the backend placement
-path separately from the observed cwd during reconciliation.
+The association is backend metadata, not authority to place or close a terminal.
+Later shell cwd notifications, reconnect and saved-tab restore use cwd to resolve
+the tab's workspace. Worktree removal also checks each terminal's current cwd, not
+its declaration or sidebar membership.
 
 **Intentional request transport exception:** `declare_worktree` is an MCP-only
 action, callable over the existing HTTP `POST /mcp` route with a bound caller.
@@ -2364,6 +2367,10 @@ browser status-bar control uses its owning daemon's normal PTY write transport.
 
 Telegram replies now use TUIC-driven receipt (👀), working (👨‍💻), waiting (🤔), answered (👍) and failed (👎) reactions. An ephemeral native draft shows Italian status lines or unapproved agent previews; it refreshes while work continues and the final reply replaces it. Acknowledgement of work requires inbox Read and a new recipient turn. PTY intent/activity and AI Chat assistant chunks share request correlation; finish remains authoritative after draft retirement. Telegram-mail-woken AI Chat turns automatically send their settled assistant text if finish has not answered. Queue and no-reply notices occur at ten minutes and sixty seconds after Read respectively. Restart keeps no request history. Phone rendering requires a live check after the backend restart.
 
+### Settings startup contract
+
+See [Settings startup workflows](settings-startup.md) for discovery, target/revision ownership, device-login intervals, human confirmation and partial-persistence recovery. Native `inventoryComplete` does not prove schema-only authentication onboarding or UI parity. Typed `list_accounts` and Ego `begin_login`/`login_status` use the same owner facade. Login launches the configured process directly in a tracked human terminal, not an arbitrary-command or ACP fallback; status separates process lifetime from credential readback.
+
 ### CircleCI credential settings (#1991-bd88)
 
 The machine-scoped `circleci.token` descriptor is write-only. Read
@@ -2384,3 +2391,7 @@ both the desktop server and `tuic-remote`. The POST previews draft agent setting
 without saving them and uses the same authentication as other machine config routes.
 
 Launch-capable Claude, Codex, Grok, OpenCode, Goose, pi and ego clients receive playbook obligations from generated launch files, not again from MCP initialize instructions. MCP keeps tool discovery and live repository/session/peer state. Unrecognized clients retain the existing MCP marker, submit, worktree and progress fallback.
+
+### Frame workload dump
+
+The loopback-only `debug action=frame_workload_dump` schedules the enabled frontend recorder dump. Like `invoke_js`, read `eval_js` logs for completion; submission does not prove frontend liveness. `POST /debug/frame-workload` and desktop `save_frame_workload` share the bounded writer. See [stall evidence](stall-journal.md).

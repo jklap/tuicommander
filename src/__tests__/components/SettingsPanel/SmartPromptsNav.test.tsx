@@ -54,7 +54,7 @@ vi.mock("../../../stores/agentConfigs", () => ({
 
 vi.mock("../../../stores/settings", () => ({
 	settingsStore: {
-		state: { ide: "vscode", font: "JetBrains Mono", defaultFontSize: 12 },
+		state: { ide: "vscode", font: "JetBrains Mono", defaultFontSize: 12, customLaunchers: [] },
 		isAiChatEnabled: () => false,
 		isAcpConfigured: () => false,
 	},

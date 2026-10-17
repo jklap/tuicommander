@@ -1,6 +1,10 @@
 import { fireEvent, render } from "@solidjs/testing-library";
 import { createSignal } from "solid-js";
 import { describe, expect, it, vi } from "vitest";
+
+const conflicts = vi.hoisted(() => vi.fn());
+vi.mock("../../../../services/settingsRefresh", () => ({ reportSettingsConflicts: conflicts }));
+
 import { LaunchInstructionsEditor } from "../LaunchInstructionsEditor";
 
 const MARKERS = ["intent:", "suggest:", "💬 "];
@@ -19,6 +23,7 @@ function renderEditor(value: string | undefined, onSave = vi.fn()) {
 	};
 	const view = render(() => (
 		<LaunchInstructionsEditor
+			settingId="agents.launch_instructions"
 			id="li"
 			label="Launch instructions"
 			value={current()}
@@ -34,6 +39,34 @@ function renderEditor(value: string | undefined, onSave = vi.fn()) {
 }
 
 describe("LaunchInstructionsEditor", () => {
+	it("keeps an unblurred launch instruction draft when live settings replace the saved value", () => {
+		// Catches: an MCP refresh silently replacing text the person is still typing.
+		const [saved, setSaved] = createSignal("saved instructions");
+		const onSave = vi.fn();
+		const view = render(() => (
+			<LaunchInstructionsEditor
+				id="live-instructions"
+				settingId="agents.launch_instructions"
+				label="Launch instructions"
+				value={saved()}
+				fallback={DEFAULT}
+				inheritanceLabel="Generated modules"
+				customizeLabel="Add instructions"
+				resetLabel="Clear additions"
+				requiredMarkers={MARKERS}
+				onSave={onSave}
+			/>
+		));
+		const textarea = view.getByLabelText("Launch instructions") as HTMLTextAreaElement;
+		fireEvent.input(textarea, { target: { value: "my unfinished instructions" } });
+		setSaved("instructions committed through MCP");
+		expect(textarea.value).toBe("my unfinished instructions");
+		expect(onSave).not.toHaveBeenCalled();
+		expect(conflicts).toHaveBeenCalledExactlyOnceWith(["/"]);
+		fireEvent.blur(textarea);
+		expect(onSave).toHaveBeenCalledWith("my unfinished instructions");
+	});
+
 	it("catches accidental overrides from inherited preview focus and blur", () => {
 		const { queryByRole, getByText, getByLabelText, onSave } = renderEditor(undefined);
 		expect(queryByRole("textbox")).toBeNull();

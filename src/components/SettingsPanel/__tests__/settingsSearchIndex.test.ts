@@ -10,6 +10,9 @@ import { extractRenderedTabComponents, extractRenderedTabKeys, extractTab } from
  * so a label keeps the `<h3>` the DOM puts above it. A component nested inside
  * one of these (RemoteMachinesTab wraps RemoteMachinesPanel) is listed by hand;
  * the top-level ones are checked against `SettingsPanel` below. */
+// Catalogue fields are indexed dynamically, not extracted as static JSX labels.
+// allSettingsTab.test.tsx exercises every supported descriptor's real editor.
+const DYNAMIC_TAB_SOURCES: Record<string, string[]> = { "all-settings": ["AllSettingsTab.tsx"] };
 const TAB_SOURCES: Record<string, string[]> = {
 	telegram: ["tabs/TelegramTab.tsx"],
 	general: ["tabs/GeneralTab.tsx"],
@@ -134,17 +137,20 @@ function componentFiles(): Map<string, string> {
 describe("settings search index — drift guard", () => {
 	it("indexes every tab SettingsPanel can open", () => {
 		const rendered = extractRenderedTabKeys(readTab("SettingsPanel.tsx")).sort();
-		expect(rendered).toEqual(Object.keys(TAB_SOURCES).sort());
+		expect(rendered).toEqual(Object.keys({ ...TAB_SOURCES, ...DYNAMIC_TAB_SOURCES }).sort());
 	});
 
-	it.each(Object.keys(TAB_SOURCES))("extracts %s from every component the panel renders for it", (tab) => {
-		const files = componentFiles();
-		const rendered = extractRenderedTabComponents(readTab("SettingsPanel.tsx"))[tab] ?? [];
-		expect(rendered.length).toBeGreaterThan(0);
-		for (const component of rendered) {
-			expect(TAB_SOURCES[tab], component).toContain(files.get(component));
-		}
-	});
+	it.each(Object.keys({ ...TAB_SOURCES, ...DYNAMIC_TAB_SOURCES }))(
+		"extracts %s from every component the panel renders for it",
+		(tab) => {
+			const files = componentFiles();
+			const rendered = extractRenderedTabComponents(readTab("SettingsPanel.tsx"))[tab] ?? [];
+			expect(rendered.length).toBeGreaterThan(0);
+			for (const component of rendered) {
+				expect({ ...TAB_SOURCES, ...DYNAMIC_TAB_SOURCES }[tab], component).toContain(files.get(component));
+			}
+		},
+	);
 
 	it.each(Object.keys(TAB_SOURCES))("matches the settings rendered by %s", (tab) => {
 		const indexed = SETTINGS_SEARCH_INDEX.filter((entry) => entry.tab === tab);

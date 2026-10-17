@@ -36,7 +36,7 @@ export const OUTPUT_ROW_RE = /^(?:\s*[●⏺]|•)/;
 /** A continuation row of an answer: indented under the agent's bullet. */
 const ANSWER_CONTINUATION_RE = /^ {2,}\S/;
 /** A user prompt row; an indented one still ends the answer. */
-const PROMPT_ROW_RE = /^\s*❯/;
+export const PROMPT_ROW_RE = /^\s*[❯›]/;
 /** A fenced code block delimiter. Inside a fence a bullet, marker or prompt glyph is content. */
 const FENCE_RE = /^\s*```/;
 /** A list item, table row or quotation belongs to the answer above it. */
@@ -44,6 +44,39 @@ const ANSWER_STRUCTURE_RE = /^ {2,}(?:[-*+•] |\d+[.)] |\||>)/;
 /** Codex's indented turn-duration footer is terminal status, not answer prose. */
 const CODEX_FOOTER_RE =
 	/^\s*Worked for \d+(?:\.\d+)?(?:ms|[smh])(?:\s+\d+(?:\.\d+)?(?:ms|[smh]))*(?:\s*•\s*\d{1,2}:\d{2})?\s*$/;
+
+/** A new output, prompt, status or protocol row cannot belong to an answer. */
+function isAnswerBoundary(text: string): boolean {
+	return (
+		OUTPUT_ROW_RE.test(text) ||
+		PROMPT_ROW_RE.test(text) ||
+		CODEX_FOOTER_RE.test(text) ||
+		SUGGEST_ANCHOR_RE.test(text) ||
+		INTENT_HIGHLIGHT_RE.test(text)
+	);
+}
+
+/**
+ * First output row after a user prompt. Claude echoes pasted hard lines with
+ * indentation, so indentation alone cannot identify output. An agent bullet,
+ * a column-zero marker, or a blank-separated marker starts output. A marker
+ * embedded in uninterrupted pasted prose stays in the prompt. Soft wraps never
+ * start a new block.
+ */
+export function promptEnd(start: number, totalRows: number, getRow: (i: number) => RowSnapshot | null): number {
+	let next = start + 1;
+	for (; next < totalRows; next++) {
+		const row = getRow(next);
+		if (!row) break;
+		if (
+			!row.isWrapped &&
+			(OUTPUT_ROW_RE.test(row.text) ||
+				(ANSWER_MARKER_RE.test(row.text) && (/^\S/.test(row.text) || getRow(next - 1)?.text.trim() === "")))
+		)
+			break;
+	}
+	return next;
+}
 
 /**
  * Last row of the answer that starts at `start` (a row matching
@@ -101,8 +134,7 @@ export function answerExtent(
 		if (inFence) {
 			inFence = !FENCE_RE.test(row.text);
 		} else {
-			if (OUTPUT_ROW_RE.test(row.text) || PROMPT_ROW_RE.test(row.text) || CODEX_FOOTER_RE.test(row.text)) break;
-			if (SUGGEST_ANCHOR_RE.test(row.text) || INTENT_HIGHLIGHT_RE.test(row.text)) break;
+			if (isAnswerBoundary(row.text)) break;
 			inFence = FENCE_RE.test(row.text);
 		}
 		last = i;
@@ -250,10 +282,17 @@ export function planSuggestOverlay(
 	const answerMarkers = new Set<number>();
 	const blocks: OverlayBlock[] = [];
 	const parts: string[] = [];
+	let lastAnswerEnd: number | undefined;
 	for (let row = firstRow; row < totalRows; row++) {
 		const snapshot = getRow(row);
 		if (!snapshot) continue;
 		const text = snapshot.text;
+
+		if (!snapshot.isWrapped && PROMPT_ROW_RE.test(text)) {
+			lastAnswerEnd = undefined;
+			row = promptEnd(row, totalRows, getRow) - 1;
+			continue;
+		}
 
 		if (SUGGEST_ANCHOR_RE.test(text) && isSuggestBlock(row, totalRows, getRow)) {
 			blocks.push({ row, kind: "suggest" });
@@ -278,6 +317,32 @@ export function planSuggestOverlay(
 			// The whole answer, not only its marker row. A wrapped row is never a
 			// line start, so an emoji the wrap happens to land on is not a marker.
 			const last = answerExtent(row, totalRows, getRow, (marker) => answerMarkers.add(marker));
+			// Answer extraction keeps separate list scopes and excludes unmarked
+			// paragraphs. The gutter instead joins confirmed answer sections across
+			// their blank separators and indented headings. A later answer must
+			// close the gap: trailing blanks/prose never inherit the gutter.
+			if (lastAnswerEnd !== undefined) {
+				let gap = lastAnswerEnd + 1;
+				for (; gap < row; gap++) {
+					const between = getRow(gap);
+					if (!between) break;
+					if (between.text.trim() === "") continue;
+					if (
+						!between.isWrapped &&
+						(!ANSWER_CONTINUATION_RE.test(between.text) ||
+							isAnswerBoundary(between.text) ||
+							ANSWER_STRUCTURE_RE.test(between.text))
+					)
+						break;
+				}
+				if (gap === row) {
+					for (gap = lastAnswerEnd + 1; gap < row; gap++) {
+						blocks.push({ row: gap, kind: "answer" });
+						parts.push(`a${gap}`);
+					}
+				}
+			}
+			lastAnswerEnd = last;
 			for (; row <= last; row++) {
 				blocks.push({ row, kind: "answer" });
 				parts.push(`a${row}`);

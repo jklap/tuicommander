@@ -1,6 +1,7 @@
 import { type Component, createSignal, For, onCleanup, onMount, Show } from "solid-js";
 import { t } from "../../../i18n";
 import { invoke } from "../../../invoke";
+import { settingsRefresh } from "../../../services/settingsRefresh";
 import { HttpRpcError } from "../../../transport";
 import { Input } from "../../ui/Input";
 import { SettingStatus, SettingToggle } from "../SettingFields";
@@ -89,6 +90,15 @@ export const TelegramTab: Component = () => {
 			setBusy(false);
 		}
 	}
+	onCleanup(
+		settingsRefresh.register({
+			section: "telegram",
+			read: () => invoke<TelegramSettings>("telegram_settings"),
+			apply: (incoming) => {
+				setSettings(incoming);
+			},
+		}),
+	);
 	onMount(() => {
 		void refresh();
 		timer = setInterval(() => {
@@ -128,12 +138,18 @@ export const TelegramTab: Component = () => {
 									: undefined
 							}
 						>
-							<button class={s.testBtn} onClick={() => void refresh()} disabled={busy()}>
+							<button
+								data-non-setting="Read the Telegram owner status without changing it"
+								class={s.testBtn}
+								onClick={() => void refresh()}
+								disabled={busy()}
+							>
 								Reload status
 							</button>
 						</StatusSummary>
 						<SectionCard title="Bot setup">
 							<SettingToggle
+								settingId="telegram.enabled"
 								row
 								label={t("telegram.enabled", "Enable Telegram")}
 								checked={data().enabled}
@@ -152,15 +168,18 @@ export const TelegramTab: Component = () => {
 								{(id, descriptionId) => (
 									<div class={s.passwordRow}>
 										<Input
+											data-setting-id="telegram.bot.token"
 											id={id}
 											aria-describedby={descriptionId()}
 											class={s.input}
 											type="password"
 											autocomplete="new-password"
+											placeholder="Enter bot token"
 											value={token()}
 											onInput={(e) => setToken(e.currentTarget.value)}
 										/>
 										<button
+											data-non-setting="Typed Telegram token, chat or expiring-pairing workflow"
 											class={s.testBtn}
 											disabled={busy() || !token()}
 											onClick={() => {
@@ -192,6 +211,7 @@ export const TelegramTab: Component = () => {
 											name={id}
 											actions={
 												<button
+													data-non-setting="Typed Telegram token, chat or expiring-pairing workflow"
 													class={s.testBtn}
 													disabled={busy()}
 													onClick={() => void change({ action: "remove_chat", chat_id: id })}
@@ -207,6 +227,7 @@ export const TelegramTab: Component = () => {
 								{(id, descriptionId) => (
 									<div class={s.passwordRow}>
 										<Input
+											data-setting-id="telegram.allowed_chat_ids.{chatId}"
 											id={id}
 											aria-describedby={descriptionId()}
 											class={s.input}
@@ -216,6 +237,7 @@ export const TelegramTab: Component = () => {
 											onInput={(e) => setChat(e.currentTarget.value)}
 										/>
 										<button
+											data-non-setting="Typed Telegram token, chat or expiring-pairing workflow"
 											class={s.testBtn}
 											disabled={busy() || !chat()}
 											onClick={() => void change({ action: "add_chat", chat_id: chat() })}
@@ -240,6 +262,7 @@ export const TelegramTab: Component = () => {
 							>
 								{() => (
 									<button
+										data-non-setting="Typed Telegram token, chat or expiring-pairing workflow"
 										class={s.testBtn}
 										disabled={busy() || !data().enabled || !data().connected}
 										onClick={() => void change({ action: "pair" })}

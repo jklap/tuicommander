@@ -35,6 +35,7 @@ import { t } from "../../../i18n";
 import { invoke } from "../../../invoke";
 import { setClaudeUsageEnabled } from "../../../plugins";
 import { isPluginDisabled, setPluginEnabled } from "../../../plugins/pluginLoader";
+import { settingOptions } from "../../../services/settingsCatalogue";
 import { agentConfigsStore, ensureAgentConfigs } from "../../../stores/agentConfigs";
 import { appLogger } from "../../../stores/appLogger";
 import { editorTabsStore } from "../../../stores/editorTabs";
@@ -129,6 +130,7 @@ const EnvVarRow: Component<{
 }> = (props) => (
 	<div class={a.envVarRow}>
 		<Input
+			data-non-setting="Environment variable record key, paired with the catalogue value control"
 			class={`${a.formInput} ${a.mono} ${a.envVarKey}`}
 			classList={{ [a.inputError]: !!props.duplicate }}
 			aria-label="KEY"
@@ -138,13 +140,19 @@ const EnvVarRow: Component<{
 		/>
 		<span class={a.envVarEquals}>=</span>
 		<Input
+			data-setting-id="agents.agents.{key}.run_configs.{name}.env.{key}"
 			class={`${a.formInput} ${a.mono} ${a.envVarValue}`}
 			aria-label="value"
 			placeholder="value"
 			value={props.value}
 			onInput={(e) => props.onChange(props.key, e.currentTarget.value)}
 		/>
-		<button class={`${a.smallBtn} ${a.danger}`} onClick={props.onRemove} title="Remove">
+		<button
+			data-non-setting="Add or remove a draft environment row; the editor Save commits it"
+			class={`${a.smallBtn} ${a.danger}`}
+			onClick={props.onRemove}
+			title="Remove"
+		>
 			×
 		</button>
 	</div>
@@ -178,6 +186,7 @@ const RunArgsFields: Component<{
 					Arguments
 				</label>
 				<Input
+					data-setting-id="agents.agents.{key}.run_configs.{name}.args"
 					id={argsId}
 					class={`${a.formInput} ${a.mono}`}
 					classList={{ [a.inputError]: hasBlockingConflict(props.conflicts) }}
@@ -260,6 +269,7 @@ const AddConfigForm: Component<{
 					Configuration name
 				</label>
 				<Input
+					data-setting-id="agents.agents.{key}.run_configs.{name}.name"
 					class={a.formInput}
 					classList={{ [a.inputError]: isDuplicate() }}
 					aria-label="Configuration name"
@@ -281,6 +291,7 @@ const AddConfigForm: Component<{
 					Command (binary)
 				</label>
 				<Input
+					data-setting-id="agents.agents.{key}.run_configs.{name}.command"
 					class={`${a.formInput} ${a.mono}`}
 					aria-label="Command (binary)"
 					id={`new-${editorId}-command`}
@@ -304,6 +315,7 @@ const AddConfigForm: Component<{
 					Model (optional)
 				</label>
 				<Input
+					data-setting-id="agents.agents.{key}.run_configs.{name}.model"
 					class={`${a.formInput} ${a.mono}`}
 					aria-label="Model"
 					id={`new-${editorId}-model`}
@@ -316,7 +328,12 @@ const AddConfigForm: Component<{
 			<div class={a.envVarsSection}>
 				<div class={a.envVarsHeader}>
 					<span class={a.envVarsLabel}>Environment Variables</span>
-					<button class={a.smallBtn} onClick={addEnvVar} type="button">
+					<button
+						data-non-setting="Add or remove a draft environment row; the editor Save commits it"
+						class={a.smallBtn}
+						onClick={addEnvVar}
+						type="button"
+					>
 						+ Add
 					</button>
 				</div>
@@ -341,6 +358,7 @@ const AddConfigForm: Component<{
 			</div>
 			<div class={a.formRow}>
 				<button
+					data-non-setting="Commit the existing run-configuration editor draft through its owner"
 					class={a.smallBtn}
 					onClick={handleSave}
 					disabled={
@@ -349,7 +367,11 @@ const AddConfigForm: Component<{
 				>
 					Save
 				</button>
-				<button class={a.smallBtn} onClick={props.onClose}>
+				<button
+					data-non-setting="Open, close or cancel the run-configuration editor"
+					class={a.smallBtn}
+					onClick={props.onClose}
+				>
 					Cancel
 				</button>
 			</div>
@@ -492,11 +514,17 @@ const RunConfigRow: Component<{
 					<span class={a.defaultBadge}>Default</span>
 				</Show>
 				<div class={a.configActions}>
-					<button class={a.smallBtn} onClick={startEnvEdit} title="Edit environment variables">
+					<button
+						data-non-setting="Open, close or cancel the run-configuration editor"
+						class={a.smallBtn}
+						onClick={startEnvEdit}
+						title="Edit environment variables"
+					>
 						Env
 					</button>
 					<Show when={!props.config.is_default}>
 						<button
+							data-setting-id="agents.agents.{key}.run_configs.{name}.is_default"
 							class={a.smallBtn}
 							onClick={() => configStore.setDefaultConfig(props.agentType, props.index)}
 							title="Set as default"
@@ -505,15 +533,28 @@ const RunConfigRow: Component<{
 						</button>
 					</Show>
 					<div class={a.menuWrap} ref={menuRef}>
-						<button class={a.smallBtn} onClick={() => setMenuOpen(!menuOpen())} title="More actions">
+						<button
+							data-non-setting="Open, close or cancel the run-configuration editor"
+							class={a.smallBtn}
+							onClick={() => setMenuOpen(!menuOpen())}
+							title="More actions"
+						>
 							···
 						</button>
 						<Show when={menuOpen()}>
 							<div class={a.menuDropdown}>
-								<button class={a.menuItem} onClick={startConfigEdit}>
+								<button
+									data-non-setting="Open, close or cancel the run-configuration editor"
+									class={a.menuItem}
+									onClick={startConfigEdit}
+								>
 									Edit
 								</button>
-								<button class={`${a.menuItem} ${a.danger}`} onClick={handleDelete}>
+								<button
+									data-non-setting="Remove the stable run-configuration record through its owner"
+									class={`${a.menuItem} ${a.danger}`}
+									onClick={handleDelete}
+								>
 									Delete
 								</button>
 							</div>
@@ -531,6 +572,7 @@ const RunConfigRow: Component<{
 							Configuration name
 						</label>
 						<Input
+							data-setting-id="agents.agents.{key}.run_configs.{name}.name"
 							class={a.formInput}
 							classList={{ [a.inputError]: isDuplicateName() }}
 							aria-label="Configuration name"
@@ -552,6 +594,7 @@ const RunConfigRow: Component<{
 							Command (binary)
 						</label>
 						<Input
+							data-setting-id="agents.agents.{key}.run_configs.{name}.command"
 							class={`${a.formInput} ${a.mono}`}
 							aria-label="Command (binary)"
 							id={`edit-${editorId}-command`}
@@ -575,6 +618,7 @@ const RunConfigRow: Component<{
 							Model (optional)
 						</label>
 						<Input
+							data-setting-id="agents.agents.{key}.run_configs.{name}.model"
 							class={`${a.formInput} ${a.mono}`}
 							aria-label="Model"
 							id={`edit-${editorId}-model`}
@@ -585,13 +629,18 @@ const RunConfigRow: Component<{
 					</div>
 					<div class={a.formRow}>
 						<button
+							data-non-setting="Commit the existing run-configuration editor draft through its owner"
 							class={a.smallBtn}
 							onClick={saveConfig}
 							disabled={isDuplicateName() || !editName().trim() || hasBlockingConflict(editConflicts())}
 						>
 							Save
 						</button>
-						<button class={a.smallBtn} onClick={() => setEditingConfig(false)}>
+						<button
+							data-non-setting="Open, close or cancel the run-configuration editor"
+							class={a.smallBtn}
+							onClick={() => setEditingConfig(false)}
+						>
 							Cancel
 						</button>
 					</div>
@@ -601,7 +650,12 @@ const RunConfigRow: Component<{
 				<div class={a.envEditPanel}>
 					<div class={a.envVarsHeader}>
 						<span class={a.envVarsLabel}>Environment Variables</span>
-						<button class={a.smallBtn} onClick={addEnvVar} type="button">
+						<button
+							data-non-setting="Add or remove a draft environment row; the editor Save commits it"
+							class={a.smallBtn}
+							onClick={addEnvVar}
+							type="button"
+						>
 							+ Add
 						</button>
 					</div>
@@ -622,10 +676,19 @@ const RunConfigRow: Component<{
 						<div class={a.validationError}>Duplicate env keys: {duplicateEnvKeys().join(", ")}</div>
 					</Show>
 					<div class={a.formRow}>
-						<button class={a.smallBtn} onClick={saveEnv} disabled={duplicateEnvKeys().length > 0}>
+						<button
+							data-non-setting="Commit the existing run-configuration editor draft through its owner"
+							class={a.smallBtn}
+							onClick={saveEnv}
+							disabled={duplicateEnvKeys().length > 0}
+						>
 							Save
 						</button>
-						<button class={a.smallBtn} onClick={() => setEditingEnv(false)}>
+						<button
+							data-non-setting="Open, close or cancel the run-configuration editor"
+							class={a.smallBtn}
+							onClick={() => setEditingEnv(false)}
+						>
 							Cancel
 						</button>
 					</div>
@@ -705,6 +768,7 @@ const EnvFlagsSection: Component<{ agentType: AgentType }> = (props) => {
 												<div class={a.envFlagRow}>
 													<Show when={flag.type === "boolean" || flag.type === "boolean_inverted"}>
 														<input
+															data-setting-id="agents.agents.{key}.env_flags.{key}"
 															type="checkbox"
 															class={a.envFlagToggle}
 															checked={isFlagEnabled(flag.key)}
@@ -713,6 +777,7 @@ const EnvFlagsSection: Component<{ agentType: AgentType }> = (props) => {
 													</Show>
 													<Show when={flag.type === "enum"}>
 														<Select
+															data-setting-id="agents.agents.{key}.env_flags.{key}"
 															compact
 															class={a.envFlagSelect}
 															value={getFlagValue(flag.key)}
@@ -724,6 +789,7 @@ const EnvFlagsSection: Component<{ agentType: AgentType }> = (props) => {
 													</Show>
 													<Show when={flag.type === "number"}>
 														<Input
+															data-setting-id="agents.agents.{key}.env_flags.{key}"
 															compact
 															type="number"
 															class={a.envFlagInput}
@@ -734,6 +800,7 @@ const EnvFlagsSection: Component<{ agentType: AgentType }> = (props) => {
 													</Show>
 													<Show when={flag.type === "string"}>
 														<Input
+															data-setting-id="agents.agents.{key}.env_flags.{key}"
 															compact
 															type="text"
 															class={a.envFlagInput}
@@ -781,7 +848,12 @@ const ClaudeUsageToggle: Component = () => {
 			<div class={a.expandedLabel}>Features</div>
 			<div class={a.actionsRow}>
 				<label class={a.toggleRow}>
-					<input type="checkbox" checked={enabled()} onChange={handleToggle} />
+					<input
+						data-setting-id="app.disabled_plugin_ids"
+						type="checkbox"
+						checked={enabled()}
+						onChange={handleToggle}
+					/>
 					<span>Usage Dashboard</span>
 				</label>
 				<span class={s.hint}>
@@ -994,6 +1066,7 @@ const AgentRow: Component<{
 							{(id, descriptionId) => (
 								<div class={a.minutesControl}>
 									<Input
+										data-setting-id="agents.agents.{key}.idle_close_minutes"
 										id={id}
 										aria-describedby={descriptionId()}
 										class={a.formInput}
@@ -1018,6 +1091,7 @@ const AgentRow: Component<{
 					<SettingRow label="Enabled">
 						{(id, descriptionId) => (
 							<input
+								data-setting-id="app.disabled_agents"
 								id={id}
 								aria-describedby={descriptionId()}
 								type="checkbox"
@@ -1040,6 +1114,7 @@ const AgentRow: Component<{
 						>
 							{(id, descriptionId) => (
 								<input
+									data-setting-id="agents.agents.{key}.auto_retry_on_error"
 									id={id}
 									aria-describedby={descriptionId()}
 									type="checkbox"
@@ -1064,6 +1139,7 @@ const AgentRow: Component<{
 						>
 							{(id, descriptionId) => (
 								<input
+									data-setting-id="agents.agents.{key}.prevent_alt_screen"
 									id={id}
 									aria-describedby={descriptionId()}
 									type="checkbox"
@@ -1089,6 +1165,7 @@ const AgentRow: Component<{
 							>
 								{(id, descriptionId) => (
 									<input
+										data-setting-id="agents.agents.{key}.skip_trust_dialog"
 										id={id}
 										aria-describedby={descriptionId()}
 										type="checkbox"
@@ -1115,6 +1192,7 @@ const AgentRow: Component<{
 							>
 								{(id, descriptionId) => (
 									<input
+										data-setting-id="agents.agents.{key}.native_status_signals"
 										id={id}
 										aria-describedby={descriptionId()}
 										type="checkbox"
@@ -1138,6 +1216,7 @@ const AgentRow: Component<{
 							<div class={a.expandedSection}>
 								<label class={a.toggleRow} onClick={(e) => e.stopPropagation()}>
 									<input
+										data-setting-id="agents.agents.{key}.hook_instrumentation"
 										type="checkbox"
 										checked={configStore.getHookInstrumentation(props.agentType) ?? false}
 										disabled={hookLoading()}
@@ -1167,6 +1246,7 @@ const AgentRow: Component<{
 							<div class={a.expandedSection}>
 								<label class={a.toggleRow} onClick={(e) => e.stopPropagation()}>
 									<input
+										data-setting-id="agents.agents.{key}.intent_tab_title"
 										type="checkbox"
 										checked={configStore.getIntentTabTitle(props.agentType) ?? true}
 										onChange={(e) => configStore.setIntentTabTitle(props.agentType, e.currentTarget.checked)}
@@ -1188,6 +1268,7 @@ const AgentRow: Component<{
 							<div class={a.expandedSection}>
 								<label class={a.toggleRow} onClick={(e) => e.stopPropagation()}>
 									<input
+										data-setting-id="agents.agents.{key}.progress_tracking"
 										type="checkbox"
 										disabled={!settingsStore.state.progressTracking}
 										checked={
@@ -1212,6 +1293,7 @@ const AgentRow: Component<{
 							<div class={a.expandedSection}>
 								<label class={a.toggleRow} onClick={(e) => e.stopPropagation()}>
 									<input
+										data-setting-id="agents.agents.{key}.suggest_followups"
 										type="checkbox"
 										checked={configStore.getSuggestFollowups(props.agentType) ?? settingsStore.state.suggestFollowups}
 										onChange={(e) => configStore.setSuggestFollowups(props.agentType, e.currentTarget.checked)}
@@ -1230,6 +1312,7 @@ const AgentRow: Component<{
 							<>
 								<LaunchModuleSettings agentType={props.agentType} />
 								<LaunchInstructionsEditor
+									settingId="agents.agents.{key}.launch_instructions"
 									id={`launch-instructions-${props.agentType}`}
 									label={`Launch instructions for ${agent().name}`}
 									value={configStore.getAgentLaunchInstructions(props.agentType)}
@@ -1253,6 +1336,7 @@ const AgentRow: Component<{
 						<div class={a.expandedSection}>
 							<div class={a.expandedLabel}>Headless Command Template</div>
 							<Input
+								data-setting-id="agents.agents.{key}.headless_template"
 								class={`${a.formInput} ${a.mono}`}
 								placeholder={`${AGENTS[props.agentType].binary} -p "{prompt}" --no-input`}
 								value={configStore.getHeadlessTemplate(props.agentType) ?? ""}
@@ -1281,7 +1365,12 @@ const AgentRow: Component<{
 						<Show
 							when={addingConfig()}
 							fallback={
-								<button class={a.smallBtn} style={{ "margin-top": "8px" }} onClick={() => setAddingConfig(true)}>
+								<button
+									data-non-setting="Open, close or cancel the run-configuration editor"
+									class={a.smallBtn}
+									style={{ "margin-top": "8px" }}
+									onClick={() => setAddingConfig(true)}
+								>
 									Add Configuration...
 								</button>
 							}
@@ -1296,12 +1385,17 @@ const AgentRow: Component<{
 						<div class={a.actionsRow}>
 							{/* Opens the file in this app's editor, so it can only be a local path. */}
 							<Show when={!machine()}>
-								<button class={a.actionBtn} onClick={handleEditConfig}>
+								<button
+									data-non-setting="Open the agent-owned configuration editor"
+									class={a.actionBtn}
+									onClick={handleEditConfig}
+								>
 									Edit Agent Config
 								</button>
 							</Show>
 							<Show when={mcpEditable()}>
 								<button
+									data-non-setting="Explicit external-agent MCP installation workflow; not TUIC configuration"
 									class={a.actionBtn}
 									classList={{ [a.installed]: mcpStatus()?.installed }}
 									onClick={handleMcpToggle}
@@ -1394,7 +1488,12 @@ const McpIntegrationsSection: Component = () => {
 					uninstalling TUICommander, or each client will report a missing MCP server.
 				</p>
 				<div class={a.actionsRow}>
-					<button class={a.actionBtn} onClick={handleRemoveAll} disabled={busy()}>
+					<button
+						data-non-setting="Explicit external-agent MCP installation workflow; not TUIC configuration"
+						class={a.actionBtn}
+						onClick={handleRemoveAll}
+						disabled={busy()}
+					>
 						{busy() ? "Removing..." : "Remove all MCP integrations"}
 					</button>
 				</div>
@@ -1545,6 +1644,7 @@ export const AgentsTab: Component<AgentsTabProps> = (props) => {
 							</p>
 
 							<SettingToggle
+								settingId="app.intent_tab_title"
 								row
 								checked={settingsStore.state.intentTabTitle}
 								onChange={(v) => settingsStore.setIntentTabTitle(v)}
@@ -1553,6 +1653,7 @@ export const AgentsTab: Component<AgentsTabProps> = (props) => {
 							/>
 
 							<SettingToggle
+								settingId="app.suggest_followups"
 								row
 								checked={settingsStore.state.suggestFollowups}
 								onChange={(v) => settingsStore.setSuggestFollowups(v)}
@@ -1562,6 +1663,7 @@ export const AgentsTab: Component<AgentsTabProps> = (props) => {
 
 							<ExpertSetting configKey="app.progress_tracking" value={settingsStore.state.progressTracking}>
 								<SettingToggle
+									settingId="app.progress_tracking"
 									row
 									checked={settingsStore.state.progressTracking}
 									onChange={(v) => settingsStore.setProgressTracking(v)}
@@ -1575,6 +1677,7 @@ export const AgentsTab: Component<AgentsTabProps> = (props) => {
 									<>
 										<LaunchModuleSettings />
 										<LaunchInstructionsEditor
+											settingId="agents.launch_instructions"
 											id="launch-instructions-global"
 											label="Launch instructions"
 											value={activeStore().getLaunchInstructions()}
@@ -1625,6 +1728,7 @@ const EgoPermissionsSection: Component = () => {
 					<ContextualHelp label="Permissions" />
 				</div>
 				<Select
+					data-setting-id="agents.agents.{key}.ego_mode"
 					id="ego-permission-mode"
 					class={a.formInput}
 					value={configStore.state.agents.ego?.ego_mode ?? ""}
@@ -1634,18 +1738,25 @@ const EgoPermissionsSection: Component = () => {
 						})
 					}
 				>
-					<option value="">Use ego configuration</option>
-					<option value="plan">Read-only (plan)</option>
-					<option value="default">Ask (default)</option>
-					<option value="edits">Auto-edit (edits)</option>
-					<option value="auto">Auto (reviewed)</option>
-					<option value="yolo">Full access (yolo)</option>
+					<For
+						each={settingOptions("agents.agents.{key}.ego_mode", {
+							"": "Use ego configuration",
+							plan: "Read-only (plan)",
+							default: "Ask (default)",
+							edits: "Auto-edit (edits)",
+							auto: "Auto (reviewed)",
+							yolo: "Full access (yolo)",
+						})}
+					>
+						{(option) => <option value={option.value}>{option.label}</option>}
+					</For>
 				</Select>
 				<div class={s.helpLabel}>
 					<label for="ego-permission-sandbox">Filesystem sandbox</label>
 					<ContextualHelp label="Filesystem sandbox" />
 				</div>
 				<Select
+					data-setting-id="agents.agents.{key}.ego_sandbox"
 					id="ego-permission-sandbox"
 					class={a.formInput}
 					value={configStore.state.agents.ego?.ego_sandbox ?? ""}
@@ -1655,9 +1766,15 @@ const EgoPermissionsSection: Component = () => {
 						})
 					}
 				>
-					<option value="">Use ego configuration</option>
-					<option value="ro">Read-only (ro)</option>
-					<option value="workspace">Workspace writes (workspace)</option>
+					<For
+						each={settingOptions("agents.agents.{key}.ego_sandbox", {
+							"": "Use ego configuration",
+							ro: "Read-only (ro)",
+							workspace: "Workspace writes (workspace)",
+						})}
+					>
+						{(option) => <option value={option.value}>{option.label}</option>}
+					</For>
 				</Select>
 				<p class={s.hint}>
 					Applies to new terminal launches and managed spawns, including resumes. Overrides matching raw flags. AI Chat
@@ -1681,6 +1798,7 @@ const HibernationSection: Component = () => {
 						<ContextualHelp label={t("settings.agents.hibernateMinutes", "Hibernate idle agents after")} />
 					</div>
 					<Input
+						data-setting-id="agents.hibernate_idle_minutes"
 						id="hibernate-minutes"
 						class={a.formInput}
 						type="number"
@@ -1700,6 +1818,7 @@ const HibernationSection: Component = () => {
 						<ContextualHelp label={t("settings.agents.hibernateScope", "Hibernate scope")} />
 					</div>
 					<Select
+						data-setting-id="agents.hibernate_scope"
 						id="hibernate-scope"
 						class={a.formInput}
 						value={store.state.hibernate_scope}
@@ -1710,8 +1829,14 @@ const HibernationSection: Component = () => {
 							)
 						}
 					>
-						<option value="background_only">{t("settings.agents.hibernateBackground", "Only in background")}</option>
-						<option value="always">{t("settings.agents.hibernateAlways", "Always")}</option>
+						<For
+							each={settingOptions("agents.hibernate_scope", {
+								background_only: t("settings.agents.hibernateBackground", "Only in background"),
+								always: t("settings.agents.hibernateAlways", "Always"),
+							})}
+						>
+							{(option) => <option value={option.value}>{option.label}</option>}
+						</For>
 					</Select>
 				</div>
 			</ExpertSetting>

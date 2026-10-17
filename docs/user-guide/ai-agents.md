@@ -367,3 +367,7 @@ Ego terminal intents use the same marker grammar as Claude and Codex. A new
 `intent: description (Title)` replaces the Context bar intent and, when intent
 titles are enabled and the tab is not user-renamed, the tab title. Soft-wrapped
 ego output is not hidden by an earlier submitted prompt during composer repaint.
+
+## Settings startup and Ego transport
+
+Assisted configuration uses the published Settings owner contract, not agent-session keystrokes or direct credential-file edits. Ego AI Chat uses ACP; a missing settings owner or ACP capability does not select a PTY fallback. Typed Settings `begin_login` opens a human-operated terminal using the configured Ego executable/workspace. `login_status` reads credential presence after termination; an exited command is not proof of authentication. See [Settings startup workflows](../backend/settings-startup.md#ego).

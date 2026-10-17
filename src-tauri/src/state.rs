@@ -362,6 +362,8 @@ pub enum AppEvent {
     /// every save — including the client that just wrote it.
     #[serde(rename = "repositories-changed")]
     RepositoriesChanged,
+    #[serde(rename = "settings-changed")]
+    SettingsChanged(crate::settings::changes::SettingsChanged),
     #[serde(rename = "open-markdown-tabs-changed")]
     OpenMarkdownTabsChanged,
     /// Directory contents changed (non-git filesystem watcher)
@@ -2366,6 +2368,7 @@ pub struct AppState {
     /// whoever is sitting at the machine.
     pub(crate) settings_policy: Arc<crate::settings::policy::Policy>,
     pub(crate) settings_api: tokio::sync::OnceCell<crate::settings::api::Settings>,
+    pub(crate) plugin_keybinding_actions: Arc<parking_lot::RwLock<Option<Vec<String>>>>,
     pub(crate) confirm_responses: DashMap<String, tokio::sync::oneshot::Sender<bool>>,
     /// App-wide process-tree snapshot shared by agent lifecycle polling.
     pub(crate) process_snapshot_cache: crate::pty::ProcessSnapshotCache,
@@ -3661,6 +3664,7 @@ impl AppState {
             hibernated_peers: dashmap::DashSet::new(),
             settings_policy: Arc::new(crate::settings::policy::Policy::default()),
             settings_api: tokio::sync::OnceCell::new(),
+            plugin_keybinding_actions: Default::default(),
             confirm_responses: DashMap::new(),
             process_snapshot_cache: crate::pty::ProcessSnapshotCache::default(),
             hot_repo_paths: parking_lot::RwLock::new(std::collections::HashSet::new()),
@@ -4437,6 +4441,20 @@ impl AppState {
         #[cfg(feature = "desktop")]
         if let Some(ref app) = *self.app_handle.read() {
             let _ = app.emit("repositories-changed", serde_json::json!({}));
+        }
+    }
+
+    /// Dual-emit the same value-free payload; there is no bus-to-window forwarder.
+    pub(crate) fn publish_settings_changed(
+        &self,
+        notice: crate::settings::changes::SettingsChanged,
+    ) {
+        let _ = self
+            .event_bus
+            .send(AppEvent::SettingsChanged(notice.clone()));
+        #[cfg(feature = "desktop")]
+        if let Some(app) = self.app_handle.read().as_ref() {
+            let _ = app.emit("settings-changed", &notice);
         }
     }
 
@@ -5347,6 +5365,7 @@ impl AppState {
             | AppEvent::McpConfirm { .. }
             | AppEvent::McpConfirmResolved { .. }
             | AppEvent::OpenMarkdownTabsChanged
+            | AppEvent::SettingsChanged(_)
             | AppEvent::RepositoriesChanged
             | AppEvent::DirChanged { .. }
             | AppEvent::SessionWorktreeDeclared { .. }

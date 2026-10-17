@@ -12,7 +12,7 @@
 .shortcuts td { padding: 12px 0 !important; }
 .shortcuts td:last-child { width: 260px; text-align: right; }
 .shortcuts td:first-child { font-weight: 600; color: var(--fg-primary); }
-.shortcutCategory { padding: 16px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg-secondary); }
+.shortcutCategory { padding: 16px 0; border-bottom: 1px solid var(--border); background: var(--bg-primary); }
 .shortcutCategory > label { font-size: 15px; font-weight: 600; }
 .shortcutCategory button { opacity: 1 !important; }
 .shortcutCategory table { margin-top: 12px; }
@@ -21,9 +21,10 @@
 .shortcutCategory td:first-child { order: 1; flex: 1; min-width: 0; }
 
 @media (max-width: 700px) {
-  .shortcutCategory tr { align-items: flex-start; flex-direction: column; gap: 4px; }
+  .shortcutCategory tr { align-items: flex-start; flex-direction: column; gap: 4px; padding: 12px 0; }
+  .shortcutCategory .shortcuts td { padding: 0 !important; }
   .shortcutCategory td:last-child { order: 2; flex-basis: auto; width: 100% !important; }
-  .shortcutCategory td:first-child { order: 1; }
+  .shortcutCategory td:first-child { order: 1; flex: none; }
 }
 
 .shortcutHeading { margin: 0; font-size: 15px; }
@@ -40,3 +41,10 @@
 .srOnly { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 
 .page .secondaryButton { min-height: 36px; height: 36px; padding: 6px 14px; line-height: 20px; align-self: center; }
+
+
+.rebindButton { min-height: 36px; padding: 6px 12px; border: 1px solid var(--border); border-radius: var(--radius-lg); background: var(--bg-tertiary); color: var(--fg-primary); font: inherit; cursor: pointer; }
+.rebindButton:hover { border-color: var(--accent); background: var(--bg-highlight); }
+@media (max-width: 600px) { .rebindButton { min-height: 44px; } }
+
+.page > [data-settings-page-header] { margin-bottom: 8px; }

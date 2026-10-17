@@ -1,5 +1,6 @@
 import { createStore, reconcile } from "solid-js/store";
 import { invoke } from "../invoke";
+import { reportSettingsConflicts, settingsRefresh } from "../services/settingsRefresh";
 import { toCamelKeys, toSnakeKeys } from "../utils/caseKeys";
 import { createConfigDeltaWriter } from "../utils/configDeltaWriter";
 import { appLogger } from "./appLogger";
@@ -59,7 +60,7 @@ export interface RepoSettings {
 	/** Allowlist of upstream MCP server names for this repo (null = all servers) */
 	mcpUpstreams: string[] | null;
 	// DEFERRED (2026-08-30) — `terminalMetaHotkeys` and the three `prHide*` fields
-	// below are override slots with no writer: no UI sets them, and `config.rs`
+	// below now have transient UI writers (persistence follow-up 1993-e7af); `config.rs`
 	// has no matching field on `RepoSettingsEntry`, so a value set here would be
 	// dropped by the backend. Either wire them up or delete them; leaving them is
 	// what let the camelCase persistence bug hide.
@@ -277,6 +278,39 @@ function createRepoSettingsStore() {
 	};
 
 	const actions = {
+		startRemoteSync(): () => void {
+			const stopSettings = settingsRefresh.register({
+				section: "repositories",
+				read: () => invoke<{ repos: Record<string, Record<string, unknown>> }>("load_repo_settings"),
+				apply: (remote) => {
+					const local = {
+						repos: Object.fromEntries(
+							Object.entries(state.settings).map(([path, value]) => [path, toSnakeKeys(value)]),
+						),
+					};
+					const merged = repoSettingsWriter.adopt(remote ?? { repos: {} }, local);
+					setState("settings", reconcile(fromWire(merged.value.repos as Record<string, Record<string, unknown>>)));
+					reportSettingsConflicts(merged.conflicts);
+				},
+			});
+			const stopLocal = settingsRefresh.register({
+				section: "repo_local",
+				read: async () =>
+					Object.fromEntries(
+						await Promise.all(
+							Object.keys(state.localConfigs).map(
+								async (path) =>
+									[path, await invoke<RepoLocalConfig | null>("load_repo_local_config", { repoPath: path })] as const,
+							),
+						),
+					),
+				apply: (configs) => setState("localConfigs", reconcile(configs)),
+			});
+			return () => {
+				stopSettings();
+				stopLocal();
+			};
+		},
 		/** Load settings from Rust backend; migrate from localStorage on first run */
 		async hydrate(): Promise<void> {
 			try {

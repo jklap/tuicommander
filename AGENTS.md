@@ -464,7 +464,7 @@ fail closed. The foreground probe still gates idle; recovery never requeues the
 uncertain payload, but normal idle flush can deliver the next queued BG wake.
 The adapter shapes are recorded in `ego-composer-1957*.tcap`.
 
-Ego selector recovery accepts both single-answer and checkbox footers, including mid-word terminal wrapping. Checkbox state uses `toggle-enter` and changes only on a toggle; Enter or Escape settles the dialog. Free-text modal text enriches an existing confident ego wait, never a ready composer. The mobile header question action supports all three forms.
+Ego selector recovery accepts both single-answer and checkbox footers, including mid-word terminal wrapping. The complete footer must be the last nonblank content: answered selector history above newer output or a composer must never re-arm awaiting. Checkbox state uses `toggle-enter` and changes only on a toggle; Enter or Escape settles the dialog. Free-text modal text enriches an existing confident ego wait, never a ready composer. The mobile header question action supports all three forms.
 
 **Every signal that sets awaiting needs a path that clears it.** The badge is
 `SessionState.awaiting_input`, not an event, and it is sticky by construction —
@@ -605,3 +605,7 @@ We maintain a patched `alacritty_terminal` at `src-tauri/patches/alacritty_termi
 When using Codex, follow the Wiz Codex instructions in `.wiz/wiz-codex.md` for this repository, subject to the global instruction hierarchy.
 Those instructions are maintained by the Wiz SessionStart hook and complement this `AGENTS.md` file.
 <!-- wiz-codex:end -->
+
+## Opt-in frame workload evidence
+
+`window.__TUIC__.frameWorkload.enable(true)` requires perfDebug and retains sensitive terminal text in bounded memory; default off. `debug action=frame_workload_dump` saves rotated instance-local captures after frontend JS responds. See docs/backend/stall-journal.md for limits, privacy and replay. The synthetic smoke fixture does not satisfy the real-stall RED.

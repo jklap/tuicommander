@@ -17,8 +17,6 @@ import { SlashMenuOverlay } from "./SlashMenuOverlay";
 import { type ComposerInputKey, computeInputDelta, isPostSendGuardActive, isSupersetEcho } from "./syncGuards";
 
 interface CommandInputProps {
-	showScrollToBottom?: boolean;
-	onScrollToBottom?: () => void;
 	sessionId: string;
 	serverVoiceRecording?: boolean;
 	onBrowserDictating?: (recording: boolean) => void;
@@ -586,19 +584,6 @@ export function CommandInput(props: CommandInputProps) {
 					<path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z" />
 				</svg>
 			</button>
-			<Show when={props.showScrollToBottom}>
-				<button
-					type="button"
-					class={styles.jumpBottom}
-					aria-label="Scroll to bottom"
-					onMouseDown={(event) => event.preventDefault()}
-					onClick={() => props.onScrollToBottom?.()}
-				>
-					<svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
-						<path d="M11 4h2v12.17l4.59-4.58L19 13l-7 7-7-7 1.41-1.41L11 16.17z" />
-					</svg>
-				</button>
-			</Show>
 		</div>
 	);
 }

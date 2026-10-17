@@ -1,4 +1,70 @@
 //! Transport cutover contracts; every file and credential slot belongs to this fixture.
+
+// Catches: startup requiring ambient credential provenance that settings never publishes.
+#[tokio::test]
+async fn startup_uses_only_published_schema() {
+    let (_dir, _guard, state) = super::accounts_tests::isolated();
+    let described = api::execute(
+        &state,
+        json!({"action":"describe", "store":"github_accounts"}),
+        Caller::mcp(
+            "127.0.0.1:1234".parse().unwrap(),
+            "startup-fixture".into(),
+            true,
+        ),
+    )
+    .await;
+    assert_eq!(described["inventoryComplete"], true, "{described}");
+    let provenance = described["fields"].as_array().unwrap().iter()
+        .find(|field| field["path"] == "/auth/source")
+        .expect("published settings cannot discover the GitHub owner's auth.source provenance required by startup");
+    let read = api::execute(
+        &state,
+        json!({"action":"get", "store":provenance["store"], "target":{"kind":"machine"}, "paths":[provenance["path"]]}),
+        Caller::mcp("127.0.0.1:1234".parse().unwrap(), "startup-fixture".into(), true),
+    ).await;
+    assert!(
+        read["values"]["/auth/source"]["effective"].is_string(),
+        "{read}"
+    );
+}
+// Catches: the catalogue leaks auth.secret while publishing credential provenance.
+#[tokio::test]
+async fn published_github_provenance_cannot_leak_auth_secret() {
+    let (_dir, _guard, state) = super::accounts_tests::isolated();
+    *state.github.token.write() = Some("startup-token-canary".into());
+    *state.github.token_source.write() = crate::github_auth::TokenSource::Env;
+    let described = api::execute(
+        &state,
+        json!({"action":"describe","store":"github_accounts"}),
+        Caller::native(),
+    )
+    .await;
+    let fields = described["fields"].as_array().unwrap();
+    assert!(!fields.iter().any(|field| {
+        field["path"]
+            .as_str()
+            .is_some_and(|path| path.starts_with("/auth/secret"))
+    }));
+    let source = fields
+        .iter()
+        .find(|field| field["path"] == "/auth/source")
+        .unwrap();
+    assert_eq!(source["operations"], json!(["get"]));
+    assert_eq!(source["sensitivity"], "public");
+    let read = api::execute(&state, json!({"action":"get","target":{"kind":"machine"},"store":"github_accounts","paths":["/auth/source"]}), Caller::native()).await;
+    assert_eq!(
+        read["values"],
+        json!({"/auth/source":{"stored":"env","effective":"env","source":"stored"}})
+    );
+    let denied = api::execute(&state, json!({"action":"get","target":{"kind":"machine"},"store":"github_accounts","paths":["/auth/secret"]}), Caller::native()).await;
+    assert_eq!(denied["error"]["code"], "unknown_path");
+    for reply in [described, read, denied] {
+        assert!(!reply.to_string().contains("startup-token-canary"));
+        assert!(!reply.to_string().contains("credential_ref"));
+    }
+}
+
 use super::{api, policy::Caller};
 use crate::remote_connection::{RemoteConnection, RemoteConnectionStore};
 use serde_json::{Value, json};
@@ -254,4 +320,216 @@ async fn settings_prompt_crud_survives_config_removal() {
     assert_eq!(empty["values"]["/prompts"]["stored"], json!([]));
     let missing = api::execute(&state, json!({"action":"get","target":{"kind":"instance"},"store":"prompts","paths":["/prompts/fixture/text"]}), Caller::native()).await;
     assert_eq!(missing["error"]["code"], "not_found");
+}
+
+// Catches: a durable MCP settings commit never waking desktop/browser readers.
+#[tokio::test]
+async fn mcp_write_publishes_value_free_settings_change() {
+    let (_dir, _guard, state) = super::accounts_tests::isolated();
+    let get =
+        json!({"action":"get","target":{"kind":"instance"},"store":"prompts","paths":["/prompts"]});
+    let initial = api::execute(&state, get, Caller::native()).await;
+    let mut events = state.event_bus.subscribe();
+    let result = api::execute(&state, json!({"action":"patch","target":{"kind":"instance"},"store":"prompts",
+        "expectedRevision":initial["revision"],"operations":[{"op":"create","path":"/prompts","id":"refresh-fixture",
+        "value":{"id":"refresh-fixture","label":"Private label canary","text":"Private text canary","pinned":false}}]}),
+        Caller::mcp("127.0.0.1:1234".parse().unwrap(), "refresh-fixture".into(), true)).await;
+    assert_eq!(result["persisted"], true, "{result}");
+    let event = events
+        .try_recv()
+        .expect("durable MCP settings commit did not publish a change");
+    let event = serde_json::to_value(event).unwrap();
+    assert_eq!(event["event"], "settings-changed");
+    assert_eq!(event["payload"]["section"], "prompts");
+    assert_eq!(event["payload"]["generation"], result["generation"]);
+    assert!(event["payload"]["generation"].as_u64().unwrap() > 0);
+    assert_eq!(event["payload"]["persisted"], true);
+    assert_eq!(event["payload"]["applied"], true);
+    assert!(!event.to_string().contains("Private label canary"));
+    assert!(!event.to_string().contains("Private text canary"));
+    assert!(
+        events.try_recv().is_err(),
+        "one commit must publish one hint"
+    );
+}
+
+// Catches: vault-only writes reusing a metadata revision and never invalidating credential badges.
+#[tokio::test]
+async fn vault_only_writes_advance_settings_generation_without_metadata_changes() {
+    let (_dir, _guard, state) = super::accounts_tests::isolated();
+    let connection = RemoteConnection::new_ssh("fixture", "not-contacted.example", "fixture");
+    RemoteConnectionStore::save(&state.data_dir, std::slice::from_ref(&connection)).unwrap();
+    let metadata = std::fs::read(state.data_dir.join("connections.json")).unwrap();
+    let mut events = state.event_bus.subscribe();
+    let first = api::execute(
+        &state,
+        action(&connection.id, "set_password"),
+        Caller::native(),
+    )
+    .await;
+    let second = api::execute(
+        &state,
+        json!({"action":"perform","target":{"kind":"machine"},"store":"connections",
+        "operation":{"action":"clear_password","id":connection.id}}),
+        Caller::native(),
+    )
+    .await;
+    assert!(first["generation"].as_u64().unwrap() < second["generation"].as_u64().unwrap());
+    assert_eq!(first["persisted"], true);
+    assert_eq!(second["persisted"], true);
+    assert_eq!(
+        std::fs::read(state.data_dir.join("connections.json")).unwrap(),
+        metadata
+    );
+    let changes: Vec<_> = std::iter::from_fn(|| events.try_recv().ok())
+        .filter_map(|event| match event {
+            crate::state::AppEvent::SettingsChanged(notice) => Some(notice),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(changes.len(), 2);
+    assert!(
+        changes
+            .iter()
+            .all(|notice| notice.section == "connections" && notice.persisted)
+    );
+    assert!(
+        !serde_json::to_string(&changes)
+            .unwrap()
+            .contains("cutover-secret-canary")
+    );
+}
+
+// Catches: partial persistence being reported as a failed write with no refresh hint.
+#[cfg(not(feature = "desktop"))]
+#[tokio::test]
+async fn persisted_apply_failure_publishes_unapplied_generation() {
+    let (dir, _guard, state) = super::accounts_tests::isolated();
+    let get = json!({"action":"get","target":{"kind":"machine"},"store":"app","paths":["/services/server/port"]});
+    let initial = api::execute(&state, get.clone(), Caller::native()).await;
+    let mut edit = json!({"action":"set","target":{"kind":"machine"},"store":"app","path":"/services/server/port",
+        "value":9981,"expectedRevision":initial["revision"]});
+    let mut events = state.event_bus.subscribe();
+    let refused = api::execute(&state, edit.clone(), Caller::native()).await;
+    assert_eq!(
+        refused["error"]["code"], "confirmation_required",
+        "{refused}"
+    );
+    assert!(events.try_recv().is_err());
+    let id = refused["error"]["proposalId"].as_str().unwrap();
+    state
+        .settings_policy
+        .begin_confirmation(&Caller::native(), id)
+        .unwrap();
+    state
+        .settings_policy
+        .finish_confirmation(&Caller::native(), id, true)
+        .unwrap();
+    edit["approval"] = json!(id);
+    let failed = api::execute(&state, edit, Caller::native()).await;
+    assert_eq!(failed["error"]["code"], "apply_failed", "{failed}");
+    assert_eq!(failed["error"]["persisted"], true);
+    let event = events.try_recv().expect("partial commit must wake readers");
+    let event = serde_json::to_value(event).unwrap();
+    assert_eq!(
+        event["payload"]["generation"],
+        failed["error"]["generation"]
+    );
+    assert_eq!(event["payload"]["applied"], false);
+    assert_eq!(event["payload"]["persisted"], true);
+    assert_eq!(failed["error"]["nextAction"], "get");
+    assert_eq!(failed["error"]["retryable"], false);
+    // The durable write already happened: recover with get, not a second set.
+    let readback = api::execute(&state, get, Caller::native()).await;
+    assert_eq!(readback["values"]["/services/server/port"]["stored"], 9981);
+    assert_ne!(readback["revision"], initial["revision"]);
+    let disk: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(dir.path().join("config.json")).unwrap()).unwrap();
+    assert_eq!(disk["services"]["server"]["port"], 9981);
+    assert!(
+        events.try_recv().is_err(),
+        "readback must not replay the mutation"
+    );
+}
+
+// Catches: refused or unchanged requests waking readers as if they durably changed settings.
+#[tokio::test]
+async fn rejected_and_noop_settings_edits_publish_nothing() {
+    let (dir, _guard, state) = super::accounts_tests::isolated();
+    std::fs::write(
+        dir.path().join("prompt-library.json"),
+        json!({"prompts":[{"id":"fixture","label":"Fixture","text":"unchanged","pinned":false}]})
+            .to_string(),
+    )
+    .unwrap();
+    let initial = api::execute(
+        &state,
+        json!({"action":"get","target":{"kind":"instance"},
+        "store":"prompts","paths":["/prompts"]}),
+        Caller::native(),
+    )
+    .await;
+    let mut events = state.event_bus.subscribe();
+    let rejected = api::execute(
+        &state,
+        json!({"action":"set","target":{"kind":"instance"},
+        "store":"prompts","expectedRevision":initial["revision"],"path":"/unknown","value":true}),
+        Caller::native(),
+    )
+    .await;
+    assert!(rejected.get("error").is_some(), "{rejected}");
+    assert!(events.try_recv().is_err());
+    let unchanged = api::execute(
+        &state,
+        json!({"action":"set","target":{"kind":"instance"},
+        "store":"prompts","expectedRevision":initial["revision"],"path":"/prompts/fixture/text","value":"unchanged"}),
+        Caller::native(),
+    )
+    .await;
+    assert_eq!(unchanged["persisted"], false, "{unchanged}");
+    assert!(events.try_recv().is_err());
+}
+
+// Catches: registered plugin shortcuts staying unavailable, or unloaded shortcuts remaining selectable.
+#[tokio::test]
+async fn frontend_plugin_actions_reach_keybinding_owner_choices() {
+    let (_dir, _guard, state) = super::accounts_tests::isolated();
+    let refresh = json!({"action":"refresh","target":{"kind":"instance"},"store":"keybindings",
+        "paths":["/bindings/terminal-copy/action"]});
+    let mut events = state.event_bus.subscribe();
+    let publish = api::execute(
+        &state,
+        json!({"action":"publish_plugin_keybinding_actions",
+        "actions":["plugin:fixture:run"]}),
+        Caller::native(),
+    )
+    .await;
+    assert_eq!(publish["persisted"], false, "{publish}");
+    let choices = api::execute(&state, refresh.clone(), Caller::native()).await;
+    let values = choices["choices"]["/bindings/terminal-copy/action"]["values"]
+        .as_array()
+        .expect("available owner actions");
+    assert!(values.contains(&json!("plugin:fixture:run")), "{choices}");
+    assert!(
+        values.contains(&json!(super::keybindings::actions()[0])),
+        "{choices}"
+    );
+    let clear = api::execute(
+        &state,
+        json!({"action":"publish_plugin_keybinding_actions","actions":[]}),
+        Caller::native(),
+    )
+    .await;
+    assert_eq!(clear["applied"], true);
+    let removed = api::execute(&state, refresh, Caller::native()).await;
+    assert!(
+        !removed["choices"]["/bindings/terminal-copy/action"]["values"]
+            .as_array()
+            .unwrap()
+            .contains(&json!("plugin:fixture:run"))
+    );
+    assert!(
+        events.try_recv().is_err(),
+        "runtime registrations must not look like durable settings edits"
+    );
 }
