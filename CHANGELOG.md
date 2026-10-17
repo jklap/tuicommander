@@ -57,6 +57,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- Require authenticated same-owner peers in the relay prototype and atomically enforce room and token capacity, while allowing the second peer at the room limit; terminate expired sockets and prevent stale peers from accessing recreated rooms (#1932-8398).
+
+### Fixed
 - Restore Edge spoken replies after the service migration with the new endpoint and the live-verified existing v1 GEC handshake (#1952-bf91).
 
 - Recover failed mobile views after a server outage through automatic or manual retry, without false empty/setup states, raw network errors or desktop restart advice (#1930-f4c2).
