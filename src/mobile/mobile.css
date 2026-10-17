@@ -1,3 +1,5 @@
+@import "../styles/chat-tokens.css";
+
 /* TUICommander PWA — Standalone global styles.
  * Isolated from the desktop global.css to allow independent evolution.
  */

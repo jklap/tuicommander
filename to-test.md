@@ -1,3 +1,8 @@
+## Mobile session Chat appearance (1974-e6ae)
+
+- [ ] After the Mac unlocks, capture `src/__tests__/browser/sessionChatAppearance.html` on isolated worktree Vite: desktop at 1000×900 and `?mobile` at 360×800, 390×844 and 430×900; repeat with `theme=light` (Commander dark and Paper light). Compare baseline `ea8c46bed6` and the 1974 commit side by side. Copy only the layout fixture into the baseline checkout; keep its baseline production CSS. The fixture uses real session transcript/switch/input components and synthetic text, not an agent transport.
+- [ ] Inspect the real mobile session detail Chat after integration: user prompt tint, folded tools, answer card, hint and existing composer in both themes. Verify send, scroll, CLI/Chat switching and answering remain usable on a phone; no touch or screenshot evidence is claimed by the static checks.
+
 ## Relay room expiration (1932-8398) — standalone relay rebuild required
 
 - [x] Expired peers cannot forward into a recreated room, remove replacement peers, or refresh their activity; idle socket readers terminate. _(verified: Linux rb targeted relay tests, including different-owner and same-owner room reuse and stale channel identity.)_ Rebuild and restart any separately deployed `tuic-relay` binary to load this fix. This is not a desktop backend edit; no live TUIC restart is needed or performed.
