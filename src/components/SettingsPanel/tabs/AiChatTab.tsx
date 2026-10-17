@@ -1,7 +1,8 @@
-import { type Component, createSignal, For, Match, onMount, Show, Switch } from "solid-js";
+import { type Component, createSignal, For, Match, onCleanup, onMount, Show, Switch } from "solid-js";
 import { t } from "../../../i18n";
 import { type EgoCliClient, egoCli } from "../../../services/egoCli";
 import { startEgoLogin } from "../../../services/egoLogin";
+import { settingsRefresh } from "../../../services/settingsRefresh";
 import { appLogger } from "../../../stores/appLogger";
 import { toastsStore } from "../../../stores/toasts";
 import type { EgoCliError, EgoCredential, EgoProviders } from "../../../types/ego";
@@ -73,6 +74,17 @@ export const AiChatTab: Component<{
 			setBusy(false);
 		}
 	};
+
+	onCleanup(
+		settingsRefresh.register({
+			section: "ego",
+			read: () => client().providers(false),
+			apply: (snapshot) => {
+				setData(snapshot);
+				setError(null);
+			},
+		}),
+	);
 
 	onMount(() => {
 		void attempt(() => client().providers(false));

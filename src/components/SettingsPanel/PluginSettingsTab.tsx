@@ -8,8 +8,10 @@ import {
 	onCleanup,
 	Show,
 	Suspense,
+	untrack,
 } from "solid-js";
 import { invoke } from "../../invoke";
+import { reportSettingsConflicts, settingsRefresh } from "../../services/settingsRefresh";
 import { pluginStore } from "../../stores/pluginStore";
 import { Input } from "../ui/Input";
 import { Select } from "../ui/Select";
@@ -26,7 +28,7 @@ interface Snapshot {
 
 /** Persistence and validation remain in the existing scoped Rust settings service. */
 export const PluginSettingsTab: Component<{ page: PluginSettingsPage }> = (props) => {
-	const [snapshot, { refetch }] = createResource(
+	const [snapshot, { refetch, mutate }] = createResource(
 		() => props.page,
 		(page) =>
 			invoke<Snapshot>("plugin_settings_action", {
@@ -34,6 +36,21 @@ export const PluginSettingsTab: Component<{ page: PluginSettingsPage }> = (props
 				action: { action: "get", paths: page.fields.map((field) => field.path) },
 			}),
 	);
+	createEffect(() => {
+		const page = props.page;
+		onCleanup(
+			settingsRefresh.register({
+				section: `plugins.${page.id}`,
+				read: () =>
+					invoke<Snapshot>("plugin_settings_action", {
+						pluginId: page.id,
+						action: { action: "get", paths: page.fields.map((field) => field.path) },
+					}),
+				apply: mutate,
+			}),
+		);
+	});
+
 	const [busy, setBusy] = createSignal(false);
 	const [message, setMessage] = createSignal("");
 	let disposed = false;
@@ -158,13 +175,17 @@ const PluginField: Component<{
 	const [draft, setDraft] = createSignal("");
 	const [invalid, setInvalid] = createSignal(false);
 	const [dirty, setDirty] = createSignal(false);
+	let acknowledged = props.value;
 	createEffect(() => {
+		const incoming = props.value;
+		const changed = JSON.stringify(incoming) !== JSON.stringify(acknowledged);
+		acknowledged = incoming;
+		if (untrack(dirty)) {
+			if (changed) reportSettingsConflicts(["draft"]);
+			return;
+		}
 		setDraft(
-			secret()
-				? ""
-				: props.field.schema.type === "array"
-					? JSON.stringify(props.value ?? [])
-					: String(props.value ?? ""),
+			secret() ? "" : props.field.schema.type === "array" ? JSON.stringify(incoming ?? []) : String(incoming ?? ""),
 		);
 		setInvalid(false);
 		setDirty(false);
@@ -179,7 +200,10 @@ const PluginField: Component<{
 				value = Number(draft());
 			}
 			setInvalid(false);
-			if (secret() || JSON.stringify(value) !== JSON.stringify(props.value)) props.onWrite(value);
+			if (secret() || JSON.stringify(value) !== JSON.stringify(props.value)) {
+				props.onWrite(value);
+				setDirty(false);
+			}
 		} catch {
 			setInvalid(true);
 		}

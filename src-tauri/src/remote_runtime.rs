@@ -624,6 +624,17 @@ fn publish(state: &Arc<AppState>, status: &RemoteConnectionStatus) {
     let _ = payload;
 }
 
+/// Reannounce this connected owner's stream epoch so consumers discard missed hints.
+/// Take the snapshot before publishing; no runtime map guard crosses the emit.
+pub(crate) fn resync_connected(state: &Arc<AppState>, id: &str) {
+    let status = state.remote.entries.get(id).map(|entry| entry.snapshot(id));
+    if let Some(status) = status
+        && status.status == RemoteStatus::Connected
+    {
+        publish(state, &status);
+    }
+}
+
 /// What the daemon says when the credential is wrong, in the one place both
 /// callers read it from.
 const REJECTED_CREDENTIALS: &str =

@@ -261,12 +261,12 @@ Right-click an HTTP(S) terminal link (including localhost) and choose **Start in
 
 ### 1.10 Move Terminal to Worktree
 
-MCP worktree creation without an explicit session spawn places only its
-same-repository caller in the new workspace. Agents working through `git -C`
-can declare an existing worktree with `session action=declare_worktree
-worktree_path=/absolute/path`. The backend validates ownership, moves only the
-caller and persists the association through restart. Shell cwd and other tabs
-remain unchanged. See [MCP backend](backend/mcp-http.md).
+MCP worktree creation registers the new workspace without moving a caller whose
+cwd is outside it. Agents working through `git -C` can record an association with
+`session action=declare_worktree worktree_path=/absolute/path`. That association
+does not override cwd for tab placement or removal. Removing or recycling a
+worktree closes only terminals whose current cwd lies inside it; unrelated tabs
+filed under a stale workspace survive and are re-homed. See [MCP backend](backend/mcp-http.md).
 
 - Right-click a terminal tab → "Move to Worktree" submenu lists available worktrees (excluding the current one)
 - Selecting a worktree sends `cd` to the PTY; OSC 7 auto-reassigns the terminal to the target branch
@@ -3174,6 +3174,10 @@ Telegram Settings includes a newest-first, process-local log of the last 20 inbo
 Telegram replies now use TUIC-driven receipt (👀), working (👨‍💻), waiting (🤔), answered (👍) and failed (👎) reactions. An ephemeral native draft shows Italian status lines or unapproved agent previews; it refreshes while work continues and the final reply replaces it. Acknowledgement of work requires inbox Read and a new recipient turn. PTY intent/activity and AI Chat assistant chunks share request correlation; finish remains authoritative after draft retirement. Telegram-mail-woken AI Chat turns automatically send their settled assistant text if finish has not answered. Queue and no-reply notices occur at ten minutes and sixty seconds after Read respectively. Restart keeps no request history. Phone rendering requires a live check after the backend restart.
 
 Terminal text fidelity: soft-wrap rows preserve original spaces in session text, mobile CLI output, copied selections and ego question labels; explicit hard breaks remain. Chat uses its separate transcript source.
+
+### Settings MCP live refresh
+
+Durable settings-facade writes publish a value-free process-local generation to desktop and SSE clients. Open settings consumers reread affected sections without saving; dirty edits survive, stale reads are discarded, and reconnect refetches snapshots. Vault-only credential writes and persisted apply failures also invalidate readers. Remote notices remain scoped to their owning connection.
 
 ### CircleCI Settings owner (#1991-bd88)
 

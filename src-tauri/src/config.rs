@@ -2990,6 +2990,7 @@ fn commit_config_change_locked(
     // remember to — and the relay toggle silently needing an app restart is
     // exactly what that costs.
     crate::relay_client::notify_config_changed(state);
+    crate::settings::api::publish_change(state, "app", !effects.server_changed);
     #[cfg(feature = "desktop")]
     if let Some(app) = state.app_handle.read().as_ref() {
         crate::background_mode::tray::desktop::schedule_sync(app);
@@ -3357,7 +3358,6 @@ pub(crate) fn load_notification_config() -> NotificationConfig {
     load_json_config(NOTIFICATION_CONFIG_FILE)
 }
 
-#[cfg_attr(feature = "desktop", tauri::command)]
 pub(crate) fn save_notification_config(
     base: NotificationConfig,
     config: NotificationConfig,
@@ -3372,7 +3372,6 @@ pub(crate) fn load_ui_prefs() -> UIPrefsConfig {
     load_json_config(UI_PREFS_FILE)
 }
 
-#[cfg_attr(feature = "desktop", tauri::command)]
 pub(crate) fn save_ui_prefs(base: UIPrefsConfig, config: UIPrefsConfig) -> Result<(), String> {
     let file: ConfigFile<UIPrefsConfig> = ConfigFile::new(UI_PREFS_FILE);
     file.save_delta(&base, &config)
@@ -3384,7 +3383,6 @@ pub(crate) fn load_repo_settings() -> RepoSettingsMap {
     load_json_config(REPO_SETTINGS_FILE)
 }
 
-#[cfg_attr(feature = "desktop", tauri::command)]
 pub(crate) fn save_repo_settings(
     base: RepoSettingsMap,
     config: RepoSettingsMap,
@@ -3586,7 +3584,6 @@ pub(crate) fn load_repo_defaults() -> RepoDefaultsConfig {
     load_json_config(REPO_DEFAULTS_FILE)
 }
 
-#[cfg_attr(feature = "desktop", tauri::command)]
 pub(crate) fn save_repo_defaults(
     base: RepoDefaultsConfig,
     config: RepoDefaultsConfig,
@@ -4134,6 +4131,7 @@ pub(crate) fn save_repositories(
     let changed = save_repositories_request(config).map_err(|error| error.to_string())?;
     if changed {
         state.notify_repositories_changed();
+        crate::settings::api::publish_change(&state, "repositories_registration", true);
     }
     Ok(())
 }
@@ -4483,7 +4481,6 @@ pub(crate) fn load_pane_layout() -> serde_json::Value {
     load_json_config(PANE_LAYOUT_FILE)
 }
 
-#[cfg_attr(feature = "desktop", tauri::command)]
 pub(crate) fn save_pane_layout(
     base: serde_json::Value,
     layout: serde_json::Value,
@@ -4497,7 +4494,6 @@ pub(crate) fn load_prompt_library() -> PromptLibraryConfig {
     load_json_config(PROMPT_LIBRARY_FILE)
 }
 
-#[cfg_attr(feature = "desktop", tauri::command)]
 pub(crate) fn save_prompt_library(
     base: PromptLibraryConfig,
     config: PromptLibraryConfig,
@@ -4543,7 +4539,6 @@ pub(crate) fn load_keybindings() -> serde_json::Value {
     load_json_config(KEYBINDINGS_FILE)
 }
 
-#[cfg_attr(feature = "desktop", tauri::command)]
 pub(crate) fn save_keybindings(
     base: serde_json::Value,
     config: serde_json::Value,
@@ -4619,7 +4614,6 @@ fn migrate_codex_bypass(config: &mut AgentsConfig) -> bool {
     true
 }
 
-#[cfg_attr(feature = "desktop", tauri::command)]
 pub(crate) fn save_agents_config(base: AgentsConfig, config: AgentsConfig) -> Result<(), String> {
     let file: ConfigFile<AgentsConfig> = ConfigFile::new(AGENTS_CONFIG_FILE);
     file.save_delta(&base, &config)?;

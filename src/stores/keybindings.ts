@@ -1,6 +1,7 @@
 import { createSignal } from "solid-js";
 import { invoke } from "../invoke";
 import { ACTION_NAMES, type ActionName, DEFAULT_BINDINGS, normalizeCombo } from "../keybindingDefaults";
+import { reportSettingsConflicts, settingsRefresh } from "../services/settingsRefresh";
 import { createConfigDeltaWriter } from "../utils/configDeltaWriter";
 import { appLogger } from "./appLogger";
 
@@ -105,7 +106,35 @@ export function createKeybindingsStore() {
 	// Initialize with defaults
 	rebuildMaps({ ...DEFAULT_BINDINGS });
 
+	function applyOverrides(overrides: KeybindingOverride[]): void {
+		userOverrides = new Map();
+		for (const entry of overrides) {
+			if (!entry.action) continue;
+			// Accept both static and plugin: namespaced actions. Dynamic plugin
+			// overrides loaded here will bind once the plugin registers the action
+			// via registerDynamicAction (see rebuild below).
+			if (!(ACTION_NAMES as readonly string[]).includes(entry.action) && !entry.action.startsWith("plugin:")) {
+				continue;
+			}
+			userOverrides.set(entry.action, entry.key);
+		}
+
+		rebuildMaps(getMergedBindings());
+		setVersion((v) => v + 1);
+	}
+
 	return {
+		startRemoteSync(): () => void {
+			return settingsRefresh.register({
+				section: "keybindings",
+				read: () => invoke<KeybindingOverride[]>("load_keybindings"),
+				apply: (overrides) => {
+					const merged = keybindingsWriter.adopt(overrides ?? [], toOverridesArray());
+					applyOverrides(merged.value);
+					reportSettingsConflicts(merged.conflicts);
+				},
+			});
+		},
 		/** Reactivity accessor — read this in createEffect/createMemo to track changes */
 		get version() {
 			return version();
@@ -120,20 +149,7 @@ export function createKeybindingsStore() {
 				hydrated = true;
 				if (!Array.isArray(overrides) || overrides.length === 0) return;
 
-				userOverrides = new Map();
-				for (const entry of overrides) {
-					if (!entry.action) continue;
-					// Accept both static and plugin: namespaced actions. Dynamic plugin
-					// overrides loaded here will bind once the plugin registers the action
-					// via registerDynamicAction (see rebuild below).
-					if (!(ACTION_NAMES as readonly string[]).includes(entry.action) && !entry.action.startsWith("plugin:")) {
-						continue;
-					}
-					userOverrides.set(entry.action, entry.key);
-				}
-
-				rebuildMaps(getMergedBindings());
-				setVersion((v) => v + 1);
+				applyOverrides(overrides);
 			} catch (err) {
 				appLogger.error("config", "Failed to load keybindings overrides — persistence disabled for this session", err);
 				// Keep defaults; hydrated stays false so save() cannot clobber the file

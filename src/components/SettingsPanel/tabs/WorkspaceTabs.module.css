@@ -21,9 +21,10 @@
 .shortcutCategory td:first-child { order: 1; flex: 1; min-width: 0; }
 
 @media (max-width: 700px) {
-  .shortcutCategory tr { align-items: flex-start; flex-direction: column; gap: 4px; }
+  .shortcutCategory tr { align-items: flex-start; flex-direction: column; gap: 4px; padding: 12px 0; }
+  .shortcutCategory .shortcuts td { padding: 0 !important; }
   .shortcutCategory td:last-child { order: 2; flex-basis: auto; width: 100% !important; }
-  .shortcutCategory td:first-child { order: 1; }
+  .shortcutCategory td:first-child { order: 1; flex: none; }
 }
 
 .shortcutHeading { margin: 0; font-size: 15px; }

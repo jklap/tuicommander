@@ -428,8 +428,10 @@ MCP callers can declare an existing linked worktree through
 `session action=declare_worktree worktree_path=/absolute/path`. Ownership comes
 from the immutable PTY launch directory and registered Git worktrees. The
 caller-only association persists under stable `TUIC_SESSION`, survives restart
-and does not change shell cwd or acquire cleanup ownership. MCP creation
-without a session spawn also places only the same-repository creator.
+and does not change shell cwd or acquire cleanup ownership. Tab placement follows
+cwd, not this association, during creation, OSC 7, reconnect and restore. Removing
+or recycling a worktree closes only terminals whose current cwd lies inside that
+checkout. A stale sidebar membership never authorizes closing an unrelated tab.
 
 
 Every workspace created by TUICommander is a linked Git worktree. Its refs and
@@ -1198,6 +1200,10 @@ The session detail CLI/Chat projection uses the same TerminalChatTranscript and 
 ### Mobile Telegram setup removal (#1976-711e)
 
 Mobile Settings does not mount or offer Telegram setup. Desktop Settings retains the shared Telegram configuration controls and existing backend transports.
+
+### Settings MCP live refresh contract
+
+The shared settings facade publishes `{section, generation, persisted, applied}` after durable writes, including vault-only and partial-persist outcomes. The monotonic counter is process-local, is never persisted, and does not replace owner CAS revisions or hash credentials. Desktop and SSE carry the same value-free payload. Frontend read/apply coordination preserves dirty intent and acknowledged baselines, suppresses obsolete writes and stale reads, scopes remote events by connection, and refetches active owners after reconnect.
 
 ### CircleCI Settings owner (#1991-bd88)
 

@@ -2,10 +2,12 @@ import QRCode from "qrcode";
 import { type Component, createEffect, createResource, createSignal, For, onCleanup, onMount, Show } from "solid-js";
 import { useConfirmDialog } from "../../../../hooks/useConfirmDialog";
 import { t } from "../../../../i18n";
+import { reportSettingsConflicts, settingsRefresh } from "../../../../services/settingsRefresh";
 import { appLogger } from "../../../../stores/appLogger";
 import { rpc } from "../../../../transport";
 import { cx } from "../../../../utils";
 import { writeClipboard } from "../../../../utils/clipboard";
+import { mergeSettingsSnapshot } from "../../../../utils/mergeSettingsSnapshot";
 import { ConfirmDialog } from "../../../ConfirmDialog";
 import { Input } from "../../../ui/Input";
 import { Select } from "../../../ui/Select";
@@ -119,19 +121,55 @@ export const RemoteAccessPanel: Component = () => {
 			});
 	});
 
+	function formSnapshot() {
+		return {
+			enabled: raEnabled(),
+			port: raPort(),
+			username: raUsername(),
+			tokenDuration: tokenDuration(),
+			ipv6: ipv6Enabled(),
+			relayEnabled: relayEnabled(),
+			relayUrl: relayUrl(),
+			relayToken: relayToken(),
+			relaySessionId: relaySessionId(),
+		};
+	}
+	let acknowledgedForm = formSnapshot();
+	function adoptConfig(config: AppConfig) {
+		const incoming = {
+			enabled: config.services.server.enabled,
+			port: config.services.server.port,
+			username: config.services.auth.username,
+			tokenDuration: config.services.auth.session_token_duration_secs ?? 2592000,
+			ipv6: config.services.server.ipv6_enabled ?? false,
+			relayEnabled: config.services.relay.enabled ?? false,
+			relayUrl: config.services.relay.url || "wss://relay.tuicommander.com",
+			relayToken: config.services.relay.token ?? "",
+			relaySessionId: config.services.relay.session_id ?? "",
+		};
+		const merged = mergeSettingsSnapshot(acknowledgedForm, formSnapshot(), incoming);
+		acknowledgedForm = incoming;
+		const value = merged.value;
+		setRaEnabled(value.enabled);
+		setRaPort(value.port);
+		setRaUsername(value.username);
+		setRaHasPassword(config.services.auth.password_hash.length > 0);
+		setTokenDuration(value.tokenDuration);
+		setIpv6Enabled(value.ipv6);
+		setRelayEnabled(value.relayEnabled);
+		setRelayUrl(value.relayUrl);
+		setRelayToken(value.relayToken);
+		setRelaySessionId(value.relaySessionId);
+		reportSettingsConflicts(merged.conflicts);
+	}
+	onCleanup(
+		settingsRefresh.register({ section: "app", read: () => rpc<AppConfig>("load_config"), apply: adoptConfig }),
+	);
+
 	const loadRemoteConfig = async () => {
 		try {
 			const config = await rpc<AppConfig>("load_config");
-			setRaEnabled(config.services.server.enabled);
-			setRaPort(config.services.server.port);
-			setRaUsername(config.services.auth.username);
-			setRaHasPassword(config.services.auth.password_hash.length > 0);
-			setTokenDuration(config.services.auth.session_token_duration_secs ?? 2592000);
-			setIpv6Enabled(config.services.server.ipv6_enabled ?? false);
-			setRelayEnabled(config.services.relay.enabled ?? false);
-			setRelayUrl(config.services.relay.url || "wss://relay.tuicommander.com");
-			setRelayToken(config.services.relay.token ?? "");
-			setRelaySessionId(config.services.relay.session_id ?? "");
+			adoptConfig(config);
 		} catch (e) {
 			appLogger.warn("config", "Failed to load remote access config, using defaults", e);
 		}
@@ -463,8 +501,7 @@ export const RemoteAccessPanel: Component = () => {
 					</ExpertSetting>
 				</Show>
 			</SectionCard>
-			<SectionCard title="Tailscale HTTPS">
-				<ContextualHelp label="Tailscale HTTPS" />
+			<SectionCard title="Tailscale HTTPS" help={<ContextualHelp label="Tailscale HTTPS" />}>
 				<Show when={!tailscaleState()}>
 					<p class={s.hint}>Tailscale status not checked.</p>
 				</Show>

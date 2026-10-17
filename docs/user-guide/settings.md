@@ -6,7 +6,7 @@ Agents Settings shows the selected machine in the header. Run configuration edit
 
 Workspace pages use the same cards and aligned rows. Terminal retains its live canvas preview and all clipboard and scrollback controls. Keyboard Shortcuts lists actions before their keycaps, with explicit Rebind and Reset actions. Git & GitHub separates authentication, monitoring, repository defaults, worktree defaults, additional accounts, CircleCI, and repository bindings. Existing save boundaries and policy choices are unchanged.
 
-The Application pages use section cards and labelled rows. General keeps its existing update and local-tool actions. Appearance keeps group rename validation and client-local chat preferences. Notifications keeps visual controls available without audio; output-device discovery starts only after **Choose output device**. Changing master volume previews once on release.
+The Application pages use section cards and labelled rows. General places the update status and its check action above the page header. A Local tools card groups TUIC CLI, Code Intelligence, and Custom Launchers. The existing install, update, uninstall, and launcher actions keep their save and confirmation behavior. Appearance keeps group rename validation and client-local chat preferences. Notifications keeps visual controls available without audio; output-device discovery starts only after **Choose output device**. Changing master volume previews once on release.
 
 
 The settings-service policy foundation keeps secrets write-only. Changes that
@@ -636,6 +636,10 @@ values (or a set credential). Plugin management uses compact secondary actions.
 Telegram replies now use TUIC-driven receipt (👀), working (👨‍💻), waiting (🤔), answered (👍) and failed (👎) reactions. An ephemeral native draft shows Italian status lines or unapproved agent previews; it refreshes while work continues and the final reply replaces it. Acknowledgement of work requires inbox Read and a new recipient turn. PTY intent/activity and AI Chat assistant chunks share request correlation; finish remains authoritative after draft retirement. Telegram-mail-woken AI Chat turns automatically send their settled assistant text if finish has not answered. Queue and no-reply notices occur at ten minutes and sixty seconds after Read respectively. Restart keeps no request history. Phone rendering requires a live check after the backend restart.
 
 Settings search includes page titles and shared card controls. Page-title results scroll to the page header; when a page and card share a title, control results use the card. Runtime status badges and summaries are not settings search targets.
+
+### Changes made through MCP
+
+An open Settings page refreshes after a durable MCP settings write. Unsaved fields stay in place; if another writer changes the same field, a warning asks you to review your edit before saving again. Incoming changes do not run startup migrations or save the snapshot back to the backend. A reconnected browser rereads its active settings sections, including after a server restart. Remote-machine changes refresh only that machine's editors, not local settings. If a write persisted but its runtime apply failed, Settings still rereads the saved state; the caller must follow the returned recovery action rather than blindly replay the write.
 
 ### CircleCI Settings owner (#1991-bd88)
 

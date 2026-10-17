@@ -1,8 +1,10 @@
-import { type Component, createSignal, For, onMount, Show } from "solid-js";
+import { type Component, createSignal, For, onCleanup, onMount, Show } from "solid-js";
 import { t } from "../../../i18n";
 import { type EgoPerimeterClient, egoPerimeterCli } from "../../../services/egoCli";
+import { reportSettingsConflicts, settingsRefresh } from "../../../services/settingsRefresh";
 import { appLogger } from "../../../stores/appLogger";
 import { asEgoCliError, type EgoPerimeterView, type EgoRootAccess, type EgoRootsEdit } from "../../../types/ego";
+import { mergeSettingsSnapshot } from "../../../utils/mergeSettingsSnapshot";
 import { Input } from "../../ui/Input";
 import { Select } from "../../ui/Select";
 import { StatusBadge } from "../../ui/StatusBadge";
@@ -42,6 +44,23 @@ export const EgoPerimeterSection: Component<{ client?: EgoPerimeterClient }> = (
 			setBusy(false);
 		}
 	};
+	onCleanup(
+		settingsRefresh.register({
+			section: "ego",
+			read: () => client().perimeter(),
+			apply: (incoming) => {
+				const current = view();
+				const merged = mergeSettingsSnapshot(
+					current?.roots ?? incoming.roots,
+					current ? draft() : incoming.roots,
+					incoming.roots,
+				);
+				setDraft(merged.value);
+				setView(incoming);
+				reportSettingsConflicts(merged.conflicts);
+			},
+		}),
+	);
 	onMount(() => void attempt(() => client().perimeter(), true));
 	const rootsDirty = () => {
 		const saved = view()?.roots;

@@ -1,5 +1,6 @@
 import { type Component, createEffect, createSignal, For, Index, on, onCleanup, Show } from "solid-js";
 import { useConfirmDialog } from "../../../../hooks/useConfirmDialog";
+import { reportSettingsConflicts, settingsRefresh } from "../../../../services/settingsRefresh";
 import { appLogger } from "../../../../stores/appLogger";
 import {
 	rpc,
@@ -8,6 +9,7 @@ import {
 	type UpstreamMcpServer,
 	type UpstreamTransport,
 } from "../../../../transport";
+import { mergeSettingsSnapshot } from "../../../../utils/mergeSettingsSnapshot";
 import { handleOpenUrl } from "../../../../utils/openUrl";
 import { ConfirmDialog } from "../../../ConfirmDialog";
 import { Input } from "../../../ui/Input";
@@ -280,6 +282,24 @@ export const UpstreamMcpPanel: Component = () => {
 	// machine's, so both have to be re-read rather than merged.
 	createEffect(
 		on(machine, () => {
+			onCleanup(
+				settingsRefresh.register({
+					section: "upstreams",
+					connectionId: machine(),
+					read: () => rpc<UpstreamMcpConfig>("load_mcp_upstreams", {}, machine()),
+					apply: (config) => {
+						const edited = config.servers?.find((server) => server.id === editingId());
+						if (edited) {
+							const incoming = serverForm(edited);
+							const merged = mergeSettingsSnapshot(editBase, editForm(), incoming);
+							editBase = incoming;
+							setEditForm(merged.value);
+							reportSettingsConflicts(merged.conflicts);
+						}
+						setUpstreams(config.servers ?? []);
+					},
+				}),
+			);
 			setUpstreams([]);
 			setUpstreamStatus([]);
 			rpc<UpstreamMcpConfig>("load_mcp_upstreams", {}, machine())
@@ -441,10 +461,9 @@ export const UpstreamMcpPanel: Component = () => {
 		}
 	}
 
-	function startEdit(server: UpstreamMcpServer) {
-		setEditingId(server.id);
+	function serverForm(server: UpstreamMcpServer): ReturnType<typeof emptyForm> {
 		const isOAuth = server.auth?.type === "oauth2";
-		setEditForm({
+		return {
 			name: server.name,
 			transportType: server.transport.type,
 			url: server.transport.type === "http" ? server.transport.url : "",
@@ -458,7 +477,14 @@ export const UpstreamMcpPanel: Component = () => {
 			oauthClientId: isOAuth ? (server.auth as { client_id: string }).client_id : "",
 			oauthClientSecret: isOAuth ? ((server.auth as { client_secret?: string }).client_secret ?? "") : "",
 			oauthScopes: isOAuth ? ((server.auth as { scopes?: string[] }).scopes?.join(" ") ?? "") : "",
-		});
+		};
+	}
+
+	let editBase = emptyForm();
+	function startEdit(server: UpstreamMcpServer) {
+		setEditingId(server.id);
+		editBase = serverForm(server);
+		setEditForm(editBase);
 	}
 
 	async function saveEdit(server: UpstreamMcpServer) {
@@ -573,22 +599,23 @@ export const UpstreamMcpPanel: Component = () => {
 
 	return (
 		<div id={SETTINGS_SECTION_UPSTREAM_MCP} class={`${s.section} ${layout.upstreams}`}>
-			<SectionCard title="Upstream MCP Servers">
+			<SectionCard
+				title="Upstream MCP Servers"
+				headingActions={
+					<button
+						class={s.copyBtn}
+						onClick={() => {
+							setShowAdd((v) => !v);
+							setError("");
+						}}
+						title="Add upstream server"
+						style={{ "font-size": "18px", "line-height": 1 }}
+					>
+						{showAdd() ? "−" : "+"}
+					</button>
+				}
+			>
 				<div class={s.group}>
-					{/* A heading, not a label: it is the section search scrolls to (#860-91a0) */}
-					<div class={layout.cardActions}>
-						<button
-							class={s.copyBtn}
-							onClick={() => {
-								setShowAdd((v) => !v);
-								setError("");
-							}}
-							title="Add upstream server"
-							style={{ "font-size": "18px", "line-height": 1 }}
-						>
-							{showAdd() ? "−" : "+"}
-						</button>
-					</div>
 					<p class={s.hint}>
 						Proxy external MCP servers through TUIC. Their tools appear prefixed as <code>{"{name}__{tool}"}</code>.
 					</p>

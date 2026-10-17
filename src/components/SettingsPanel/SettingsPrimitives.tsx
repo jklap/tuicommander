@@ -15,7 +15,7 @@ export function SettingPageHeader(props: {
 	breadcrumb?: string;
 }) {
 	return (
-		<>
+		<div>
 			<Show when={props.breadcrumb}>
 				<div class={s.breadcrumb}>{props.breadcrumb}</div>
 			</Show>
@@ -35,20 +35,28 @@ export function SettingPageHeader(props: {
 					{props.actions}
 				</div>
 			</header>
-		</>
+		</div>
 	);
 }
 
 export function SectionCard(props: {
 	title: string;
 	description?: string;
+	help?: JSX.Element;
+	headingActions?: JSX.Element;
 	actions?: JSX.Element;
 	children: JSX.Element;
 }) {
 	const id = createUniqueId();
 	return (
 		<section class={s.card} aria-labelledby={id}>
-			<h3 id={id}>{props.title}</h3>
+			<div class={s.cardHeading}>
+				<h3 id={id}>{props.title}</h3>
+				{props.help}
+				<Show when={props.headingActions}>
+					<div class={`${s.actions} ${s.headingActions}`}>{props.headingActions}</div>
+				</Show>
+			</div>
 			<Show when={props.description}>
 				<p class={s.description}>{props.description}</p>
 			</Show>
@@ -94,6 +102,8 @@ export function StatusSummary(props: {
 	tone?: "success" | "warning" | "error";
 	source: string;
 	freshness?: string;
+	details?: JSX.Element;
+	actions?: JSX.Element;
 	children?: JSX.Element;
 }) {
 	return (
@@ -104,8 +114,12 @@ export function StatusSummary(props: {
 					{props.source}
 					<Show when={props.freshness}> · {props.freshness}</Show>
 				</p>
+				{props.details}
 			</div>
 			{props.children}
+			<Show when={props.actions}>
+				<div class={s.actions}>{props.actions}</div>
+			</Show>
 		</div>
 	);
 }
