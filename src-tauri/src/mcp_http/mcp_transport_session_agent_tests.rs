@@ -4947,7 +4947,6 @@ async fn lost_launch_reply_reuses_the_same_child() {
     );
 }
 
-
 // Catches: output chunks recapture a moving ring instead of completing the retained snapshot.
 #[test]
 fn budgeted_terminal_output_snapshot_survives_concurrent_output() {

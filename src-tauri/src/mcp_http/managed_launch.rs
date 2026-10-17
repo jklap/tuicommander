@@ -23,7 +23,15 @@ pub(super) fn launch(
     origin: Option<&str>,
     input: Launch<'_>,
 ) -> Value {
-    let Launch { profile, name, prompt, workspace, owner_scope, idempotency_key, keep_open } = input;
+    let Launch {
+        profile,
+        name,
+        prompt,
+        workspace,
+        owner_scope,
+        idempotency_key,
+        keep_open,
+    } = input;
     let parent = origin.and_then(|origin| {
         state
             .mcp

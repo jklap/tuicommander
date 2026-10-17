@@ -170,7 +170,10 @@ async fn launch_transaction_owned_prompt_timeout_reports_blocked_without_requeue
     assert_eq!(after["status"], "blocked", "{after}");
     assert_eq!(after["prompt_delivery"], "queued");
     assert_eq!(after["ready"], false);
-    assert_eq!(after["reason"], "initial prompt delivery timed out; prompt remains queued");
+    assert_eq!(
+        after["reason"],
+        "initial prompt delivery timed out; prompt remains queued"
+    );
     assert_eq!(after["session_id"], first["session_id"]);
     assert_eq!(queued, 1);
     assert_eq!(children, 1);
