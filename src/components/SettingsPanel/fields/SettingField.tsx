@@ -25,8 +25,10 @@ export const SettingField: Component<
 			when={props.row}
 			fallback={
 				<div class={s.group}>
-					<label for={id}>{props.label}</label>
-					{props.help || <ContextualHelp label={props.label} hint={props.hint} />}
+					<div class={s.helpLabel}>
+						<label for={id}>{props.label}</label>
+						{props.help || <ContextualHelp label={props.label} hint={props.hint} />}
+					</div>
 					{props.children(id, descriptionId(), descriptionId)}
 					<Show when={props.hint}>
 						<p id={`${id}-hint`} class={s.hint}>
@@ -43,8 +45,10 @@ export const SettingField: Component<
 		>
 			<div class={s.settingRow}>
 				<div class={s.settingRowText}>
-					<label for={id}>{props.label}</label>
-					{props.help || <ContextualHelp label={props.label} hint={props.hint} />}
+					<div class={s.helpLabel}>
+						<label for={id}>{props.label}</label>
+						{props.help || <ContextualHelp label={props.label} hint={props.hint} />}
+					</div>
 					<Show when={props.hint}>
 						<p id={`${id}-hint`} class={s.hint}>
 							{props.hint}

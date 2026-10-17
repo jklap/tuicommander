@@ -28,8 +28,10 @@ export const RepoScriptsTab: Component<RepoTabProps> = (props) => {
 		<div class={`${s.section} ${r.page}`}>
 			<SectionCard title={t("repoScripts.heading.designMode", "Design Mode")}>
 				<div class={s.group}>
-					<label for="repo-dev-server-url">{t("repoScripts.label.devServerUrl", "Dev Server URL")}</label>
-					<ContextualHelp label={t("repoScripts.label.devServerUrl", "Dev Server URL")} />
+					<div class={s.helpLabel}>
+						<label for="repo-dev-server-url">{t("repoScripts.label.devServerUrl", "Dev Server URL")}</label>
+						<ContextualHelp label={t("repoScripts.label.devServerUrl", "Dev Server URL")} />
+					</div>
 					<Input
 						id="repo-dev-server-url"
 						type="url"
@@ -50,8 +52,10 @@ export const RepoScriptsTab: Component<RepoTabProps> = (props) => {
 				description="Scripts run locally and are never included in team exports. Empty fields inherit the global script."
 			>
 				<div class={s.group}>
-					<label for="repo-setup-script">{t("repoScripts.label.setupScript", "Setup Script")}</label>
-					<ContextualHelp label={t("repoScripts.label.setupScript", "Setup Script")} />
+					<div class={s.helpLabel}>
+						<label for="repo-setup-script">{t("repoScripts.label.setupScript", "Setup Script")}</label>
+						<ContextualHelp label={t("repoScripts.label.setupScript", "Setup Script")} />
+					</div>
 					<Textarea
 						id="repo-setup-script"
 						value={props.settings.setupScript ?? ""}
@@ -71,8 +75,10 @@ export const RepoScriptsTab: Component<RepoTabProps> = (props) => {
 				</div>
 
 				<div class={s.group}>
-					<label for="repo-run-script">{t("repoScripts.label.runScript", "Run Script")}</label>
-					<ContextualHelp label={t("repoScripts.label.runScript", "Run Script")} />
+					<div class={s.helpLabel}>
+						<label for="repo-run-script">{t("repoScripts.label.runScript", "Run Script")}</label>
+						<ContextualHelp label={t("repoScripts.label.runScript", "Run Script")} />
+					</div>
 					<Textarea
 						id="repo-run-script"
 						value={props.settings.runScript ?? ""}
@@ -92,8 +98,10 @@ export const RepoScriptsTab: Component<RepoTabProps> = (props) => {
 				</div>
 
 				<div class={s.group}>
-					<label for="repo-archive-script">{t("repoScripts.label.archiveScript", "Archive Script")}</label>
-					<ContextualHelp label={t("repoScripts.label.archiveScript", "Archive Script")} />
+					<div class={s.helpLabel}>
+						<label for="repo-archive-script">{t("repoScripts.label.archiveScript", "Archive Script")}</label>
+						<ContextualHelp label={t("repoScripts.label.archiveScript", "Archive Script")} />
+					</div>
 					<Textarea
 						id="repo-archive-script"
 						value={props.settings.archiveScript ?? ""}
