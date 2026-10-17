@@ -1364,30 +1364,50 @@ export function createGridRenderer(ctx: GridContext2D, deps: GridRendererDeps): 
 		}
 	}
 
+	// Display slots last painted by this renderer. A projection change invalidates
+	// only slots whose backend owner or omitted marker span changed.
+	let paintedLayout: Map<number, string> | undefined;
+
 	function paintGrid(rowMap: Map<number, DecodedRow>, m: CellMetrics, opts: PaintGridOptions): void {
 		const projection = opts.projection ?? new ViewportProjection(rowMap, opts.hiddenRows, opts.hiddenAnswerMarkers);
 		const fontFamily = deps.getFontFamily();
 		const w = ctx.canvas.width / m.dpr;
-		if (opts.fullRepaint || !opts.dirtyIndices || projection.hidden.size > 0) {
-			// Full repaint: clear canvas + paint all rows (include gutter area)
+		const layout = new Map<number, string>();
+		const displayRows = new Map<number, DecodedRow>();
+		for (const [index, row] of rowMap) {
+			const display = projection.displayRow(index);
+			if (display === null) continue;
+			layout.set(display, `${index}:${projection.rowLayoutKey(index)}`);
+			displayRows.set(display, row);
+		}
+		if (opts.fullRepaint || !opts.dirtyIndices) {
 			const h = ctx.canvas.height / m.dpr;
 			ctx.fillStyle = cachedBgDefault;
 			ctx.fillRect(-GUTTER_PX, 0, w, h);
-			for (const [, row] of rowMap) {
-				const display = projection.projectRow(row);
-				if (display) paintRow(display, display.index * m.cellHeight, m, fontFamily);
+			for (const [, row] of displayRows) {
+				const display = projection.projectRow(row)!;
+				paintRow(display, display.index * m.cellHeight, m, fontFamily);
 			}
 		} else {
-			// Incremental: repaint only dirty text rows (overlay handles cursor/selection/search)
-			for (const idx of opts.dirtyIndices) {
-				const y = idx * m.cellHeight;
+			const dirtySlots = new Set<number>();
+			for (const index of opts.dirtyIndices) {
+				const display = projection.displayRow(index);
+				if (display !== null) dirtySlots.add(display);
+			}
+			if (paintedLayout) {
+				for (const [slot, key] of paintedLayout) if (layout.get(slot) !== key) dirtySlots.add(slot);
+				for (const [slot, key] of layout) if (paintedLayout.get(slot) !== key) dirtySlots.add(slot);
+			}
+			for (const slot of dirtySlots) {
+				const y = slot * m.cellHeight;
 				ctx.fillStyle = cachedBgDefault;
 				ctx.fillRect(-GUTTER_PX, y, w, m.cellHeight);
-				const row = rowMap.get(idx);
+				const row = displayRows.get(slot);
 				const display = row && projection.projectRow(row);
-				if (display) paintRow(display, display.index * m.cellHeight, m, fontFamily);
+				if (display) paintRow(display, y, m, fontFamily);
 			}
 		}
+		paintedLayout = layout;
 	}
 
 	function setTheme(bgDefault: string, fgDefault: string, neutralSurface = bgDefault): void {

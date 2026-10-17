@@ -59,12 +59,14 @@ describe("viewport projection", () => {
 	});
 	it("maps pointer and inclusive selection boundaries across the omitted wide marker", () => {
 		// Catches: marker spacer or protocol trailing space leaving three blank columns.
-		const { rows, projection, answer } = recorded();
+		const { rows, projection, answer, plan } = recorded();
+		// The recorded prompt quotes suggest rows 16/17; prompt ownership keeps them visible.
+		expect([...hiddenMarkerRows(plan.blocks)]).toEqual([22, 23]);
 		expect(projection.toDisplay(answer, 2)).toBeNull();
 		expect(projection.toDisplay(answer, 3)).toBeNull();
 		expect(projection.toDisplay(answer, 4)).toBeNull();
 		const point = projection.toDisplay(answer, 5)!;
-		expect(point).toEqual({ row: answer - 2, col: 2 });
+		expect(point).toEqual({ row: answer, col: 2 });
 		expect(projection.toBackend(point.row, 2)).toEqual({ row: answer, col: 5 });
 		expect(projection.displayCol(answer, 2)).toBe(2);
 		expect(projection.displayCol(answer, 5)).toBe(2);
@@ -95,13 +97,13 @@ describe("viewport projection", () => {
 			metrics,
 			projection,
 		);
-		expect(fillRect).toHaveBeenCalledWith(20, (answer - 2) * 20, 30, 20);
+		expect(fillRect).toHaveBeenCalledWith(20, answer * 20, 30, 20);
 		expect(selection.start).toEqual({ row: absolute, col: 5 });
 		expect(selection.getLocalText((abs) => rows.get(abs - absolute + answer) ?? null)).toBe("The");
 		const search = createCanvasSearchController();
 		search.replace([{ row: absolute, col_start: 5, col_end: 8 }]);
 		paintSearchHighlights(search, (row) => selectionRowToViewport(vp, row), ctx, metrics, projection);
-		expect(fillRect).toHaveBeenCalledWith(20, (answer - 2) * 20, 30, 20);
+		expect(fillRect).toHaveBeenCalledWith(20, answer * 20, 30, 20);
 		const input = document.createElement("input");
 		const renderer = createGridRenderer(ctx, { fontWeight: () => 400, getFontFamily: () => "monospace" });
 		paintCursor(
@@ -118,7 +120,7 @@ describe("viewport projection", () => {
 			projection,
 		);
 		expect(input.style.left).toBe("26px");
-		expect(input.style.top).toBe(`${(answer - 2) * 20}px`);
+		expect(input.style.top).toBe(`${answer * 20}px`);
 		fillRect.mockClear();
 		const hidden = [...projection.hidden][0];
 		paintCursor(
