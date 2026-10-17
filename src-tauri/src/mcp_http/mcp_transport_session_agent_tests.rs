@@ -4920,3 +4920,43 @@ fn budgeted_terminal_output_snapshot_survives_concurrent_output() {
     );
     assert!(missing.get("error").is_some());
 }
+
+// Catches: live inventory drops the backend activity timestamp and leaves compact activity unknown.
+#[tokio::test]
+async fn session_inventory_exposes_activity_timestamp_and_compact_age() {
+    let state = test_state();
+    let created = handle_session(&state, &serde_json::json!({"action":"create"}), None);
+    if created.get("error").is_some() {
+        return;
+    }
+    let id = created["session_id"].as_str().unwrap();
+    state.session_maps.session_states.insert(
+        id.into(),
+        crate::state::SessionState {
+            last_activity_ms: 1,
+            ..Default::default()
+        },
+    );
+    let full = handle_session(
+        &state,
+        &serde_json::json!({"action":"list","session_id":id}),
+        None,
+    );
+    let compact = handle_session(
+        &state,
+        &serde_json::json!({"action":"list","session_id":id,"compact":true}),
+        None,
+    );
+    handle_session(
+        &state,
+        &serde_json::json!({"action":"kill","session_id":id}),
+        None,
+    );
+    assert_eq!(full[0]["last_activity_ms"], 1);
+    assert!(
+        compact[0]["activity_age_ms"]
+            .as_u64()
+            .is_some_and(|age| age > 0),
+        "{compact}"
+    );
+}

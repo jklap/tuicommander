@@ -6092,3 +6092,97 @@ fn compact_inventory_keeps_unknown_state_and_scoped_recipient_errors() {
     );
     assert!(missing.get("error").is_some());
 }
+
+// Catches: two snapshot acknowledgements subtract the same historical loss count from newer losses.
+#[test]
+fn overlapping_inbox_snapshots_do_not_erase_new_eviction_losses() {
+    for legacy_first in [false, true] {
+        let state = test_state();
+        register_peer(&state, TEST_UUID_A, "overlap", "mcp-overlap");
+        let push = |index: usize| {
+            state.push_agent_inbox(
+                TEST_UUID_A,
+                crate::state::AgentMessage {
+                    id: format!("message-{index}"),
+                    from_tuic_session: "lead".into(),
+                    from_name: "lead".into(),
+                    content: "x".repeat(1800),
+                    timestamp: index as u64 + 1,
+                    delivered_via_channel: false,
+                },
+            );
+        };
+        for index in 0..105 {
+            push(index);
+        }
+        let args = serde_json::json!({"action":"inbox","limit":1,"since":0,"byte_budget":1024});
+        let first_a = handle_messaging(&state, &args, Some("mcp-overlap"));
+        let first_b = handle_messaging(&state, &args, Some("mcp-overlap"));
+        let finish = |mut page: serde_json::Value| {
+            while !page["continuation"].is_null() {
+                let mut request = args.clone();
+                request["continuation"] = page["continuation"].clone();
+                page = handle_messaging(&state, &request, Some("mcp-overlap"));
+                assert!(page.get("error").is_none(), "{page}");
+            }
+        };
+        if legacy_first {
+            let legacy = handle_messaging(
+                &state,
+                &serde_json::json!({"action":"inbox","limit":1}),
+                Some("mcp-overlap"),
+            );
+            assert_eq!(legacy["missed_count"], 5);
+        } else {
+            finish(first_a.clone());
+        }
+        // The first eviction is the message acknowledged by A; the other two are unread losses.
+        for index in 105..108 {
+            push(index);
+        }
+        if legacy_first {
+            finish(first_a);
+        }
+        finish(first_b);
+        let next = handle_messaging(
+            &state,
+            &serde_json::json!({"action":"inbox","limit":1}),
+            Some("mcp-overlap"),
+        );
+        assert_eq!(
+            next["missed_count"], 2,
+            "B must not erase losses that occurred after capture"
+        );
+    }
+}
+
+// Catches: unsupported wait budgets are silently ignored after the wait consumes the oversized mail.
+#[tokio::test]
+async fn agent_wait_rejects_byte_budget_before_consuming_mail() {
+    let state = test_state();
+    register_peer(&state, TEST_UUID_A, "wait-budget", "mcp-wait-budget");
+    state.push_agent_inbox(
+        TEST_UUID_A,
+        crate::state::AgentMessage {
+            id: "wait-large".into(),
+            from_tuic_session: "lead".into(),
+            from_name: "lead".into(),
+            content: "x".repeat(2000),
+            timestamp: 1000,
+            delivered_via_channel: false,
+        },
+    );
+    let result = handle_agent_wait(
+        &state,
+        &serde_json::json!({"action":"wait","byte_budget":1024}),
+        Some("mcp-wait-budget"),
+    )
+    .await;
+    assert_eq!(result["error"], "wait_byte_budget_unsupported");
+    let unread = handle_messaging(
+        &state,
+        &serde_json::json!({"action":"inbox"}),
+        Some("mcp-wait-budget"),
+    );
+    assert_eq!(unread["messages"][0]["id"], "wait-large");
+}

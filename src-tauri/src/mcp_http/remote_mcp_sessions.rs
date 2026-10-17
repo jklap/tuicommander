@@ -74,11 +74,14 @@ pub(super) fn resolve(state: &AppState, args: &Value) -> Option<Result<(String, 
 }
 
 pub(super) async fn call(state: &Arc<AppState>, host: &str, id: &str, args: &Value) -> Value {
-    if args["action"] == "output"
-        && let Err(error) = super::response_pages::budget(args)
-    {
-        return error;
-    }
+    let requested_budget = if args["action"] == "output" {
+        match super::response_pages::budget(args) {
+            Ok(budget) => budget,
+            Err(error) => return error,
+        }
+    } else {
+        None
+    };
     if id.trim().is_empty() {
         return failure(host, "session_id must not be empty");
     }
@@ -176,6 +179,21 @@ pub(super) async fn call(state: &Arc<AppState>, host: &str, id: &str, args: &Val
     };
     match request(host, request_builder).await {
         Ok(mut value) => {
+            if let Some(budget) = requested_budget {
+                if value["encoding"] != "json-text" {
+                    return failure(
+                        host,
+                        "daemon does not support byte-budget output; update the daemon",
+                    );
+                }
+                if serde_json::to_vec(&value)
+                    .expect("JSON response serializes")
+                    .len()
+                    > budget
+                {
+                    return failure(host, "daemon response exceeds requested byte_budget");
+                }
+            }
             if action == "output"
                 && value.get("exited").is_none()
                 && value["encoding"] != "json-text"
@@ -196,7 +214,18 @@ pub(super) async fn call(state: &Arc<AppState>, host: &str, id: &str, args: &Val
             }
             value
         }
-        Err(value) => value,
+        Err(value) => {
+            if requested_budget.is_some_and(|budget| {
+                serde_json::to_vec(&value)
+                    .expect("JSON error serializes")
+                    .len()
+                    > budget
+            }) {
+                failure(host, "daemon error exceeds requested byte_budget")
+            } else {
+                value
+            }
+        }
     }
 }
 
@@ -412,5 +441,46 @@ mod tests {
         .unwrap()
         .unwrap_err();
         assert!(ambiguity["error"].as_str().unwrap().contains("conflicts"));
+    }
+    // Catches: an older daemon ignores byte_budget and its full exited-bearing body bypasses the proxy bound.
+    #[tokio::test]
+    async fn remote_output_rejects_daemon_ignoring_requested_byte_budget() {
+        let hub = test_state();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        hub.remote
+            .force_connected_for_test("old-daemon", &url, None);
+        let server = tokio::spawn(async move {
+            // Recorded actual daemon response from the audit, not a fabricated external payload.
+            let app = axum::Router::new().route(
+                "/sessions/{id}/output",
+                axum::routing::get(|| async {
+                    axum::Json(
+                        serde_json::from_str::<Value>(include_str!(
+                            "../fixtures/mcp-output-2005.txt"
+                        ))
+                        .unwrap(),
+                    )
+                }),
+            );
+            axum::serve(listener, app).await.unwrap();
+        });
+        let id = uuid::Uuid::new_v4().to_string();
+        let result = call(
+            &hub,
+            "old-daemon",
+            &id,
+            &json!({"action":"output","byte_budget":1024}),
+        )
+        .await;
+        server.abort();
+        assert!(
+            serde_json::to_vec(&result).unwrap().len() <= 1024,
+            "legacy daemon bypassed byte budget"
+        );
+        assert!(
+            result.get("error").is_some(),
+            "capability mismatch must fail explicitly: {result}"
+        );
     }
 }

@@ -3303,3 +3303,9 @@ when the budget is omitted. Snapshots expire after 300 seconds, restart or cache
 eviction; invalid or expired tokens fail explicitly. Concurrent output cannot
 change a captured snapshot. Other output formats keep their existing contract.
 See [the full paging and inventory contract](../backend/mcp-http.md#compact-inventories-and-byte-bounded-response-snapshots).
+
+HTTP MCP-compatible output tokens share the local `ipc` continuation scope with
+IPC MCP passthrough for the same target. A local caller holding a token may
+resume it through either transport. This is not a new authentication boundary;
+normal endpoint admission still applies. Remote byte-budget requests reject
+legacy daemons that do not return the bounded envelope.

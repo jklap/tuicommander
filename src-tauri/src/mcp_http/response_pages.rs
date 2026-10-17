@@ -21,7 +21,7 @@ struct Snapshot {
 pub(super) struct Acknowledgement {
     pub cursor: u64,
     pub message_ids: Vec<String>,
-    pub missed_count: u64,
+    pub eviction_watermark: u64,
 }
 
 #[derive(Default)]
@@ -58,6 +58,30 @@ impl ResponsePages {
         budget: usize,
         capture: impl FnOnce() -> Value,
     ) -> (Value, Option<Acknowledgement>) {
+        self.page_with_ack(owner, operation, args, budget, || {
+            let value = capture();
+            let acknowledgement = value["next_since"].as_u64().map(|cursor| Acknowledgement {
+                cursor,
+                message_ids: value["messages"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|message| message["id"].as_str().map(str::to_owned))
+                    .collect(),
+                eviction_watermark: 0,
+            });
+            (value, acknowledgement)
+        })
+    }
+
+    pub(super) fn page_with_ack(
+        &mut self,
+        owner: &str,
+        operation: &str,
+        args: &Value,
+        budget: usize,
+        capture: impl FnOnce() -> (Value, Option<Acknowledgement>),
+    ) -> (Value, Option<Acknowledgement>) {
         self.snapshots.retain(|_, s| s.created.elapsed() < TTL);
         let (id, offset) = if let Some(token) = args.get("continuation") {
             let parsed = token
@@ -78,7 +102,7 @@ impl ResponsePages {
             }
             (id, offset)
         } else {
-            let value = capture();
+            let (value, acknowledgement) = capture();
             // Errors are errors, never a successful empty snapshot.
             if value.get("error").is_some() {
                 if serde_json::to_vec(&value)
@@ -124,16 +148,7 @@ impl ResponsePages {
                     text,
                     created: Instant::now(),
                     offsets: HashSet::from([0]),
-                    acknowledgement: value["next_since"].as_u64().map(|cursor| Acknowledgement {
-                        cursor,
-                        message_ids: value["messages"]
-                            .as_array()
-                            .into_iter()
-                            .flatten()
-                            .filter_map(|message| message["id"].as_str().map(str::to_owned))
-                            .collect(),
-                        missed_count: value["missed_count"].as_u64().unwrap_or(0),
-                    }),
+                    acknowledgement,
                 },
             );
             (id, 0)
@@ -161,7 +176,7 @@ impl ResponsePages {
         let mut low = 0;
         let mut high = boundaries.len();
         while low + 1 < high {
-            let mid = (low + high) / 2;
+            let mid = low.midpoint(high);
             if serde_json::to_vec(&render(boundaries[mid]))
                 .expect("JSON value serializes")
                 .len()
@@ -219,7 +234,15 @@ pub(super) fn compact(row: &Value) -> Value {
             .cloned()
             .unwrap_or_else(|| json!("unknown"))
     });
-    result.entry("activity_age_ms").or_insert(Value::Null);
+    result.entry("activity_age_ms").or_insert_with(|| {
+        row["last_activity_ms"]
+            .as_u64()
+            .filter(|timestamp| *timestamp > 0)
+            .map(|timestamp| {
+                json!(super::mcp_transport_peer::now_unix_ms().saturating_sub(timestamp))
+            })
+            .unwrap_or(Value::Null)
+    });
     result.insert(
         "omitted_fields".into(),
         json!(
@@ -358,5 +381,18 @@ mod tests {
         );
         assert_eq!(replayed, page);
         assert!(ack.is_none());
+    }
+    // Catches: a compact projection discards the backend activity timestamp instead of deriving age.
+    #[test]
+    fn compact_inventory_derives_activity_from_last_activity_timestamp() {
+        let row = json!({"session_id":"live", "last_activity_ms":1, "shell_state":"busy"});
+        let projected = compact(&row);
+        assert!(
+            projected["activity_age_ms"]
+                .as_u64()
+                .is_some_and(|age| age > 0),
+            "{projected}"
+        );
+        assert_eq!(projected["state"], "busy");
     }
 }

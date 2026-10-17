@@ -1687,6 +1687,8 @@ pub(crate) struct AgentDeliveryGate {
     orchestrator_wake_attempt: u64,
     orchestrator_wake_attempts_in_group: u8,
     inbox_revision: u64,
+    eviction_watermark: u64,
+    acknowledged_eviction_watermark: u64,
     inbox_events: tokio::sync::watch::Sender<u64>,
 }
 
@@ -1704,6 +1706,8 @@ impl Default for AgentDeliveryGate {
             orchestrator_wake_attempt: 0,
             orchestrator_wake_attempts_in_group: 0,
             inbox_revision: 0,
+            eviction_watermark: 0,
+            acknowledged_eviction_watermark: 0,
             inbox_events,
         }
     }
@@ -2673,6 +2677,7 @@ impl AppState {
         };
         if let Some((evicted_id, evicted_through, missed)) = evicted {
             if missed {
+                gate.eviction_watermark = gate.eviction_watermark.saturating_add(1);
                 *self
                     .agent_inbox_evictions
                     .entry(recipient.to_string())
@@ -2686,6 +2691,20 @@ impl AppState {
         let revision = gate.inbox_revision;
         gate.inbox_events.send_replace(revision);
         stored_timestamp
+    }
+
+    pub(crate) fn add_inbox_evictions(&self, recipient: &str, count: u64) {
+        let entry = self
+            .active_agent_waiters
+            .entry(recipient.to_string())
+            .or_default();
+        let mut gate = entry.lock();
+        gate.eviction_watermark = gate.eviction_watermark.saturating_add(count);
+        let mut pending = self
+            .agent_inbox_evictions
+            .entry(recipient.to_string())
+            .or_default();
+        *pending = pending.saturating_add(count);
     }
 
     /// Hear every change to one peer's inbox without waiting on it.
@@ -3190,7 +3209,9 @@ impl AppState {
         since: u64,
         limit: usize,
     ) -> (Vec<AgentMessage>, bool, u64) {
-        self.read_agent_inbox(tuic_session, since, limit, true)
+        let (messages, has_more, missed_count, _) =
+            self.read_agent_inbox(tuic_session, since, limit, true);
+        (messages, has_more, missed_count)
     }
 
     pub(crate) fn read_agent_inbox(
@@ -3199,7 +3220,7 @@ impl AppState {
         since: u64,
         limit: usize,
         acknowledge: bool,
-    ) -> (Vec<AgentMessage>, bool, u64) {
+    ) -> (Vec<AgentMessage>, bool, u64, u64) {
         let gate_entry = self
             .active_agent_waiters
             .entry(tuic_session.to_string())
@@ -3227,13 +3248,14 @@ impl AppState {
                 .get(tuic_session)
                 .map(|n| *n)
                 .unwrap_or(0);
-            return (messages, has_more, missed_count);
+            return (messages, has_more, missed_count, gate.eviction_watermark);
         }
         let missed_count = self
             .agent_inbox_evictions
             .remove(tuic_session)
             .map(|(_, count)| count)
             .unwrap_or(0);
+        gate.acknowledged_eviction_watermark = gate.eviction_watermark;
         let read_through = messages
             .iter()
             .map(|message| message.timestamp)
@@ -3241,7 +3263,7 @@ impl AppState {
             .unwrap_or(since);
         let message_ids: Vec<_> = messages.iter().map(|message| message.id.clone()).collect();
         self.acknowledge_agent_snapshot_locked(tuic_session, read_through, &message_ids, &mut gate);
-        (messages, has_more, missed_count)
+        (messages, has_more, missed_count, gate.eviction_watermark)
     }
 
     /// A byte-paged read acknowledges only the immutable snapshot, never newer mail.
@@ -3250,16 +3272,22 @@ impl AppState {
         tuic_session: &str,
         cursor: u64,
         message_ids: &[String],
-        missed_count: u64,
+        eviction_watermark: u64,
     ) {
         let entry = self
             .active_agent_waiters
             .entry(tuic_session.to_string())
             .or_default();
         let mut gate = entry.lock();
+        // Overlapping snapshots may acknowledge the same historical losses. Only
+        // the newly covered watermark range may clear the live pending counter.
+        let newly_acknowledged =
+            eviction_watermark.saturating_sub(gate.acknowledged_eviction_watermark);
         if let Some(mut count) = self.agent_inbox_evictions.get_mut(tuic_session) {
-            *count = count.saturating_sub(missed_count);
+            *count = count.saturating_sub(newly_acknowledged);
         }
+        gate.acknowledged_eviction_watermark =
+            gate.acknowledged_eviction_watermark.max(eviction_watermark);
         self.acknowledge_agent_snapshot_locked(tuic_session, cursor, message_ids, &mut gate);
     }
 

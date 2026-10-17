@@ -2440,3 +2440,42 @@ result line 168437. It is historical terminal text, not a current-state assertio
 `src-tauri/src/fixtures/mcp-inbox-2005.txt` captures the audit's 49,609-byte inbox
 response, private TUIC transcript result line 3239. The regression also covers
 multibyte and escaped oversized inbox content.
+
+#### Review clarifications: loss watermarks, wait and local continuation scope
+
+All inbox readers use one delivery-gate acknowledgement boundary. A captured
+byte snapshot records the monotonic eviction watermark at capture time. Final
+completion acknowledges only the previously unacknowledged part of that range.
+Two overlapping snapshots cannot subtract the same historical missed count
+from later losses. An ordinary inbox read advances that same watermark; there
+is no separate byte-page read cursor or client acknowledgement protocol.
+
+`agent action=wait` is **not byte-bounded**. Supplying `byte_budget` or
+`continuation` to wait returns `wait_byte_budget_unsupported` before registering
+a waiter or consuming mail. Use byte-budgeted inbox reads for bounded payloads.
+The existing wait claims and acknowledges mail before its response is returned.
+Adding deferred completion to it would create another acknowledgement model;
+wait paging must instead use the shared subscription/ack reconciliation tracked
+by #2004-4760. This story does not claim to reduce the audit's 14,763-byte wait
+response maximum.
+
+A daemon must support the byte-page envelope to serve a byte-budgeted remote
+output request. The desktop proxy rejects unpaged legacy-daemon responses and
+pages that exceed the requested compact-JSON budget. It does not pass through
+an oversized legacy body merely because `exited` is present. Update an
+incompatible daemon; do not retry without a budget unless unbounded output is
+actually desired.
+
+Full session inventory exposes known `last_activity_ms` from the backend
+snapshot. Compact projection derives `activity_age_ms` from that timestamp;
+a missing or zero timestamp remains unknown. An exact registered local peer
+name is resolved before interpreting a slash as a connection qualifier. With
+an explicit connection selected, a daemon-local slash-containing name remains
+a name unless it carries that same connection prefix.
+
+Inbox tokens are scoped to the bound peer identity. Native MCP output tokens
+are scoped to their MCP session and target. HTTP MCP-compatible output and the
+IPC MCP passthrough intentionally share the local `ipc` continuation scope for
+the same target: either local-user transport can resume a token issued by the
+other. Tokens are opaque snapshot references, **not authorization credentials**;
+normal endpoint admission and the local OS-user trust boundary still apply.

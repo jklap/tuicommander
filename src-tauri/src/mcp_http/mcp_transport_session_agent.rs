@@ -1022,18 +1022,12 @@ fn handle_session_unpaged(
                         "agent_state",
                         agent_state.map(serde_json::Value::String),
                     );
-                    session["activity_age_ms"] = session_state
+                    if let Some(snapshot) = session_state
                         .as_ref()
-                        .map(|snapshot| {
-                            if snapshot.last_activity_ms == 0 {
-                                serde_json::Value::Null
-                            } else {
-                                serde_json::json!(
-                                    now_unix_ms().saturating_sub(snapshot.last_activity_ms)
-                                )
-                            }
-                        })
-                        .unwrap_or(serde_json::Value::Null);
+                        .filter(|snapshot| snapshot.last_activity_ms > 0)
+                    {
+                        session["last_activity_ms"] = serde_json::json!(snapshot.last_activity_ms);
+                    }
                     session
                 })
                 .collect();
@@ -1051,13 +1045,10 @@ fn handle_session_unpaged(
                 let mut value = to_json_or_error(&row);
                 value["is_caller"] = serde_json::json!(false);
                 if let Some(remote_state) = row.state.as_ref() {
-                    value["activity_age_ms"] = if remote_state.last_activity_ms > 0 {
-                        serde_json::json!(
-                            now_unix_ms().saturating_sub(remote_state.last_activity_ms)
-                        )
-                    } else {
-                        serde_json::Value::Null
-                    };
+                    if remote_state.last_activity_ms > 0 {
+                        value["last_activity_ms"] =
+                            serde_json::json!(remote_state.last_activity_ms);
+                    }
                     if let Some(shell_state) = remote_state.shell_state.as_ref() {
                         value["shell_state"] = serde_json::json!(shell_state);
                     }

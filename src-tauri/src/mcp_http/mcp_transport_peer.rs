@@ -195,10 +195,7 @@ pub(super) fn link_pending_children_to_parent(
         }
     }
     if let Some((_, missed)) = state.agent_inbox_evictions.remove(&pending_parent) {
-        *state
-            .agent_inbox_evictions
-            .entry(parent_tuic_session.to_string())
-            .or_default() += missed;
+        state.add_inbox_evictions(parent_tuic_session, missed);
     }
 
     children.len()
@@ -1014,6 +1011,11 @@ pub(super) async fn handle_agent_wait(
     args: &serde_json::Value,
     mcp_session_id: Option<&str>,
 ) -> serde_json::Value {
+    if args.get("byte_budget").is_some() || args.get("continuation").is_some() {
+        // DEFERRED (2026-10-17) — wait acknowledges delivery before responding;
+        // byte paging must reuse the unified subscription/ack boundary from #2004-4760.
+        return serde_json::json!({"error":"wait_byte_budget_unsupported", "alternative":"Use agent action=inbox with byte_budget; wait remains unbounded."});
+    }
     let caller_tuic = match mcp_session_id
         .and_then(|sid| state.mcp.to_session.get(sid).map(|e| e.value().clone()))
     {
@@ -1217,20 +1219,19 @@ pub(super) fn handle_messaging(
             else {
                 return serde_json::json!({"error":"You are not registered. Register first with agent action=register"});
             };
-            let (response, cursor) =
-                state
-                    .mcp
-                    .response_pages
-                    .lock()
-                    .page(&owner, "inbox", args, budget, || {
-                        handle_messaging_with_message_id(state, args, mcp_session_id, None)
-                    });
+            let (response, cursor) = state.mcp.response_pages.lock().page_with_ack(
+                &owner,
+                "inbox",
+                args,
+                budget,
+                || capture_inbox_reply(state, args, mcp_session_id, false),
+            );
             if let Some(ack) = cursor {
                 state.acknowledge_agent_snapshot(
                     &owner,
                     ack.cursor,
                     &ack.message_ids,
-                    ack.missed_count,
+                    ack.eviction_watermark,
                 );
             }
             return response;
@@ -1530,13 +1531,10 @@ fn handle_messaging_with_message_id(
                             .and_then(|s| s.agent_state.as_ref().or(s.shell_state.as_ref()))
                             .map(|s| serde_json::json!(s))
                             .unwrap_or_else(|| serde_json::json!("unknown"));
-                        peer["activity_age_ms"] = snapshot
-                            .as_ref()
-                            .filter(|s| s.last_activity_ms > 0)
-                            .map(|s| {
-                                serde_json::json!(now_unix_ms().saturating_sub(s.last_activity_ms))
-                            })
-                            .unwrap_or(serde_json::Value::Null);
+                        if let Some(snapshot) = snapshot.as_ref().filter(|s| s.last_activity_ms > 0)
+                        {
+                            peer["last_activity_ms"] = serde_json::json!(snapshot.last_activity_ms);
+                        }
                         super::response_pages::compact(&peer)
                     } else {
                         peer
@@ -2083,62 +2081,78 @@ fn handle_messaging_with_message_id(
             );
             response
         }
-        "inbox" => {
-            // Resolve caller's tuic_session via O(1) mcp_to_session reverse map (RUST-3/PERF-2).
-            let tuic_session = match mcp_session_id
-                .and_then(|sid| state.mcp.to_session.get(sid).map(|e| e.value().clone()))
-                .filter(|tuic| state.peer_agents.contains_key(tuic))
-            {
-                Some(ts) => ts,
-                None => {
-                    return serde_json::json!({"error": "You are not registered. Register first with agent action=register"});
-                }
-            };
-            let limit = args["limit"]
-                .as_u64()
-                .unwrap_or(crate::state::AGENT_INBOX_CAPACITY as u64)
-                .clamp(1, crate::state::AGENT_INBOX_CAPACITY as u64)
-                as usize;
-            let since = resolve_agent_since(state, &tuic_session, args);
-            let (messages, has_more, missed_count) = if args.get("byte_budget").is_some() {
-                state.read_agent_inbox(&tuic_session, since, limit, false)
-            } else {
-                state.observe_agent_inbox(&tuic_session, since, limit)
-            };
-            // Same contract as wait: always hand back a usable cursor, falling back
-            // to the position we read from when the batch is empty.
-            let next_since = messages
-                .iter()
-                .map(|message| message.timestamp)
-                .max()
-                .unwrap_or(since);
-            if args.get("byte_budget").is_none() {
-                advance_agent_cursor(state, &tuic_session, next_since);
-            }
-            let message_ids: Vec<&str> =
-                messages.iter().map(|message| message.id.as_str()).collect();
-            tracing::info!(
-                source = "agent_msg",
-                event = "inbox_read",
-                caller_session_id = mcp_session_id.unwrap_or(""),
-                caller_peer_id = %tuic_session,
-                inbox_owner = %tuic_session,
-                message_ids = %serde_json::json!(message_ids),
-                "Peer inbox read"
-            );
-            let mut resp = serde_json::json!({
-                "messages": messages,
-                "count": messages.len(),
-                "next_since": next_since,
-                "has_more": has_more,
-            });
-            if missed_count > 0 {
-                resp["missed_count"] = serde_json::json!(missed_count);
-            }
-            resp
-        }
+        "inbox" => capture_inbox_reply(state, args, mcp_session_id, true).0,
         other => serde_json::json!({"error": format!(
             "Unknown action '{}' for tool 'agent'. Available: {}", other, AGENT_ACTIONS
         )}),
     }
+}
+
+/// Capture and optionally acknowledge through the same delivery-gate boundary.
+fn capture_inbox_reply(
+    state: &Arc<AppState>,
+    args: &serde_json::Value,
+    mcp_session_id: Option<&str>,
+    acknowledge: bool,
+) -> (
+    serde_json::Value,
+    Option<super::response_pages::Acknowledgement>,
+) {
+    // Resolve caller's tuic_session via O(1) mcp_to_session reverse map (RUST-3/PERF-2).
+    let tuic_session = match mcp_session_id
+        .and_then(|sid| state.mcp.to_session.get(sid).map(|e| e.value().clone()))
+        .filter(|tuic| state.peer_agents.contains_key(tuic))
+    {
+        Some(ts) => ts,
+        None => {
+            return (
+                serde_json::json!({"error": "You are not registered. Register first with agent action=register"}),
+                None,
+            );
+        }
+    };
+    let limit = args["limit"]
+        .as_u64()
+        .unwrap_or(crate::state::AGENT_INBOX_CAPACITY as u64)
+        .clamp(1, crate::state::AGENT_INBOX_CAPACITY as u64) as usize;
+    let since = resolve_agent_since(state, &tuic_session, args);
+    let (messages, has_more, missed_count, eviction_watermark) = if acknowledge {
+        let (messages, has_more, missed_count) =
+            state.observe_agent_inbox(&tuic_session, since, limit);
+        (messages, has_more, missed_count, 0)
+    } else {
+        state.read_agent_inbox(&tuic_session, since, limit, false)
+    };
+    // Same contract as wait: always hand back a usable cursor, falling back
+    // to the position we read from when the batch is empty.
+    let next_since = messages
+        .iter()
+        .map(|message| message.timestamp)
+        .max()
+        .unwrap_or(since);
+    let message_ids: Vec<String> = messages.iter().map(|message| message.id.clone()).collect();
+    let acknowledgement = (!acknowledge).then(|| super::response_pages::Acknowledgement {
+        cursor: next_since,
+        message_ids: message_ids.clone(),
+        eviction_watermark,
+    });
+    tracing::info!(
+        source = "agent_msg",
+        event = "inbox_read",
+        caller_session_id = mcp_session_id.unwrap_or(""),
+        caller_peer_id = %tuic_session,
+        inbox_owner = %tuic_session,
+        message_ids = %serde_json::json!(message_ids),
+        "Peer inbox read"
+    );
+    let mut resp = serde_json::json!({
+        "messages": messages,
+        "count": messages.len(),
+        "next_since": next_since,
+        "has_more": has_more,
+    });
+    if missed_count > 0 {
+        resp["missed_count"] = serde_json::json!(missed_count);
+    }
+    (resp, acknowledgement)
 }

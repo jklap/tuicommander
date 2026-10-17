@@ -637,9 +637,27 @@ fn qualify_rows(value: &mut Value, host: &str) {
 }
 
 async fn directory(state: &Arc<AppState>, mut args: Value) -> Value {
+    // Prefer the same exact/local identity resolver used by native send. Slash
+    // is a valid display-name character, not proof of a remote qualifier.
+    if args["connection_id"]
+        .as_str()
+        .is_none_or(|host| host == "local")
+        && let Some(reference) = args["to"].as_str()
+    {
+        match state.resolve_peer_ref_checked(reference) {
+            Ok(Some(identity)) => args["to"] = json!(identity),
+            Err(error) => return json!({"error":error}),
+            Ok(None) => {}
+        }
+    }
     if let Some((host, recipient)) = args["to"]
         .as_str()
         .and_then(|to| to.split_once('/'))
+        .filter(|(host, _)| {
+            args["connection_id"]
+                .as_str()
+                .is_none_or(|selected| selected == *host)
+        })
         .map(|(host, recipient)| (host.to_string(), recipient.to_string()))
     {
         if args["connection_id"]
@@ -2171,5 +2189,19 @@ mod tests {
                 "shadow peer of the disconnected link survived the race"
             );
         }
+    }
+    // Catches: a registered display name containing slash is misrouted as a connection address.
+    #[tokio::test]
+    async fn scoped_directory_preserves_registered_slash_display_name() {
+        let state = test_state();
+        let (_, identity) = peer(&state, "feature/worker").await;
+        let listed = directory(
+            &state,
+            json!({"action":"list_peers","to":"feature/worker","compact":true}),
+        )
+        .await;
+        assert!(listed.get("connection_errors").is_none(), "{listed}");
+        assert_eq!(listed["peers"].as_array().unwrap().len(), 1, "{listed}");
+        assert_eq!(listed["peers"][0]["tuic_session"], identity);
     }
 }
