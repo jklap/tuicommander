@@ -211,6 +211,11 @@ events, so another window or a phone sees the same order and cancellations.
 
 ## Mobile Screens (`src/mobile/`)
 
+`SessionDetailScreen` replaces its state with each complete WebSocket or polled
+session snapshot. Omitted optional fields mean cleared state, not missing deltas.
+A fresh poll can therefore retire a stale socket's agent identity and question,
+return Chat to CLI, and route the composer to the remaining shell after agent exit.
+
 Mobile connection presentation follows `useSessions`, not the independent version poll. Recovery increments a root revision consumed by Files, Chat settings, Activity, Settings and Progress discovery. Failed Files reads retry without replacing unsaved edits. During an outage, tab views stay mounted but hidden so contradictory empty/setup errors do not replace the shared connection banner. Mobile Chat hydrates settings quietly and does not infer missing ego configuration from an unsuccessful read.
 
 `OpenMarkdownMenu` adds a scrollable Markdown section to session overflow.

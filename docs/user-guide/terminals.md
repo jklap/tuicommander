@@ -25,6 +25,11 @@ normalized into each other.
 
 In the mobile session output, a small upward drag stops auto-follow. New output does not scroll the view until you return to the bottom.
 
+When the viewed agent exits, the mobile session returns to the shell: question
+controls close, Chat returns to CLI, and the composer sends shell input. Fresh
+session polling also clears stale agent controls if the output socket pauses or
+reconnects. If the PTY ends, **Session ended** offers **Back** to the session list.
+
 In the mobile session output, completed lines continue into history even after the terminal history fills, while the live region redraws below. Long text wraps to the phone width. A continuation
 keeps the original line's leading spaces or tabs, so indented lists and code
 remain readable. Claude tool-call status dots keep the same space while pulsing
