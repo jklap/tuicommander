@@ -1164,6 +1164,7 @@
 	"sidebar.workingCount": "{count} working",
 	"sidebar.returnedCount": "{count} returned",
 	"sidebar.idleSessionCount": "{count} idle sessions",
+	"sidebar.standby": "Standby (paused)",
 	"sidebar.subagentCount": "{count} subagents",
 	"sidebar.subagentRunning": "Running",
 	"sidebar.subagentDone": "Returned",

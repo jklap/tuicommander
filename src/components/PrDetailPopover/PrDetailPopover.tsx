@@ -15,6 +15,7 @@ import { terminalsStore } from "../../stores/terminals";
 import { toastsStore } from "../../stores/toasts";
 import { cx } from "../../utils";
 import { prepareAgentLaunchCommand } from "../../utils/agentSession";
+import { closeBranchTerminalPtys } from "../../utils/closeBranchTerminals";
 import { handleOpenUrl } from "../../utils/openUrl";
 import { isAlreadyMerged, mergeWithFallback } from "../../utils/prMerge";
 import { preferredMergeStrategy } from "../../utils/prMergeStrategy";
@@ -138,21 +139,6 @@ export const PrDetailPopover: Component<PrDetailPopoverProps> = (props) => {
 		return (branch?.terminals?.length ?? 0) > 0;
 	};
 
-	/** Called by `executeCleanup`, which passes the workspace id it was given. */
-	const closeTerminalsForBranch = async (repoPath: string, workspaceId: string) => {
-		const repo = repositoriesStore.get(repoPath);
-		const branch = repo?.workspaces[workspaceId];
-		if (branch) {
-			for (const termId of branch.terminals) {
-				try {
-					await invoke("close_pty", { sessionId: termId, cleanupWorktree: false });
-				} catch (err) {
-					appLogger.warn("git", `close_pty failed for terminal ${termId}`, err);
-				}
-			}
-		}
-	};
-
 	const handleCleanupExecute = async (steps: CleanupStep[], options?: { unstash?: boolean }) => {
 		const ctx = cleanupCtx();
 		if (!ctx) return;
@@ -170,7 +156,7 @@ export const PrDetailPopover: Component<PrDetailPopoverProps> = (props) => {
 			branchName: ctx.branchName,
 			baseBranch: ctx.baseBranch,
 			steps: steps.map((s) => ({ id: s.id, checked: s.checked })),
-			closeTerminalsForBranch,
+			closeTerminalsForBranch: closeBranchTerminalPtys,
 			unstash: options?.unstash,
 			onStepStart: (id) => {
 				setCleanupStepStatuses((prev) => ({ ...prev, [id]: "running" }));

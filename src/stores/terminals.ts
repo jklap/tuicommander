@@ -809,11 +809,17 @@ function createTerminalsStore() {
 				}
 				setState("activeId", id);
 			});
-			if (prevId && prevId !== id) {
-				rpc("set_session_visible", { sessionId: prevId, visible: false }).catch(() => {});
+			// `prevId`/`id` are terminal-store ids ("term-6"); the backend keys visibility and
+			// standby by PTY session id. Passing the terminal id made `wake_session` a silent
+			// no-op, so a parked tab never woke on click (and the hidden tab was never recorded
+			// as hidden). A tab with no PTY yet (a restore placeholder) has no session to report.
+			const prevSessionId = prevId ? state.terminals[prevId]?.sessionId : null;
+			if (prevId && prevId !== id && prevSessionId) {
+				rpc("set_session_visible", { sessionId: prevSessionId, visible: false }).catch(() => {});
 			}
-			if (id) {
-				rpc("set_session_visible", { sessionId: id, visible: true }).catch(() => {});
+			const sessionId = id ? state.terminals[id]?.sessionId : null;
+			if (sessionId) {
+				rpc("set_session_visible", { sessionId, visible: true }).catch(() => {});
 			}
 		},
 

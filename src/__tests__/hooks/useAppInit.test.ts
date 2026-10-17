@@ -1022,6 +1022,51 @@ describe("initApp", () => {
 		expect(bySession("sess-plain")?.alias).toBeNull();
 	});
 
+	// `session-standby` fires only on a transition, so a WebView reload while a tab is parked
+	// used to rebuild it as running: no pause mark, and a counting age in the sidebar.
+	it("re-adopts a parked surviving session as parked, and a running one as running", async () => {
+		const deps = createMockDeps({
+			pty: {
+				listActiveSessions: vi.fn().mockResolvedValue([
+					{ session_id: "sess-parked", cwd: "/repo", standby: true },
+					{ session_id: "sess-running", cwd: "/repo" },
+				]),
+				close: vi.fn().mockResolvedValue(undefined),
+			},
+		});
+
+		await initApp(deps);
+
+		const bySession = (sid: string) => terminalsStore.get(terminalsStore.getTerminalForSession(sid)!);
+		expect(bySession("sess-parked")?.standby).toBe(true);
+		expect(bySession("sess-running")?.standby).toBe(false);
+	});
+
+	it("applies session-standby events to the tab that owns the session, both ways", async () => {
+		let send: ((event: { payload: unknown }) => void) | undefined;
+		vi.mocked(listen).mockImplementation(((event: string, handler: (event: { payload: unknown }) => void) => {
+			if (event === "session-standby") send = handler;
+			return Promise.resolve(vi.fn());
+		}) as unknown as typeof listen);
+		const deps = createMockDeps({
+			pty: {
+				listActiveSessions: vi.fn().mockResolvedValue([{ session_id: "sess-evt", cwd: "/repo" }]),
+				close: vi.fn().mockResolvedValue(undefined),
+			},
+		});
+		await initApp(deps);
+		const tab = () => terminalsStore.get(terminalsStore.getTerminalForSession("sess-evt")!);
+		expect(send).toBeDefined();
+
+		send?.({ payload: { session_id: "sess-evt", standby: true } });
+		expect(tab()?.standby).toBe(true);
+		send?.({ payload: { session_id: "sess-evt", standby: false } });
+		expect(tab()?.standby).toBe(false);
+
+		// An event for a session no tab owns is ignored rather than thrown.
+		expect(() => send?.({ payload: { session_id: "unknown", standby: true } })).not.toThrow();
+	});
+
 	// The Context bar above an agent tab renders only once intent or prompt is
 	// known. Left to the later lifecycle sync, it appears after the terminal has
 	// measured, so the pane shrinks and the PTY sees a transient taller height:
