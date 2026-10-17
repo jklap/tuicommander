@@ -47,6 +47,24 @@ function elapsedTime(ms: number): string {
 	return `${Math.floor(minutes / 1_440)}d`;
 }
 
+/** Both responsive call actions use the same handset, not the dictation mic. */
+function VoiceCallIcon() {
+	return (
+		<svg
+			width="20"
+			height="20"
+			viewBox="0 0 24 24"
+			fill="none"
+			stroke="currentColor"
+			stroke-width="2"
+			stroke-linecap="round"
+			aria-hidden="true"
+		>
+			<path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72c.13.96.36 1.9.69 2.79a2 2 0 0 1-.45 2.11L8.09 9.89a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45c.89.33 1.83.56 2.79.69A2 2 0 0 1 22 16.92z" />
+		</svg>
+	);
+}
+
 export function SessionDetailScreen(props: SessionDetailScreenProps) {
 	// Merge polled state with real-time WebSocket state pushes.
 	// WS state arrives instantly; poll state arrives every 3s as fallback.
@@ -277,18 +295,7 @@ export function SessionDetailScreen(props: SessionDetailScreenProps) {
 						disabled={browserDictating()}
 						onClick={() => void voice.toggle()}
 					>
-						<svg
-							width="20"
-							height="20"
-							viewBox="0 0 24 24"
-							fill="none"
-							stroke="currentColor"
-							stroke-width="2"
-							stroke-linecap="round"
-							aria-hidden="true"
-						>
-							<path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72c.13.96.36 1.9.69 2.79a2 2 0 0 1-.45 2.11L8.09 9.89a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45c.89.33 1.83.56 2.79.69A2 2 0 0 1 22 16.92z" />
-						</svg>
+						<VoiceCallIcon />
 					</button>
 				</Show>
 				<button
@@ -364,6 +371,7 @@ export function SessionDetailScreen(props: SessionDetailScreenProps) {
 								void voice.toggle();
 							}}
 						>
+							<VoiceCallIcon />
 							{voice.armed() ? "Stop voice call" : "Start voice call"}
 						</button>
 					</Show>

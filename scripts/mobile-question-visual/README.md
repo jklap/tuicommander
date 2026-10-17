@@ -16,3 +16,6 @@ backend, microphone or permission state.
 but hard-coded dark card in Paper and question cards covering the key bar.
 It checks both themes, three question forms, and 390/834 widths. The PNGs are
 visual evidence; geometry and computed colors are the regression oracle.
+
+Set `VISUAL_ONLY=1` for question screenshots without executing regression
+assertions, or `VISUAL_VOICE=1` for phone-menu and tablet-header handset captures.

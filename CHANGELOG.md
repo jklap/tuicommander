@@ -9,7 +9,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Use Start/Stop voice call labels in the phone More menu, consistent with the tablet header (#1979-89e1, #1981-0caf).
 
 - Allow explicit mobile replies while an agent awaits input without requiring an idle shell; keep recognized question controls and show the actual refusal reason without losing the answer (#1980-47b7).
-- Distinguish mobile two-way voice calls with a handset icon; composer dictation keeps its microphone (#1979-89e1).
+- Distinguish mobile two-way voice calls with the same handset icon in the tablet header and phone More menu; composer dictation keeps its microphone (#1979-89e1).
 
 - Show readable session names and progress text in mobile push notifications; session links remain unchanged (#1978-9cfe).
 - Show structured file edits as old/new blocks with aligned tabs and horizontal scrolling in Chat; add a phone CLI shortcut to read edits without unmounting the terminal (#1982-ee68).
