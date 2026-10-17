@@ -1,6 +1,6 @@
 import type { DecodedRow, StyledRange } from "./canvasTerminalUtils";
 import { cellText } from "./canvasTerminalUtils";
-import { ANSWER_MARKER_RE, answerExtent, OUTPUT_ROW_RE, type RowSnapshot } from "./suggestOverlay";
+import { ANSWER_MARKER_RE, answerExtent, PROMPT_ROW_RE, promptEnd, type RowSnapshot } from "./suggestOverlay";
 
 /** One turn of the answers-only view: what the user asked, then only the 💬 answers. */
 export interface AnswersTurn {
@@ -33,7 +33,7 @@ export function rowCopyText(row: DecodedRow): string {
 	return text;
 }
 
-/** Rows a prompt may span, so a turn whose output never starts with a bullet is not swallowed whole. */
+/** Rows shown in a prompt preview; classification still skips the complete prompt echo. */
 export const PROMPT_MAX_ROWS = 50;
 
 /** Text of rows `[from, to]`: soft-wrapped rows concatenated, hard lines joined with a newline, indent under the bullet removed. */
@@ -61,18 +61,16 @@ function joinLogicalLine(rows: readonly RowSnapshot[], from: number): { text: st
 
 /**
  * The prompt block at the top of a turn: the prompt row plus every following row
- * up to the first agent output (bullet) or 💬 row. A multi-line or hard-wrapped
+ * up to the first agent output (bullet), unindented 💬 row or blank-separated 💬 row. A multi-line or hard-wrapped
  * prompt spans several logical lines, so reading one logical line cut it short
  * (#1369). Soft-wrapped rows are concatenated, hard lines joined with a newline.
  */
 function readPrompt(rows: readonly RowSnapshot[]): { text: string; next: number } {
 	let text = rows[0].text;
-	let next = 1;
-	while (next < rows.length && next < PROMPT_MAX_ROWS) {
-		const row = rows[next];
-		if (!row.isWrapped && (OUTPUT_ROW_RE.test(row.text) || ANSWER_MARKER_RE.test(row.text))) break;
+	const next = promptEnd(0, rows.length, (i) => rows[i] ?? null);
+	for (let i = 1; i < Math.min(next, PROMPT_MAX_ROWS); i++) {
+		const row = rows[i];
 		text = row.isWrapped ? text + row.text : `${text.replace(/[ \t]+$/, "")}\n${row.text}`;
-		next++;
 	}
 	return { text: text.trimEnd(), next };
 }
@@ -93,6 +91,10 @@ export function buildAnswersTurn(rows: readonly RowSnapshot[], hasPrompt: boolea
 	}
 	const answers: string[] = [];
 	while (i < rows.length) {
+		if (!rows[i].isWrapped && PROMPT_ROW_RE.test(rows[i].text)) {
+			i = promptEnd(i, rows.length, (r) => rows[r] ?? null);
+			continue;
+		}
 		if (!rows[i].isWrapped && ANSWER_MARKER_RE.test(rows[i].text)) {
 			const markers = new Set<number>();
 			const last = answerExtent(
