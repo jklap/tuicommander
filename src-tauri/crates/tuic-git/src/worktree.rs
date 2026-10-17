@@ -11960,7 +11960,7 @@ pub fn detect_orphan_worktrees_blocking(repo_path: String) -> Result<Vec<String>
         .args(["worktree", "list", "--porcelain"])
         .run()
         .map_err(|e| format!("git worktree list failed: {e}"))?;
-    let default_branch = get_remote_default_branch(&repo_path)?;
+    let mut default_branch = None;
     let mut orphans = Vec::new();
     for path in parse_orphan_worktrees(&out.stdout) {
         // Detached describes HEAD, not branch lifetime. A non-default branch
@@ -11968,7 +11968,11 @@ pub fn detect_orphan_worktrees_blocking(repo_path: String) -> Result<Vec<String>
         // Missing directories can only have their stale registration removed.
         if Path::new(&path).exists() {
             let head = rev_at(Path::new(&path), "HEAD")?;
-            if non_default_local_branch_at_head(&repo_path, &head, &default_branch)? {
+            let default_branch = match default_branch.as_ref() {
+                Some(branch) => branch,
+                None => default_branch.insert(get_remote_default_branch(&repo_path)?),
+            };
+            if non_default_local_branch_at_head(&repo_path, &head, default_branch)? {
                 continue;
             }
         }
