@@ -73,7 +73,8 @@ Values shown are the `:root` defaults of `global.css` (the former VS Code Dark p
 | `--warning` | `#dcdcaa` | Caution, pending, main branch icon (yellow) |
 | `--attention` | `#e8984c` | Actionable alerts, confirmation prompts (orange) |
 | `--error` | `#f48771` | Errors, failures, closed PRs (coral) |
-| `--merged` | `#a371f7` | PR merged badge (purple) |
+| `--merged` | `#ae83ff` | PR merged marker and badge background (purple; Paper uses `#7540b0`) |
+| `--text-on-merged` | `#000000` | Filled merged badge label (Paper uses `#ffffff`); independent of accent action foreground |
 | `--unseen` | `#c084fc` | Terminal completed while user wasn't viewing (purple, clears on view) |
 | `--diff-del` | `--error` mixed 25% with white | Deleted-line counts in the sidebar stats badge. Lighter than `--error` so a negative diff does not read as an alarm; `vscode-light` resets it to `--error` |
 | `--border` | `#3e3e42` | All borders and dividers |
@@ -455,6 +456,10 @@ Full-screen overlay. All pages share `width: min(1136px, calc(100vw - 48px))`, `
 - `StatusSummary`: visible status words and existing `StatusBadge` semantic tone, source and freshness. Unknown is neutral; saved sign-in is not a live connection.
 - `ListRow`: wrapping name/subtitle, source/version/access badges and named actions. `EmptyState` explains absence and offers one valid action; do not conflate loading, failed or unsupported state.
 - `DangerZone`: explicit scope and consequence for destructive/disconnecting actions only; caller retains confirmation. Ordinary reset is not automatically destructive.
+- Label/help pairs use the shared `.helpLabel` layout so stacked and grid fields reserve one cell for the pair; the badge remains beside wrapped label text.
+- Paper shades the shared success, attention, changes/review and merged tokens for readable marker text; the legend and sidebar keep the same components and shapes.
+- Agent color tiles use metadata-selected `--identity-on-light` or `--identity-on-dark`; identity fills do not change with the app theme.
+- Settings maps secondary and muted copy to the shared `--settings-foreground` token, mixed from the theme foregrounds for elevated/highlighted surfaces. Links and link buttons use `--link-foreground` without changing action fills. Commander Settings accent actions use dark `--settings-on-accent` copy.
 - Help is 12px `--fg-secondary`, never essential `--fg-muted`. Contextual help is selective and adds information beyond the subtitle; do not add a question mark to every row.
 - Below 800px rows stack; below 600px navigation is compact and controls/actions have 44px targets. Preserve keyboard labels and long translations.
 - Keep existing autosave/explicit-save boundaries and lazy mounting. Shared primitives never probe, save or infer service state.
@@ -467,7 +472,7 @@ Full-screen overlay. All pages share `width: min(1136px, calc(100vw - 48px))`, `
 |-------|-----------|--------|------------|-------|
 | Open | `--success` | none | `--text-on-success` | — |
 | Draft | transparent | `1px dashed --fg-muted` | `--fg-muted` | — |
-| Merged | `#a371f7` | none | `--text-on-accent` | — |
+| Merged | `--merged` | none | `--text-on-merged` | — |
 | Closed | `--error` | none | `--text-on-error` | — |
 | Conflict | `--error` | none | `--text-on-error` | pulse-opacity 1.5s |
 | CI Failed | `--error` | none | `--text-on-error` | bold |
