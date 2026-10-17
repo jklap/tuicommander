@@ -246,6 +246,10 @@ Git repository operations (lower level than useGitOperations).
 **File:** `src/hooks/useQuickSwitcher.ts`
 
 Held-key branch quick-switcher (Cmd+Ctrl on macOS, Ctrl+Alt on Win/Linux).
+Number keys select branches before configurable actions. Configured letter actions,
+including Ctrl+Alt+V on Windows/Linux, still dispatch while the chord is held.
+The shortcut dispatcher captures handled quick-switcher chords before terminal
+input so the same key does not also write PTY bytes.
 
 ```typescript
 switchToBranchByIndex(index: number): void

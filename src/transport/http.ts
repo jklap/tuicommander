@@ -275,6 +275,10 @@ async function rpcImpl<T>(command: string, args: Record<string, unknown>, connec
 		throw new HttpRpcError(command, resp.status, text);
 	}
 
+	// Void log routes acknowledge the write without a JSON body. Keep the
+	// empty-body guard for data routes: a missing payload is still a failure.
+	if (resp.status === 204 && mapping.allowNoContent) return undefined as T;
+
 	const contentType = resp.headers.get("content-type") || "";
 	let data: unknown;
 	if (contentType.includes("application/octet-stream")) {

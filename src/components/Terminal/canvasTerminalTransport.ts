@@ -18,6 +18,7 @@ export interface TerminalTransport {
 	 * is a no-op there rather than a per-frame rejected invoke.
 	 */
 	ackFrame(received: number): void;
+	setVisible?(visible: boolean): void;
 	onEvent(type: string, handler: (payload: unknown) => void): Promise<void>;
 	/** WS lifecycle errors are local notifications, not backend PTY events. */
 	onStreamError?(handler: (error: unknown) => void): void;
@@ -75,6 +76,9 @@ export class TauriTransport implements TerminalTransport {
 	 * stale unsubscribe is dropped instead of deleting the live channel.
 	 */
 	private epoch: number | null = null;
+	private visible = false;
+	private visibilityPublication: Promise<unknown> = Promise.resolve();
+	private received = 0;
 
 	constructor(sessionId: string) {
 		this.sessionId = sessionId;
@@ -98,6 +102,7 @@ export class TauriTransport implements TerminalTransport {
 		invoke: (cmd: string, args?: Record<string, unknown>) => Promise<unknown>,
 		Channel: new () => { onmessage: (data: ArrayBuffer | number[]) => void },
 	): Promise<void> {
+		this.received = 0;
 		const onFrame = this.onFrameHandler!;
 		const sessionId = this.sessionId;
 		const channel = new Channel();
@@ -116,8 +121,10 @@ export class TauriTransport implements TerminalTransport {
 		this.epoch = (await invoke("subscribe_terminal_grid", {
 			sessionId: this.sessionId,
 			channel,
+			visible: this.visible,
 		})) as number;
-		invoke("terminal_request_frame", { sessionId: this.sessionId }).catch(() => {});
+		this.setVisible(this.visible);
+		await this.visibilityPublication;
 	}
 
 	unsubscribe(): void {
@@ -143,11 +150,38 @@ export class TauriTransport implements TerminalTransport {
 		return this.invokeRef(cmd, args);
 	}
 
+	setVisible(visible: boolean): void {
+		this.visible = visible;
+		if (this.epoch === null) return;
+		const epoch = this.epoch;
+		// Keep hide/show ordered within an epoch: an older hide must finish before
+		// a newer show can publish. Epoch checks also discard queued teardown work.
+		this.visibilityPublication = this.visibilityPublication
+			.then(async () => {
+				if (this.epoch !== epoch) return;
+				await this.invokeRef?.("ack_terminal_frame", {
+					sessionId: this.sessionId,
+					epoch,
+					received: this.received,
+					visible,
+				});
+				if (this.epoch === epoch && visible && this.visible) {
+					return this.invokeRef?.("terminal_request_frame", { sessionId: this.sessionId });
+				}
+			})
+			.catch(() => {});
+	}
+
 	ackFrame(received: number): void {
+		this.received = received;
 		// No epoch means no live subscription: there is no gate to open, and epoch 0
 		// would match none, so the backend would ignore every later ack anyway.
 		if (this.epoch === null) return;
-		this.invokeRef?.("ack_terminal_frame", { sessionId: this.sessionId, epoch: this.epoch, received }).catch((e) => {
+		this.invokeRef?.("ack_terminal_frame", {
+			sessionId: this.sessionId,
+			epoch: this.epoch,
+			received,
+		}).catch((e) => {
 			appLogger.debug("terminal", "ack_terminal_frame failed", { sessionId: this.sessionId, error: e });
 		});
 	}

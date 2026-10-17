@@ -691,7 +691,9 @@ When intent markers are enabled for the connecting agent, initialize instruction
 
 Initialize instruction prose stays within the existing 1,600-byte classic and
 1,664-byte collapsed empty-state budgets. Compact wording preserves the answer
-marker, urgent mail and progress reporting rules.
+marker, urgent mail and progress reporting rules. The answer marker can start a
+row or the text of a Markdown list item; status, tool and hook/task notices stay
+excluded.
 
 TUIC supplies protocol instructions and tool descriptions on different wire
 surfaces. Client receipt does not prove that the model can read either surface
@@ -1841,6 +1843,10 @@ bar also keeps repo-scoped tabs visible when a repository has no active workspac
      `false` includes `urgent_fallback_reason` for the queued fallback. The
      receipt cannot prove the model acted. One unread notice per sender and
      recipient covers further urgent mail until inbox observation clears it.
+     An unfinished notice reservation expires after 30 seconds so an abandoned
+     writer cannot suppress later urgent sends. Completion of the expired
+     reservation cannot settle a newer message's reservation; this lease does
+     not retry the earlier payload or claim that the model consumed it.
      The recorded CLI contract, including unused immediate-send gesture
      findings, is in `src-tauri/src/fixtures/agent_mail/urgent_cli_probe_2026_09_27.json`.
    - **Channel push**: `notifications/claude/channel` is available to external Claude Code clients with an active SSE stream and no managed PTY. It is a best-effort notification; the inbox remains authoritative.
@@ -2104,7 +2110,7 @@ replay horizon, not unbounded or restart-persistent exactly-once delivery.
 
 ## Telegram adapter groundwork
 
-The headless `telegram` tool exposes `register`, `unregister`, `begin`, `activity`, `finish` and `send` through the normal MCP registry and dispatch. Registration uses the caller's MCP-bound TUIC identity, replaces the previous agent with one native mail and is never persisted. MCP session end, PTY close or foreground-agent exit retires it. Other callers must register before outbound actions. Authorized text with no agent gets "Nessun agent registrato" and is dropped; strangers stay silent. Native stable-ID inbox/wake delivery remains authoritative. See [the Telegram design](../design/telegram-channel.md).
+The headless `telegram` tool exposes `register`, `unregister`, `begin`, `activity`, `finish` and `send` through the normal MCP registry and dispatch. Registration uses the caller's MCP-bound TUIC identity, replaces the previous agent with one native mail and is never persisted. MCP session end, PTY close or foreground-agent exit retires it. Other callers must register before outbound actions. Authorized text with no agent gets "No agent is listening. Ask an agent in TUICommander to register for Telegram." and is dropped; strangers stay silent. Native stable-ID inbox/wake delivery remains authoritative. See [the Telegram design](../design/telegram-channel.md).
 
 Native remote health, authentication, session-list, and SSE clients strip request URLs from reqwest errors before publishing them. Token-authenticated native HTTP requests send the existing `tui-session` cookie header rather than a query token; browser WebSocket query authentication is unchanged.
 
@@ -2330,3 +2336,14 @@ merge queue policy and shared request budgets apply unchanged. The desktop comma
 `{account, reference, request}` payloads (IPC also supplies `pluginId`).
 The GitHub Work runtime binds both ports when it registers each configured account.
 No live write or desktop-load verification is implied by recorded-fixture tests.
+
+`session action=force_retry` is a blocking, localhost-only terminal control.
+It resolves the normal session address, requires a live ego recovery snapshot
+and an empty tracked composer, serializes input and submits `/retry` once via
+the standard agent writer. It does not queue or attach ACP. Remote-qualified MCP
+session control remains limited to the existing supported remote actions; the
+browser status-bar control uses its owning daemon's normal PTY write transport.
+
+### Telegram request streaming (1959-162a)
+
+Telegram replies now use TUIC-driven receipt (👀), working (👨‍💻), waiting (🤔), answered (👍) and failed (👎) reactions. An ephemeral native draft shows Italian status lines or unapproved agent previews; it refreshes while work continues and the final reply replaces it. Acknowledgement of work requires inbox Read and a new recipient turn. PTY intent/activity and AI Chat assistant chunks share request correlation; finish remains authoritative after draft retirement. Telegram-mail-woken AI Chat turns automatically send their settled assistant text if finish has not answered. Queue and no-reply notices occur at ten minutes and sixty seconds after Read respectively. Restart keeps no request history. Phone rendering requires a live check after the backend restart.

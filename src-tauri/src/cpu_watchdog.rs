@@ -345,6 +345,8 @@ fn report_frontend_liveness(state: &Arc<AppState>) {
         Verdict::Frozen { gap } => tracing::warn!(
             source = "diagnostics",
             silent_secs = gap.as_secs(),
+            last_heartbeat_received_ms = state.frontend_liveness.last_received_ms(),
+            backend_observed_ms = chrono::Utc::now().timestamp_millis(),
             "Frontend unresponsive: no heartbeat for {}s — the WebView main thread is blocked or gone. \
              The backend and every PTY session are unaffected; recover with \
              POST /debug/reload_webview, or open the UI in a browser on this port.",

@@ -53,3 +53,7 @@
 .updateBanner:active {
   background: var(--accent-hover);
 }
+
+/* Keep view state and drafts mounted during a connection outage. */
+.views { height: 100%; }
+.views[hidden] { display: none; }

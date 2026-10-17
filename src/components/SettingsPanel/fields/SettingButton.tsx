@@ -8,14 +8,14 @@ export interface SettingButtonProps extends SettingFieldProps {
 }
 
 export const SettingButton: Component<SettingButtonProps> = (props) => (
-	<SettingField label={props.label} hint={props.hint}>
-		{(id, hintId) => (
+	<SettingField label={props.label} hint={props.hint} row={props.row} error={props.error} help={props.help}>
+		{(id, _hintId, descriptionId) => (
 			<button
 				id={id}
 				type="button"
 				class={s.button}
 				aria-label={props.value}
-				aria-describedby={hintId}
+				aria-describedby={descriptionId()}
 				disabled={props.disabled}
 				onClick={props.onClick}
 			>

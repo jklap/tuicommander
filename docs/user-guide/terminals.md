@@ -77,7 +77,7 @@ Older recorded prompts with a prompt ID also appear when Claude did not record a
 
 ### Suspending a Tab
 
-**Right-click → Suspend Tab** ends the tab's process and its agent, freeing the memory and CPU they used, and keeps the tab in the tab bar marked `zz`. It is not auto-standby: auto-standby only pauses an idle process, which keeps its memory, and wakes it when you focus the tab. A suspended tab holds no process at all.
+**Right-click → Suspend Tab** ends the tab's process and its agent, freeing the memory and CPU they used, and keeps the tab in the tab bar marked `zz`. It is not auto-standby: auto-standby pauses an eligible idle process, which keeps its memory, and wakes it when you focus the tab. Agents running as separate foreground jobs inside an interactive shell are not auto-stopped, because the shell would reclaim their terminal. Remote viewing and typing prevent standby for a full timeout window after the last activity or disconnect. A suspended tab holds no process at all.
 
 - **Resume** — click **Resume** in the tab, or right-click → **Resume Tab**. A new session opens in the same folder. An agent tab runs the same resume command a tab gets after a TUICommander restart, so the agent continues its conversation. A plain shell tab opens a fresh shell.
 - **Restart** — Rust saves suspended tabs before ending their processes. They stay suspended after a restart or frontend recreation, even when suspension happened with no UI open; they are never resumed automatically.
@@ -93,7 +93,7 @@ Older recorded prompts with a prompt ID also appear when Claude did not record a
 - Press **Enter** to confirm, **Escape** to cancel
 - Explicit custom names persist through reconnects and are never replaced by agent output
 - Spawn-assigned agent labels are base names: an `intent: text (Title)` marker may replace them with the current work phase, even when its text wraps across many terminal rows
-- The canvas leaves `intent:` and `suggest:` marker rows blank without moving other rows. Intent tails wrapped by the terminal or indented by the agent are hidden too; a blank row ends an indented tail. Answer, tool output and prompt rows remain visible.
+- The canvas keeps `intent:` rows visible with a theme-aware warning tint for ego, Claude and Codex. It removes complete `suggest:` marker rows and their continuation rows from the displayed grid. They occupy no selectable line and are excluded from copied text, including selections that cross scrollback. Suggestion chips remain independent of this projection. When blank separators surround the removed block, one separator remains instead of two adjacent blank lines.
 - Agent terminals show an expandable **Context** bar. It separates the model's current **Intent**, the orchestrator-owned **Assignment**, and the last substantial user **Prompt**. MCP-connected models are instructed to refresh intent at task start and whenever the material work phase changes
 - Captured intent and prompt are recovered when reconnecting to a live session, including an idle agent. **Prompt** retains the most recent submission with at least ten words; shorter follow-ups do not replace it.
 
@@ -421,3 +421,15 @@ The backend checks unattended top-level agent tabs every five seconds. `agents.h
 Hibernation requires an idle agent and a verified resume session in its saved profile. Plain shells and agents without a verifiable resume session stay live. Unread peer mail, pending commands or background work, awaiting input, attached readers, keep-open tabs and open automation runs prevent hibernation. Managed children retain their separate idle-close policy. Sleep gaps longer than 30 seconds do not advance the idle clock.
 
 The normal Rust suspension path persists `reason: "idle_hibernate"` before ending the PTY. Opening the tab, submitting input or sending peer mail uses the shared wake path. Storage or resume-verification failures leave the live session intact.
+
+### ego provider recovery
+
+When terminal ego reports a provider outage, its tab shows **recovering** rather
+than a working animation. The status bar shows the recovery phase, attempt,
+next attempt time and seconds remaining. Zero seconds means the scheduled time
+has arrived, not that the provider has recovered. **Force retry** submits
+`/retry` once to that terminal. If the composer contains a draft, the retry is
+refused without changing the draft. The status bar displays the refusal. Managed parents receive recovery entry and exit
+notices; MCP callers can use `session action=force_retry session_id=<id>`.
+Recovery clears when ego explicitly clears it, resumes busy/idle state, or
+returns to the shell prompt. This terminal protocol is separate from ACP retry.

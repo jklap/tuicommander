@@ -14,10 +14,45 @@ fn expand_tilde(path: &str) -> String {
         .unwrap_or_else(|| path.to_string())
 }
 
+/// Native ego recovery snapshot. Bounded before deserialization at the OSC boundary.
+#[derive(Clone, Debug, Serialize, serde::Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct ProviderRecovery {
+    pub phase: String,
+    pub next_attempt_ms: Option<u64>,
+    pub attempt: u32,
+}
+
+pub fn parse_provider_recovery(payload: &str) -> Option<ParsedEvent> {
+    if payload == "clear" {
+        return Some(ParsedEvent::ProviderRecovery { recovery: None });
+    }
+    if payload.len() > 256 {
+        return None;
+    }
+    // Require null explicitly for retrying, rather than accepting a missing field.
+    let value: serde_json::Value = serde_json::from_str(payload).ok()?;
+    value.get("next_attempt_ms")?;
+    let recovery: ProviderRecovery = serde_json::from_value(value).ok()?;
+    let valid = recovery.attempt > 0
+        && match recovery.phase.as_str() {
+            "waiting" => recovery
+                .next_attempt_ms
+                .is_some_and(|time| time <= 8_640_000_000_000_000),
+            "retrying" => recovery.next_attempt_ms.is_none(),
+            _ => false,
+        };
+    valid.then_some(ParsedEvent::ProviderRecovery {
+        recovery: Some(recovery),
+    })
+}
+
 /// Structured events parsed from PTY output
 #[derive(Clone, Debug, Serialize)]
 #[serde(tag = "type")]
 pub enum ParsedEvent {
+    #[serde(rename = "provider-recovery")]
+    ProviderRecovery { recovery: Option<ProviderRecovery> },
     #[serde(rename = "rate-limit")]
     RateLimit {
         pattern_name: String,
@@ -1559,24 +1594,37 @@ pub enum StructuredTokenAnchor {
     Suggest,
 }
 
+/// One marker grammar for backend capture and frontend row styling. Keep the
+/// data file portable between Rust regex and JavaScript RegExp.
+fn intent_anchor_pattern() -> &'static str {
+    lazy_static::lazy_static! {
+        static ref PATTERNS: serde_json::Value =
+            serde_json::from_str(include_str!("intent_marker.json")).expect("intent marker grammar");
+    }
+    PATTERNS["anchor"].as_str().expect("intent anchor")
+}
+
+lazy_static::lazy_static! {
+    static ref INTENT_ANCHOR_RE: regex::Regex =
+        regex::Regex::new(intent_anchor_pattern()).expect("intent anchor regex");
+}
+
 /// Identify a structured token at the start of a logical terminal line.
 /// Keep this shared with the parser grammar so grid filtering accepts exactly
 /// the same optional agent bullets as the authoritative token regexes.
 pub fn structured_token_anchor(clean: &str) -> Option<StructuredTokenAnchor> {
+    if INTENT_ANCHOR_RE.is_match(clean) {
+        return Some(StructuredTokenAnchor::Intent);
+    }
     lazy_static::lazy_static! {
-        static ref STRUCTURED_TOKEN_ANCHOR_RE: regex::Regex = regex::Regex::new(&format!(
-            r"^[\t ]*(?:[{b}][\t ]+)?(?:(?:{a})?(intent)|(suggest)):",
+        static ref SUGGEST_ANCHOR_RE: regex::Regex = regex::Regex::new(&format!(
+            r"^[\t ]*(?:[{b}][\t ]+)?suggest:",
             b = AGENT_LINE_BULLETS,
-            a = ACK_SENTENCE_PREFIX
-        ))
-        .unwrap();
+        )).unwrap();
     }
-    let captures = STRUCTURED_TOKEN_ANCHOR_RE.captures(clean)?;
-    if captures.get(1).is_some() {
-        Some(StructuredTokenAnchor::Intent)
-    } else {
-        captures.get(2).map(|_| StructuredTokenAnchor::Suggest)
-    }
+    SUGGEST_ANCHOR_RE
+        .is_match(clean)
+        .then_some(StructuredTokenAnchor::Suggest)
 }
 
 /// Detect agent-declared intent tokens: `intent: <text>` or `intent: <text> (<title>)`
@@ -1587,23 +1635,9 @@ pub fn parse_intent(clean: &str, agent_active: bool) -> Option<ParsedEvent> {
         return None;
     }
     lazy_static::lazy_static! {
-        // Plain prefix: `intent:` at line start, with optional leading
-        // horizontal whitespace, a leading bullet glyph (see
-        // AGENT_LINE_BULLETS) and/or the ack sentence (see
-        // ACK_SENTENCE_PREFIX). Ink-hosted agents (Claude Code) decorate the
-        // first line of an assistant message with `● ` and indent every
-        // continuation line by the bullet width, so plain-prefix tokens
-        // emitted after the first line arrive as `  intent: ...`; Codex
-        // decorates the first line with `• ` instead. The leading whitespace
-        // must be horizontal only — any non-whitespace character before the
-        // keyword (other than an allowed bullet or that one sentence) is
-        // rejected.
         static ref INTENT_PLAIN_RE: regex::Regex = regex::Regex::new(&format!(
-            r"(?m)^[\t ]*(?:[{b}][\t ]+)?(?:{a})?intent:[\t ]+(.+)$",
-            b = AGENT_LINE_BULLETS,
-            a = ACK_SENTENCE_PREFIX
-        ))
-        .unwrap();
+            r"(?m){}[\t ]+(.+)$", intent_anchor_pattern()
+        )).unwrap();
     }
 
     // The token is a single logical line, but the agent that wrote it wraps its
@@ -6895,6 +6929,41 @@ Enter to select · ↑/↓ to navigate · Esc to cancel";
                     );
                 }
             }
+        }
+    }
+}
+
+#[cfg(test)]
+mod provider_recovery_tests {
+    use super::*;
+
+    /// Catches: malformed recovery frames overwriting the last trustworthy snapshot.
+    #[test]
+    fn provider_recovery_rejects_invalid_contract_fields() {
+        for payload in [
+            r#"{"phase":"waiting","next_attempt_ms":null,"attempt":1}"#,
+            r#"{"phase":"retrying","next_attempt_ms":1,"attempt":1}"#,
+            r#"{"phase":"retrying","attempt":1}"#,
+            r#"{"phase":"retrying","next_attempt_ms":null,"attempt":0}"#,
+            r#"{"phase":"unknown","next_attempt_ms":null,"attempt":1}"#,
+            r#"{"phase":"waiting","next_attempt_ms":8640000000000001,"attempt":1}"#,
+            r#"{"phase":"retrying","next_attempt_ms":null,"attempt":1,"extra":true}"#,
+        ] {
+            assert!(parse_provider_recovery(payload).is_none(), "{payload}");
+        }
+        assert!(parse_provider_recovery(&"x".repeat(257)).is_none());
+    }
+
+    /// Catches: valid retrying or clear transitions being rejected at numeric boundaries.
+    #[test]
+    fn provider_recovery_accepts_snapshots_and_explicit_clear() {
+        for payload in [
+            r#"{"phase":"waiting","next_attempt_ms":0,"attempt":1}"#,
+            r#"{"phase":"waiting","next_attempt_ms":8640000000000000,"attempt":4294967295}"#,
+            r#"{"phase":"retrying","next_attempt_ms":null,"attempt":2}"#,
+            "clear",
+        ] {
+            assert!(parse_provider_recovery(payload).is_some(), "{payload}");
         }
     }
 }

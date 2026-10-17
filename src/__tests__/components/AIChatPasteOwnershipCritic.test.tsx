@@ -26,6 +26,7 @@ it.each([
 		sessionId,
 		busy: () => false,
 		queuedPrompts: () => [],
+		configOptions: () => [],
 		capabilities: () => (connected ? { promptImage: true } : null),
 		ensureStarted: () => startup,
 	} as unknown as AcpChat;

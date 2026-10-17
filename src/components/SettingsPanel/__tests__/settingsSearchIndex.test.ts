@@ -36,10 +36,12 @@ const TAB_SOURCES: Record<string, string[]> = {
  * what was added: give it a static heading if it is a real setting, otherwise
  * update the number here. */
 const UNINDEXABLE: Record<string, { dynamic: number; orphans: number }> = {
-	telegram: { dynamic: 0, orphans: 0 },
+	// Recent event labels come from runtime state; polling summaries are not controls.
+	telegram: { dynamic: 1, orphans: 0 },
 	general: { dynamic: 0, orphans: 0 },
 	appearance: { dynamic: 0, orphans: 0 },
-	notifications: { dynamic: 0, orphans: 0 },
+	// Notification sound row labels are runtime entries, not static search targets.
+	notifications: { dynamic: 1, orphans: 0 },
 	terminal: { dynamic: 0, orphans: 0 },
 	// The `<label>{section.title}</label>` over each group of the shortcut list —
 	// the groups and their bindings are built at runtime, so the page is indexed
@@ -49,12 +51,12 @@ const UNINDEXABLE: Record<string, { dynamic: number; orphans: number }> = {
 	github: { dynamic: 0, orphans: 0 },
 	// UpstreamMcpPanel: the "Discovered tools ({count})" label, whose rendered
 	// text includes a runtime count.
-	mcp: { dynamic: 1, orphans: 0 },
+	mcp: { dynamic: 2, orphans: 0 },
 	"remote-access": { dynamic: 0, orphans: 0 },
 	// RemoteMachinesPanel: the SSH-host `<option label={`${host}…`}>` (a
 	// datalist entry, not a setting), and the "Deployment" and "Keep ephemeral
 	// daemon alive" labels, whose text sits in a nested `<span>`.
-	"remote-machines": { dynamic: 3, orphans: 0 },
+	"remote-machines": { dynamic: 1, orphans: 0 },
 	plugins: { dynamic: 1, orphans: 0 },
 	"smart-prompts": { dynamic: 3, orphans: 12 },
 	// The per-agent "Native status signals", "Prevent alternate screen", and
@@ -62,13 +64,14 @@ const UNINDEXABLE: Record<string, { dynamic: number; orphans: number }> = {
 	// cards and have no static scroll target; their static captions are orphans. Workspace trust appears only in the
 	// expanded Claude and Codex cards, so a global search result could not open
 	// the right card or scroll to its control.
-	// The machine selector's "Configure agents on" label scopes the page. The
+	// The machine selector is indexed under the page header. The
 	// idle-close control sits inside a collapsed, per-agent card: search cannot
 	// identify which card to expand or scroll to its hidden control. Neither has
 	// a stable search target.
+	// Named run editors add six persistent field labels, but search cannot open their runtime forms.
 	// The per-agent "Launch instructions for <agent>" editor names its agent at
 	// runtime, inside a collapsed card; the global editor is indexed.
-	agents: { dynamic: 1, orphans: 12 },
+	agents: { dynamic: 1, orphans: 18 },
 	// The `<optgroup label={provider.name}>` inside the default-model picker. It
 	// groups the options by provider and is not a setting anybody can scroll to.
 	"ai-chat": { dynamic: 1, orphans: 0 },
@@ -156,9 +159,16 @@ describe("settings search index — drift guard", () => {
 		}).toEqual(UNINDEXABLE[tab]);
 	});
 
-	it("keeps per-agent captions and the machine selector out of static search targets", () => {
+	it("keeps per-agent captions out of search and indexes the page-level machine selector", () => {
 		const orphans = extractTab(readPage("agents")).settings.filter((setting) => !setting.section);
 		expect(orphans.map((setting) => setting.text)).toEqual([
+			"Arguments",
+			"Configuration name",
+			"Command (binary)",
+			"Model (optional)",
+			"Configuration name",
+			"Command (binary)",
+			"Model (optional)",
 			"Usage Dashboard",
 			"Close idle managed child after",
 			"Enabled",
@@ -170,8 +180,12 @@ describe("settings search index — drift guard", () => {
 			"Track agent intent",
 			"Collect progress",
 			"Show suggested follow-ups",
-			"Configure agents on",
 		]);
+		expect(SETTINGS_SEARCH_INDEX).toContainEqual({
+			tab: "agents",
+			section: "Terminal agents",
+			label: "Configure agents on",
+		});
 	});
 
 	it("indexes no tab the panel cannot open", () => {
@@ -237,6 +251,7 @@ describe("searchSettings", () => {
 
 	it("offers a desktop-only control on the desktop and not in a browser", () => {
 		expect(searchSettings("global hotkey", ALL_TABS, "desktop")).toEqual([
+			expect.objectContaining({ tab: "keyboard-shortcuts", section: "Global Hotkey", platform: "desktop" }),
 			expect.objectContaining({ tab: "keyboard-shortcuts", label: "Global Hotkey (Toggle Window)" }),
 		]);
 		expect(searchSettings("global hotkey", ALL_TABS, "browser")).toEqual([]);

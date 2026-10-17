@@ -3,7 +3,7 @@ import AnsiToHtml from "ansi-to-html";
 // The component tests therefore use jsdom instead of the suite-wide happy-dom
 // environment so security behavior matches real browser engines.
 import DOMPurify from "dompurify";
-import { marked, type Tokens } from "marked";
+import { marked, Renderer, type Tokens } from "marked";
 import "./markdown-content.css";
 import { type Component, createEffect, createMemo, Index, onCleanup, Show } from "solid-js";
 import { appLogger } from "../../stores/appLogger";
@@ -20,6 +20,7 @@ import {
 } from "../../utils/tweakComments";
 import { applyTweakDomHighlights } from "../../utils/tweakDomHighlight";
 import { filePathRegex, isWholeFilePath } from "../Terminal/linkProvider";
+import { type ChatTableActions, enhanceChatTables, tableSources } from "./chatTables";
 
 /** DOMPurify's default allowed-URI schemes plus Tauri's local asset protocols
  *  (`asset:`, `tauri:`). Without these, DOMPurify strips the rewritten image
@@ -35,6 +36,8 @@ export interface ContentRendererProps {
 	untrustedContent?: boolean;
 	/** Opt-in copy action for fenced code blocks. Receives the original source text. */
 	onCodeCopy?: (text: string) => void;
+	/** AI Chat only: smart columns and exact-source table actions. */
+	tableActions?: ChatTableActions;
 	/** Turn plain file paths into links; the caller still resolves and validates them. */
 	autoLinkFiles?: boolean;
 	emptyMessage?: string;
@@ -123,6 +126,11 @@ const ANSI_CSI_RE = /\x1b\[[\x30-\x3f]*[\x20-\x2f]*[\x40-\x7e]/;
 // Custom renderer: code blocks with ANSI sequences render with colors.
 marked.use({
 	renderer: {
+		table(token: Tokens.Table) {
+			return Renderer.prototype.table
+				.call(this, token)
+				.replace("<table>", `<table data-raw-table="${encodeURIComponent(token.raw)}">`);
+		},
 		code(token: Tokens.Code) {
 			const lang = token.lang ?? "";
 			const baseCls = lang ? `language-${lang}` : "";
@@ -306,7 +314,13 @@ async function renderMermaidBlocks(container: HTMLElement): Promise<void> {
  */
 function renderMarkdownSegment(
 	source: string,
-	opts: { baseDir?: string; imageSrc?: (path: string) => string; lineOffset: number; untrustedContent?: boolean },
+	opts: {
+		baseDir?: string;
+		imageSrc?: (path: string) => string;
+		lineOffset: number;
+		untrustedContent?: boolean;
+		smartTables?: boolean;
+	},
 ): string {
 	const raw = stripAnsiOutsideCodeBlocks(source);
 	try {
@@ -326,6 +340,14 @@ function renderMarkdownSegment(
 		//    applied to the rendered DOM afterwards), then parse markdown.
 		const withSentinels = injectTweakSentinels(cleaned);
 		let html = marked.parse(withSentinels, { async: false }) as string;
+		if (opts.smartTables) {
+			const originals = tableSources(source);
+			let tableIndex = 0;
+			html = html.replace(
+				/data-raw-table="[^"]*"/g,
+				() => `data-raw-table="${encodeURIComponent(originals[tableIndex++] ?? "")}"`,
+			);
+		} else html = html.replace(/ data-raw-table="[^"]*"/g, "");
 
 		// 4. Resolve local images through the active transport and repository boundary.
 		html = rewriteLocalImages(html, opts.baseDir, opts.imageSrc);
@@ -412,6 +434,7 @@ export const ContentRenderer: Component<ContentRendererProps> = (props) => {
 					imageSrc: props.imageSrc,
 					lineOffset: 0,
 					untrustedContent: props.untrustedContent,
+					smartTables: !!props.tableActions,
 				}),
 	);
 
@@ -429,6 +452,7 @@ export const ContentRenderer: Component<ContentRendererProps> = (props) => {
 	let renderedBaseDir: string | undefined;
 	let renderedImageSrc: ContentRendererProps["imageSrc"];
 	let renderedUntrusted: boolean | undefined;
+	let renderedSmartTables: boolean | undefined;
 	const incrementalContent = createMemo(() => {
 		if (!props.incremental) return { committed: [] as string[], tail: "" };
 		split = splitStream(props.content ?? "", split);
@@ -440,11 +464,13 @@ export const ContentRenderer: Component<ContentRendererProps> = (props) => {
 		if (
 			props.baseDir !== renderedBaseDir ||
 			props.imageSrc !== renderedImageSrc ||
-			props.untrustedContent !== renderedUntrusted
+			props.untrustedContent !== renderedUntrusted ||
+			!!props.tableActions !== renderedSmartTables
 		) {
 			renderedBaseDir = props.baseDir;
 			renderedImageSrc = props.imageSrc;
 			renderedUntrusted = props.untrustedContent;
+			renderedSmartTables = !!props.tableActions;
 			renderedHtml = [];
 			renderedFor = [];
 		} else if (n > committed.length || (n > 0 && committed[n - 1] !== renderedFor[n - 1])) {
@@ -458,6 +484,7 @@ export const ContentRenderer: Component<ContentRendererProps> = (props) => {
 					imageSrc: props.imageSrc,
 					lineOffset: committed[i].lineOffset,
 					untrustedContent: props.untrustedContent,
+					smartTables: !!props.tableActions,
 				}),
 			);
 			renderedFor.push(committed[i]);
@@ -469,6 +496,7 @@ export const ContentRenderer: Component<ContentRendererProps> = (props) => {
 				imageSrc: props.imageSrc,
 				lineOffset: split.tail.lineOffset,
 				untrustedContent: props.untrustedContent,
+				smartTables: !!props.tableActions,
 			}),
 		};
 	});
@@ -567,6 +595,21 @@ export const ContentRenderer: Component<ContentRendererProps> = (props) => {
 	let containerRef: HTMLDivElement | undefined;
 	// Hrefs that resolved to nothing; the auto-link pass must not turn their text back into links.
 	const deadHrefs = new Set<string>();
+	createEffect(() => {
+		processedContent();
+		incrementalContent();
+		const actions = props.tableActions;
+		if (!actions) return;
+		let active = true;
+		let dispose: (() => void) | undefined;
+		queueMicrotask(() => {
+			if (active && containerRef) dispose = enhanceChatTables(containerRef, actions);
+		});
+		onCleanup(() => {
+			active = false;
+			dispose?.();
+		});
+	});
 
 	// After render, set indeterminate property on [~] checkboxes (not settable via HTML attribute)
 	// and render Mermaid diagrams from ```mermaid code blocks.

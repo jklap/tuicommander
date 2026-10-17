@@ -1,4 +1,4 @@
-import { createSignal, onMount, Show } from "solid-js";
+import { createEffect, createSignal, onMount, Show } from "solid-js";
 import { TelegramTab } from "../../components/SettingsPanel/tabs/TelegramTab";
 import { Select } from "../../components/ui/Select";
 import { t } from "../../i18n";
@@ -14,6 +14,7 @@ import styles from "./SettingsScreen.module.css";
 const SOUND_KEY = "tuic-mobile-sounds";
 
 interface SettingsScreenProps {
+	recoveryRevision?: number;
 	isConnected: boolean;
 }
 
@@ -48,6 +49,10 @@ export function SettingsScreen(props: SettingsScreenProps) {
 	onMount(() => {
 		setServerUrl(window.location.origin);
 		void detectPushState().then(setPushState);
+	});
+	createEffect(() => {
+		props.recoveryRevision;
+		setThemeError(null);
 		void loadMobileTheme()
 			.then(setTheme)
 			.catch((error: unknown) => {

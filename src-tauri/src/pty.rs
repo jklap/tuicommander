@@ -404,6 +404,11 @@ fn try_timer_idle_transition(
         let protocol_stale =
             screen_activity == AgentScreenActivity::Ready && silence.protocol_busy_is_stale();
         let screen_confirms_idle = match screen_activity {
+            AgentScreenActivity::Ready
+                if agent_type == Some("ego") && silence.injection_delivery_uncertain =>
+            {
+                silence.recover_uncertain_injection_on_empty_composer()
+            }
             AgentScreenActivity::Ready if protocol_stale => {
                 tracing::warn!(
                     session_id = %session_id,
@@ -640,6 +645,11 @@ fn spawn_silence_timer(
                     let now = std::time::Instant::now();
                     sl.last_output_at = now;
                     sl.last_chunk_at = now;
+                    if sl.injection_delivery_uncertain {
+                        // Resetting clocks is not a new composer repaint.
+                        sl.injection_uncertain_since = Some(now);
+                        sl.screen_ready_pending_since = None;
+                    }
                 }
                 continue;
             }
@@ -1896,7 +1906,7 @@ impl ChunkProcessor {
                 let refs: Vec<&str> = screen.iter().map(String::as_str).collect();
                 // Fails OPEN by contract: no anchor found is `None`, and `None`
                 // must mean "parse everything", never "parse nothing".
-                crate::chrome::find_chrome_cutoff(&refs)
+                crate::chrome::find_agent_chrome_cutoff(&refs, agent_type.as_deref())
             } else {
                 None
             };
@@ -2153,11 +2163,27 @@ impl ChunkProcessor {
 
         // Handle terminal events from alacritty (title, clipboard, PTY writes, OSC 133, TUIC)
         let mut tuic_events: Vec<ParsedEvent> = Vec::new();
+        // Lifecycle markers retract recovery; they do not announce it. Track the
+        // pending snapshot too, since these events are published after this loop.
+        let mut recovery_active = state
+            .session_maps
+            .session_states
+            .get(session_id)
+            .is_some_and(|session| session.provider_recovery.is_some());
         let mut explicit_idle_in_chunk = false;
         if !term_events.is_empty() {
             use crate::terminal_grid::{Osc133Event, TermEvent};
             for evt in term_events {
                 match evt {
+                    TermEvent::Bell => {
+                        state.emit_pty_event(crate::state::AppEvent::PtyBell {
+                            session_id: session_id.to_string(),
+                        });
+                        #[cfg(feature = "desktop")]
+                        if let Some(a) = state.app_handle.read().as_ref() {
+                            let _ = a.emit(&format!("pty-bell-{session_id}"), ());
+                        }
+                    }
                     TermEvent::PtyWrite(response) => {
                         // Four substring scans of a terminal reply, for a
                         // diagnostic error line only. Behind the toggle.
@@ -2232,6 +2258,10 @@ impl ChunkProcessor {
                         line,
                     } => {
                         explicit_idle_in_chunk |= command == 'A';
+                        if command == 'A' && recovery_active {
+                            recovery_active = false;
+                            tuic_events.push(ParsedEvent::ProviderRecovery { recovery: None });
+                        }
                         state
                             .session_maps
                             .has_osc133_integration
@@ -2290,6 +2320,16 @@ impl ChunkProcessor {
                         payload,
                         line,
                     } => match verb.as_str() {
+                        "ego-recovery" if agent_type.as_deref() == Some("ego") => {
+                            if let Some(event) =
+                                crate::output_parser::parse_provider_recovery(&payload)
+                            {
+                                if let ParsedEvent::ProviderRecovery { recovery } = &event {
+                                    recovery_active = recovery.is_some();
+                                }
+                                tuic_events.push(event);
+                            }
+                        }
                         "codex-session" => crate::codex_binding::receive(
                             state,
                             session_id,
@@ -2302,6 +2342,10 @@ impl ChunkProcessor {
                             // field is driven by Question/UserInput events instead.
                             explicit_idle_in_chunk |= payload == "idle";
                             self.handle_tuic_state(&payload, session_id, state);
+                            if matches!(payload.as_str(), "busy" | "idle") && recovery_active {
+                                recovery_active = false;
+                                tuic_events.push(ParsedEvent::ProviderRecovery { recovery: None });
+                            }
                             if let Some(evt) = tuic_state_awaiting_event(&payload, line as i64) {
                                 tuic_events.push(evt);
                             }
@@ -3864,29 +3908,15 @@ pub(crate) fn spawn_reader_thread(
         // force-reset it so frame delivery resumes. Prevents permanent blank
         // terminal when the frontend fails to ack (crash, corrupt frame, etc.).
         //
-        // This is also the deadline a HIDDEN tab races on purpose: it acks on a
-        // trailing timer (HIDDEN_ACK_INTERVAL_MS in canvasTerminalUtils.ts), so
-        // the two constants are coupled and neither may be re-tuned alone. The
-        // difference between them is the frontend's drift budget — at 400 vs 500
-        // it was 100 ms and lost constantly, logging the warning below for tabs
-        // that were merely in the background.
+        // Hidden desktop subscriptions are excluded before this gate. Only a
+        // visible viewport (or a frame already queued before hide) can time out.
         const MAX_IN_FLIGHT_MS: u64 = 500;
-        // After this many consecutive force-resets, back off for STUCK_PAUSE_MS
-        // to let the JS event loop drain the Tauri channel backlog before
-        // sending more frames. Kept short (1s, chunked) so a transient JS stall
-        // — e.g. a repo-changed git/IPC burst that blocks the WebView thread for
-        // ~1-2s — doesn't freeze an otherwise-healthy terminal for the full
-        // pause. The loop re-applies the back-off if the frontend is still
-        // behind, so persistent saturation still gets cumulative backpressure.
-        const MAX_STUCK_BEFORE_PAUSE: u32 = 3;
-        const STUCK_PAUSE_MS: u64 = 1_000;
         // Send-rate floors live in grid_send_min_interval_ms() (unit-tested).
         // How long after a keystroke the typing-throttle stays armed.
         const INPUT_THROTTLE_WINDOW_MS: u64 = 150;
         const LOAD_SATURATION_RATIO: f64 = 1.0; // 1-min load >= cores
         const LOAD_SAMPLE_INTERVAL: std::time::Duration = std::time::Duration::from_secs(1);
         let mut stuck_since: Option<std::time::Instant> = None;
-        let mut stuck_count: u32 = 0;
         let mut dirty_run: u32 = 0;
         let mut last_sent: Option<std::time::Instant> = None;
         let mut last_load_check: Option<std::time::Instant> = None;
@@ -3976,13 +4006,21 @@ pub(crate) fn spawn_reader_thread(
                 continue;
             }
             dirty_run = dirty_run.saturating_add(1);
-            // Clone the Arc out: the guard below would otherwise hold a DashMap
-            // shard read lock across the stuck back-off sleep, blocking every
-            // writer on that shard for up to a second.
+            // Clone the Arc out so recovery never retains a DashMap shard guard.
             let gate = ticker_state
                 .grid
                 .gates
                 .get(&ticker_sid)
+                .filter(|_| {
+                    #[cfg(feature = "desktop")]
+                    {
+                        desktop_grid_visible(&ticker_state, &ticker_sid)
+                    }
+                    #[cfg(not(feature = "desktop"))]
+                    {
+                        false
+                    }
+                })
                 .map(|g| Arc::clone(g.value()));
             // The gate belongs to the desktop WebView and to nothing else. It used
             // to stop this tick outright, which is correct only while the desktop
@@ -3993,44 +4031,33 @@ pub(crate) fn spawn_reader_thread(
             // `send_grid_frame` — but it may only stop the tick when there is
             // nobody else to serve.
             let watchers = grid_has_watcher(&ticker_state, &ticker_sid);
-            if gate.as_ref().is_some_and(|g| !g.is_open()) {
+            if gate.as_ref().is_some_and(|g| g.is_paused()) {
+                stuck_since = None;
+                if !watchers {
+                    if let Some(target) = take_pending_scroll(&ticker_state, &ticker_sid)
+                        && let Some(vt) = ticker_state.grid.vt_log_buffers.get(&ticker_sid)
+                    {
+                        apply_scroll_target(&mut vt.lock(), target);
+                    }
+                    continue;
+                }
+            } else if gate.as_ref().is_some_and(|g| !g.is_open()) {
                 let now = std::time::Instant::now();
                 let since = stuck_since.get_or_insert(now);
                 let elapsed = now.duration_since(*since).as_millis() as u64;
                 if elapsed > MAX_IN_FLIGHT_MS {
-                    stuck_count += 1;
-                    tracing::warn!(
-                        session_id = %ticker_sid,
-                        elapsed_ms = elapsed,
-                        stuck_count,
-                        watchers,
-                        outstanding = gate.as_ref().map_or(0, |g| g.outstanding()),
-                        "grid frame gate stuck, abandoning the outstanding frame"
-                    );
                     if let Some(g) = gate.as_ref() {
                         g.abandon();
+                        tracing::warn!(
+                            session_id = %ticker_sid,
+                            elapsed_ms = elapsed,
+                            stuck_count = g.abandoned_count(),
+                            watchers,
+                            paused = g.is_paused(),
+                            "grid frame gate stuck, abandoning the outstanding frame"
+                        );
                     }
                     stuck_since = None;
-                    if stuck_count >= MAX_STUCK_BEFORE_PAUSE {
-                        stuck_count = 0;
-                        // Back off to let JS drain the channel backlog before retrying.
-                        // Sleep in short chunks so (a) a recovered frontend resumes
-                        // within ~one chunk rather than the full pause, and (b) session
-                        // close isn't delayed up to the full pause on shutdown.
-                        //
-                        // Skipped entirely when a browser is watching: this pause is
-                        // the desktop's recovery time, and spending it on the thread
-                        // that is the only frame source for the other transport
-                        // freezes a client that never fell behind.
-                        let mut waited = 0u64;
-                        while !watchers
-                            && waited < STUCK_PAUSE_MS
-                            && ticker_running.load(Ordering::Relaxed)
-                        {
-                            std::thread::sleep(std::time::Duration::from_millis(100));
-                            waited += 100;
-                        }
-                    }
                 }
                 if !watchers {
                     ticker_dirty.store(true, Ordering::Relaxed);
@@ -4038,7 +4065,6 @@ pub(crate) fn spawn_reader_thread(
                 }
             } else {
                 stuck_since = None;
-                stuck_count = 0;
             }
             // Adaptive frame-rate floor: a TUI that animates continuously (e.g.
             // grok's spinner repaints its whole bordered UI and walks the cursor
@@ -4413,6 +4439,15 @@ fn apply_scroll_target(vt: &mut crate::state::VtLogBuffer, target: i64) {
     }
 }
 
+#[cfg(feature = "desktop")]
+fn desktop_grid_visible(state: &AppState, session_id: &str) -> bool {
+    state
+        .grid
+        .channels
+        .get(session_id)
+        .is_some_and(|ch| ch.visible.load(Ordering::Relaxed))
+}
+
 /// Is anyone waiting for this session's grid frames?
 ///
 /// The two consumers `send_grid_frame` knows about: the desktop IPC channel, and
@@ -4424,7 +4459,7 @@ fn apply_scroll_target(vt: &mut crate::state::VtLogBuffer, target: i64) {
 /// a consumer this misses is a client that stops repainting.
 pub(crate) fn grid_has_subscriber(state: &AppState, session_id: &str) -> bool {
     #[cfg(feature = "desktop")]
-    if state.grid.channels.contains_key(session_id) {
+    if desktop_grid_visible(state, session_id) {
         return true;
     }
     grid_has_watcher(state, session_id)
@@ -4483,7 +4518,7 @@ pub(crate) fn send_grid_frame(
     // no desktop channel, so the watch can take the original; cloning first and
     // then finding nothing to hand the original to was pure copy.
     #[cfg(feature = "desktop")]
-    let desktop_wants_it = state.grid.channels.contains_key(session_id);
+    let desktop_wants_it = desktop_grid_visible(state, session_id);
     #[cfg(not(feature = "desktop"))]
     let desktop_wants_it = false;
 
@@ -4556,8 +4591,15 @@ fn send_desktop_grid_frame(state: &AppState, session_id: &str, bytes: Vec<u8>) {
     let Some(ch) = state.grid.channels.get(session_id) else {
         return;
     };
+    if !ch.visible.load(Ordering::Relaxed) {
+        return;
+    }
     let gate = state.grid.gates.get(session_id);
     if let Some(gate) = gate.as_deref() {
+        if gate.is_paused() {
+            gate.note_missed();
+            return;
+        }
         gate.mark_sent();
     }
     // `tauri::ipc::Response` is what keeps this binary. A `Vec<u8>` matches

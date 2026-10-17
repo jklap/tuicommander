@@ -292,6 +292,7 @@ fn event_type_name(event: &AppEvent) -> &str {
         AppEvent::PtyExit { .. } => "pty-exit",
         AppEvent::PtyActivity { .. } => "pty-activity",
         AppEvent::PtyTitle { .. } => "pty-title",
+        AppEvent::PtyBell { .. } => "pty-bell",
         AppEvent::PtyOsc133 { .. } => "pty-osc133",
         AppEvent::PtyCwd { .. } => "pty-cwd",
         AppEvent::PluginWatcherLines { .. } => "plugin-watcher-lines",
@@ -401,6 +402,7 @@ fn event_payload(event: &AppEvent) -> serde_json::Value {
         AppEvent::PtyTitle { session_id, title } => {
             serde_json::json!({ "session_id": session_id, "title": title })
         }
+        AppEvent::PtyBell { session_id } => serde_json::json!({ "session_id": session_id }),
         AppEvent::PtyActivity { session_id } => {
             serde_json::json!({ "session_id": session_id })
         }

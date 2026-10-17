@@ -164,7 +164,10 @@ pub(super) async fn write_to_session(
     Path(session_id): Path<String>,
     Json(body): Json<WriteRequest>,
 ) -> impl IntoResponse {
-    if let Err(e) = write_pty_input(&state, &session_id, &body.data) {
+    if let Err(e) =
+        crate::pty::run_bounded_pty_input(move || write_pty_input(&state, &session_id, &body.data))
+            .await
+    {
         if e == "Session not found" {
             return session_not_found();
         }
@@ -182,8 +185,12 @@ pub(super) async fn write_parts_to_session(
     Path(session_id): Path<String>,
     Json(body): Json<WritePartsRequest>,
 ) -> impl IntoResponse {
-    let parts: Vec<&str> = body.parts.iter().map(String::as_str).collect();
-    if let Err(e) = write_pty_input_parts(&state, &session_id, &parts) {
+    if let Err(e) = crate::pty::run_bounded_pty_input(move || {
+        let parts: Vec<&str> = body.parts.iter().map(String::as_str).collect();
+        write_pty_input_parts(&state, &session_id, &parts)
+    })
+    .await
+    {
         if e == "Session not found" {
             return session_not_found();
         }
@@ -271,6 +278,7 @@ pub(crate) fn write_pty_input_parts(
     session_id: &str,
     parts: &[&str],
 ) -> Result<(), String> {
+    crate::background_mode::hidden::record_remote_activity(state, session_id);
     let transaction = state.input_transaction(session_id);
     let _input = transaction.lock();
     let byte_parts: Vec<&[u8]> = parts.iter().map(|part| part.as_bytes()).collect();
@@ -300,11 +308,12 @@ pub(crate) fn write_pty_input_pair(
     key: &str,
     agent_type: Option<&str>,
 ) -> Result<(), String> {
-    let transaction = state.input_transaction(session_id);
-    let _input = transaction.lock();
     if key != "\r" || agent_type.is_none() {
         return write_pty_input_parts(state, session_id, &[text, key]);
     }
+    crate::background_mode::hidden::record_remote_activity(state, session_id);
+    let transaction = state.input_transaction(session_id);
+    let _input = transaction.lock();
 
     let writer = state
         .pty_writer(session_id)
@@ -337,6 +346,7 @@ fn write_pty_input_bytes(
     session_id: &str,
     data: &[u8],
 ) -> Result<(), String> {
+    crate::background_mode::hidden::record_remote_activity(state, session_id);
     let transaction = state.input_transaction(session_id);
     let _input = transaction.lock();
     state.write_pty_parts(session_id, &[data])?;
@@ -508,6 +518,7 @@ pub(super) async fn get_output(
     Path(session_id): Path<String>,
     Query(query): Query<OutputQuery>,
 ) -> impl IntoResponse {
+    crate::background_mode::hidden::record_remote_activity(&state, &session_id);
     let format = query.format.as_deref().unwrap_or("raw");
 
     // Both local MCP and the remote proxy use the same serializer, including
@@ -620,8 +631,6 @@ pub(super) async fn close_session(
     Path(session_id): Path<String>,
 ) -> impl IntoResponse {
     if state.session_maps.sessions.contains_key(&session_id) {
-        // Send Ctrl+C then cleanup
-        let _ = write_pty_input_bytes(&state, &session_id, &[0x03]);
         // Broadcast to SSE/WebSocket consumers BEFORE cleanup: cleanup_session reaps
         // this session's per-session PTY channel, so the closed frame must be emitted
         // while the channel still exists. broadcast keeps the buffered frame available
@@ -646,6 +655,7 @@ pub(super) async fn close_session(
         let cleanup_session_id = session_id.clone();
         let cleanup_state = state.clone();
         if let Err(error) = tokio::task::spawn_blocking(move || {
+            crate::pty::close_pty_core(&cleanup_state, &cleanup_session_id, false);
             crate::pty::cleanup_session(&cleanup_session_id, &cleanup_state);
         })
         .await
@@ -1543,6 +1553,7 @@ async fn handle_ws_session(
                                 crate::state::AppEvent::PtyParsed { parsed, .. } => {
                                     serde_json::json!({"type": "parsed", "event": parsed})
                                 }
+                                crate::state::AppEvent::PtyBell { .. } => serde_json::json!({"type": "bell"}),
                                 crate::state::AppEvent::PtyTitle { title, .. } => {
                                     serde_json::json!({"type": "title", "title": title})
                                 }
@@ -1591,13 +1602,25 @@ async fn handle_ws_session(
     while let Some(Ok(msg)) = ws_receiver.next().await {
         match msg {
             Message::Text(text) => {
-                if let Err(error) = write_pty_input(&state_clone, &sid, &text) {
+                let input_state = state_clone.clone();
+                let input_sid = sid.clone();
+                if let Err(error) = crate::pty::run_bounded_pty_input(move || {
+                    write_pty_input(&input_state, &input_sid, &text)
+                })
+                .await
+                {
                     tracing::error!(session_id = %sid, %error, "PTY write failed");
                     break;
                 }
             }
             Message::Binary(data) => {
-                if let Err(error) = write_pty_input_bytes(&state_clone, &sid, &data) {
+                let input_state = state_clone.clone();
+                let input_sid = sid.clone();
+                if let Err(error) = crate::pty::run_bounded_pty_input(move || {
+                    write_pty_input_bytes(&input_state, &input_sid, &data)
+                })
+                .await
+                {
                     tracing::error!(session_id = %sid, %error, "PTY write failed");
                     break;
                 }
@@ -1702,6 +1725,12 @@ async fn handle_ws_log_session(
                     // channel was reaped (session gone): exit instead of spinning on
                     // the immediately-ready error arm. Lagged is a transient skip.
                     match event {
+                        Ok(crate::state::AppEvent::PtyBell { .. }) => {
+                            if ws_sender.text(&serde_json::json!({"type": "bell"}).to_string()).await.is_err() {
+                                break;
+                            }
+                            LoopAction::Skip
+                        }
                         Ok(crate::state::AppEvent::PtyTitle { title, .. }) => {
                             if ws_sender.text(&serde_json::json!({"type": "title", "title": title}).to_string()).await.is_err() {
                                 break;
@@ -1788,13 +1817,25 @@ async fn handle_ws_log_session(
     while let Some(Ok(msg)) = ws_receiver.next().await {
         match msg {
             Message::Text(text) => {
-                if let Err(error) = write_pty_input(&state, &session_id, &text) {
+                let input_state = state.clone();
+                let input_sid = session_id.clone();
+                if let Err(error) = crate::pty::run_bounded_pty_input(move || {
+                    write_pty_input(&input_state, &input_sid, &text)
+                })
+                .await
+                {
                     tracing::error!(session_id = %session_id, %error, "PTY write failed");
                     break;
                 }
             }
             Message::Binary(data) => {
-                if let Err(error) = write_pty_input_bytes(&state, &session_id, &data) {
+                let input_state = state.clone();
+                let input_sid = session_id.clone();
+                if let Err(error) = crate::pty::run_bounded_pty_input(move || {
+                    write_pty_input_bytes(&input_state, &input_sid, &data)
+                })
+                .await
+                {
                     tracing::error!(session_id = %session_id, %error, "PTY write failed");
                     break;
                 }
@@ -1823,6 +1864,7 @@ async fn handle_ws_log_session(
 fn grid_ws_frame(event: &crate::state::AppEvent) -> Option<serde_json::Value> {
     // Per-session channel — every event belongs to this session.
     Some(match event {
+        crate::state::AppEvent::PtyBell { .. } => serde_json::json!({"type":"bell"}),
         crate::state::AppEvent::PtyParsed { parsed, .. } => {
             serde_json::json!({"type": "parsed", "event": parsed})
         }
@@ -1986,7 +2028,13 @@ async fn handle_ws_grid_session(
                 // No ACK needed — watch channel handles backpressure naturally.
             }
             Message::Binary(data) => {
-                if let Err(error) = write_pty_input_bytes(&state_clone, &sid, &data) {
+                let input_state = state_clone.clone();
+                let input_sid = sid.clone();
+                if let Err(error) = crate::pty::run_bounded_pty_input(move || {
+                    write_pty_input_bytes(&input_state, &input_sid, &data)
+                })
+                .await
+                {
                     tracing::error!(session_id = %sid, %error, "PTY write failed");
                     break;
                 }
@@ -3342,6 +3390,101 @@ mod tests {
         );
     }
 
+    /// A full OS pipe, not a mocked writer: the next byte blocks in the kernel
+    /// until the read end is dropped. The bounded release keeps RED runs finite.
+    #[cfg(unix)]
+    fn full_kernel_pipe() -> (std::fs::File, std::fs::File) {
+        use std::os::fd::{AsRawFd, FromRawFd};
+        let mut fds = [-1; 2];
+        assert_eq!(unsafe { libc::pipe(fds.as_mut_ptr()) }, 0);
+        let reader = unsafe { std::fs::File::from_raw_fd(fds[0]) };
+        let mut writer = unsafe { std::fs::File::from_raw_fd(fds[1]) };
+        let fd = writer.as_raw_fd();
+        let flags = unsafe { libc::fcntl(fd, libc::F_GETFL) };
+        assert!(flags >= 0);
+        assert_eq!(
+            unsafe { libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK) },
+            0
+        );
+        loop {
+            match std::io::Write::write(&mut writer, &[0; 4096]) {
+                Ok(n) => assert!(n > 0),
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => break,
+                Err(error) => panic!("fill kernel pipe: {error}"),
+            }
+        }
+        assert_eq!(unsafe { libc::fcntl(fd, libc::F_SETFL, flags) }, 0);
+        (reader, writer)
+    }
+
+    /// Catches: a blocked kernel PTY write parks an HTTP runtime worker and
+    /// prevents the request from returning its own bounded uncertainty error.
+    #[cfg(unix)]
+    #[tokio::test(flavor = "current_thread")]
+    async fn blocked_kernel_write_returns_a_bounded_http_error() {
+        let state = super::super::tests::test_state();
+        let sid = "blocked-http-write";
+        crate::state::tests_support::insert_dummy_session(&state, sid);
+        let (reader, writer) = full_kernel_pipe();
+        state.session_maps.sessions.get(sid).unwrap().lock().writer =
+            Arc::new(parking_lot::Mutex::new(Box::new(writer)));
+        let release = std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_secs(5));
+            drop(reader);
+        });
+        let started = std::time::Instant::now();
+        let response = write_to_session(
+            State(state.clone()),
+            Path(sid.to_string()),
+            Json(WriteRequest { data: "x".into() }),
+        )
+        .await
+        .into_response();
+        let elapsed = started.elapsed();
+        release.join().unwrap();
+        crate::pty::close_pty_core(&state, sid, false);
+        assert!(response.status().is_server_error());
+        assert!(
+            elapsed < std::time::Duration::from_secs(3),
+            "blocked write held HTTP for {elapsed:?}"
+        );
+    }
+
+    /// Catches: close waits behind a blocked writer before it can kill the
+    /// session, so its nominal 100ms grace window is never reached.
+    #[cfg(unix)]
+    #[test]
+    fn close_reaches_kill_fallback_while_kernel_writer_is_blocked() {
+        let state = super::super::tests::test_state();
+        let sid = "blocked-writer-close";
+        crate::state::tests_support::insert_dummy_session(&state, sid);
+        let (reader, writer) = full_kernel_pipe();
+        let shared: crate::state::SharedPtyWriter =
+            Arc::new(parking_lot::Mutex::new(Box::new(writer)));
+        state.session_maps.sessions.get(sid).unwrap().lock().writer = shared.clone();
+        let (locked_tx, locked_rx) = std::sync::mpsc::channel();
+        let blocked = std::thread::spawn(move || {
+            let mut writer = shared.lock();
+            locked_tx.send(()).unwrap();
+            let _ = std::io::Write::write_all(writer.as_mut(), b"x");
+        });
+        locked_rx.recv().unwrap();
+        let release = std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_secs(5));
+            drop(reader);
+        });
+        let started = std::time::Instant::now();
+        crate::pty::close_pty_core(&state, sid, false);
+        let elapsed = started.elapsed();
+        release.join().unwrap();
+        blocked.join().unwrap();
+        assert!(!state.session_maps.sessions.contains_key(sid));
+        assert!(
+            elapsed < std::time::Duration::from_secs(1),
+            "close waited for writer for {elapsed:?}"
+        );
+    }
+
     #[cfg(unix)]
     #[test]
     fn n_input_parts_share_one_writer_flush_and_preserve_write_boundaries() {
@@ -4138,6 +4281,16 @@ mod tests {
         let mut map = frame.as_object().expect("frame must be an object").clone();
         assert!(map.remove("type").is_some(), "frame must carry a type");
         map
+    }
+
+    /// Catches browser bells disappearing after desktop stops decoding hidden frames.
+    #[test]
+    fn grid_ws_bell_is_independent_of_grid_frames() {
+        let frame = grid_ws_frame(&crate::state::AppEvent::PtyBell {
+            session_id: "s1".into(),
+        })
+        .unwrap();
+        assert_eq!(frame, serde_json::json!({"type":"bell"}));
     }
 
     #[test]

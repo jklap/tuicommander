@@ -215,6 +215,9 @@ pub fn run(log: &str, caller: &str, command: &[String]) -> Result<(), String> {
         .append(true)
         .open(log)
         .map_err(|e| format!("Cannot open background log {log}: {e}"))?;
+    let full_command = command.join(" ");
+    writeln!(output, "tuic bg: command={full_command}")
+        .map_err(|e| format!("Cannot write background log header {log}: {e}"))?;
     let stderr = output.try_clone().map_err(|e| e.to_string())?;
     let code = match Command::new(&command[0])
         .args(&command[1..])
@@ -232,7 +235,13 @@ pub fn run(log: &str, caller: &str, command: &[String]) -> Result<(), String> {
     let exit_file = format!("{log}.exit");
     fs::write(&exit_file, format!("{code}\n"))
         .map_err(|e| format!("Cannot write exit file {exit_file}: {e}"))?;
-    let wake = format!("BG DONE exit={code} log={log} cmd={}", command.join(" "));
+    let first_line = full_command.split(['\r', '\n']).next().unwrap_or_default();
+    let mut label: String = first_line.chars().take(120).collect();
+    if first_line.len() < full_command.len() || first_line.chars().nth(120).is_some() {
+        label = label.chars().take(119).collect();
+        label.push('…');
+    }
+    let wake = format!("BG DONE exit={code} log={log} cmd={label}");
     let wake_file = format!("{log}.wake");
     // No mail id exists before enqueue. One runner identity distinguishes jobs
     // even when they reuse the same log path and command, and survives retries.

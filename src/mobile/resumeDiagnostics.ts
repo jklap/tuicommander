@@ -1,7 +1,9 @@
 import { appLogger } from "../stores/appLogger";
+import { installResumeTrail } from "./resumeTrail";
 
 /** Record a broken resumed document without changing or reloading it. */
 export function installResumeDiagnostics(): () => void {
+	const disposeTrail = installResumeTrail();
 	let frame = 0;
 	let hidden = document.visibilityState === "hidden";
 	let lastError: { message: string; filename: string; lineno: number; colno: number; stack?: string } | null = null;
@@ -73,6 +75,7 @@ export function installResumeDiagnostics(): () => void {
 	window.addEventListener("pageshow", onShow);
 	document.addEventListener("visibilitychange", onVisibility);
 	return () => {
+		disposeTrail();
 		cancelAnimationFrame(frame);
 		window.removeEventListener("error", onError);
 		window.removeEventListener("pagehide", onHide);

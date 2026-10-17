@@ -1,5 +1,7 @@
 # AI Chat
 
+Use **⋯ → Delete conversation…** to delete saved conversations. Each row has a trash button. Confirm the conversation name before deletion; this permanently removes its history and closes its open tab. If ego refuses deletion (for example, while the conversation is running), the conversation stays and the error is shown. The list offers deletion only when ego advertises the ACP delete capability. If you select another conversation while deletion cleanup is pending, that selection stays active.
+
 AI Chat is a conversation with **ego**, which TUICommander launches and speaks to
 over ACP. TUICommander is the environment — terminals, repositories, the MCP
 server — and ego is the intelligence. TUICommander keeps no provider, no API key,
@@ -29,12 +31,24 @@ acknowledges the ceiling. Without a repo selection, launch behavior is unchanged
 
 Desktop composer actions use the same pin and blue play icons as the terminal Compose panel. The pin parks a draft and highlights when one is parked. Its tooltip offers restore or swap. The play button sends while idle and queues while ego is busy.
 
-Pasting an image starts ego when needed before checking image support. Finder image copies attach the image rather than its filename; mixed clipboard data with substantive text pastes as text, as in Ideas and terminal Compose.
+Pasting an image starts ego when needed before checking image support. Finder image copies attach the image rather than its filename; mixed clipboard data with substantive text pastes as text, as in Ideas and terminal Compose. An empty text clipboard flavor does not suppress an available image.
 
 While ego waits to retry a provider request, AI Chat shows the cause, attempt
 number and a live countdown. The countdown starts when the update arrives and
 ends at **retrying now**. Recovery removes the line; a final failure replaces it
 with the error. The Copy action beside a user message stays on one line.
+
+## Compact panel controls
+
+The header contains the conversation title picker, **New**, **⋯**, and window controls. The tab strip appears only when two or more tabs are open. **⋯** contains labelled session settings, pause/resume, compact, fork, new-conversation options, and deletion actions. Capability and busy-state restrictions still apply.
+
+The model and repository share a small line below the input. Repository pinning stays on that line. Process titles and tool disclosures share one line; failed calls expand automatically. Suggested replies appear only under the latest answer. Loaded history does not show execution durations measured from the view mount.
+
+## Tables
+
+AI Chat keeps short fields and headers on one line. Longer text uses the remaining space. Tables with multiple long columns use the approved wide layout; the first column stays visible while you scroll. A scroll hint appears only when the table is wider than its viewport. Priority values use compact badges.
+
+Each table has **Markdown**, **Copy as Markdown**, and **Open as document** actions. Markdown toggles the original source, including inline formatting and escaped pipes; Copy uses that source in either view. Open creates a read-only TUIC Markdown tab. In a detached AI Chat window, the document opens in the main window. On mobile, it opens a document view with **Back to Chat**. Other Markdown documents and terminal transcripts retain their existing layout.
 
 ## Opening it
 
@@ -285,3 +299,31 @@ Use **New conversation with options** beside the `+` button to override the ego 
 A custom conversation runs its own ego ACP process. Its mail identity is separate from daily chats, even when both use the same workspace.
 
 When you scroll up and more conversation content arrives, **New text below** appears above the composer. Select it to return to the bottom and resume following. Reaching the bottom by hand clears it too. Search jumps do not show the pill until later content arrives. Disable **New text indicator** in **Settings → Appearance → Chat**, or mobile Settings. This preference is saved on the current client and applies to terminal Chat too.
+
+AI Chat replies use plain chat prose without the terminal answer rail. Literal Markdown blockquotes keep their normal quote style.
+
+Use **Pin repository** beside the composer to keep that conversation's repository context while you navigate elsewhere. **Pinned repository** identifies the frozen context. Unpin to follow the repository on screen again. The name uses the repository or group color, with the normal light-theme text adjustment. This does not move or filter conversation tabs. The existing pin icon still parks your draft; it is a separate action.
+
+Middle-click a conversation tab to close it through the same path as its close button. The last conversation tab stays open. Press Escape from the composer or transcript to stop a running turn without clearing your draft. When Find is open, Escape closes Find first, including when focus has moved back to the composer. Desktop Stop, Park and Send align to the input height.
+
+Repository names in linked worktree contexts use the registered parent repository color, including its inherited group color. Pinning a worktree keeps that color while you browse another repository.
+
+## Telegram replies
+
+Ask ego to call `telegram register` from this conversation after Telegram is
+configured in Settings. Registration is voluntary and lasts only while its MCP
+identity remains live. No PTY is needed. Incoming allowlisted phone text arrives
+through the normal peer inbox and TUIC wakes an idle conversation.
+
+The phone shows a receipt reaction, then a working reaction once the mail is
+read and a new turn starts. Assistant message chunks stream into the ephemeral
+Telegram preview; thought chunks and tool arguments do not. Permissions show a
+waiting reaction and ask you to respond in TUICommander. The preview is never
+approval to publish anything.
+
+`telegram begin` is optional. `telegram finish` supplies the exact final phone
+answer and remains valid after the preview ends. If a turn started by TUIC's
+peer-mail wake settles without finish, TUIC sends that turn's assistant text
+once. Turns started from an unrelated conversation prompt do not auto-publish.
+A failed turn sends one safe stopped notice. Stop on the phone targets only the
+captured turn; a queued Stop does not interrupt unrelated work.

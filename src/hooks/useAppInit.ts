@@ -428,7 +428,7 @@ export async function initApp(deps: AppInitDeps) {
 	// Only the live event presents a toast, so a reconnect can never replay
 	// historical notifications. Boot reads nothing: the journal is queried when
 	// the dialog opens, for the one project it shows.
-	subscribeEvents(
+	await subscribeEvents(
 		{
 			"progress-recorded": (payload) => progressStore.presentLive(payload as ProgressRecordedPayload),
 			"automation-run-changed": (payload) => presentAutomationNotice(payload),

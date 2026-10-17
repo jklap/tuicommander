@@ -24,6 +24,38 @@ pub(super) fn arm(state: &AppState, peer: &str, pty: &str, epoch: u64) -> Result
 }
 
 impl Runtime {
+    pub(super) async fn stop_acp(&mut self, update: &Value) -> Result<bool, Error> {
+        let Some(stopped) = update.get("stopped_message_generation") else {
+            return Ok(false);
+        };
+        let Some(active) = &self.outbound.active else {
+            return Ok(false);
+        };
+        if stopped["chat"]["type"] != "private"
+            || stopped["chat"]["id"].as_i64() != Some(active.chat)
+            || stopped["draft_id"].as_i64() != Some(active.draft)
+            || !self.outbound.paths.allowlist()?.contains(&active.chat)
+        {
+            return Ok(false);
+        }
+        let Some(request) = self.requests.iter_mut().find(|r| r.id == active.request) else {
+            return Ok(false);
+        };
+        let Some((connection, session, turn)) = request.recipient.stop_target(request.turn) else {
+            return Ok(false);
+        };
+        request.failed = true;
+        request.noticed = true;
+        self.outbound.active = None;
+        // The actor rechecks the expected turn atomically before sending cancel.
+        self.state
+            .acp
+            .cancel_turn(connection, session, turn)
+            .await
+            .map_err(|_| Error::State)?;
+        Ok(true)
+    }
+
     pub(super) fn stop(&mut self, update: &Value) -> Result<bool, Error> {
         let Some(stopped) = update.get("stopped_message_generation") else {
             return Ok(false);
@@ -47,6 +79,16 @@ impl Runtime {
         // Consume before writing: failures and duplicate updates never retry Escape.
         let active = self.outbound.active.take().ok_or(Error::State)?;
         let Some(token) = active.interrupt else {
+            // A queued Stop withdraws the request, never an unrelated turn.
+            if let Some(request) = self
+                .requests
+                .iter_mut()
+                .find(|r| r.id == active.request && !r.working)
+            {
+                request.failed = true;
+                request.noticed = true;
+                return Ok(true);
+            }
             return Ok(false);
         };
         let writer = self.state.pty_writer(&active.pty).ok_or(Error::State)?;
@@ -71,6 +113,10 @@ impl Runtime {
             session.turn_interrupt.take()
         };
         drop(owned);
+        if let Some(request) = self.requests.iter_mut().find(|r| r.id == active.request) {
+            request.failed = true;
+            request.noticed = true;
+        }
         // This is an interrupt request, not composer text. Feeding a bare ESC
         // into InputLineBuffer would consume the replacement's first character.
         // Release SilenceState before write: captured writers process output inline.

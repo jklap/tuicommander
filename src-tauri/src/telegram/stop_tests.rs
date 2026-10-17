@@ -20,11 +20,14 @@ async fn bound(paths: Paths, server: &FakeServer) -> (Runtime, Session, Arc<Mute
     crate::test_support::agent_session(&runtime.state, PEER, crate::pty::SHELL_BUSY);
     crate::pty::note_submitted_input(&runtime.state, PEER);
     runtime
-        .track(PendingMail {
-            id: "request".into(),
-            recipient: PEER.into(),
-            content: json!({"chat_id":"1111111"}).to_string(),
-        })
+        .track(
+            PendingMail {
+                id: "request".into(),
+                recipient: PEER.into(),
+                content: json!({"chat_id":"1111111"}).to_string(),
+            },
+            super::streaming::Recipient::capture(&runtime.state, PEER),
+        )
         .unwrap();
     let draft = runtime
         .tool(
@@ -95,11 +98,14 @@ async fn stop_is_one_shot_for_the_bound_chat_draft_and_preserves_next_input() {
             .is_empty()
     );
     runtime
-        .track(PendingMail {
-            id: "next".into(),
-            recipient: PEER.into(),
-            content: json!({"chat_id":"1111111"}).to_string(),
-        })
+        .track(
+            PendingMail {
+                id: "next".into(),
+                recipient: PEER.into(),
+                content: json!({"chat_id":"1111111"}).to_string(),
+            },
+            super::streaming::Recipient::capture(&runtime.state, PEER),
+        )
         .unwrap();
     let next = runtime
         .tool(

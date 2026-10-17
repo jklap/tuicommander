@@ -3,6 +3,8 @@ use serde_json::{Value, json};
 use std::time::Duration;
 use tokio::time::Instant;
 
+pub(super) const PREVIEW_LABEL: &str = "Preview — not approved.";
+
 /// Deliberately conservative UTF-16 budget, including astral characters.
 pub(super) fn chunks(text: &str) -> Result<Vec<&str>, Error> {
     if text.is_empty() {
@@ -32,6 +34,7 @@ pub(super) struct Active {
     pub draft: i64,
     pub interrupt: Option<std::sync::Arc<()>>,
     text: String,
+    pub authored: bool,
     sent: Instant,
     dirty: bool,
 }
@@ -41,6 +44,7 @@ pub(super) struct Outbound {
     pub paths: Paths,
     pub api: BotApi,
     pub active: Option<Active>,
+    pub recent: std::sync::Arc<parking_lot::Mutex<super::recent::Recent>>,
     next_send: Instant,
     stopped: Option<Error>,
 }
@@ -50,12 +54,66 @@ impl Outbound {
             paths,
             api,
             active: None,
+            recent: Default::default(),
             next_send: Instant::now(),
             stopped: None,
         }
     }
 
     pub async fn call(&mut self, chat: i64, method: &str, body: Value) -> Result<Value, Error> {
+        let preview = body["text"].as_str().unwrap_or("").to_owned();
+        let result = self.call_inner(chat, method, body, None).await;
+        let kind = match method {
+            "sendMessage" => Some("reply"),
+            "answerCallbackQuery" => Some("button"),
+            _ => None,
+        };
+        if let Some(kind) = kind {
+            self.recent.lock().record(
+                "out",
+                kind,
+                result
+                    .as_ref()
+                    .map(|_| "sent".into())
+                    .unwrap_or_else(|error| format!("failed: {error}")),
+                Some(&preview),
+            );
+        }
+        result
+    }
+
+    pub async fn setup_reply(
+        &mut self,
+        chat: i64,
+        reply: super::settings::SetupReply,
+    ) -> Result<Value, Error> {
+        let result = self
+            .call_inner(
+                chat,
+                "sendMessage",
+                json!({"chat_id":chat,"text":reply.text()}),
+                Some(reply),
+            )
+            .await;
+        self.recent.lock().record(
+            "out",
+            "reply",
+            result
+                .as_ref()
+                .map(|_| "sent".into())
+                .unwrap_or_else(|error| format!("failed: {error}")),
+            Some(reply.text()),
+        );
+        result
+    }
+
+    async fn call_inner(
+        &mut self,
+        chat: i64,
+        method: &str,
+        body: Value,
+        setup: Option<super::settings::SetupReply>,
+    ) -> Result<Value, Error> {
         if let Some(error) = self.stopped {
             return Err(error);
         }
@@ -67,11 +125,18 @@ impl Outbound {
         }
         tokio::time::sleep_until(self.next_send).await;
         // Revocation is checked immediately before every operation, after waiting.
-        if !self.paths.allowlist()?.contains(&chat) {
+        let ids = self.paths.allowlist_entries()?;
+        if chat <= 0
+            || (setup.is_none() && !ids.contains(&chat))
+            || (matches!(setup, Some(super::settings::SetupReply::Linked)) && !ids.contains(&chat))
+        {
             return Err(Error::Config);
         }
         self.next_send = Instant::now() + Duration::from_secs(1);
-        let result = self.api.request(method, body).await;
+        let result = match setup {
+            Some(reply) => self.api.setup_reply(chat, reply).await,
+            None => self.api.request(method, body).await,
+        };
         if let Err(Error::RateLimited(seconds)) = result {
             self.next_send = Instant::now() + Duration::from_secs(seconds.clamp(1, 3600));
         }
@@ -84,6 +149,11 @@ impl Outbound {
         result
     }
 
+    pub async fn received_reaction(&mut self, chat: i64, message: i64) -> Result<Value, Error> {
+        self.call(chat, "setMessageReaction", json!({"chat_id":chat,"message_id":message,
+            "reaction":[{"type":"emoji","emoji":super::streaming::RECEIVED_REACTION}],"is_big":false})).await
+    }
+
     pub async fn begin(
         &mut self,
         request: String,
@@ -91,6 +161,18 @@ impl Outbound {
         pty: String,
         epoch: u64,
         chat: i64,
+    ) -> Result<i64, Error> {
+        self.begin_text(request, peer, pty, epoch, chat, "").await
+    }
+
+    pub async fn begin_text(
+        &mut self,
+        request: String,
+        peer: String,
+        pty: String,
+        epoch: u64,
+        chat: i64,
+        text: &str,
     ) -> Result<i64, Error> {
         if self.active.is_some() {
             return Err(Error::State);
@@ -103,7 +185,7 @@ impl Outbound {
             .call(
                 chat,
                 "sendMessageDraft",
-                json!({"chat_id":chat,"draft_id":draft,"text":"","can_stop":true,"keep_on_stop":false}),
+                json!({"chat_id":chat,"draft_id":draft,"text":text,"can_stop":true,"keep_on_stop":false}),
             )
             .await?;
         if accepted != Value::Bool(true) {
@@ -117,7 +199,8 @@ impl Outbound {
             chat,
             draft,
             interrupt: None,
-            text: String::new(),
+            text: text.into(),
+            authored: false,
             sent: Instant::now(),
             dirty: false,
         });
@@ -125,16 +208,43 @@ impl Outbound {
     }
 
     pub fn activity(&mut self, request: &str, text: &str) -> Result<(), Error> {
-        let active = self
-            .active
-            .as_mut()
-            .filter(|a| a.request == request)
-            .ok_or(Error::State)?;
-        // Activity is a bounded unapproved preview, never an approval state.
-        let text = text.chars().take(500).collect::<String>();
-        active.text = format!("Preview — not approved.\n{text}");
-        active.dirty = true;
+        // Agent-authored content remains explicitly unapproved.
+        self.status(
+            request,
+            &format!(
+                "{PREVIEW_LABEL}\n{}",
+                text.chars().take(500).collect::<String>()
+            ),
+            true,
+        );
+        if self.active.as_ref().is_none_or(|a| a.request != request) {
+            return Err(Error::State);
+        }
         Ok(())
+    }
+
+    pub fn status(&mut self, request: &str, text: &str, authored: bool) {
+        if let Some(active) = self.active.as_mut().filter(|a| a.request == request) {
+            let (prefix, body) = text
+                .strip_prefix(PREVIEW_LABEL)
+                .map_or(("", text), |body| (PREVIEW_LABEL, body));
+            let budget = 4096 - prefix.encode_utf16().count();
+            let mut units = 0;
+            let tail: String = body
+                .chars()
+                .rev()
+                .take_while(|ch| {
+                    units += ch.len_utf16();
+                    units <= budget
+                })
+                .collect();
+            let text = format!("{prefix}{}", tail.chars().rev().collect::<String>());
+            if active.text != text {
+                active.text = text;
+                active.dirty = true;
+            }
+            active.authored = authored;
+        }
     }
 
     pub async fn refresh(&mut self) -> Result<(), Error> {
