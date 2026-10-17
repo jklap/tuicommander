@@ -340,6 +340,10 @@ agent-aware command submission helper.
 
 Backend selection and logical-row extraction retain real spaces at soft-wrap margins. Mobile CLI log rendering uses serialized `wrapped` boundaries rather than word-length guesses when metadata is present. Older daemon rows without this field retain the existing prose reflow fallback. This changes extracted text, not canvas layout or styling.
 
+### Opt-in workload evidence
+
+CanvasTerminal records raw arrivals before decode and immutable merged grid snapshots immediately before the base paint, plus visibility transitions. Capture requires both the explicit recorder flag and perfDebug. No render behavior changes. See [stall evidence](../backend/stall-journal.md) for caps, timing replay and limitations.
+
 ### Prompt ownership after reflow (#1389-3a47)
 
 Accepting changed frame geometry invalidates cached prompt boundaries and rejects
@@ -358,3 +362,32 @@ The renderer retains the backend owner and marker-span layout of each display
 slot. Projection changes invalidate only slots whose owner or marker span changed,
 including old bottom slots that must be cleared after rows move upward.
 Geometry, theme and other explicit full repaint requests still clear the canvas.
+
+### Viewport-bounded marker work (#2002-2239)
+
+CLI painting classifies the visible rows, one bottom overscan row and at most
+128 rows above the viewport. Unchanged row generations reuse the existing `rowTextLayout` text cache,
+marker snapshots and the marker plan. Replaced rows invalidate their own text and the dependent plan;
+a change to the preceding wrap flag invalidates the dependent snapshot too.
+History outside this window is classified when scrolling reaches it. An answer
+whose anchor is more than 128 rows above the viewport is not inferred from prose.
+
+A tracked prompt can start much earlier. Its ownership prefix is limited to 128
+rows synchronously and 128 rows per background read. Unresolved ownership stays
+fail-closed and resumes from the prior read boundary, including the preceding
+row to preserve blank separation. No background completion scans the accumulated
+prefix again, and intermediate chunks do not repaint the canvas. This bounds individual paint/read tasks, not the total work needed
+to resolve an arbitrarily long pasted prompt.
+
+| Consumer | Trigger | Text work before this fix | Text work after this fix |
+| --- | --- | --- | --- |
+| `planViewportMarkers` / `planMarkers` | Output frame, forced repaint | Viewport + 32 rows, but cold tracked prompt could synchronously walk retained history | Viewport + 128 rows; cold prefix at most 128; unchanged generations reuse text and plan |
+| `renderCachedBase` / `planMarkers` | Integer smooth-scroll paint | Same cold prompt exception | Same bounded planner; uncached history classified lazily |
+| `readMarkerPromptBoundary` / `readTurnRows` | Cold tracked prompt | One async operation fetched every prefix chunk | One operation reads at most 128 rows and retains its continuation position |
+| `planSuggestOverlay`, `answerExtent`, prompt echo and gutter gap walks | Called by marker plan | Caller range, except prompt prefix supplied by planner | Caller range is viewport + lookback; row dependencies cached |
+| `gridRenderer` / `ViewportProjection` | Paint and marker projection | Visible cells and marker sets, not history text classification | Unchanged; consumes bounded marker sets |
+| `readAnswersHistory` / `buildAnswersTurn` | Explicit Answers-only view; output refresh every 400 ms while open | Finished turns cached; running turn scanned in full, or last 5000 rows with no known prompts | Unchanged semantic full-history reader; not a canvas frame/scroll consumer |
+
+The explicit Answers-only view still reads full retained turns to preserve its
+copy/selectable history contract. Its running-turn refresh is not viewport-bound;
+this change does not claim to fix that separate full-history consumer.

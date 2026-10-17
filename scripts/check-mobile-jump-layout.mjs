@@ -1,4 +1,4 @@
-/** Real component rectangles catch a jump control covering keys or leaving Send's row. */
+/** Real component rectangles catch a jump control covering keys or entering the composer. */
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { mkdirSync, readdirSync, writeFileSync } from "node:fs";
@@ -41,7 +41,7 @@ try {
     const key = [...document.querySelectorAll('button')].find(b => b.textContent.trim() === '←');
     if (!jump || !send || !key) return null;
     const rect = e => { const r=e.getBoundingClientRect();return {left:r.left,right:r.right,top:r.top,bottom:r.bottom}; };
-    return { jump:rect(jump),send:rect(send),keys:[...key.parentElement.querySelectorAll('button')].map(rect) };
+    return { jump:rect(jump),send:rect(send),keybar:rect(key.parentElement),output:rect(document.querySelector("[data-output-area]")),composer:rect(send.parentElement),keys:[...key.parentElement.querySelectorAll('button')].map(rect) };
    })()`, returnByValue: true });
    measurement = value.result.value;
    if (measurement) break;
@@ -55,12 +55,14 @@ try {
  }
  writeFileSync(join(evidence,"measurements.json"), JSON.stringify(results,null,2));
  if (!process.argv.includes("--capture-only")) {
-  for (const {width,jump,send,keys} of results) {
+  for (const {width,jump,keybar,output,composer,keys} of results) {
    assert.ok(keys.every(k => jump.right <= k.left || jump.left >= k.right || jump.bottom <= k.top || jump.top >= k.bottom), `${width}: jump overlaps a key-bar button`);
-   assert.ok(Math.abs((jump.top+jump.bottom-send.top-send.bottom)/2) <= 1, `${width}: jump must align with Send, not the key bar`);
-   assert.ok(jump.right <= width && jump.left >= send.right, `${width}: jump stays right of Send within viewport`);
+   assert.ok(keybar.top - jump.bottom >= 8, `${width}: jump bottom must clear key bar by at least 8px`);
+   assert.ok(jump.bottom < composer.top, `${width}: jump must not touch composer row`);
+   assert.ok(jump.top >= output.top && jump.bottom <= output.bottom && jump.left >= output.left && jump.right <= output.right, `${width}: jump must float within output area`);
+   assert.ok(jump.right <= width && jump.left >= width - 64, `${width}: jump stays at bottom-right within viewport`);
   }
-  console.log("PASS: no key overlap and Send-row alignment at 360, 390 and landscape 844");
+  console.log("PASS: output-area placement with 8px key-bar gap at 360, 390 and landscape 844");
  }
 } finally {
  ws?.close();

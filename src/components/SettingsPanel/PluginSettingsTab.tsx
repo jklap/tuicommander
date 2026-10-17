@@ -97,7 +97,7 @@ export const PluginSettingsTab: Component<{ page: PluginSettingsPage }> = (props
 					</svg>
 				}
 				description="Settings supplied by this loaded plugin. Changes retain the plugin’s declared scope and save behavior."
-				scope="Plugin-owned"
+				scope="Plugin"
 				breadcrumb={`Plugin settings / ${props.page.label}`}
 				source={`Source: ${pluginStore.getPlugin(props.page.id)?.builtIn ? "bundled with TUICommander" : "installed plugin"} · ${props.page.id}`}
 			/>
@@ -139,6 +139,7 @@ export const PluginSettingsTab: Component<{ page: PluginSettingsPage }> = (props
 												}
 											>
 												<button
+													data-setting-id={field.id}
 													class={s.testBtn}
 													aria-label={`Reset ${pluginFieldLabel(field)}`}
 													title={`Reset ${pluginFieldLabel(field)} to default`}
@@ -240,6 +241,7 @@ const PluginField: Component<{
 											when={choices()}
 											fallback={
 												<Input
+													data-setting-id={props.field.id}
 													id={id}
 													aria-describedby={descriptionId()}
 													type={
@@ -268,6 +270,7 @@ const PluginField: Component<{
 										>
 											{(values) => (
 												<Select
+													data-setting-id={props.field.id}
 													id={id}
 													aria-describedby={descriptionId()}
 													value={JSON.stringify(props.value)}
@@ -283,6 +286,7 @@ const PluginField: Component<{
 									}
 								>
 									<input
+										data-setting-id={props.field.id}
 										id={id}
 										aria-describedby={descriptionId()}
 										type="checkbox"
@@ -310,6 +314,7 @@ const PluginField: Component<{
 							}}
 						>
 							<SettingList
+								data-setting-id={props.field.id}
 								row
 								label={label()}
 								actions={props.actions}
@@ -331,6 +336,7 @@ const PluginField: Component<{
 				>
 					{(values) => (
 						<SettingMultiSelect
+							data-setting-id={props.field.id}
 							row
 							label={label()}
 							actions={props.actions}

@@ -2367,6 +2367,10 @@ browser status-bar control uses its owning daemon's normal PTY write transport.
 
 Telegram replies now use TUIC-driven receipt (👀), working (👨‍💻), waiting (🤔), answered (👍) and failed (👎) reactions. An ephemeral native draft shows Italian status lines or unapproved agent previews; it refreshes while work continues and the final reply replaces it. Acknowledgement of work requires inbox Read and a new recipient turn. PTY intent/activity and AI Chat assistant chunks share request correlation; finish remains authoritative after draft retirement. Telegram-mail-woken AI Chat turns automatically send their settled assistant text if finish has not answered. Queue and no-reply notices occur at ten minutes and sixty seconds after Read respectively. Restart keeps no request history. Phone rendering requires a live check after the backend restart.
 
+### Settings startup contract
+
+See [Settings startup workflows](settings-startup.md) for discovery, target/revision ownership, device-login intervals, human confirmation and partial-persistence recovery. Native `inventoryComplete` does not prove schema-only authentication onboarding or UI parity. Typed `list_accounts` and Ego `begin_login`/`login_status` use the same owner facade. Login launches the configured process directly in a tracked human terminal, not an arbitrary-command or ACP fallback; status separates process lifetime from credential readback.
+
 ### CircleCI credential settings (#1991-bd88)
 
 The machine-scoped `circleci.token` descriptor is write-only. Read
@@ -2387,3 +2391,6 @@ Prefer `agent action=launch` for a managed worker that needs a selected/new work
 A SQLite journal reserves identity before side effects and uses revision compare-and-swap to prevent concurrent checkpoint owners from both creating resources. An app-scoped async mutex serializes launch mutations; filesystem/process work remains on the existing allocation/spawn paths. A lost reply reuses the child. An uncertain interrupted side effect blocks instead of retrying or changing checkout. Native session/prompt state determines delivery and readiness, never output movement alone. The existing spawn name pinning and managed idle-close exemption are reused. Routing, account choice and local brief rules are not TUIC policy.
 
 Native automation and workflow run bindings also use this transaction through `managed_launch`: automation run IDs and workflow attempt IDs provide stable keys, with an in-process run-owner scope when no peer parent exists. No synthetic peer is registered. Run-owned children use the same pinned-name and explicit keep-open path as MCP children; the existing run controller still owns cancellation and completion. The unkeyed public `spawn` compatibility action continues to use the same low-level PTY spawn implementation.
+### Frame workload dump
+
+The loopback-only `debug action=frame_workload_dump` schedules the enabled frontend recorder dump. Like `invoke_js`, read `eval_js` logs for completion; submission does not prove frontend liveness. `POST /debug/frame-workload` and desktop `save_frame_workload` share the bounded writer. See [stall evidence](stall-journal.md).

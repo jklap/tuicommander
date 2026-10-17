@@ -129,6 +129,9 @@ mod upstream_credentials_tests;
 mod api_tests;
 
 #[cfg(test)]
+mod startup_flow_tests;
+
+#[cfg(test)]
 mod circleci_tests;
 #[cfg(feature = "desktop")]
 pub(crate) mod legacy;

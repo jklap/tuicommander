@@ -4241,3 +4241,12 @@ it("maps managed launch unchanged to its shared HTTP boundary", () => {
 		body: request,
 	});
 });
+
+// Catches: browser dumps failing while desktop IPC persists the same recording.
+it("maps frame workload persistence without changing the recording", () => {
+	expect(mapCommandToHttp("save_frame_workload", { recording: "{}" })).toEqual({
+		method: "POST",
+		path: "/debug/frame-workload",
+		body: { recording: "{}" },
+	});
+});

@@ -35,6 +35,7 @@ pub mod work_items;
 pub use tuic_core::app_instance;
 pub(crate) mod app_logger;
 pub(crate) mod changelog;
+mod frame_workload;
 mod stall_journal;
 pub(crate) use tuic_terminal::chrome;
 pub(crate) mod circleci;
@@ -2132,6 +2133,7 @@ pub fn run() {
             pty::terminal_request_frame,
             pty::ack_terminal_frame,
             frontend_liveness::frontend_heartbeat,
+            frame_workload::save_frame_workload,
             pty::terminal_exit_alt_screen,
             pty::terminal_scroll,
             pty::terminal_scroll_to_offset,

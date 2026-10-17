@@ -332,3 +332,7 @@ peer-mail wake settles without finish, TUIC sends that turn's assistant text
 once. Turns started from an unrelated conversation prompt do not auto-publish.
 A failed turn sends one safe stopped notice. Stop on the phone targets only the
 captured turn; a queued Stop does not interrupt unrelated work.
+
+## Settings MCP startup boundary
+
+The Settings owner can read and edit the configured Ego model/perimeter and base provider-auth configuration, with owner revisions and next-session effects. The AI Chat Settings button still opens the human login workflow. A schema-only assistant can also request typed `begin_login` and `login_status` from the configured Ego owner; you complete the exchange in its terminal. Terminal exit is not success: the owner reads credential presence, then the assistant refreshes provider state. Missing binary/capability is not permission to use a different executable or PTY fallback for ACP. See [startup workflows](../backend/settings-startup.md#ego).

@@ -1037,6 +1037,10 @@ Existing input/output device enumeration returns the same device objects on succ
 shared ego recovery transaction. It refuses a non-empty tracked composer and returns
 the error to the caller. HTTP equivalent: `POST /sessions/{id}/force-retry`.
 
+## Settings startup ownership
+
+`settings_action` shares its envelope and recovery behavior with HTTP and MCP; native caller trust does not bypass owner CAS or human confirmation. [Settings startup workflows](../backend/settings-startup.md) describes GitHub `list_accounts` and configured Ego `begin_login`/`login_status`, including owner revision checks, a human-operated terminal and credential readback distinct from process completion.
+
 ### CircleCI credential settings (#1991-bd88)
 
 The machine-scoped `circleci.token` descriptor is write-only. Read
@@ -1053,3 +1057,6 @@ continues to show the effective token source. No transport returns the token.
 ### Managed launch transaction
 
 `managed_agent_launch(request: object) -> object` creates or reads a durable managed-child launch. It shares validation, journal and execution with `POST /agents/launch` and MCP `agent action=launch`. See [HTTP API](http-api.md#durable-managed-agent-launch) for the request, receipt and retry contract. The explicit registered parent, stable name and keep-open policy are set before the prompt can run.
+### Frame workload evidence
+
+`save_frame_workload(recording: String) -> Result<String, String>` writes bounded schema-v1 live grid workload JSON through the same serialized blocking-pool writer as `POST /debug/frame-workload`. Returns the instance-local capture path. It does not enable capture.

@@ -29,6 +29,7 @@ export default defineConfig({
 						"stores/notifications",
 						"stores/transcriptPreferences",
 						"services/tasksNotifications",
+						"services/settingsRefresh",
 						"stores/ui",
 						"stores/appLogger",
 						"transport",

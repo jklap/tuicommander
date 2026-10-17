@@ -8,6 +8,7 @@ import { rpc } from "../../transport";
 import { CommandInput } from "../components/CommandInput";
 import { CommandWidget } from "../components/CommandWidget";
 import { IdeasOverlay } from "../components/IdeasOverlay";
+import { MobileJumpBottom } from "../components/MobileJumpBottom";
 import { OpenMarkdownMenu } from "../components/OpenMarkdownMenu";
 import { OutputView } from "../components/OutputView";
 import { SessionHeaderOverlay, type SessionHeaderPanel } from "../components/SessionHeaderOverlay";
@@ -513,6 +514,10 @@ export function SessionDetailScreen(props: SessionDetailScreenProps) {
 						</button>
 					</div>
 				</Show>
+				<MobileJumpBottom
+					visible={chat.active() ? !chat.atBottom() : !cliAtBottom()}
+					onScrollToBottom={() => (chat.active() ? chat.scrollToBottom() : jumpCli?.())}
+				/>
 			</div>
 			<Show when={!sessionState()?.awaiting_input && sessionState()?.suggested_actions?.length}>
 				<SuggestChips
@@ -534,8 +539,6 @@ export function SessionDetailScreen(props: SessionDetailScreenProps) {
 					onInputKeyRequest={(key) => requestComposerInputKey?.(key)}
 				/>
 				<CommandInput
-					showScrollToBottom={chat.active() ? !chat.atBottom() : !cliAtBottom()}
-					onScrollToBottom={() => (chat.active() ? chat.scrollToBottom() : jumpCli?.())}
 					serverVoiceRecording={voice.recording()}
 					onBrowserDictating={setBrowserDictating}
 					sessionId={props.session.session_id}

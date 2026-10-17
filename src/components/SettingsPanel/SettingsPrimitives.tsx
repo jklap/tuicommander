@@ -1,4 +1,5 @@
 import { createUniqueId, type JSX, Show } from "solid-js";
+import type { SettingId } from "../../services/settingsCatalogue";
 import { StatusBadge } from "../ui/StatusBadge";
 import { SettingField } from "./fields/SettingField";
 import { InfoBadge } from "./InfoBadge";
@@ -15,7 +16,7 @@ export function SettingPageHeader(props: {
 	breadcrumb?: string;
 }) {
 	return (
-		<div>
+		<div class={s.pageHeaderBlock} data-settings-page-header>
 			<Show when={props.breadcrumb}>
 				<div class={s.breadcrumb}>{props.breadcrumb}</div>
 			</Show>
@@ -71,6 +72,7 @@ export function SectionCard(props: {
 /** SettingField remains the single owner of labels and descriptive IDs. */
 export function SettingRow(props: {
 	label: string;
+	settingId?: SettingId;
 	hint?: string;
 	error?: string;
 	help?: JSX.Element;
@@ -79,6 +81,7 @@ export function SettingRow(props: {
 }) {
 	return (
 		<SettingField
+			settingId={props.settingId}
 			label={props.label}
 			hint={props.hint}
 			error={props.error}

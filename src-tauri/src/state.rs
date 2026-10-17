@@ -2369,6 +2369,7 @@ pub struct AppState {
     /// whoever is sitting at the machine.
     pub(crate) settings_policy: Arc<crate::settings::policy::Policy>,
     pub(crate) settings_api: tokio::sync::OnceCell<crate::settings::api::Settings>,
+    pub(crate) plugin_keybinding_actions: Arc<parking_lot::RwLock<Option<Vec<String>>>>,
     pub(crate) confirm_responses: DashMap<String, tokio::sync::oneshot::Sender<bool>>,
     /// App-wide process-tree snapshot shared by agent lifecycle polling.
     pub(crate) process_snapshot_cache: crate::pty::ProcessSnapshotCache,
@@ -3665,6 +3666,7 @@ impl AppState {
             hibernated_peers: dashmap::DashSet::new(),
             settings_policy: Arc::new(crate::settings::policy::Policy::default()),
             settings_api: tokio::sync::OnceCell::new(),
+            plugin_keybinding_actions: Default::default(),
             confirm_responses: DashMap::new(),
             process_snapshot_cache: crate::pty::ProcessSnapshotCache::default(),
             hot_repo_paths: parking_lot::RwLock::new(std::collections::HashSet::new()),

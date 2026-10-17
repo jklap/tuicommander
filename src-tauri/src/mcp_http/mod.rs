@@ -2012,6 +2012,11 @@ pub fn build_router(state: Arc<AppState>, remote_auth: bool, mcp_enabled: bool) 
         // Debug: execute JS in the main WebView (loopback-only, enforced in handler).
         // Local router only — never the remote router (this is an RCE surface).
         .route("/debug/invoke_js", post(log_routes::invoke_js_http))
+        .route(
+            "/debug/frame-workload",
+            post(log_routes::save_frame_workload)
+                .layer(axum::extract::DefaultBodyLimit::max(8 * 1024 * 1024)),
+        )
         .route("/secrets/forms/{nonce}", get(crate::secrets::form_http))
         .route("/secrets/forms/submit", post(crate::secrets::submit_http))
         // Debug: reload the main WebView natively (loopback-only, enforced in
@@ -10208,6 +10213,38 @@ mod tests {
     /// ::disable()` added anywhere outside this layer, or an axum release that
     /// drifts its default upward, fails here instead of silently uncapping the
     /// server.
+    /// Catches: the default 2 MiB cap preventing a bounded capture dump, or the
+    /// capture-specific override removing bounds from neighboring routes.
+    #[tokio::test]
+    async fn frame_workload_route_has_its_own_bounded_body_limit() {
+        async fn post_capture(path: &str, bytes: usize) -> StatusCode {
+            let payload = serde_json::json!({"recording": " ".repeat(bytes)}).to_string();
+            build_router(test_state(), false, true)
+                .oneshot(
+                    Request::post(path)
+                        .header(CONTENT_TYPE, "application/json")
+                        .body(Body::from(payload))
+                        .unwrap(),
+                )
+                .await
+                .unwrap()
+                .status()
+        }
+        // Invalid recording reaches the handler without writing application data.
+        assert_eq!(
+            post_capture("/debug/frame-workload", 3 * 1024 * 1024).await,
+            StatusCode::BAD_REQUEST
+        );
+        assert_eq!(
+            post_capture("/debug/frame-workload", 8 * 1024 * 1024).await,
+            StatusCode::PAYLOAD_TOO_LARGE
+        );
+        assert_eq!(
+            post_capture("/logs", 3 * 1024 * 1024).await,
+            StatusCode::PAYLOAD_TOO_LARGE
+        );
+    }
+
     #[tokio::test]
     async fn server_limits_reject_a_body_over_the_cap() {
         async fn post_bytes(n: usize) -> StatusCode {

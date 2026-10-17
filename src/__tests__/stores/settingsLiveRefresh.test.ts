@@ -44,9 +44,30 @@ describe("settings live refresh", () => {
 		stop = store.startRemoteSync();
 		await flush();
 	});
-	afterEach(() => {
-		stop();
-		vi.useRealTimers();
+	function cleanup() {
+		try {
+			stop();
+		} finally {
+			vi.useRealTimers();
+		}
+	}
+	afterEach(cleanup);
+
+	// Catches: a failed unsubscribe leaving later tests on fake timers.
+	it("restores_real_timers_when_subscription_teardown_throws", () => {
+		const originalStop = stop;
+		stop = () => {
+			throw new Error("subscription teardown failed");
+		};
+		let timersLeaked = false;
+		try {
+			expect(cleanup).toThrow("subscription teardown failed");
+			timersLeaked = vi.isFakeTimers();
+		} finally {
+			stop = originalStop;
+			vi.useRealTimers();
+		}
+		expect(timersLeaked, "later tests must not inherit fake timers").toBe(false);
 	});
 
 	// Catches: an external write staying invisible or being echoed through save_config.

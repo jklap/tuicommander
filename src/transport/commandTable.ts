@@ -2218,6 +2218,10 @@ export const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 	probe_ssh_config_hosts: { map: () => ({ method: "GET", path: "/tunnels/ssh-hosts/status" }) },
 	list_ssh_agent_keys: { map: () => ({ method: "GET", path: "/tunnels/agent-keys" }) },
 
+	// --- Opt-in terminal-content evidence ---
+	save_frame_workload: {
+		map: (args) => ({ method: "POST", path: "/debug/frame-workload", body: { recording: args.recording } }),
+	},
 	// --- App Logger ---
 	push_log: {
 		map: (args) => ({
