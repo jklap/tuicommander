@@ -329,8 +329,10 @@ fn saving_agents_config_rewrites_the_launch_files() {
 #[test]
 fn generated_modules_append_both_user_layers_and_obey_off() {
     let app = AppConfig::default();
-    let mut agents = AgentsConfig::default();
-    agents.launch_instructions = Some("GLOBAL ADDITION".into());
+    let mut agents = AgentsConfig {
+        launch_instructions: Some("GLOBAL ADDITION".into()),
+        ..Default::default()
+    };
     agents
         .agents
         .entry("ego".into())
@@ -363,9 +365,10 @@ fn generated_modules_append_both_user_layers_and_obey_off() {
 fn migration_drops_only_exact_legacy_defaults_once() {
     for intent in [false, true] {
         for suggest in [false, true] {
-            let mut agents = AgentsConfig::default();
-            agents.launch_instructions =
-                Some(marker_text(intent, suggest).replace("{VER}", "1.7.99"));
+            let mut agents = AgentsConfig {
+                launch_instructions: Some(marker_text(intent, suggest).replace("{VER}", "1.7.99")),
+                ..Default::default()
+            };
             agents
                 .agents
                 .entry("ego".into())
@@ -382,8 +385,10 @@ fn migration_drops_only_exact_legacy_defaults_once() {
             assert!(!agents.launch_instructions_disabled);
         }
     }
-    let mut agents = AgentsConfig::default();
-    agents.launch_instructions = Some(String::new());
+    let mut agents = AgentsConfig {
+        launch_instructions: Some(String::new()),
+        ..Default::default()
+    };
     migrate_additions(&mut agents);
     assert!(agents.launch_instructions_disabled);
 }

@@ -186,9 +186,11 @@ mod launch_preview_tests {
     /// Catches: preview uses all markers for every agent and leaves the version token unresolved.
     #[test]
     fn launch_preview_respects_agent_marker_flags() {
-        let mut app = crate::config::AppConfig::default();
-        app.intent_tab_title = true;
-        app.suggest_followups = true;
+        let mut app = crate::config::AppConfig {
+            intent_tab_title: true,
+            suggest_followups: true,
+            ..Default::default()
+        };
         let mut agents = AgentsConfig::default();
         agents.agents.insert(
             "claude".into(),

@@ -207,6 +207,7 @@ fn file_content(agent: &str, text: &str) -> String {
     }
 }
 
+#[cfg(test)]
 pub(crate) fn file_path(config_dir: &Path, agent: &str) -> PathBuf {
     file_path_for(config_dir, agent, false)
 }
