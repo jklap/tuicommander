@@ -929,7 +929,10 @@ const AgentRow: Component<{
 			>
 				<div class={a.agentInfo}>
 					<div class={a.agentNameRow}>
-						<div class={a.agentIcon} style={{ background: display().color, opacity: isEnabled() ? 1 : 0.4 }}>
+						<div
+							class={a.agentIcon}
+							style={{ background: display().color, color: display().foreground, opacity: isEnabled() ? 1 : 0.4 }}
+						>
 							<AgentIcon agent={props.agentType} size={16} />
 						</div>
 						<span class={a.agentName} style={{ opacity: isEnabled() ? 1 : 0.5 }}>
@@ -1559,8 +1562,10 @@ const EgoPermissionsSection: Component = () => {
 			description="Terminal launches and managed spawns only. Approval policy and filesystem confinement are separate choices."
 		>
 			<div class={a.permissionRows}>
-				<label for="ego-permission-mode">Permissions</label>
-				<ContextualHelp label="Permissions" />
+				<div class={s.helpLabel}>
+					<label for="ego-permission-mode">Permissions</label>
+					<ContextualHelp label="Permissions" />
+				</div>
 				<Select
 					id="ego-permission-mode"
 					class={a.formInput}
@@ -1578,8 +1583,10 @@ const EgoPermissionsSection: Component = () => {
 					<option value="auto">Auto (reviewed)</option>
 					<option value="yolo">Full access (yolo)</option>
 				</Select>
-				<label for="ego-permission-sandbox">Filesystem sandbox</label>
-				<ContextualHelp label="Filesystem sandbox" />
+				<div class={s.helpLabel}>
+					<label for="ego-permission-sandbox">Filesystem sandbox</label>
+					<ContextualHelp label="Filesystem sandbox" />
+				</div>
 				<Select
 					id="ego-permission-sandbox"
 					class={a.formInput}
@@ -1609,8 +1616,12 @@ const HibernationSection: Component = () => {
 		<SectionCard title={t("settings.agents.hibernateHeading", "Idle agent hibernation")}>
 			<ExpertSetting configKey="agents.hibernate_idle_minutes" value={store.state.hibernate_idle_minutes}>
 				<div class={a.fieldRow}>
-					<label for="hibernate-minutes">{t("settings.agents.hibernateMinutes", "Hibernate idle agents after")}</label>
-					<ContextualHelp label={t("settings.agents.hibernateMinutes", "Hibernate idle agents after")} />
+					<div class={s.helpLabel}>
+						<label for="hibernate-minutes">
+							{t("settings.agents.hibernateMinutes", "Hibernate idle agents after")}
+						</label>
+						<ContextualHelp label={t("settings.agents.hibernateMinutes", "Hibernate idle agents after")} />
+					</div>
 					<Input
 						id="hibernate-minutes"
 						class={a.formInput}
@@ -1626,8 +1637,10 @@ const HibernationSection: Component = () => {
 			</ExpertSetting>
 			<ExpertSetting configKey="agents.hibernate_scope" value={store.state.hibernate_scope}>
 				<div class={a.fieldRow}>
-					<label for="hibernate-scope">{t("settings.agents.hibernateScope", "Hibernate scope")}</label>
-					<ContextualHelp label={t("settings.agents.hibernateScope", "Hibernate scope")} />
+					<div class={s.helpLabel}>
+						<label for="hibernate-scope">{t("settings.agents.hibernateScope", "Hibernate scope")}</label>
+						<ContextualHelp label={t("settings.agents.hibernateScope", "Hibernate scope")} />
+					</div>
 					<Select
 						id="hibernate-scope"
 						class={a.formInput}

@@ -136,6 +136,29 @@ describe("mobile session header", () => {
 		expect(onOpenFiles).toHaveBeenCalledOnce();
 	});
 
+	it("keeps tasks two taps away from More when phone controls are hidden", async () => {
+		// catches: hiding the phone task button without an overflow replacement.
+		rpcReplies({ project: "/repo", entries: [], nextCursor: null });
+		const view = render(() => (
+			<SessionDetailScreen
+				subscribeChatWake={() => () => {}}
+				session={session("phone-tasks", "claude", "COORDINATOR")}
+				sessionExists
+				onBack={() => {}}
+				onOpenFiles={() => {}}
+			/>
+		));
+		await fireEvent.click(view.getByRole("button", { name: "More session actions" }));
+		await fireEvent.click(view.getByRole("button", { name: "Tasks, 3 active" }));
+		await waitFor(() =>
+			expect(rpc).toHaveBeenCalledWith("progress_list", {
+				project: "/repo",
+				input: expect.objectContaining({ ptyId: "phone-tasks" }),
+			}),
+		);
+		expect(view.getByRole("button", { name: "More session actions" }).getAttribute("aria-expanded")).toBe("false");
+	});
+
 	it("explains when a session has no project instead of showing another session's journal", async () => {
 		const detached = { ...session("codex-3", "codex", "Detached"), cwd: null, worktree_path: null };
 		const view = render(() => (

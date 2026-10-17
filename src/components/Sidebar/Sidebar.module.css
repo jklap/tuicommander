@@ -1016,7 +1016,7 @@
 
 .prMerged {
   background: var(--merged);
-  color: var(--text-on-accent);
+  color: var(--text-on-merged);
 }
 
 .prClosed {
@@ -1083,7 +1083,7 @@
   flex-shrink: 0;
 }
 
-.prMarkOpen { color: var(--success); }
+.prMarkOpen { color: var(--success-marker); }
 .prMarkMerged { color: var(--merged); }
 .prMarkClosed { color: var(--diff-del); }
 .prMarkChanges { color: var(--changes); }

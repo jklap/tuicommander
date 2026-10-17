@@ -27,20 +27,17 @@ export function useSessionChatView(props: {
 		}
 	});
 	const active = () => mode() === "chat" && available();
+	const openChat = () => {
+		chatViewStore.clearUnavailable(props.sessionId());
+		select("chat");
+	};
 	const Toggle = () => (
 		<Show when={available()}>
 			<div class={styles.toggle} role="group" aria-label="Terminal view">
 				<button type="button" aria-pressed={!active()} onClick={() => select("cli")}>
 					CLI
 				</button>
-				<button
-					type="button"
-					aria-pressed={active()}
-					onClick={() => {
-						chatViewStore.clearUnavailable(props.sessionId());
-						select("chat");
-					}}
-				>
+				<button type="button" aria-pressed={active()} onClick={openChat}>
 					Chat
 				</button>
 			</div>
@@ -74,5 +71,5 @@ export function useSessionChatView(props: {
 			</Show>
 		</>
 	);
-	return { active, Toggle, View, atBottom, scrollToBottom: () => jump?.() };
+	return { active, available, openChat, Toggle, View, atBottom, scrollToBottom: () => jump?.() };
 }

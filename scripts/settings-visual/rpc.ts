@@ -1,0 +1,42 @@
+import perimeter from '../../src/__tests__/fixtures/ego-perimeter/effective-default.json';
+export const isTauri=()=>true;
+export const owningConnectionFor=()=>undefined;
+export const buildHttpUrl=(p:string)=>'http://127.0.0.1:15387/blocked'+p;
+export class HttpRpcError extends Error {}
+export const listen=async()=>()=>{};
+export const subscribeEvents=async()=>()=>{};
+export const subscribePty=async()=>()=>{};
+export const guardTauriUnlisten=(fn:any)=>fn;
+export const emitLocalEvent=()=>{};
+export const appLogger={info(){},warn(){},error(){},debug(){}};
+export const calls:string[]=[];
+const config={shell:null,font_family:'monospace',font_size:13,theme:'commander',mcp_server_enabled:true,disabled_native_tools:[],collapse_tools:false,services:{server:{enabled:false,port:9876,ipv6_enabled:false},auth:{username:'',password_hash:'',session_token_duration_secs:86400,lan_auth_bypass:false},relay:{enabled:false,url:'',session_id:''}}};
+export async function invoke(cmd:string,args?:any):Promise<any>{calls.push(cmd);switch(cmd){
+case 'load_config':return structuredClone(config);
+case 'get_config_defaults':return {};
+case 'get_home_directory':return '/workspace';
+case 'get_cli_status':return {installed:true,path:'/fixture/tuic',version_match:true,auto_updatable:true};
+case 'mdkb_status':return {available:false,connected:false};
+case 'load_repo_settings':return {};
+case 'load_mcp_upstreams':return {servers:[]};
+case 'get_mcp_upstream_status':return {upstreams:[]};
+case 'get_mcp_status':return {enabled:true,running:true,native_tools:[{name:'session',summary:'Manage terminal sessions',description:'Fixture tool'}],active_sessions:0,mcp_clients:0,max_sessions:32,remote_port:null,reachable:null};
+case 'get_relay_status':return {enabled:false,connected:false,url:'',session_id:''};
+case 'get_local_ips':return [];
+case 'get_tailscale_status':return {installed:false,running:false,ip:null};
+case 'get_remote_connections':case 'load_remote_connections':return {};
+case 'list_audio_output_devices':case 'list_audio_devices':case 'get_model_info':case 'get_speech_assets':case 'get_speech_voices':case 'get_edge_voices':case 'fetch_plugin_registry':case 'list_installed_mcp_integrations':case 'github_list_accounts':return [];
+case 'get_agent_mcp_status':return {supported:true,installed:false,config_path:null,shared_settings_file:false};
+case 'github_auth_status':return {authenticated:true,login:'fixture-account',avatar_url:null,source:'oauth',scopes:'repo'};
+case 'github_diagnostics':return {circuit_breaker_open:false,circuit_breaker_status:'closed',repos_not_found:[],repos_monitored:0};
+case 'github_resolve_repos':return {};
+case 'circleci_token_status':return {configured:false,source:'none'};
+case 'check_microphone_permission':return 'not_determined';
+case 'telegram_settings':return {enabled:false,token_set:false,bot_alias:null,registered_agent_name:null,chats:[],pairing_pending:false,recent_events:[],connected:false,polling_owner:null,last_error:null,last_message_time:null};
+case 'ego_providers':return {defaultModel:'fixture/example',providers:[{name:'fixture',credential:{state:'absent',detail:'Illustrative fixture only'},models:[{slug:'fixture/example',name:'Example model',available:false,unavailable:'No credential in isolated fixture'}]}]};
+case 'ego_perimeter':return {profile:null,roots:{rootDir:'/workspace',rootAccess:'read-write',readAllowlist:'',writableDirs:''},networkEnabled:false,execEnforcement:'notChecked',effective:{...perimeter,roots:[{path:'/workspace',access:'read-write',source:'default'}]},preview:'Illustrative configuration; not a live enforcement check'};
+case 'load_keybindings':return [];
+case 'load_agents_config':return {agents:{},hibernate_idle_minutes:60,hibernate_scope:'background_only'};
+default:return undefined;
+}}
+export const rpc=invoke;
