@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+- Keep the CLI answer gutter continuous across internal blank rows and section headings between marked answers, without including trailing unmarked prose or tool output (#1998-d826).
+
 - Place the mobile jump-to-bottom control beside Send, outside the key bar so it cannot cover arrow keys (#1988-0233).
 
 - Preserve full mobile CLI startup, permission and selection dialogs in initial HTTP and live log-WebSocket screens (#1987-606c).
