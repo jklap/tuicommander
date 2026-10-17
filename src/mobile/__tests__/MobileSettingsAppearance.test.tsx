@@ -89,7 +89,7 @@ describe("mobile Settings", () => {
 		);
 		expect(screen.queryByRole("button", { name: /telegram/i })).toBeNull();
 		expect(screen.queryByText(/telegram/i)).toBeNull();
-		expect(screen.getByRole("link", { name: "Open Desktop UI" })).toBeTruthy();
+		expect(screen.getByText("Open Desktop UI").tagName).toBe("A");
 	});
 
 	// Catches: mobile rendering the indicator without offering a working opt-out.
