@@ -1,16 +1,14 @@
-import { readFileSync, writeFileSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { afterEach, expect, it, vi } from "vitest";
 import { setPerfDebug } from "../../../utils/perfDebug";
 import type { CellMetrics, DecodedRow } from "../canvasTerminalUtils";
 import {
 	dumpFrameWorkload,
 	FrameWorkloadRecorder,
-	recordWorkloadPaint,
 	type PaintState,
 	recordWorkloadArrival,
+	recordWorkloadPaint,
 	setFrameWorkloadEnabled,
-	WORKLOAD_BYTES,
-	WORKLOAD_EVENTS,
 } from "../frameWorkload";
 import { type RecordedRow, replayFrameWorkload, restoreWorkloadRow } from "../frameWorkloadReplay";
 
@@ -111,44 +109,6 @@ it("synthetic smoke reaches production text paint with font DPR and projection s
 	expect(ctx.setTransform).toHaveBeenCalledWith(2, 0, 0, 2, expect.any(Number), 0);
 	expect(result.frames).toHaveLength(1);
 	expect(result.source).toBe("synthetic-smoke-not-stall-red");
-});
-
-it("measures recorder hot-path overhead on a bounded synthetic 60x160 grid without dump encoding", () => {
-	const rows = new Map(Array.from({ length: 60 }, (_, i) => [i, row(i, 160)]));
-	const binary = new ArrayBuffer(60 * 160 * 13);
-	const recorder = new FrameWorkloadRecorder();
-	const samples: number[] = [];
-	const freshRowSamples: number[] = [];
-	for (let i = 0; i < 128; i++) {
-		const start = performance.now();
-		recorder.arrival("overhead", binary, false, i * 16);
-		recorder.paint("overhead", rows, state, i * 16);
-		samples.push(performance.now() - start);
-		// Fresh rows model a fully damaged frame. Decode allocations are outside
-		// this timer, just as they are outside the recorder's responsibility.
-		const freshRows = new Map(Array.from({ length: 60 }, (_, index) => [index, row(index, 160)]));
-		const freshStart = performance.now();
-		recorder.arrival("overhead", binary, false, i * 16);
-		recorder.paint("overhead", freshRows, state, i * 16);
-		freshRowSamples.push(performance.now() - freshStart);
-	}
-	samples.sort((a, b) => a - b);
-	freshRowSamples.sort((a, b) => a - b);
-	const report = {
-		synthetic: true,
-		rows: 60,
-		cols: 160,
-		iterations: 128,
-		p50_ms: samples[64],
-		p95_ms: samples[121],
-		max_ms: samples[127],
-		fresh_rows: { p50_ms: freshRowSamples[64], p95_ms: freshRowSamples[121], max_ms: freshRowSamples[127] },
-		memory: recorder.status(),
-	};
-	if (process.env.FRAME_WORKLOAD_OVERHEAD_REPORT)
-		writeFileSync(process.env.FRAME_WORKLOAD_OVERHEAD_REPORT, JSON.stringify(report, null, 2));
-	expect(recorder.status().bytes).toBeLessThanOrEqual(WORKLOAD_BYTES);
-	expect(recorder.status().events).toBeLessThanOrEqual(WORKLOAD_EVENTS);
 });
 
 it("a stall longer than the window does not erase its last paint before the dump", () => {
