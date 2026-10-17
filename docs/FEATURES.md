@@ -2922,9 +2922,11 @@ completion/maximum-duration integration remain pending.
 
 ### Lean one-shot automation creation
 
-One-shot automation creation accepts `name`, `prompt` and `in_secs` from a bound
-agent. Host-resolved caller defaults and returned next-run/local fire times remove
-clock, list and get lookups; exact UTC storage preserves elapsed delays across DST.
+One-shot automation creation accepts `name`, `prompt`, `in_secs` and an explicit
+saved `run_config` from a bound agent. Host-resolved repository defaults and
+returned next-run/local fire times remove clock, list and get lookups. Identical
+caller requests reuse the first saved occurrence; exact UTC storage preserves
+elapsed delays across DST. Unknown caller profile identity fails explicitly.
 
 ### Automations dialog (backend integration pending)
 

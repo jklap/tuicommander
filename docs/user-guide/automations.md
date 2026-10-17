@@ -123,8 +123,11 @@ Use Left/Right or Home/End on the Definitions and Runs tabs. New automation, Ref
 ### Ask an agent to schedule a one-time check
 
 A bound agent can call `automations` once with
-`{"action":"create","definition":{"name":"Recheck","prompt":"Check again","in_secs":3600}}`.
-The host uses its own clock and this caller's repository and saved agent profile.
-It returns the saved schedule and next-run timestamp; no clock or list lookup is
-needed. If the caller has no saved default profile, specify `run_config`.
-Elapsed delays remain exact across daylight-saving changes.
+`{"action":"create","definition":{"name":"Recheck","prompt":"Check again","in_secs":3600,"run_config":"Your saved profile"}}`.
+The host uses its own clock and this caller's repository. Specify the actual
+saved agent profile in `run_config`; the host does not infer an account/model
+profile from agent type. It returns the saved schedule and next-run timestamp;
+no clock or list lookup is needed. Retrying the identical request from the same
+caller returns the original reminder without resetting its delay. Supply a new
+explicit id to schedule a separate identical reminder. Elapsed delays remain
+exact across daylight-saving changes.

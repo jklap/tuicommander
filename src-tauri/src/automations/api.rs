@@ -30,6 +30,8 @@ pub(crate) enum AutomationAction {
     },
     Create {
         definition: Value,
+        #[serde(skip)]
+        idempotent: bool,
     },
     Update {
         id: Option<String>,
@@ -118,8 +120,17 @@ pub(crate) async fn execute_as(
 ) -> Result<Value, String> {
     let mut action = parse(input)?;
     caller.creator(&action)?;
-    if let AutomationAction::Create { definition } = &mut action {
-        super::create::apply_caller_defaults(definition, &state, &caller)?;
+    if let AutomationAction::Create {
+        definition,
+        idempotent,
+    } = &mut action
+    {
+        if let Caller::Agent(Some(creator)) = &caller
+            && definition.get("id").is_none()
+        {
+            super::create::assign_retry_id(definition, creator)?;
+            *idempotent = true;
+        }
     }
     if let AutomationAction::RunNow { id } = action {
         return value(AutomationRuntime::run_now(&state, &id).await?);
@@ -140,13 +151,35 @@ pub(crate) async fn execute_as(
         .map_err(|error| format!("Automation cleanup task failed: {error}"))?;
     }
     tokio::task::spawn_blocking(move || {
-        execute_stored_as(
-            &DefinitionStore::new(),
-            &RunStore::open()?,
-            action,
-            Utc::now(),
-            caller,
-        )
+        let definitions = DefinitionStore::new();
+        if let AutomationAction::Create {
+            definition,
+            idempotent,
+        } = &mut action
+        {
+            if *idempotent {
+                // A retry returns the original occurrence even if caller cwd or
+                // launch settings are no longer available to resolve defaults.
+                if let Some(saved) = definitions
+                    .load()?
+                    .definitions
+                    .into_iter()
+                    .find(|saved| definition["id"].as_str() == Some(saved.id.as_str()))
+                {
+                    if saved.created_by_session.as_deref()
+                        != match &caller {
+                            Caller::Agent(session) => session.as_deref(),
+                            Caller::Client => None,
+                        }
+                    {
+                        return Err("Automation id already exists".into());
+                    }
+                    return create_reply(saved, Utc::now());
+                }
+            }
+            super::create::apply_caller_defaults(definition, &state, &caller)?;
+        }
+        execute_stored_as(&definitions, &RunStore::open()?, action, Utc::now(), caller)
     })
     .await
     .map_err(|error| format!("Automation task failed: {error}"))?
@@ -211,23 +244,13 @@ pub(crate) fn execute_stored_as(
             timezone.as_deref(),
         )?),
         AutomationAction::Get { id } => value(definitions.get(&id)?),
-        AutomationAction::Create { definition } => {
+        AutomationAction::Create {
+            definition,
+            idempotent,
+        } => {
             let definition = super::create::resolve(definition, now)?;
-            let id = definition.id.clone();
-            actions::execute(
-                definitions,
-                DefinitionAction::Create { definition },
-                creator,
-            )?;
-            let saved = definitions.get(&id)?;
-            let next = if saved.enabled {
-                saved.schedule()?.next_after(now)?
-            } else {
-                None
-            };
-            let mut reply = value(&saved)?;
-            reply["next_run_ms"] = json!(next.map(|time| time.timestamp_millis()));
-            Ok(reply)
+            let saved = actions::create_saved(definitions, definition, creator, idempotent)?;
+            create_reply(saved, now)
         }
         AutomationAction::Update {
             id,
@@ -298,6 +321,17 @@ pub(crate) fn execute_stored_as(
         AutomationAction::RunNow { .. } => Err("Run Now requires the runtime owner".into()),
     }
 }
+fn create_reply(saved: AutomationDefinition, now: DateTime<Utc>) -> Result<Value, String> {
+    let next = if saved.enabled {
+        saved.schedule()?.next_after(now)?
+    } else {
+        None
+    };
+    let mut reply = value(&saved)?;
+    reply["next_run_ms"] = json!(next.map(|time| time.timestamp_millis()));
+    Ok(reply)
+}
+
 fn cursor(runs: &RunStore, id: &str) -> Result<Option<DateTime<Utc>>, String> {
     runs.scheduled_cursor(id)?
         .map(|millis| {

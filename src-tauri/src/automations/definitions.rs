@@ -32,23 +32,49 @@ impl DefinitionStore {
     }
 
     /// Create one definition without replacing another writer's edits.
-    pub fn create(&self, mut definition: AutomationDefinition) -> Result<(), String> {
+    pub fn create(&self, definition: AutomationDefinition) -> Result<(), String> {
+        self.create_saved(definition).map(|_| ())
+    }
+
+    pub(crate) fn create_saved(
+        &self,
+        definition: AutomationDefinition,
+    ) -> Result<AutomationDefinition, String> {
+        self.insert(definition, false)
+    }
+
+    /// Atomically reuse the first saved occurrence for a host-generated request id.
+    pub(crate) fn create_idempotent(
+        &self,
+        definition: AutomationDefinition,
+    ) -> Result<AutomationDefinition, String> {
+        self.insert(definition, true)
+    }
+
+    fn insert(
+        &self,
+        mut definition: AutomationDefinition,
+        idempotent: bool,
+    ) -> Result<AutomationDefinition, String> {
         if definition.timezone.is_empty() {
             definition.timezone = super::schedule::timezone_for_creation(None)?;
         }
         definition.validate()?;
         self.file.update_with_strict(|latest| {
             latest.validate()?;
-            if latest
+            if let Some(saved) = latest
                 .definitions
                 .iter()
-                .any(|item| item.id == definition.id)
+                .find(|item| item.id == definition.id)
             {
+                if idempotent && saved.created_by_session == definition.created_by_session {
+                    return Ok((saved.clone(), false));
+                }
                 return Err("Automation id already exists".into());
             }
             definition.validate_schedule_at(chrono::Utc::now())?;
-            latest.definitions.push(definition);
-            Ok(((), true))
+            latest.definitions.push(definition.clone());
+            Ok((definition, true))
         })
     }
 

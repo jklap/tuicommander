@@ -1225,9 +1225,12 @@ removing a stored token leaves environment and CircleCI CLI fallbacks unchanged.
 
 ### Automation lean creation (#2001-5c1f)
 
-Bound agents can create with name, prompt
-and in_secs. The shared API resolves elapsed delay using the host clock and uses
-only caller-specific repository and saved agent profile defaults. Schedule choices
-are exclusive. Create returns the saved definition and next_run_ms; once_local and
+Bound agents can create with name, prompt, in_secs and an explicit run_config.
+The shared API resolves elapsed delay using the host clock and uses only
+caller-specific repository defaults. Actual saved profile identity is not retained
+in current caller metadata, so missing run_config fails instead of substituting
+an agent-type default. Generated IDs hash caller identity and the original request;
+identical retries atomically reuse the original occurrence. A separate identical
+reminder needs a new explicit id. Schedule choices are exclusive. Create returns the saved definition and next_run_ms; once_local and
 once_at preserve both the selected zone's local display and the exact UTC instant.
 Unbound HTTP/IPC callers still supply explicit definition fields.

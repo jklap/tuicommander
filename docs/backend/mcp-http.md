@@ -2187,14 +2187,20 @@ Errors use `{ "error": "..." }` with the identical backend validation text.
 A bound agent can create a one-shot in one call:
 
 ```json
-{"action":"create","definition":{"name":"Recheck","prompt":"Check again","in_secs":3600}}
+{"action":"create","definition":{"name":"Recheck","prompt":"Check again","in_secs":3600,"run_config":"Your saved profile"}}
 ```
 
 The host resolves the elapsed delay from its own UTC clock. It defaults repository
 from this caller's live cwd, ACP root or registered project, never another tab.
-`run_config` defaults to the caller agent's saved default profile (or its only
-profile). Missing or ambiguous context requires an explicit field; errors name it.
-Generated IDs combine the name and a UUID. Other defaults are existing workspace,
+`run_config` must be explicit: current caller metadata does not retain the actual
+saved account/model profile. The host never substitutes the agent type's default
+profile. An omitted profile returns `{error,code:"caller_profile_unresolved",field:"run_config"}`.
+Generated IDs combine the name with a SHA-256 hash of caller identity and the
+original request before defaults and clock resolution. Repeating that request
+returns the first saved occurrence, including when caller cwd has changed or is
+no longer available. Concurrent retries share one locked insertion. To create a
+separate identical reminder, supply a new explicit `id`. Explicit-ID duplicates
+still fail. Other defaults are existing workspace,
 enabled=true, grace_secs=43200, overlap=skip and max_duration_secs=3600.
 Create returns the saved fields plus `next_run_ms` and the resolved
 `once_local`/`timezone`; no date, list or get call is needed. `in_secs` must be a

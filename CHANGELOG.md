@@ -6,7 +6,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
-- Create one-shot automations with name, prompt and a relative delay; the host resolves caller defaults and returns the saved fire time without extra clock/list/get calls (#2001-5c1f).
+- Create retry-safe one-shot automations with name, prompt, a relative delay and an explicit saved profile; the host resolves caller repository defaults and returns the saved fire time without extra clock/list/get calls (#2001-5c1f).
 ### Fixed
 
 - Correct Settings accent-action text, compact navigation, wrapped help badges, shortcut groups, and workspace path presentation; hide the desktop-only Local tools card in browser mode (#1945).

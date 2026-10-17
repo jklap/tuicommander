@@ -9,7 +9,7 @@ use std::sync::Arc;
 pub fn tool_definition() -> Value {
     json!({
         "name": "automations",
-        "description": "One-shot: {\"action\":\"create\",\"definition\":{\"name\":\"Recheck\",\"prompt\":\"Check again\",\"in_secs\":3600}}. The host resolves its clock and bound caller's repository/saved agent profile; other create fields have safe defaults. No date/list/get needed: create returns the saved definition with once_local, timezone and next_run_ms. in_secs, cron and once_local are exclusive; missing caller context requires explicit fields. update accepts definition or id+enabled. list/get read definitions; pause/resume/delete retain history. run_now starts a run; run/list_runs/summary read history. preview/preview_definition/preset resolve schedules; templates/template supply disabled drafts. worktree_preview/cleanup_worktree inspect/remove safe run workspaces.",
+        "description": "One-shot: {\"action\":\"create\",\"definition\":{\"name\":\"Recheck\",\"prompt\":\"Check again\",\"in_secs\":3600,\"run_config\":\"Your saved profile\"}}. The host clock resolves in_secs, exclusive with cron/once_local. run_config must name the actual caller profile: its agent-type default is never substituted. Bound agents may omit id, repository, workspace, cron, enabled, grace_secs, overlap and max_duration_secs; unbound HTTP/IPC callers must supply all normal definition fields (cron may be omitted for Once). Missing context names the required field. Repeating an identical generated create for the same caller returns the first saved occurrence; use an explicit new id for a separate identical reminder. Create returns the saved definition with local fire time and next_run_ms; no date/list/get needed. update accepts definition or id+enabled; list/get/pause/resume/delete manage definitions (history retained). run_now/run/list_runs/summary manage runs; preview/preview_definition/preset resolve schedules; templates/template supply disabled drafts; worktree_preview/cleanup_worktree inspect/remove safe run workspaces.",
         "inputSchema": {
             "type": "object", "additionalProperties": false,
             "required": ["action"],
@@ -31,7 +31,7 @@ pub fn tool_definition() -> Value {
                 ]},
                 "definition": {
                     "type":"object", "additionalProperties":false,
-                    "required":["name","prompt"],
+                    "required":["name","prompt","run_config"],
                     "properties": {
                         "id":{"type":"string"}, "name":{"type":"string"}, "prompt":{"type":"string"},
                         "run_config":{"type":"string"}, "repository":{"type":"string"},
@@ -61,7 +61,13 @@ pub async fn handle(args: &Value, creator_session: Option<String>, state: Arc<Ap
 }
 
 fn reply(result: Result<Value, String>) -> Value {
-    result.unwrap_or_else(|error| json!({"error": error}))
+    result.unwrap_or_else(|error| {
+        if error == super::create::PROFILE_REQUIRED {
+            json!({"error": error, "code":"caller_profile_unresolved", "field":"run_config"})
+        } else {
+            json!({"error": error})
+        }
+    })
 }
 
 #[cfg(test)]

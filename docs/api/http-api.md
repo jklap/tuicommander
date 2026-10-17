@@ -3033,8 +3033,12 @@ so a DST fold cannot move the occurrence. Preserve `once_at` for unchanged sched
 edits; clear it when changing the schedule. `next_run_ms` in create replies is
 computed, not stored; update/preview ignore this read-only field.
 HTTP/IPC callers without bound agent identity supply all normal definition fields.
-Bound MCP callers can omit id, repository, run_config, workspace, enabled,
-grace_secs, overlap and max_duration_secs; see the MCP guide for caller-only defaults.
+Bound MCP callers can omit id, repository, workspace, enabled, grace_secs,
+overlap and max_duration_secs. They must supply the actual saved `run_config`:
+agent-type defaults are not proof of the caller's account/model profile.
+Generated bound creates are idempotent by caller plus original request; identical
+retries return the first saved occurrence without resetting its delay. Supply a
+new explicit id for a separate identical reminder. See the MCP guide for defaults.
 Update replaces only the named definition and rejects a changed id; enabled-only
 update preserves concurrent edits. Supplying both `definition` and `enabled` is
 an error. Create ignores client creator provenance; update preserves it.

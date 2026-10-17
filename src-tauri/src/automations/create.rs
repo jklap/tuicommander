@@ -34,26 +34,12 @@ pub(super) fn apply_caller_defaults(
                 .get(peer)
                 .and_then(|agent| agent.project.clone())
         });
-    let agent_type = pty
-        .as_ref()
-        .and_then(|id| {
-            state
-                .session_maps
-                .session_states
-                .get(id)
-                .and_then(|session| session.agent_type.clone())
-        })
-        .or_else(|| acp_root.as_ref().map(|_| "ego".to_owned()));
-    let config = crate::config::load_agents_config();
-    apply_defaults(definition, repository, agent_type.as_deref(), &config)
+    apply_defaults(definition, repository)
 }
 
-fn apply_defaults(
-    definition: &mut Value,
-    repository: Option<String>,
-    agent_type: Option<&str>,
-    config: &crate::config::AgentsConfig,
-) -> Result<(), String> {
+pub(super) const PROFILE_REQUIRED: &str = "Automation run_config is required: the caller's actual saved profile cannot be resolved; supply run_config explicitly";
+
+fn apply_defaults(definition: &mut Value, repository: Option<String>) -> Result<(), String> {
     let fields = definition
         .as_object_mut()
         .ok_or("Automation definition must be an object")?;
@@ -62,37 +48,12 @@ fn apply_defaults(
             .ok_or("Automation repository is required: bound caller has no repository/cwd")?;
         fields.insert("repository".into(), json!(repository));
     }
+    // Agent type is not account/model profile identity. Neither PTY nor ACP
+    // caller metadata currently records the saved run-configuration name.
     if !fields.contains_key("run_config") {
-        let profiles = agent_type
-            .and_then(|agent| config.agents.get(agent))
-            .map(|agent| &agent.run_configs);
-        let profile = profiles.and_then(|profiles| {
-            profiles.iter().find(|profile| profile.is_default)
-                .or_else(|| (profiles.len() == 1).then(|| &profiles[0]))
-        }).ok_or("Automation run_config is required: bound caller has no unambiguous saved agent configuration")?;
-        fields.insert("run_config".into(), json!(profile.name));
+        return Err(PROFILE_REQUIRED.into());
     }
-    if !fields.contains_key("id") {
-        let name = fields
-            .get("name")
-            .and_then(Value::as_str)
-            .ok_or("Automation name is required")?;
-        let slug: String = name
-            .chars()
-            .take(48)
-            .map(|ch| {
-                if ch.is_ascii_alphanumeric() {
-                    ch.to_ascii_lowercase()
-                } else {
-                    '-'
-                }
-            })
-            .collect();
-        fields.insert(
-            "id".into(),
-            json!(format!("{slug}-{}", uuid::Uuid::new_v4())),
-        );
-    }
+
     for (key, value) in [
         ("workspace", json!({"mode":"existing"})),
         ("enabled", json!(true)),
@@ -102,6 +63,36 @@ fn apply_defaults(
     ] {
         fields.entry(key).or_insert(value);
     }
+    Ok(())
+}
+
+/// Hash the original request before ambient defaults/clock resolution so a lost
+/// reply can be retried even after cwd, timezone or default settings have changed.
+pub(super) fn assign_retry_id(definition: &mut Value, creator: &str) -> Result<(), String> {
+    use sha2::{Digest, Sha256};
+    let mut request = definition.clone();
+    let fields = request
+        .as_object_mut()
+        .ok_or("Automation definition must be an object")?;
+    fields.remove("created_by_session");
+    let name = fields
+        .get("name")
+        .and_then(Value::as_str)
+        .ok_or("Automation name is required")?;
+    let slug: String = name
+        .chars()
+        .take(48)
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() {
+                ch.to_ascii_lowercase()
+            } else {
+                '-'
+            }
+        })
+        .collect();
+    request.sort_all_objects();
+    let bytes = serde_json::to_vec(&(creator, request)).map_err(|error| error.to_string())?;
+    definition["id"] = json!(format!("{slug}-{}", hex::encode(Sha256::digest(bytes))));
     Ok(())
 }
 
