@@ -18,6 +18,7 @@ const DEFAULT = [
 function renderEditor(value: string | undefined, onSave = vi.fn()) {
 	const view = render(() => (
 		<LaunchInstructionsEditor
+			settingId="agents.launch_instructions"
 			id="li"
 			label="Launch instructions"
 			value={value}
@@ -37,6 +38,7 @@ describe("LaunchInstructionsEditor", () => {
 		const view = render(() => (
 			<LaunchInstructionsEditor
 				id="live-instructions"
+				settingId="agents.launch_instructions"
 				label="Launch instructions"
 				value={saved()}
 				fallback={DEFAULT}

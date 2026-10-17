@@ -1,4 +1,5 @@
 import { type Component, createSignal, For, onMount, Show } from "solid-js";
+import { settingOptions } from "../../../../services/settingsCatalogue";
 import { appLogger } from "../../../../stores/appLogger";
 import {
 	type ConnectionState,
@@ -366,6 +367,7 @@ export const RemoteMachinesPanel: Component = () => {
 					<SettingRow label="Name">
 						{(id, descriptionId) => (
 							<Input
+								data-setting-id="connections.connections.{id}.name"
 								id={id}
 								aria-describedby={descriptionId()}
 								value={props.formData.name}
@@ -377,6 +379,7 @@ export const RemoteMachinesPanel: Component = () => {
 					<SettingRow label="Transport">
 						{(id, descriptionId) => (
 							<Select
+								data-setting-id="connections.connections.{id}.transport.type"
 								id={id}
 								aria-describedby={descriptionId()}
 								class={s.input}
@@ -385,8 +388,11 @@ export const RemoteMachinesPanel: Component = () => {
 									props.setFormData((f) => ({ ...f, transportType: e.currentTarget.value as "Ssh" | "Direct" }))
 								}
 							>
-								<option value="Ssh">SSH</option>
-								<option value="Direct">Direct</option>
+								<For
+									each={settingOptions("connections.connections.{id}.transport.type", { Ssh: "SSH", Direct: "Direct" })}
+								>
+									{(option) => <option value={option.value}>{option.label}</option>}
+								</For>
 							</Select>
 						)}
 					</SettingRow>
@@ -394,6 +400,7 @@ export const RemoteMachinesPanel: Component = () => {
 						<SettingRow label="Host">
 							{(id, descriptionId) => (
 								<Input
+									data-setting-id="connections.connections.{id}.transport.ssh_host"
 									id={id}
 									aria-describedby={descriptionId()}
 									type="text"
@@ -411,6 +418,7 @@ export const RemoteMachinesPanel: Component = () => {
 							</For>
 						</datalist>
 						<button
+							data-non-setting="Explicit SSH discovery or authentication probe; not configuration persistence"
 							class={s.textBtn}
 							style={{ "margin-top": "12px", "margin-bottom": "12px" }}
 							type="button"
@@ -426,6 +434,7 @@ export const RemoteMachinesPanel: Component = () => {
 						<SettingRow label="Port">
 							{(id, descriptionId) => (
 								<Input
+									data-setting-id="connections.connections.{id}.transport.ssh_port"
 									id={id}
 									aria-describedby={descriptionId()}
 									type="number"
@@ -443,6 +452,7 @@ export const RemoteMachinesPanel: Component = () => {
 						<SettingRow label="User">
 							{(id, descriptionId) => (
 								<Input
+									data-setting-id="connections.connections.{id}.transport.ssh_user"
 									id={id}
 									aria-describedby={descriptionId()}
 									type="text"
@@ -457,6 +467,7 @@ export const RemoteMachinesPanel: Component = () => {
 						<SettingRow label="Identity file">
 							{(id, descriptionId) => (
 								<Input
+									data-setting-id="connections.connections.{id}.transport.identity_file"
 									id={id}
 									aria-describedby={descriptionId()}
 									type="text"
@@ -470,6 +481,7 @@ export const RemoteMachinesPanel: Component = () => {
 						<SettingRow label="Remote daemon port">
 							{(id, descriptionId) => (
 								<Input
+									data-setting-id="connections.connections.{id}.transport.remote_daemon_port"
 									id={id}
 									aria-describedby={descriptionId()}
 									type="number"
@@ -491,6 +503,7 @@ export const RemoteMachinesPanel: Component = () => {
 						<SettingRow label="URL">
 							{(id, descriptionId) => (
 								<Input
+									data-setting-id="connections.connections.{id}.transport.url"
 									id={id}
 									aria-describedby={descriptionId()}
 									type="text"
@@ -503,22 +516,28 @@ export const RemoteMachinesPanel: Component = () => {
 						</SettingRow>
 					</Show>
 				</SectionCard>
-				<SectionCard title="Deployment and lifetime">
-					<ContextualHelp label="Deployment and lifetime" />
+				<SectionCard title="Deployment and lifetime" help={<ContextualHelp label="Deployment and lifetime" />}>
 					<Show when={props.formData.transportType === "Ssh"}>
 						<SettingRow label="Deployment">
 							{(id, descriptionId) => (
 								<>
 									<Select
+										data-setting-id="connections.connections.{id}.deploy"
 										class={s.input}
 										id={id}
 										aria-describedby={descriptionId()}
 										value={props.formData.deploy}
 										onChange={(e) => props.setFormData((f) => ({ ...f, deploy: e.currentTarget.value as DeployMode }))}
 									>
-										<option value="never">Never deploy</option>
-										<option value="on_connect">Deploy on connect</option>
-										<option value="installed">Installed service</option>
+										<For
+											each={settingOptions("connections.connections.{id}.deploy", {
+												never: "Never deploy",
+												on_connect: "Deploy on connect",
+												installed: "Installed service",
+											})}
+										>
+											{(option) => <option value={option.value}>{option.label}</option>}
+										</For>
 									</Select>
 								</>
 							)}
@@ -527,6 +546,7 @@ export const RemoteMachinesPanel: Component = () => {
 							{(id, descriptionId) => (
 								<>
 									<Input
+										data-setting-id="connections.connections.{id}.survive_secs"
 										type="number"
 										class={s.input}
 										min={1}
@@ -547,6 +567,7 @@ export const RemoteMachinesPanel: Component = () => {
 					<SettingRow label="Auto-update remote daemons">
 						{(id, descriptionId) => (
 							<input
+								data-setting-id="connections.connections.{id}.auto_update"
 								id={id}
 								aria-describedby={descriptionId()}
 								class={s.rowSwitch}
@@ -559,6 +580,7 @@ export const RemoteMachinesPanel: Component = () => {
 					<SettingRow label="Auth username">
 						{(id, descriptionId) => (
 							<Input
+								data-setting-id="connections.connections.{id}.auth_username"
 								id={id}
 								aria-describedby={descriptionId()}
 								type="text"
@@ -572,6 +594,7 @@ export const RemoteMachinesPanel: Component = () => {
 					<SettingRow label="Auth password">
 						{(id, descriptionId) => (
 							<Input
+								data-setting-id="connections.{id}.credential"
 								id={id}
 								aria-describedby={descriptionId()}
 								type="password"
@@ -602,6 +625,7 @@ export const RemoteMachinesPanel: Component = () => {
 						automatically.
 					</p>
 					<button
+						data-non-setting="Open, prefill, cancel or close the connection editor"
 						class={s.copyBtn}
 						onClick={() => {
 							setShowAdd((v) => !v);
@@ -636,7 +660,13 @@ export const RemoteMachinesPanel: Component = () => {
 					<span style={{ "font-weight": 500, "font-size": "13px" }}>
 						Discovered SSH hosts ({discovered().hosts.length})
 					</span>
-					<button class={s.textBtn} type="button" onClick={probeHosts} disabled={probingHosts()}>
+					<button
+						data-non-setting="Explicit SSH discovery or authentication probe; not configuration persistence"
+						class={s.textBtn}
+						type="button"
+						onClick={probeHosts}
+						disabled={probingHosts()}
+					>
 						{probingHosts() ? "Probing..." : "Probe config hosts"}
 					</button>
 				</div>
@@ -655,6 +685,7 @@ export const RemoteMachinesPanel: Component = () => {
 							return (
 								<div style={{ display: "flex", gap: "4px", "align-items": "center" }}>
 									<button
+										data-non-setting="Open, prefill, cancel or close the connection editor"
 										type="button"
 										class={s.textBtn}
 										title="Prefill the Add form with this host"
@@ -675,6 +706,7 @@ export const RemoteMachinesPanel: Component = () => {
 										</span>
 									</button>
 									<button
+										data-non-setting="Explicit SSH discovery or authentication probe; not configuration persistence"
 										type="button"
 										class={s.textBtn}
 										title="Contact this host once to check authentication"
@@ -705,10 +737,16 @@ export const RemoteMachinesPanel: Component = () => {
 							onProbeHosts={probeHosts}
 						/>
 						<div style={{ display: "flex", gap: "8px", "justify-content": "flex-end" }}>
-							<button class={s.textBtn} onClick={addConnection} disabled={saving()}>
+							<button
+								data-non-setting="Create, update or remove a stable connection through the existing owner"
+								class={s.textBtn}
+								onClick={addConnection}
+								disabled={saving()}
+							>
 								{saving() ? "Saving..." : "Save"}
 							</button>
 							<button
+								data-non-setting="Open, prefill, cancel or close the connection editor"
 								class={s.textBtn}
 								onClick={() => {
 									setShowAdd(false);
@@ -728,6 +766,7 @@ export const RemoteMachinesPanel: Component = () => {
 				</div>
 			</Show>
 
+			<h3>Your machines</h3>
 			{/* Empty state */}
 			<Show when={connectionList().length === 0 && !showAdd()}>
 				<p class={s.hint} style={{ color: "var(--text-dimmed)" }}>
@@ -735,7 +774,6 @@ export const RemoteMachinesPanel: Component = () => {
 				</p>
 			</Show>
 
-			<h3>Your machines</h3>
 			{/* Connection list */}
 			<For each={connectionList()}>
 				{(connState) => {
@@ -813,7 +851,12 @@ export const RemoteMachinesPanel: Component = () => {
 									>
 										<div class={s.hint}>
 											Connected through {connState.baseUrl}
-											<button class={s.textBtn} disabled={saving()} onClick={() => saveResolvedAddress(connState)}>
+											<button
+												data-non-setting="Create, update or remove a stable connection through the existing owner"
+												class={s.textBtn}
+												disabled={saving()}
+												onClick={() => saveResolvedAddress(connState)}
+											>
 												Save resolved address
 											</button>
 										</div>
@@ -849,6 +892,7 @@ export const RemoteMachinesPanel: Component = () => {
 								{/* Connect / Disconnect */}
 								<Show when={connState.status === "connected"}>
 									<button
+										data-non-setting="Remote daemon service installation/update workflow"
 										class={s.textBtn}
 										disabled={serviceBusyId() === conn().id || connState.updateInProgress}
 										onClick={() => updateRemote(connState)}
@@ -857,6 +901,7 @@ export const RemoteMachinesPanel: Component = () => {
 									</button>
 								</Show>
 								<button
+									data-non-setting="Connect or disconnect the current runtime without changing its configuration"
 									class={s.textBtn}
 									onClick={() => {
 										// "unauthenticated" still holds a tunnel and a baseUrl, so it
@@ -872,6 +917,7 @@ export const RemoteMachinesPanel: Component = () => {
 								</button>
 								<Show when={conn().transport.type === "Ssh"}>
 									<button
+										data-non-setting="Remote daemon service installation/update workflow"
 										class={s.textBtn}
 										disabled={serviceBusyId() === conn().id}
 										onClick={() => toggleInstalled(conn())}
@@ -889,6 +935,7 @@ export const RemoteMachinesPanel: Component = () => {
 								</Show>
 								{/* Edit */}
 								<button
+									data-non-setting="Open, prefill, cancel or close the connection editor"
 									class={s.copyBtn}
 									style={{ "flex-shrink": 0 }}
 									title="Edit"
@@ -900,6 +947,7 @@ export const RemoteMachinesPanel: Component = () => {
 								</button>
 								{/* Delete */}
 								<button
+									data-non-setting="Create, update or remove a stable connection through the existing owner"
 									class={s.copyBtn}
 									title="Remove"
 									onClick={() => removeConnection(conn().id, conn().name)}
@@ -932,10 +980,16 @@ export const RemoteMachinesPanel: Component = () => {
 											onProbeHosts={probeHosts}
 										/>
 										<div style={{ display: "flex", gap: "8px", "justify-content": "flex-end" }}>
-											<button class={s.textBtn} onClick={() => saveEdit(connState)} disabled={saving()}>
+											<button
+												data-non-setting="Create, update or remove a stable connection through the existing owner"
+												class={s.textBtn}
+												onClick={() => saveEdit(connState)}
+												disabled={saving()}
+											>
 												{saving() ? "Saving..." : "Save"}
 											</button>
 											<button
+												data-non-setting="Open, prefill, cancel or close the connection editor"
 												class={s.textBtn}
 												onClick={() => {
 													setEditingId(null);

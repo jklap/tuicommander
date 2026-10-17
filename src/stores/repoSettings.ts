@@ -60,7 +60,7 @@ export interface RepoSettings {
 	/** Allowlist of upstream MCP server names for this repo (null = all servers) */
 	mcpUpstreams: string[] | null;
 	// DEFERRED (2026-08-30) — `terminalMetaHotkeys` and the three `prHide*` fields
-	// below are override slots with no writer: no UI sets them, and `config.rs`
+	// below now have transient UI writers (persistence follow-up 1993-e7af); `config.rs`
 	// has no matching field on `RepoSettingsEntry`, so a value set here would be
 	// dropped by the backend. Either wire them up or delete them; leaving them is
 	// what let the camelCase persistence bug hide.

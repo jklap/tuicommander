@@ -4,9 +4,9 @@ Repository Settings separates identity, inherited worktree overrides, Design Mod
 
 Agents Settings shows the selected machine in the header. Run configuration editors keep explicit Save and Cancel actions. Terminal-agent permissions and filesystem sandbox remain separate from AI Chat ACP settings; launch instructions still save on blur.
 
-Workspace pages use the same cards and aligned rows. Terminal retains its live canvas preview and all clipboard and scrollback controls. Keyboard Shortcuts lists actions before their keycaps, with explicit Rebind and Reset actions. Git & GitHub separates authentication, monitoring, repository defaults, worktree defaults, additional accounts, CircleCI, and repository bindings. Existing save boundaries and policy choices are unchanged.
+Workspace pages use the same cards and aligned rows. Terminal retains its live canvas preview and all clipboard and scrollback controls. Keyboard Shortcuts places its searchable actions in Shortcut groups, before their keycaps, with explicit Rebind and Reset actions. Git & GitHub separates authentication, monitoring, repository defaults, worktree defaults, additional accounts, CircleCI, and repository bindings. Existing save boundaries and policy choices are unchanged.
 
-The Application pages use section cards and labelled rows. General keeps its existing update and local-tool actions. Appearance keeps group rename validation and client-local chat preferences. Notifications keeps visual controls available without audio; output-device discovery starts only after **Choose output device**. Changing master volume previews once on release.
+The Application pages use section cards and labelled rows. General places the update status and its check action above the page header. On desktop, a Local tools card groups TUIC CLI, Code Intelligence, and Custom Launchers; this card is hidden in browser mode. General links to AI Chat defaults when AI Chat is enabled. The existing install, update, uninstall, and launcher actions keep their save and confirmation behavior. Appearance keeps group rename validation and client-local chat preferences. Notifications keeps visual controls available without audio; output-device discovery starts only after **Choose output device**. Changing master volume previews once on release.
 
 
 The settings-service policy foundation keeps secrets write-only. Changes that
@@ -24,7 +24,7 @@ groups the pages by task:
 | **Application** | General, Appearance, Notifications |
 | **Workspace** | Terminal, Keyboard Shortcuts, Git & GitHub |
 | **AI** | Agents, AI Chat, Voice, Smart Prompts |
-| **Integrations** | MCP, Remote Access, Remote Machines, Plugins |
+| **Integrations** | MCP, Remote Access, Remote Machines, Telegram, Manage plugins |
 | **Plugin settings** | Loaded plugins with registered settings, marked **Plugin** |
 | **Repositories** | One page for each repository in the sidebar |
 
@@ -194,8 +194,8 @@ playback also uses the selected output device.
 | **Show scrollbar marks** | On | Mark each command's position on the terminal scrollbar, so a long scrollback shows where output began. Covers the **history** markers only — the blue/red block ticks and the green user-prompt ticks. Orange search-match ticks are not affected: they are the result of a search you just ran, not a display preference. |
 | **Reflow scrollback on resize** | On | Re-wrap scrollback history when the terminal changes width, so output written at the old width stays readable after a side panel opens or closes. Turn it off to leave history lines as they were written and truncate them to the new width instead. The visible screen is never reflowed either way — cursor-addressed TUIs redraw themselves. A change applies to sessions already open. |
 
-The terminal bell mode (`none`, `visual`, `sound`, `both`) has no control in
-Settings. Set `bell_style` in `config.json` (see [Terminal Bell](terminals.md#terminal-bell)).
+The terminal bell mode (`none`, `visual`, `sound`, `both`) has no control on
+the dedicated Terminal page. Use All settings (Expert) to edit `app.bell_style` (see [Terminal Bell](terminals.md#terminal-bell)).
 
 ### Keyboard Shortcuts
 
@@ -478,7 +478,7 @@ Settings navigation, or from the sidebar `⋯` → "Repo Settings".
 
 ### Repo-Local Config (`.tuic.json`)
 
-A `.tuic.json` file in the repository root provides team-shareable settings that override per-repo app settings and global defaults. The file is read-only from TUICommander (edit it in your repo directly).
+A `.tuic.json` file in the repository root provides team-shareable settings that override per-repo app settings and global defaults. The dedicated repository page reads this file. All settings (Expert) can edit its catalogue fields through the registered-repository owner, with a revision check; you can also edit it in your repository.
 
 **Precedence:** `.tuic.json` > per-repo app settings > global defaults
 
@@ -641,6 +641,20 @@ Settings search includes page titles and shared card controls. Page-title result
 
 An open Settings page refreshes after a durable MCP settings write. Unsaved fields stay in place; if another writer changes the same field, a warning asks you to review your edit before saving again. Incoming changes do not run startup migrations or save the snapshot back to the backend. A reconnected browser rereads its active settings sections, including after a server restart. Remote-machine changes refresh only that machine's editors, not local settings. If a write persisted but its runtime apply failed, Settings still rereads the saved state; the caller must follow the returned recovery action rather than blindly replay the write.
 
+## All settings (Expert)
+
+The **Application → All settings (Expert)** page provides typed scalar and string-list editors from the Rust catalogue. Search results update the inspector even when this page is already open. You can also select a setting manually. Bind any stable record keys, and select a registered repository or existing Ego profile when required. The inspector edits existing records; use the dedicated domain page to create records, manage credentials or edit structured pane/forward/root data. It does not expose an opaque JSON editor.
+
+Reads show owner state and a revision. Save changes only that field with its read revision. A remote update keeps a dirty draft and its old revision, so a conflicting save cannot silently overwrite the new state. **Discard draft and reload** explicitly abandons that draft. Exposure/execution edits first return a proposal; **Ask for confirmation** uses the existing human dialog. If persistence succeeded but runtime application failed, or the transport lost the outcome, the inspector disables writes until you reload authoritative state. Read back before retrying.
+
+General also exposes content-index memory budget, attachment byte limit and background WebView unload delay as expert resource controls. Enum-backed shared selects use catalogue values while retaining their existing readable labels. Search includes the inspector descriptors. In browser mode, these results open machine-owned fields in the HTTP-capable inspector; they do not open desktop-only controls such as the native global-hotkey recorder.
+
+The explicit source ledgers distinguish read-only identities, derived credentials, legacy snapshots and separate domain controls. CircleCI credentials and dictation corrections still use owners outside the catalogue (1991-bd88, 1992-d4fa). Global/repository PR visibility filters remain transient pending 1993-e7af; their presence is not a durable-persistence guarantee.
+
+## Assisted startup
+
+The [Settings startup contract](../backend/settings-startup.md) describes discoverable GitHub device/Enterprise workflows and Ego settings/readback. Interactive Ego login still requires the human AI Chat Settings workflow and has no published Settings login action. Native inventory completeness does not mean every onboarding or live UI check is complete.
+
 ### CircleCI Settings owner (#1991-bd88)
 
 Settings discovery includes the write-only machine setting `circleci.token`.
@@ -648,3 +662,5 @@ Typed `set_token` and `clear_token` actions share the existing token owner acros
 MCP, IPC and HTTP. Readback reports stored presence only (`set`, `unset`,
 `unavailable`), never a secret. Git & GitHub keeps its effective-source status;
 removing a stored token leaves environment and CircleCI CLI fallbacks unchanged.
+
+On narrow screens, search and page selection share one compact navigation row. The workspace path in AI Chat is a read-only field; select or scroll its text to inspect the full path.

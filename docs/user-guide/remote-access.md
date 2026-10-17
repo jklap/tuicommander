@@ -852,3 +852,7 @@ A successful recovery uses the resolved endpoint for the current session.
 Remote Machines shows the effective address and **Save resolved address**.
 Select that action to update the saved connection without disconnecting it.
 Leaving the action alone keeps the original saved address.
+
+## Remote Settings startup limits
+
+The shared Settings HTTP endpoint retains local-or-authenticated access; MCP mutation remains loopback-only. A local request does not implicitly target a remote daemon. Select the owner explicitly, keep its read revision, and never treat a remote invalidation cursor as a local CAS token. [Startup workflows](../backend/settings-startup.md) covers confirmation, device-login state and readback after uncertain or partial persistence. Secrets remain write-only.
