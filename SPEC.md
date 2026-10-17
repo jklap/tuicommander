@@ -714,6 +714,7 @@ Some frontend-only stores persist to localStorage:
 - [x] Remote access / HTTP server
 - [x] SSH-managed remote daemon deployment, idle lifetime, pairing-token vaulting, and systemd/launchd installation
 - [x] Mobile terminal prompt keyboard correction defaults on, with a device-local Settings toggle for autocorrect, spellcheck and sentence capitalization (#1878-3a3c).
+- [x] Mobile CLI and Chat key-bar jump-to-bottom arrow appears only while scrolled back and resumes output follow without terminal input (#1975-4a38).
 - [x] Mobile terminal Ctrl menu (Ctrl+C, Ctrl+B, Ctrl+D, agent-aware Ctrl+Enter)
 - [x] Mobile Send long-press Queue transfers the live draft to the shared server ready-window queue; taps still submit immediately.
 - [x] Session uploads live under TUIC data, with launch grants and session-end cleanup; startup reclaims only provably dead owners, preserving concurrent instances; ego invocation-scoped binary-file read roots remain unsupported (#1833-aa60).
@@ -1166,3 +1167,7 @@ Telegram replies now use TUIC-driven receipt (👀), working (👨‍💻), wait
 ### Mobile session Chat presentation (#1974-e6ae)
 
 The session detail CLI/Chat projection uses the same TerminalChatTranscript and semantic Chat tokens as desktop terminal Chat. Shared font sizes cover prompt, reply, tool and hint text. The mobile switch keeps 44px targets and the existing CommandInput and keybar; no new terminal row is added. AI Chat is outside this change.
+
+### Mobile Telegram setup removal (#1976-711e)
+
+Mobile Settings does not mount or offer Telegram setup. Desktop Settings retains the shared Telegram configuration controls and existing backend transports.

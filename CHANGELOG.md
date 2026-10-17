@@ -7,6 +7,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 - Align mobile session Chat prompt tint, answer theme rule and transcript typography with desktop through one shared token stylesheet (#1974-e6ae).
+- Add a mobile key-bar down arrow while CLI or Chat output is scrolled back; tap it to return to the latest output without sending terminal input (#1975-4a38).
+- Remove Telegram setup from mobile Settings; desktop Settings remains the configuration owner (#1976-711e).
 
 - Stream Telegram status and AI Chat answers with receipt/working reactions, request-scoped final replies, and bounded queue/failure notices (#1959-162a).
 - Add smart AI Chat table columns, conditional horizontal-scroll hints, exact-source Markdown and Copy actions, and read-only document opening on desktop and mobile (#1923-c6fb).
@@ -20,6 +22,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Restyle Workspace Settings with section cards, aligned terminal and Git fields, and action-first shortcut rows while preserving existing behavior.
 - Bound `tuic bg` completion command labels to one line and 120 characters; keep the full command before job output in the log (#1950-43b7).
 ### Fixed
+- Omit hidden answer markers when copying terminal selections or AI Chat answers, including mobile and the Answers view. (#1963-c7f6)
 - Restore contextual help for repository Design Mode and automation scripts in Settings (#1946-5de3).
 - Resolve worktree lifecycle bases for repositories without main/master, and explain when no base branch is available (#1961-bab6).
 - Prevent auto-standby from stranding foreground shell jobs; wake the recorded stopped group and retain a full timeout window after remote input, output viewing, or disconnect (#1962-4182).
@@ -55,6 +58,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- Require authenticated same-owner peers in the relay prototype and atomically enforce room and token capacity, while allowing the second peer at the room limit; terminate expired sockets and prevent stale peers from accessing recreated rooms (#1932-8398).
+
+### Fixed
 - Restore Edge spoken replies after the service migration with the new endpoint and the live-verified existing v1 GEC handshake (#1952-bf91).
 
 - Recover failed mobile views after a server outage through automatic or manual retry, without false empty/setup states, raw network errors or desktop restart advice (#1930-f4c2).

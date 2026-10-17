@@ -17,6 +17,7 @@ import { handleOpenUrl } from "../../utils/openUrl";
 import { isImagePaste } from "../../utils/pastedImage";
 import { isPerfDebug } from "../../utils/perfDebug";
 import { markPerf, noteFrameRequest } from "../../utils/perfTrace";
+import { stripAnswerMarkers } from "../../utils/stripAnswerMarkers";
 import { applyPinchFontDelta } from "../../utils/terminalZoom";
 import { ContextMenu, createContextMenu } from "../ContextMenu/ContextMenu";
 import { AnswersPanel } from "./AnswersPanel";
@@ -3408,7 +3409,7 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 		props.onRef?.({
 			wheel: handleWheel,
 			focus: () => keyInputRef.focus({ preventScroll: true }),
-			getSelectionText: () => selection.cachedText,
+			getSelectionText: () => stripAnswerMarkers(selection.cachedText),
 			refresh: () => {
 				rowMap.clear();
 				clearDetectedLinks();
@@ -3596,7 +3597,7 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 				async (text) => {
 					selection.cachedText = text;
 					selection.localSnapshot = getLocalSelectionText(selection, selectionAbsRowToViewport, rowMap);
-					await writeClipboard(text);
+					await writeClipboard(stripAnswerMarkers(text));
 				},
 			);
 			if (result.kind === "copied") {

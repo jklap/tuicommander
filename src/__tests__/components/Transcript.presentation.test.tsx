@@ -150,8 +150,9 @@ it("offers suggestions only beneath the latest answer", () => {
 			.map((button) => button.textContent),
 	).toEqual(["New one", "New two", "New three"]);
 });
-// Catches: process intent and tool disclosure occupying two separate rows; failures staying collapsed.
-it("merges intent into the activity line and opens failed output", () => {
+// TEST-CHANGE (#1970-e1f4): Boss wants failed output closed by default, superseding #1958's expansion.
+// Catches: process intent using a separate row, or failed group/call details opening automatically.
+it("merges intent into the activity line and keeps failed group and call closed", () => {
 	const { container } = transcript([
 		{ id: "intent", kind: "agent", text: "intent: Reading the source (Source check)" },
 		{
@@ -167,8 +168,14 @@ it("merges intent into the activity line and opens failed output", () => {
 		},
 	]);
 	const activity = container.querySelector<HTMLDetailsElement>("details[class*=toolActivity]")!;
-	expect(activity.open).toBe(true);
-	expect(activity.querySelector("details")?.open).toBe(true);
+	expect([activity.open, activity.querySelector("details")?.open]).toEqual([false, false]);
+	expect(activity.querySelector("summary")?.textContent).toContain("Failed");
+	expect(activity.querySelector("summary span[class*=toolCallFailure]")).not.toBeNull();
+	activity.open = true;
+	const call = activity.querySelector("details")!;
+	expect(call.open).toBe(false);
+	call.open = true;
+	expect(call.textContent).toContain("File unavailable");
 	expect(activity.querySelector("summary")?.textContent).toContain("Source check");
 	expect(activity.querySelector("summary")?.textContent).toContain("Reading the source");
 	expect(activity.querySelector("summary")?.textContent).toContain("1 read");
