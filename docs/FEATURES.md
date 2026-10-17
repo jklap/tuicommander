@@ -2180,6 +2180,7 @@ Unsupported actions are hidden. Menus close on outside tap or Escape and use
 - Mirrored sessions stream through the connected desktop server to their owning daemon, so the phone stays on its HTTPS origin; the session kill action reaches that owner too
 - Live output via WebSocket with `format=log` (VT100-extracted clean lines, auto-scrolling, 500-line live tail). Scrolling up or touching retains the reading window and fetched history; the next log update after returning to the bottom restores the live tail.
 - HTTP and HTTPS links in output open in the phone's external browser; Markdown path controls open the Files editor.
+- Mobile CLI preserves active dialog options and interaction footers, including startup trust, external-file imports and command permissions, without dialog-title exceptions.
 - Claude `/resume` retains its full session list and filtered or no-match search results in both initial HTTP output and live log-WebSocket frames; key-bar arrows and Enter operate the real terminal picker
 - Source-width prose rows are rejoined before the phone wraps them; short lines, lists, and box-drawing blocks retain their layout
 - When a mobile output line wraps, its continuation keeps the line's leading spaces or tabs; unindented prose and horizontally scrolling box-drawing blocks retain their layout

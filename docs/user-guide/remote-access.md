@@ -106,7 +106,8 @@ output. This switches the reading surface without closing the terminal or
 clearing its history; returning to CLI follows the latest output. Expand the tool activity and edit to read its **Old**
 and **New** text. Tab stops align at four spaces. Swipe the edit block sideways
 for long lines rather than wrapping coloured terminal rows. Switch back with
-**CLI** for permission prompts. Edit excerpts are bounded to 20,000 characters
+**CLI** for permission prompts. Startup trust, external-file imports, permission
+prompts and selection lists keep their option rows and interaction footer. Edit excerpts are bounded to 20,000 characters
 per version; an ellipsis marks a truncated excerpt. A failed tool card describes
 a proposed edit, not a successful file change.
 

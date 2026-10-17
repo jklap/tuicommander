@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+- Preserve full mobile CLI startup, permission and selection dialogs in initial HTTP and live log-WebSocket screens (#1987-606c).
+
 - Use Start/Stop voice call labels in the phone More menu, consistent with the tablet header (#1979-89e1, #1981-0caf).
 
 - Allow explicit mobile replies while an agent awaits input without requiring an idle shell; keep recognized question controls and show the actual refusal reason without losing the answer (#1980-47b7).
