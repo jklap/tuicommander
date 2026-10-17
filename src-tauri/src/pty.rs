@@ -1906,7 +1906,7 @@ impl ChunkProcessor {
                 let refs: Vec<&str> = screen.iter().map(String::as_str).collect();
                 // Fails OPEN by contract: no anchor found is `None`, and `None`
                 // must mean "parse everything", never "parse nothing".
-                crate::chrome::find_chrome_cutoff(&refs)
+                crate::chrome::find_agent_chrome_cutoff(&refs, agent_type.as_deref())
             } else {
                 None
             };

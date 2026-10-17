@@ -1594,24 +1594,37 @@ pub enum StructuredTokenAnchor {
     Suggest,
 }
 
+/// One marker grammar for backend capture and frontend row styling. Keep the
+/// data file portable between Rust regex and JavaScript RegExp.
+fn intent_anchor_pattern() -> &'static str {
+    lazy_static::lazy_static! {
+        static ref PATTERNS: serde_json::Value =
+            serde_json::from_str(include_str!("intent_marker.json")).expect("intent marker grammar");
+    }
+    PATTERNS["anchor"].as_str().expect("intent anchor")
+}
+
+lazy_static::lazy_static! {
+    static ref INTENT_ANCHOR_RE: regex::Regex =
+        regex::Regex::new(intent_anchor_pattern()).expect("intent anchor regex");
+}
+
 /// Identify a structured token at the start of a logical terminal line.
 /// Keep this shared with the parser grammar so grid filtering accepts exactly
 /// the same optional agent bullets as the authoritative token regexes.
 pub fn structured_token_anchor(clean: &str) -> Option<StructuredTokenAnchor> {
+    if INTENT_ANCHOR_RE.is_match(clean) {
+        return Some(StructuredTokenAnchor::Intent);
+    }
     lazy_static::lazy_static! {
-        static ref STRUCTURED_TOKEN_ANCHOR_RE: regex::Regex = regex::Regex::new(&format!(
-            r"^[\t ]*(?:[{b}][\t ]+)?(?:(?:{a})?(intent)|(suggest)):",
+        static ref SUGGEST_ANCHOR_RE: regex::Regex = regex::Regex::new(&format!(
+            r"^[\t ]*(?:[{b}][\t ]+)?suggest:",
             b = AGENT_LINE_BULLETS,
-            a = ACK_SENTENCE_PREFIX
-        ))
-        .unwrap();
+        )).unwrap();
     }
-    let captures = STRUCTURED_TOKEN_ANCHOR_RE.captures(clean)?;
-    if captures.get(1).is_some() {
-        Some(StructuredTokenAnchor::Intent)
-    } else {
-        captures.get(2).map(|_| StructuredTokenAnchor::Suggest)
-    }
+    SUGGEST_ANCHOR_RE
+        .is_match(clean)
+        .then_some(StructuredTokenAnchor::Suggest)
 }
 
 /// Detect agent-declared intent tokens: `intent: <text>` or `intent: <text> (<title>)`
@@ -1622,23 +1635,9 @@ pub fn parse_intent(clean: &str, agent_active: bool) -> Option<ParsedEvent> {
         return None;
     }
     lazy_static::lazy_static! {
-        // Plain prefix: `intent:` at line start, with optional leading
-        // horizontal whitespace, a leading bullet glyph (see
-        // AGENT_LINE_BULLETS) and/or the ack sentence (see
-        // ACK_SENTENCE_PREFIX). Ink-hosted agents (Claude Code) decorate the
-        // first line of an assistant message with `● ` and indent every
-        // continuation line by the bullet width, so plain-prefix tokens
-        // emitted after the first line arrive as `  intent: ...`; Codex
-        // decorates the first line with `• ` instead. The leading whitespace
-        // must be horizontal only — any non-whitespace character before the
-        // keyword (other than an allowed bullet or that one sentence) is
-        // rejected.
         static ref INTENT_PLAIN_RE: regex::Regex = regex::Regex::new(&format!(
-            r"(?m)^[\t ]*(?:[{b}][\t ]+)?(?:{a})?intent:[\t ]+(.+)$",
-            b = AGENT_LINE_BULLETS,
-            a = ACK_SENTENCE_PREFIX
-        ))
-        .unwrap();
+            r"(?m){}[\t ]+(.+)$", intent_anchor_pattern()
+        )).unwrap();
     }
 
     // The token is a single logical line, but the agent that wrote it wraps its

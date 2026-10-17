@@ -257,7 +257,15 @@ ParsedEvent::Intent {
 }
 ```
 
-Detected as a plain-prefix token at the start of a row: `intent: <text> (<title>)`, optionally behind an agent bullet glyph or the wrap indent.
+Detected as a plain-prefix token at the start of a row: `intent: <text> (<title>)`, optionally behind an agent bullet glyph or the wrap indent. The intent anchor grammar is stored in
+`crates/tuic-terminal/src/intent_marker.json` and consumed by both Rust capture
+and the frontend tint classifier. All agent types use this grammar.
+
+Ego chrome is bounded by its native status-row/composer pair, shared with the
+ready-screen adapter. A historical submitted `> prompt` or transcript separator
+is not a live composer. When a soft-wrapped response temporarily overwrites the
+old composer before its repaint, the response remains eligible for parsing;
+the next intent updates both session state and the tab-title event.
 
 AI Chat receives ACP markdown chunks in both desktop and browser mode, without
 terminal rows or wrap metadata. `protocolText.ts` interprets the joined answer
