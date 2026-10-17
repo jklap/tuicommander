@@ -36,6 +36,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Restyle Workspace Settings with section cards, aligned terminal and Git fields, and action-first shortcut rows while preserving existing behavior.
 - Bound `tuic bg` completion command labels to one line and 120 characters; keep the full command before job output in the log (#1950-43b7).
 ### Fixed
+- Apply confirmed username and password changes live in headless Settings without reporting a persisted apply failure or restarting the desktop listener; real listener changes keep their restart contract (#1984-3472).
 
 - Preserve unsent mobile answers when opening an ego question card, and exclude startup/help rows from fresh-session free-text questions (#1980-47b7, #1973-3d1b).
 - Preserve original spaces across terminal soft wraps in MCP text, copied selections, ego questions and mobile CLI output; keep hard line breaks (#1977-063c).
