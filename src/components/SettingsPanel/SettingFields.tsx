@@ -92,13 +92,21 @@ export const SettingSelect: Component<{
 	value: string;
 	onChange: (value: string) => void;
 	options: { value: string; label: string }[];
+	/** Runtime availability can narrow, but never extend, the owner schema. */
+	unavailableValues?: readonly string[];
 	hint?: string;
 	hintStyle?: JSX.CSSProperties;
 }> = (props) => {
-	const options = () =>
-		props.settingId && settingDescriptor(props.settingId).schema.enum
-			? settingOptions(props.settingId, Object.fromEntries(props.options.map((option) => [option.value, option.label])))
-			: props.options;
+	const options = () => {
+		const choices =
+			props.settingId && settingDescriptor(props.settingId).schema.enum
+				? settingOptions(
+						props.settingId,
+						Object.fromEntries(props.options.map((option) => [option.value, option.label])),
+					)
+				: props.options;
+		return choices.filter((option) => !props.unavailableValues?.includes(option.value));
+	};
 	return (
 		<Show
 			when={props.row}

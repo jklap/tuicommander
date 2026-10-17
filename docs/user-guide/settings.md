@@ -4,9 +4,9 @@ Repository Settings separates identity, inherited worktree overrides, Design Mod
 
 Agents Settings shows the selected machine in the header. Run configuration editors keep explicit Save and Cancel actions. Terminal-agent permissions and filesystem sandbox remain separate from AI Chat ACP settings; launch instructions still save on blur.
 
-Workspace pages use the same cards and aligned rows. Terminal retains its live canvas preview and all clipboard and scrollback controls. Keyboard Shortcuts lists actions before their keycaps, with explicit Rebind and Reset actions. Git & GitHub separates authentication, monitoring, repository defaults, worktree defaults, additional accounts, CircleCI, and repository bindings. Existing save boundaries and policy choices are unchanged.
+Workspace pages use the same cards and aligned rows. Terminal retains its live canvas preview and all clipboard and scrollback controls. Keyboard Shortcuts places its searchable actions in Shortcut groups, before their keycaps, with explicit Rebind and Reset actions. Git & GitHub separates authentication, monitoring, repository defaults, worktree defaults, additional accounts, CircleCI, and repository bindings. Existing save boundaries and policy choices are unchanged.
 
-The Application pages use section cards and labelled rows. General places the update status and its check action above the page header. A Local tools card groups TUIC CLI, Code Intelligence, and Custom Launchers. The existing install, update, uninstall, and launcher actions keep their save and confirmation behavior. Appearance keeps group rename validation and client-local chat preferences. Notifications keeps visual controls available without audio; output-device discovery starts only after **Choose output device**. Changing master volume previews once on release.
+The Application pages use section cards and labelled rows. General places the update status and its check action above the page header. On desktop, a Local tools card groups TUIC CLI, Code Intelligence, and Custom Launchers; this card is hidden in browser mode. General links to AI Chat defaults when AI Chat is enabled. The existing install, update, uninstall, and launcher actions keep their save and confirmation behavior. Appearance keeps group rename validation and client-local chat preferences. Notifications keeps visual controls available without audio; output-device discovery starts only after **Choose output device**. Changing master volume previews once on release.
 
 
 The settings-service policy foundation keeps secrets write-only. Changes that
@@ -24,7 +24,7 @@ groups the pages by task:
 | **Application** | General, Appearance, Notifications |
 | **Workspace** | Terminal, Keyboard Shortcuts, Git & GitHub |
 | **AI** | Agents, AI Chat, Voice, Smart Prompts |
-| **Integrations** | MCP, Remote Access, Remote Machines, Plugins |
+| **Integrations** | MCP, Remote Access, Remote Machines, Telegram, Manage plugins |
 | **Plugin settings** | Loaded plugins with registered settings, marked **Plugin** |
 | **Repositories** | One page for each repository in the sidebar |
 
@@ -662,3 +662,5 @@ Typed `set_token` and `clear_token` actions share the existing token owner acros
 MCP, IPC and HTTP. Readback reports stored presence only (`set`, `unset`,
 `unavailable`), never a secret. Git & GitHub keeps its effective-source status;
 removing a stored token leaves environment and CircleCI CLI fallbacks unchanged.
+
+On narrow screens, search and page selection share one compact navigation row. The workspace path in AI Chat is a read-only field; select or scroll its text to inspect the full path.

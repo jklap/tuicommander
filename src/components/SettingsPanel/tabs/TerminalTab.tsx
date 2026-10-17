@@ -291,7 +291,7 @@ export const TerminalTab: Component = () => {
 			<SettingPageHeader
 				title="Terminal"
 				description="Configure terminal typography, preview, and behavior."
-				scope="Application"
+				scope="Application defaults"
 				breadcrumb="Workspace / Terminal"
 			/>
 			<SectionCard title={t("appearance.heading.theme", "Theme")}>

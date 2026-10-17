@@ -459,7 +459,7 @@ Full-screen overlay. All pages share `width: min(1136px, calc(100vw - 48px))`, `
 - Label/help pairs use the shared `.helpLabel` layout so stacked and grid fields reserve one cell for the pair; the badge remains beside wrapped label text.
 - Paper shades the shared success, attention, changes/review and merged tokens for readable marker text; the legend and sidebar keep the same components and shapes.
 - Agent color tiles use metadata-selected `--identity-on-light` or `--identity-on-dark`; identity fills do not change with the app theme.
-- Settings maps secondary and muted copy to the shared `--settings-foreground` token, mixed from the theme foregrounds for elevated/highlighted surfaces. Links and link buttons use `--link-foreground` without changing action fills. Commander Settings accent actions use dark `--settings-on-accent` copy.
+- Settings maps secondary and muted copy to the shared `--settings-foreground` token, mixed from the theme foregrounds for elevated/highlighted surfaces. Links and link buttons use `--link-foreground` without changing action fills. Settings accent actions retain the theme's `--text-on-accent` foreground.
 - Help is 12px `--fg-secondary`, never essential `--fg-muted`. Contextual help is selective and adds information beyond the subtitle; do not add a question mark to every row.
 - Card heading actions stay in the shared heading flex layout so descriptions cannot flow beneath an absolute action. Color targets do not shrink; compact color targets are 44px circles and wrap within the full-width control column.
 - Below 800px rows stack; below 600px navigation is compact and controls/actions have 44px targets. Preserve keyboard labels and long translations.

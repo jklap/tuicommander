@@ -96,7 +96,7 @@ const GLOBAL_TAB_GROUPS: { key: string; label: string; tabs: SettingsShellTab[] 
 			{ key: "remote-access", label: t("settings.remoteAccess", "Remote Access") },
 			{ key: "remote-machines", label: t("settings.remoteMachines", "Remote Machines") },
 			{ key: "telegram", label: "Telegram" },
-			{ key: "plugins", label: t("settings.plugins", "Plugins") },
+			{ key: "plugins", label: t("settings.managePlugins", "Manage plugins") },
 		],
 	},
 ];
@@ -377,7 +377,7 @@ export const SettingsPanel: Component<SettingsPanelProps> = (props) => {
 				</Show>
 				<Show when={activeTab() === "general"}>
 					<SettingsHelpScope page="general">
-						<GeneralTab />
+						<GeneralTab onOpenAiChat={settingsStore.isAiChatEnabled() ? () => setActiveTab("ai-chat") : undefined} />
 					</SettingsHelpScope>
 				</Show>
 				<Show when={activeTab() === "appearance"}>

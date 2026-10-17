@@ -757,7 +757,7 @@ export const SmartPromptsTab: Component = () => {
 			<SettingPageHeader
 				title="Smart Prompts"
 				description="Configure reusable actions and their execution behavior."
-				scope="Application"
+				scope="Application defaults"
 				breadcrumb="AI / Smart Prompts"
 			/>
 			<SectionCard
@@ -804,7 +804,9 @@ export const SmartPromptsTab: Component = () => {
 						</Select>
 					)}
 				</SettingRow>
-				<p class={s.hint}>{detection.loading() ? "Detecting..." : ""}</p>
+				<Show when={detection.loading()}>
+					<p class={s.hint}>Detecting...</p>
+				</Show>
 			</SectionCard>
 
 			<SectionCard
