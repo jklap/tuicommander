@@ -33,11 +33,13 @@ import {
 	spanAt,
 } from "./canvasTerminalLinks";
 import {
+	cachedMarkerSnapshot,
+	createCanvasMarkerPlanner,
 	MARKER_LOOKBACK_ROWS,
+	MARKER_PREFIX_BUDGET,
 	type MarkerPlan,
 	markerPromptStart,
 	type PromptBoundary,
-	planCanvasMarkers,
 	readMarkerPromptBoundary,
 } from "./canvasTerminalMarkers";
 import { paintCursor, paintSearchHighlights, paintSelection, syncImePosition, thumbFor } from "./canvasTerminalPaint";
@@ -611,10 +613,9 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 		const markers = planViewportMarkers(frame, dirtyIndices);
 		projectedDisplayOffset = frame.displayOffset;
 		const projection = new ViewportProjection(rowMap, markers.hidden, markers.answerMarkers);
-		const projectionChanged = projection.key !== viewportProjection.key;
 		viewportProjection = projection;
 		gridRenderer.paintGrid(rowMap, m, {
-			fullRepaint: fullRepaintNeeded || projectionChanged,
+			fullRepaint: fullRepaintNeeded,
 			projection: viewportProjection,
 			dirtyIndices:
 				dirtyIndices &&
@@ -985,6 +986,8 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 	const markerPromptEnds = new Map<number, PromptBoundary>();
 	const markerPromptReads = new Set<number>();
 	let markerPromptGeneration = -1;
+	const cachedPlanCanvasMarkers = createCanvasMarkerPlanner();
+	const markerSnapshot = cachedMarkerSnapshot(rowText);
 	const NO_MARKERS: MarkerPlan = { hidden: new Set(), answerMarkers: new Set(), key: "", blocks: [] };
 	let lastMarkerPlan: MarkerPlan = NO_MARKERS;
 	/** The hidden set the main canvas was last painted with. */
@@ -1023,7 +1026,7 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 		const known = prior === undefined ? undefined : markerPromptEnds.get(prior);
 		const boundary =
 			known && (known.resolved || known.end >= base + rows + 1) ? { ...known, end: known.end - base } : undefined;
-		const plan = planCanvasMarkers(
+		const plan = cachedPlanCanvasMarkers(
 			rows,
 			getRow,
 			prompts.map((row) => row - base),
@@ -1036,14 +1039,24 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 			if (!markerPromptReads.has(start)) {
 				markerPromptReads.add(start);
 				const liveEpoch = scroll.liveEpoch;
-				void readMarkerPromptBoundary(start, base + rows + 1, (from, to) =>
-					readTurnRows(fetchStyledRange, from, to),
+				void readMarkerPromptBoundary(
+					known && !known.resolved ? Math.max(start, known.end - 1) : start,
+					base + rows + 1,
+					(from, to) => readTurnRows(fetchStyledRange, from, to),
+					MARKER_PREFIX_BUDGET,
 				).then((result) => {
 					if (!alive || !scroll.isCacheGenerationCurrent(generation)) return;
 					markerPromptReads.delete(start);
 					if (!result) return;
 					// As with scroll-row fetches, a read that raced a history commit is stale.
-					if (scroll.liveEpoch === liveEpoch) markerPromptEnds.set(start, result);
+					if (scroll.liveEpoch === liveEpoch) {
+						markerPromptEnds.set(start, result);
+						if (!result.resolved && result.end < base + rows + 1) {
+							// Continue in bounded IPC tasks, not one full canvas repaint per prefix chunk.
+							planMarkers(rows, base, getRow);
+							return;
+						}
+					}
 					fullRepaintNeeded = true;
 					if (scroll.position !== null) scheduleSmoothRender();
 					else scheduleRepaint();
@@ -1078,7 +1091,7 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 		const wrappedAbove = (i: number) => (i > 0 ? rowMap.get(i - 1) : rowCache.get(base + i - 1))?.wrapped ?? false;
 		lastMarkerPlan = planMarkers(frame.screenRows || lastResizeRows || 24, base, (i) => {
 			const row = i >= 0 ? rowMap.get(i) : rowCache.get(base + i);
-			return row ? { text: rowToText(row), isWrapped: wrappedAbove(i) } : null;
+			return row ? markerSnapshot(row, wrappedAbove(i)) : null;
 		});
 		return lastMarkerPlan;
 	}
@@ -1264,7 +1277,7 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 		const markers = planMarkers(rows, hist - intOffset, (i) => {
 			const cached = cacheRow(hist - intOffset + i);
 			if (!cached) return null;
-			return { text: rowToText(cached), isWrapped: cacheRow(hist - intOffset + i - 1)?.wrapped ?? false };
+			return markerSnapshot(cached, cacheRow(hist - intOffset + i - 1)?.wrapped ?? false);
 		});
 		const projectionRows = new Map(tempMap);
 		for (const index of [-1, rows]) {
@@ -1414,6 +1427,8 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 		}
 	}
 
+	// DEFERRED (2026-10-17) — Answers-only refresh still classifies the running turn in full.
+	// Bounding it needs a lazy history/copy contract; canvas viewport planning does not change that contract.
 	async function refreshAnswers() {
 		const frame = currentFrame;
 		if (!alive || !frame) return;
