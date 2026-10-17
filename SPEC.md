@@ -788,6 +788,7 @@ Some frontend-only stores persist to localStorage:
 - [x] The conversation holds one language end to end — Whisper's detection picks the voice and the model is asked to answer in it
 - [x] Barge-in — WebRTC AEC3 (`echo.rs`) keeps our own reply out of the segmenter; the user talking stops playback and opens the next turn (measured: 200 ms stop latency — hush waits for `min_speech_ms` of speech so residual echo cannot stop a reply — 0 false triggers)
 - [x] Download progress and utterance state are pushed on `/events` as well as to the desktop window, from one serialized payload per event; utterance transitions come from the render thread that performs them, through an observer port, so `finished` and `interrupted` reach a client that never polls
+- [x] Mobile session headers distinguish the two-way voice call with a handset icon and call labels; composer dictation keeps its microphone (#1979-89e1).
 - [x] A browser tab is its own microphone and speaker over one WebSocket (`dictation/browser.rs`), so a remote client holds a whole conversation on its own hardware. Neither owner falls back to the other's devices, a client that vanishes disarms on the same path as a dead local device, and the frontend half stays transport only — segmentation, the activation phrase and the hold-back all remain in Rust
 
 ### Completed (P2)

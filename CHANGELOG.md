@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+- Distinguish mobile two-way voice calls with a handset icon; composer dictation keeps its microphone (#1979-89e1).
+
 - Show readable session names and progress text in mobile push notifications; session links remain unchanged (#1978-9cfe).
 
 - Settings: replace tunnel forwards as one validated atomic list and complete typed settings owner dispatch.

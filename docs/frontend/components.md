@@ -776,6 +776,8 @@ The Precheck section includes a default-off stdout context checkbox. It edits
 `precheck.inject_output` through the existing store and shared save API, without
 changing prompt text. Disabling and re-enabling the precheck resets the flag.
 
+The mobile session header uses a handset icon and Start/Stop voice call labels for the two-way voice control. The composer dictation button keeps its microphone icon.
+
 ### Mobile composer browser dictation
 
 Restored dictated drafts stay in the composer without writing to the terminal on mount. Send or the first edit reconciles the saved text with the current PTY input line through the existing delta path. Later edits use the local baseline so delayed terminal echoes do not replay text.

@@ -801,6 +801,7 @@ Tabbed side panel with four tabs: Changes, Log, Stashes, Branches. Replaces the 
 - File Browser (folder icon) — `Cmd+E`
 - Markdown (MD icon) — `Cmd+Shift+M`
 - Git (diff icon) — `Cmd+Shift+D` (opens Git Panel)
+- Mobile session header: handset for two-way voice calls; composer dictation keeps its microphone.
 - Mic button (when dictation enabled): hold to record, release to transcribe
 
 ---

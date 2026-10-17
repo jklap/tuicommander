@@ -1,3 +1,7 @@
+## Mobile voice handset (1979-89e1)
+
+- [ ] [VISUAL] After the Mac unlocks, capture the mobile session header in Commander dark and Paper light. Include the idle handset, armed handset, and unchanged composer dictation microphone. Confirm the handset is readable at phone and iPad sizes. The screen was locked during implementation; no visual capture is claimed.
+
 ## Readable mobile pushes (1978-9cfe) — Rust restart required
 
 - [ ] After Boss restarts `make dev` or installs `make build`, receive an awaiting/progress push from a named session and an unnamed agent session. Confirm readable names and progress text, no UUID/tool JSON in the displayed body, and that tapping opens the correct session. No live desktop restart or phone push was performed by this peer.
