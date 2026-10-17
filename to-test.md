@@ -2444,3 +2444,5 @@ Needs an iPhone (iOS 16.4+, 18.4+ preferred), the desktop TUICommander running a
 - [ ] [VISUAL] #1982-ee68: After the backend rebuild, capture the same tab-separated Claude Edit in Chat at 390 px in Commander and Paper. Expand tool activity and its edit; confirm full-width old/new backgrounds, aligned columns and horizontal scrolling. From phone CLI tap Read file edits in Chat, then CLI; verify terminal history and draft remain intact, with CLI following the latest output. Includes Rust projection changes, so Boss must restart make dev or rebuild release when ready; no Rust hot reload.
 
 - [ ] After the next backend restart, check Claude trust, external-import and Bash permission dialogs in mobile CLI: all options and the footer must remain visible (#1987-606c). Rust changes require a manual restart to load.
+
+- [ ] After Boss restarts the Rust backend, verify CircleCI Settings discovery (`circleci.token`) and presence-only readback through the shared Settings action. Isolated tests cover set/clear and failures; no production credential test is required (#1991-bd88).

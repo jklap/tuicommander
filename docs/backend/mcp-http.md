@@ -2339,7 +2339,7 @@ No live write or desktop-load verification is implied by recorded-fixture tests.
 
 ### Settings cutover (#1787-4778)
 
-`settings` replaces the removed MCP `config` tool without an alias. Its schema is generated from Rust action DTOs. `settings_action(request)` and `POST /settings/action` use the same envelope and owner services. Describe has optional area/store/id filters and cursor pagination (1–128 fields). Reads and edits use an explicit target; edits require expectedRevision. Prompts remain available through the stable-ID `prompts` store; get `/prompts` lists id/label/text/pinned records, while keyed leaf reads and create/remove patches retain stable identities. Typed workflows use perform with an explicit machine target and a store-selected operation DTO for github_accounts, ego (also expectedRevision), upstreams, connections, telegram and voice in dictation builds. Targeted describe/refresh uses target/store/paths through the registered owner resolver. Connection credential reads use /{id}/credential and return separate password/pairingToken presence. Credential writes retire only that runtime and reconnect it only when it was active; an explicit later disconnect retires the queued reconnect. Explicit refresh for ego refreshes the configured owner's provider catalogue; describe never performs a network refresh.
+`settings` replaces the removed MCP `config` tool without an alias. Its schema is generated from Rust action DTOs. `settings_action(request)` and `POST /settings/action` use the same envelope and owner services. Describe has optional area/store/id filters and cursor pagination (1–128 fields). Reads and edits use an explicit target; edits require expectedRevision. Prompts remain available through the stable-ID `prompts` store; get `/prompts` lists id/label/text/pinned records, while keyed leaf reads and create/remove patches retain stable identities. Typed workflows use perform with an explicit machine target and a store-selected operation DTO for github_accounts, ego (also expectedRevision), upstreams, connections, circleci, telegram and voice in dictation builds. Targeted describe/refresh uses target/store/paths through the registered owner resolver. Connection credential reads use /{id}/credential and return separate password/pairingToken presence. Credential writes retire only that runtime and reconnect it only when it was active; an explicit later disconnect retires the queued reconnect. Explicit refresh for ego refreshes the configured owner's provider catalogue; describe never performs a network refresh.
 
 MCP access requires settings_mcp_enabled, enabled only by trusted UI; legacy config enablement grants no settings authority. MCP mutations remain loopback-only. HTTP retains local-or-authenticated access and IPC retains native host trust. Exposure proposals use ui confirm proposalId and an exact replay with approval. Secrets remain write-only. Owner transactions and perform remain unavailable while the native inventory gap ledger is nonempty; describe reports inventoryComplete.
 
@@ -2363,3 +2363,16 @@ browser status-bar control uses its owning daemon's normal PTY write transport.
 ### Telegram request streaming (1959-162a)
 
 Telegram replies now use TUIC-driven receipt (👀), working (👨‍💻), waiting (🤔), answered (👍) and failed (👎) reactions. An ephemeral native draft shows Italian status lines or unapproved agent previews; it refreshes while work continues and the final reply replaces it. Acknowledgement of work requires inbox Read and a new recipient turn. PTY intent/activity and AI Chat assistant chunks share request correlation; finish remains authoritative after draft retirement. Telegram-mail-woken AI Chat turns automatically send their settled assistant text if finish has not answered. Queue and no-reply notices occur at ten minutes and sixty seconds after Read respectively. Restart keeps no request history. Phone rendering requires a live check after the backend restart.
+
+### CircleCI credential settings (#1991-bd88)
+
+The machine-scoped `circleci.token` descriptor is write-only. Read
+`{action:"get",target:{kind:"machine"},store:"circleci",paths:["/token"]}`
+through MCP `settings`, IPC `settings_action`, or HTTP `POST /settings/action`.
+Readback returns only `stored.status` and `effective.status`: `set`, `unset`, or
+`unavailable`. It describes the stored TUIC token, not environment or CLI fallbacks.
+Use `{action:"perform",target:{kind:"machine"},store:"circleci",operation:{action:"set_token",token:"..."}}`
+or `operation:{action:"clear_token"}`. Both actions use the existing CircleCI
+owner; replies contain only token presence. Clearing the stored token does not
+remove `CIRCLE_TOKEN` or the CircleCI CLI configuration. The Git & GitHub page
+continues to show the effective token source. No transport returns the token.

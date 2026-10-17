@@ -73,6 +73,13 @@ pub(super) fn native_catalogue_for(dictation: bool) -> Result<Catalogue, Catalog
         available.clone(),
     )?;
     catalogue.register_schema(
+        "circleci",
+        "machine",
+        &super::circleci::catalogue_schema(),
+        None,
+        available.clone(),
+    )?;
+    catalogue.register_schema(
         "github_accounts",
         "machine",
         &super::accounts::GithubSettings::catalogue_schema(),
