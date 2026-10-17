@@ -5,6 +5,9 @@
 ## Mobile agent exit recovery (1985-45bd)
 
 - [ ] [VISUAL] On a phone, exit a throwaway viewed ego session while its question is open, then type and send a shell command. Confirm agent/question controls disappear and shell output/input remain usable. Repeat with Claude Chat open and after reconnecting the output socket. Close the PTY and confirm Session ended offers Back. Component regressions do not prove phone touch behavior; no live production sessions were used.
+## Live Settings credentials (1984-3472) — Rust restart required
+
+- [ ] After Boss manually restarts `make dev` or installs `make build`, use an isolated instance to approve a username or password change in Settings. Confirm the save succeeds and new Basic Auth/login requests use the new credentials without restarting the listener. Real headless listener port changes must still report persisted-but-unavailable application. No live desktop restart was performed by this peer.
 
 ## Mobile human replies (1980-47b7) — Rust restart required
 

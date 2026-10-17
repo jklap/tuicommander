@@ -1513,7 +1513,11 @@ tool-list notices and listener restart requests. Runtime effects run after file
 locks are released. Replies distinguish persisted data from applied effects;
 scheduled desktop listener restarts remain `applied:false` pending readback, and a
 headless listener change reports persisted-but-unavailable application instead of
-claiming a live rebind. Effect failure returns `apply_failed`, `persisted:true` and
+claiming a live rebind. Username and password-hash edits do not require a listener
+restart: Basic Auth and the login endpoint read the committed config on each
+request, and credential changes invalidate cached authentication failures. These
+credential-only commits report `applied:true` in desktop and headless builds.
+Effect failure returns `apply_failed`, `persisted:true` and
 recovery guidance; retrying the old mutation conflicts. Failed persistence updates
 neither the cache nor effect subscribers. The later refresh step owns publication
 of `settings-changed` events.
