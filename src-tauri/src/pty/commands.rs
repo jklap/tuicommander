@@ -1353,7 +1353,7 @@ pub(crate) async fn set_session_visible(
     session_id: String,
     visible: bool,
 ) -> Result<(), String> {
-    crate::background_mode::hidden::set_visible(&state, &session_id, visible, true);
+    crate::background_mode::hidden::set_visible_from_client(&state, &session_id, visible, true);
     Ok(())
 }
 

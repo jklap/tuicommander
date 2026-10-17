@@ -1384,7 +1384,12 @@ pub(super) async fn set_session_visible(
     Path(session_id): Path<String>,
     Json(body): Json<SessionVisibleRequest>,
 ) -> impl IntoResponse {
-    crate::background_mode::hidden::set_visible(&state, &session_id, body.visible, false);
+    crate::background_mode::hidden::set_visible_from_client(
+        &state,
+        &session_id,
+        body.visible,
+        false,
+    );
     (StatusCode::OK, Json(serde_json::json!({ "ok": true })))
 }
 
@@ -7033,5 +7038,26 @@ mod tests {
             "POST /sessions/worktree must hold its response until the shell is idle"
         );
         close_session(State(state), axum::extract::Path(session_id)).await;
+    }
+
+    /// A terminal-store id sent where a PTY session id belongs is never recorded (teardown
+    /// only reaps the entries of ids that were real sessions), for a show or a hide.
+    /// Replay port of wip 773090fae's route test (no `viewer_id` on this model).
+    #[tokio::test]
+    async fn set_session_visible_route_does_not_record_an_id_that_names_no_session() {
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+        for visible in [true, false] {
+            let body: SessionVisibleRequest =
+                serde_json::from_value(serde_json::json!({ "visible": visible })).unwrap();
+            let response =
+                set_session_visible(State(state.clone()), Path("term-6".to_string()), Json(body))
+                    .await
+                    .into_response();
+            assert_eq!(response.status(), StatusCode::OK);
+            assert!(
+                !state.session_maps.session_visibility.contains_key("term-6"),
+                "a terminal id sent as a session id must not be remembered (visible={visible})"
+            );
+        }
     }
 }

@@ -60,6 +60,28 @@ fn wake_visible(state: &AppState, id: &str, visible: bool) {
     let _ = (state, id, visible);
 }
 
+/// The `set_session_visible` entry point for both transports (desktop IPC and HTTP).
+///
+/// `id` must be a PTY session id. An id that names no live session is a caller bug
+/// (until 2026-10 the frontend sent its terminal-store id, "term-6", so focus never woke a
+/// parked tab): it is not recorded, because teardown only reaps the entries of ids that
+/// were real sessions, and a `visible: true` for one is logged as a warning (it looks exactly
+/// like a wake of a session that simply is not parked). Replay port of wip 773090fae's
+/// `apply_session_visibility` guard onto this model.
+pub(crate) fn set_visible_from_client(state: &AppState, id: &str, visible: bool, desktop: bool) {
+    if !state.session_maps.sessions.contains_key(id) {
+        if visible {
+            tracing::warn!(
+                session_id = id,
+                "set_session_visible for a session that does not exist — the caller probably \
+                 sent a terminal id instead of a PTY session id; nothing was recorded or woken"
+            );
+        }
+        return;
+    }
+    set_visible(state, id, visible, desktop);
+}
+
 /// IPC visibility belongs to the desktop; HTTP visibility belongs to a remote client.
 pub(crate) fn set_visible(state: &AppState, id: &str, visible: bool, desktop: bool) {
     let mut visibility = state.background_visibility.lock();
