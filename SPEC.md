@@ -1183,3 +1183,11 @@ The session detail CLI/Chat projection uses the same TerminalChatTranscript and 
 ### Mobile Telegram setup removal (#1976-711e)
 
 Mobile Settings does not mount or offer Telegram setup. Desktop Settings retains the shared Telegram configuration controls and existing backend transports.
+
+### CircleCI Settings owner (#1991-bd88)
+
+Settings discovery includes the write-only machine setting `circleci.token`.
+Typed `set_token` and `clear_token` actions share the existing token owner across
+MCP, IPC and HTTP. Readback reports stored presence only (`set`, `unset`,
+`unavailable`), never a secret. Git & GitHub keeps its effective-source status;
+removing a stored token leaves environment and CircleCI CLI fallbacks unchanged.

@@ -999,7 +999,7 @@ export const GitHubTab: Component = () => {
 				<p class={s.hint}>
 					{t("github.circleCiHint", "Use a read-only CircleCI token. Stored tokens are never shown again.")}
 				</p>
-				<div class={s.group}>
+				<div class={s.group} data-setting-id="circleci.token">
 					<Input
 						type="password"
 						aria-label="CircleCI read-only token"

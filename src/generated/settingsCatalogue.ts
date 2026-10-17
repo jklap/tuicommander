@@ -3848,6 +3848,36 @@ export const settingsCatalogue = {
       ],
       "confirmationClass": "ordinary"
     },
+    "circleci.token": {
+      "id": "circleci.token",
+      "store": "circleci",
+      "owner": "machine",
+      "area": "circleci",
+      "group": "token",
+      "order": 0,
+      "path": "/token",
+      "labelKey": "settings.catalogue.circleci.token.label",
+      "helpKey": "settings.catalogue.circleci.token.help",
+      "label": "token",
+      "schema": {
+        "type": "string",
+        "writeOnly": true
+      },
+      "nullable": false,
+      "availability": {
+        "status": "available"
+      },
+      "choices": null,
+      "sensitivity": "secret",
+      "apply": "live",
+      "effect": "Updates the stored CircleCI token through its existing owner. Environment and CLI fallbacks are unchanged. Use typed set_token/clear_token actions; values are never returned.",
+      "operations": [
+        "get",
+        "set_secret",
+        "clear_secret"
+      ],
+      "confirmationClass": "ordinary"
+    },
     "connections.connections.{id}.auth_username": {
       "id": "connections.connections.{id}.auth_username",
       "store": "connections",
