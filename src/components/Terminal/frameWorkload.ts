@@ -110,37 +110,44 @@ export class FrameWorkloadRecorder {
 		this.dropped = 0;
 	}
 	snapshot(reason: string, _now: number): WorkloadRecording {
-		// A paint can block longer than the retention window. Do not age out the
-		// very workload that just blocked us; age eviction runs on new arrivals.
-		const events = this.events.map((event) => {
-			const { bytes: _bytes, ...common } = event;
-			if (event.kind === "visibility") return common;
-			if (event.kind === "arrival") {
-				const { buffer: _buffer, ...rest } = common as Extract<Event, { kind: "arrival" }>;
-				return { ...rest, binary: encodeBytes(new Uint8Array(event.buffer)) };
-			}
-			const { rows: _rows, ...rest } = common as Extract<Event, { kind: "paint" }>;
+		return this.freezeSnapshot(reason)();
+	}
+	freezeSnapshot(reason: string): () => WorkloadRecording {
+		const retained = this.events.slice();
+		const dropped = this.dropped;
+		return () => {
+			// A paint can block longer than the retention window. Do not age out the
+			// very workload that just blocked us; age eviction runs on new arrivals.
+			const events = retained.map((event) => {
+				const { bytes: _bytes, ...common } = event;
+				if (event.kind === "visibility") return common;
+				if (event.kind === "arrival") {
+					const { buffer: _buffer, ...rest } = common as Extract<Event, { kind: "arrival" }>;
+					return { ...rest, binary: encodeBytes(new Uint8Array(event.buffer)) };
+				}
+				const { rows: _rows, ...rest } = common as Extract<Event, { kind: "paint" }>;
+				return {
+					...rest,
+					rows: [...event.rows.values()].map((row) => ({
+						index: row.index,
+						count: row.count,
+						wrapped: row.wrapped,
+						codepoints: encodeU32(row.codepoints),
+						fg: encodeU32(row.fg),
+						bg: encodeU32(row.bg),
+						attrs: encodeBytes(row.attrs),
+						cellExtras: [...(row.cellExtras ?? [])],
+					})),
+				};
+			});
 			return {
-				...rest,
-				rows: [...event.rows.values()].map((row) => ({
-					index: row.index,
-					count: row.count,
-					wrapped: row.wrapped,
-					codepoints: encodeU32(row.codepoints),
-					fg: encodeU32(row.fg),
-					bg: encodeU32(row.bg),
-					attrs: encodeBytes(row.attrs),
-					cellExtras: [...(row.cellExtras ?? [])],
-				})),
+				schema_version: 1,
+				source: "live",
+				wall_time_origin_ms: performance.timeOrigin,
+				reason: reason.slice(0, 128),
+				dropped,
+				events,
 			};
-		});
-		return {
-			schema_version: 1,
-			source: "live",
-			wall_time_origin_ms: performance.timeOrigin,
-			reason: reason.slice(0, 128),
-			dropped: this.dropped,
-			events,
 		};
 	}
 }
@@ -186,11 +193,13 @@ export function dumpFrameWorkload(reason = "manual", automatic = false): Promise
 	const now = performance.now();
 	if (automatic && now - lastAutomaticDump < 30_000) return Promise.resolve({ skipped: "cooldown" });
 	if (automatic) lastAutomaticDump = now;
+	// Freeze bounded references before yielding: later arrivals may evict the active window.
+	const snapshot = recorder.freezeSnapshot(reason);
 	// Yield past the paint callback. Encoding happens only at dump, never per frame.
 	saving = new Promise((resolve) => setTimeout(resolve, 0))
 		.then(async () => {
 			if (!isFrameWorkloadEnabled()) return { skipped: "recorder disabled" };
-			const recording = recorder.snapshot(reason, performance.now());
+			const recording = snapshot();
 			let json = JSON.stringify(recording);
 			while (new TextEncoder().encode(json).byteLength > WORKLOAD_FILE_BYTES && recording.events.length) {
 				recording.events.shift();

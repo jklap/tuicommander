@@ -47,7 +47,7 @@ fn persist(directory: &Path, recording: &str) -> Result<String, String> {
     result
 }
 
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub(crate) async fn save_frame_workload(recording: String) -> Result<String, String> {
     if recording.len() > MAX_BYTES {
         return Err("frame workload exceeds 6 MiB".into());

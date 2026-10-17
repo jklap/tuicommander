@@ -79,7 +79,10 @@ releases the window.
 
 A grid paint exceeding 200 ms or a main-thread freeze reported by the existing
 freeze detector schedules a dump after JS regains control, at most once per
-30 seconds, with one dump in flight. It cannot save during an unrecovered
+30 seconds, with one dump in flight. Accepting a dump freezes bounded event
+references before yielding, so later arrivals cannot evict its triggering paint.
+The active window can retain another 4 MiB while that capture is pending;
+encoding and file writes remain deferred. It cannot save during an unrecovered
 main-thread hang, and the freeze detector's sleep/background exclusions remain.
 Manual `debug action=frame_workload_dump` bypasses the cooldown, not the opt-in
 gates. Like `invoke_js`, acceptance is asynchronous: read the actual path or
