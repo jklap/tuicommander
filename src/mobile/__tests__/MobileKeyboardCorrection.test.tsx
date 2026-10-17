@@ -13,7 +13,6 @@ vi.mock("../mobileTheme", () => ({
 	setMobileTheme: vi.fn(),
 }));
 vi.mock("../useMobileVoice", () => ({ useMobileVoice: () => ({ available: () => false }) }));
-vi.mock("../../components/SettingsPanel/tabs/TelegramTab", () => ({ TelegramTab: () => <div /> }));
 
 beforeEach(() => {
 	localStorage.clear();

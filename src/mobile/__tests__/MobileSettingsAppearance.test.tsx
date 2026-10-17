@@ -81,6 +81,17 @@ afterEach(() => {
 });
 
 describe("mobile Settings", () => {
+	// Catches: desktop Telegram setup being offered again in mobile Settings, even offline.
+	it.each([true, false])("does not offer Telegram setup when connected=%s", async (isConnected) => {
+		render(() => <SettingsScreen isConnected={isConnected} />);
+		await waitFor(() =>
+			expect((screen.getByRole("combobox", { name: "Theme" }) as HTMLSelectElement).disabled).toBe(false),
+		);
+		expect(screen.queryByRole("button", { name: /telegram/i })).toBeNull();
+		expect(screen.queryByText(/telegram/i)).toBeNull();
+		expect(screen.getByRole("link", { name: "Open Desktop UI" })).toBeTruthy();
+	});
+
 	// Catches: mobile rendering the indicator without offering a working opt-out.
 	it("lets the mobile client disable and persist the new-text indicator", async () => {
 		transcriptPreferences.setEnabled(true);
