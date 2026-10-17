@@ -36,7 +36,7 @@ pub enum EgoAuthAction {
 }
 
 pub struct EgoSettingsStore {
-    state: Arc<AppState>,
+    state: std::sync::Weak<AppState>,
     context: Option<Arc<ConfigContext>>,
     runtime: tokio::runtime::Handle,
     sequence: Arc<Mutex<()>>,
@@ -48,7 +48,7 @@ impl EgoSettingsStore {
     #[allow(dead_code)] // Registered by the settings facade in Step 4.
     pub(crate) fn new(state: Arc<AppState>) -> Result<Self, Failure> {
         Ok(Self {
-            state,
+            state: Arc::downgrade(&state),
             context: None,
             runtime: tokio::runtime::Handle::try_current()
                 .map_err(|_| Error::new(ID, "unavailable"))?,
@@ -67,8 +67,13 @@ impl EgoSettingsStore {
         action: EgoAuthAction,
     ) -> Result<CommitReply, Failure> {
         let _sequence = self.sequence.lock();
-        let mut context =
-            ConfigContext::configured(&self.state).map_err(|_| Error::new(ID, "unavailable"))?;
+        let mut context = ConfigContext::configured(
+            self.state
+                .upgrade()
+                .ok_or_else(|| Error::new(ID, "unavailable"))?
+                .as_ref(),
+        )
+        .map_err(|_| Error::new(ID, "unavailable"))?;
         context.profile = None;
         let latest = self.snapshot(&context)?;
         if transaction::revision(&latest)? != expected_revision {
@@ -260,8 +265,12 @@ impl Store for EgoSettingsStore {
             .map_or(Target::Machine, |id| Target::Profile { id: id.clone() })
     }
     fn resolve(self: Arc<Self>, target: &Target) -> Result<Arc<Self>, Failure> {
+        let state = self
+            .state
+            .upgrade()
+            .ok_or_else(|| Error::new(ID, "unavailable"))?;
         let context = Arc::new(
-            ConfigContext::configured(&self.state).map_err(|_| Error::new(ID, "unavailable"))?,
+            ConfigContext::configured(state.as_ref()).map_err(|_| Error::new(ID, "unavailable"))?,
         );
         let current = context
             .profile

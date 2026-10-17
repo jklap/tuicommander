@@ -180,69 +180,7 @@ impl<S: Store> Service<S> {
         tokio::task::spawn_blocking(move || {
             let owner = owner.resolve(&target)?;
             owner.validate_read_paths(&paths)?;
-            let mut latest = owner.read()?;
-            let revision = transaction::revision(&latest)?;
-            let mut values = BTreeMap::new();
-            for path in paths {
-                let parts = pointer::segments(&path, &store)?;
-                let field = pointer::field(&cat, &store, &parts)?;
-                if !matches!(field.availability, Availability::Available)
-                    || !field.annotation.operations.contains(&Operation::Get)
-                {
-                    return Err(Error::new(&store, "unavailable"));
-                }
-                let value =
-                    match pointer::at_mut(&mut latest, &parts, &cat, &store, &mut Vec::new()) {
-                        Ok(value) => value.clone(),
-                        Err(error)
-                            if error.code == "not_found"
-                                && (field.nullable
-                                    || matches!(
-                                        field.annotation.sensitivity,
-                                        Sensitivity::Secret | Sensitivity::DerivedSecret
-                                    )) =>
-                        {
-                            let (key, parent) = parts.split_last().expect("nonempty pointer");
-                            let parent = pointer::at_mut(
-                                &mut latest,
-                                parent,
-                                &cat,
-                                &store,
-                                &mut Vec::new(),
-                            )?;
-                            if field.path.ends_with('}')
-                                || !parent.is_object()
-                                || parent.get(key).is_some()
-                            {
-                                return Err(error);
-                            }
-                            Value::Null
-                        }
-                        Err(error) => return Err(error),
-                    };
-                let stored = if matches!(
-                    field.annotation.sensitivity,
-                    Sensitivity::Secret | Sensitivity::DerivedSecret
-                ) {
-                    let set = !value.is_null() && value != "";
-                    json!({"status": if set { "set" } else { "unset" }})
-                } else {
-                    value
-                };
-                values.insert(
-                    path,
-                    StoredValue {
-                        effective: stored.clone(),
-                        stored,
-                        source: "stored".into(),
-                    },
-                );
-            }
-            Ok(Snapshot {
-                revision,
-                values,
-                choices: BTreeMap::new(),
-            })
+            snapshot(&cat, &store, paths, owner.read()?)
         })
         .await
         .map_err(|_| Error::new(&safe_store, "store_failed"))?
@@ -403,4 +341,75 @@ impl<S: Store> Service<S> {
         }
         Ok(reply)
     }
+}
+
+/// Project an authoritative owner document with the same path and secret rules as file stores.
+pub(super) fn snapshot(
+    cat: &Catalogue,
+    store: &str,
+    paths: Vec<String>,
+    mut latest: Value,
+) -> Result<Snapshot, Failure> {
+    if paths.is_empty() || paths.len() > 128 {
+        return Err(Error::new(store, "out_of_range"));
+    }
+    let revision = transaction::revision(&latest)?;
+    let mut values = BTreeMap::new();
+    for path in paths {
+        let parts = pointer::segments(&path, store)?;
+        let field = pointer::field(cat, store, &parts)?;
+        if !matches!(field.availability, Availability::Available)
+            || !field.annotation.operations.contains(&Operation::Get)
+        {
+            return Err(Error::new(store, "unavailable"));
+        }
+        let value = match pointer::at_mut(&mut latest, &parts, cat, store, &mut Vec::new()) {
+            Ok(value) => value.clone(),
+            Err(error)
+                if error.code == "not_found"
+                    && (field.nullable
+                        || matches!(
+                            field.annotation.sensitivity,
+                            Sensitivity::Secret | Sensitivity::DerivedSecret
+                        )) =>
+            {
+                let (key, parent) = parts.split_last().expect("nonempty pointer");
+                let parent = pointer::at_mut(&mut latest, parent, cat, store, &mut Vec::new())?;
+                if field.path.ends_with('}') || !parent.is_object() || parent.get(key).is_some() {
+                    return Err(error);
+                }
+                Value::Null
+            }
+            Err(error) => return Err(error),
+        };
+        let stored = if matches!(
+            field.annotation.sensitivity,
+            Sensitivity::Secret | Sensitivity::DerivedSecret
+        ) {
+            if field.schema["enum"] == json!(["set", "unset", "unavailable"]) {
+                if value == "unavailable" {
+                    return Err(Error::new(store, "secret_unreadable"));
+                }
+                json!({"status": value})
+            } else {
+                let set = !value.is_null() && value != "";
+                json!({"status": if set { "set" } else { "unset" }})
+            }
+        } else {
+            value
+        };
+        values.insert(
+            path,
+            StoredValue {
+                effective: stored.clone(),
+                stored,
+                source: "stored".into(),
+            },
+        );
+    }
+    Ok(Snapshot {
+        revision,
+        values,
+        choices: BTreeMap::new(),
+    })
 }

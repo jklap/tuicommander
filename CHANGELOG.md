@@ -6,11 +6,23 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+- Show structured file edits as old/new blocks with aligned tabs and horizontal scrolling in Chat; add a phone CLI shortcut to read edits without unmounting the terminal (#1982-ee68).
+
+- Give phone session names more header space by moving voice and tasks into More; keep CLI/Chat direct and tablet controls unchanged (#1981-0caf).
+
+- Document the integrated Settings restyle and cover lazy catalogue search, scoped plugin reads, empty catalogues, retired section links and close/reopen boundaries (#1945-a78d).
+
+- Settings: replace tunnel forwards as one validated atomic list and complete typed settings owner dispatch.
+- Align mobile session Chat prompt tint, answer theme rule and transcript typography with desktop through one shared token stylesheet (#1974-e6ae).
+- Add a mobile key-bar down arrow while CLI or Chat output is scrolled back; tap it to return to the latest output without sending terminal input (#1975-4a38).
+- Remove Telegram setup from mobile Settings; desktop Settings remains the configuration owner (#1976-711e).
+
 - Stream Telegram status and AI Chat answers with receipt/working reactions, request-scoped final replies, and bounded queue/failure notices (#1959-162a).
 - Add smart AI Chat table columns, conditional horizontal-scroll hints, exact-source Markdown and Copy actions, and read-only document opening on desktop and mobile (#1923-c6fb).
 
 - Tidy AI Chat into one header row with labelled overflow actions, compact process disclosures, latest-answer suggestions, and no synthetic history timing (#1958-b67e).
 
+- Complete generated settings MCP/HTTP/IPC owner dispatch, remove the legacy MCP config action, and invalidate pending GitHub settings device flows on logout (#1787-4778). Typed owners and explicit target guards are wired; the complete-inventory gate remains enforced.
 - Restyle repository Settings with inherited override rows, script cards, team sharing, and a scoped reset action.
 
 - Restyle Agents Settings and named run editors while preserving machine ownership, draft saves, terminal permissions, and hibernation policy.
@@ -20,6 +32,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Fixed
 - Preserve Claude /resume session rows and filtered results in mobile CLI output without widening agent-state parsing (#1971-5834).
 - Forward mobile key-bar arrows and Tab to waiting Claude pickers without overwriting the local answer draft (#1972-128e).
+- Route Telegram messages to the latest-connected live AI Chat when no agent has explicitly registered; keep explicit ownership authoritative and preserve in-flight replies when another chat connects (#1983-1b47).
+- Keep Settings contextual help beside its label, including repository scripts and narrow layouts (#1965-d50f).
+- Give Paper semantic branch and PR markers readable theme colors in Settings and the sidebar; keep filled merged badge labels readable independently of accent action colors (#1968-baa4).
+- Use readable identity foregrounds on agent color tiles in Settings (#1967-404e).
+- Restore Settings text, enabled action and tooltip contrast on themed surfaces (#1966-514a).
+- Let gated HTTP and IPC settings edits confirm and commit through the existing human dialog; keep HTTP approvals stable across TCP ports and require approval for tunnel forward-list replacement (#1787-4778).
+- Omit hidden answer markers when copying terminal selections or AI Chat answers, including mobile and the Answers view. (#1963-c7f6)
 - Restore contextual help for repository Design Mode and automation scripts in Settings (#1946-5de3).
 - Resolve worktree lifecycle bases for repositories without main/master, and explain when no base branch is available (#1961-bab6).
 - Prevent auto-standby from stranding foreground shell jobs; wake the recorded stopped group and retain a full timeout window after remote input, output viewing, or disconnect (#1962-4182).
@@ -55,6 +74,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- Require authenticated same-owner peers in the relay prototype and atomically enforce room and token capacity, while allowing the second peer at the room limit; terminate expired sockets and prevent stale peers from accessing recreated rooms (#1932-8398).
+
+### Fixed
 - Restore Edge spoken replies after the service migration with the new endpoint and the live-verified existing v1 GEC handshake (#1952-bf91).
 
 - Recover failed mobile views after a server outage through automatic or manual retry, without false empty/setup states, raw network errors or desktop restart advice (#1930-f4c2).

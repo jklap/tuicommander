@@ -288,3 +288,28 @@
 .overflow .markdownEntry { flex-direction: column; align-items: stretch; justify-content: center; gap: 4px; padding-block: 8px; }
 .markdownEntry span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .markdownPath { color: var(--fg-muted); font-size: 11px; }
+
+/* Phones reserve identity space; tablets keep the direct secondary controls. */
+.overflow .phoneAction { display: none; }
+
+@media (max-width: 430px) {
+  .header .secondaryAction { display: none; }
+  .overflow .phoneAction { display: flex; }
+}
+
+.diffReadingAction { display: none; }
+@media (max-width: 430px) {
+  .diffReadingAction {
+    display: block;
+    flex-shrink: 0;
+    min-height: 44px;
+    padding: 8px 12px;
+    border: 0;
+    border-bottom: 1px solid var(--border);
+    background: var(--bg-secondary);
+    color: var(--accent);
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
+  }
+}

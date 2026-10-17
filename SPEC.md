@@ -714,6 +714,7 @@ Some frontend-only stores persist to localStorage:
 - [x] Remote access / HTTP server
 - [x] SSH-managed remote daemon deployment, idle lifetime, pairing-token vaulting, and systemd/launchd installation
 - [x] Mobile terminal prompt keyboard correction defaults on, with a device-local Settings toggle for autocorrect, spellcheck and sentence capitalization (#1878-3a3c).
+- [x] Mobile CLI and Chat key-bar jump-to-bottom arrow appears only while scrolled back and resumes output follow without terminal input (#1975-4a38).
 - [x] Mobile terminal Ctrl menu (Ctrl+C, Ctrl+B, Ctrl+D, agent-aware Ctrl+Enter)
 - [x] Mobile Send long-press Queue transfers the live draft to the shared server ready-window queue; taps still submit immediately.
 - [x] Session uploads live under TUIC data, with launch grants and session-end cleanup; startup reclaims only provably dead owners, preserving concurrent instances; ego invocation-scoped binary-file read roots remain unsupported (#1833-aa60).
@@ -846,7 +847,7 @@ excluded from this protocol and local mail survives hub loss.
 
 ## Telegram channel implementation status (#1438-79b4)
 
-The headless daemon provides native Telegram mail, correlated drafts, exact final replies, done/blocked notices and opaque callbacks. Any MCP-bound TUIC agent opts in with `telegram register`; one volatile registration replaces the previous agent with one mail notice. Registration ends on MCP session end, PTY close or agent exit while its shell remains. No configured agent UUID is required. Allowed inbound without an agent replies "No agent is listening. Ask an agent in TUICommander to register for Telegram." and drops; strangers stay silent. Only the cursor persists, so restart may lose unread mail and requires registration again. Single-destination sends and private token/allowlist authorization remain. See [Telegram channel](docs/design/telegram-channel.md). Live mint deployment remains pending.
+The headless daemon provides native Telegram mail, correlated drafts, exact final replies, done/blocked notices and opaque callbacks. Any MCP-bound TUIC agent opts in with `telegram register`; one volatile registration replaces the previous agent with one mail notice. Registration ends on MCP session end, PTY close or agent exit while its shell remains. No configured agent UUID is required. Without explicit registration, allowed inbound reaches the latest-connected live AI Chat peer; connection order, not selected tab, resolves multiple live chats. Explicit registration always wins. Allowed inbound with neither kind of agent replies "No agent is listening. Ask an agent in TUICommander to register for Telegram." and drops; strangers stay silent. Only the cursor persists, so restart may lose unread mail and requires registration again. Single-destination sends and private token/allowlist authorization remain. See [Telegram channel](docs/design/telegram-channel.md). Live mint deployment remains pending.
 
 Workflow safety: pinned checks own process trees and stop on timeout, run cancellation, and shutdown. Operator decisions and workflow policy mutations require host Human authority (desktop IPC or credential-authenticated HTTP). Workflow plan Done requires current integration evidence for every approved story; stale canonical refs reopen its derived state until recertification.
 
@@ -1098,6 +1099,13 @@ Shared wake (B6, #1807-4f1f): `session_wake::ensure_live` serializes durable res
 
 ## Mobile Claude terminal Chat view
 
+Phone sessions offer a direct **Read file edits in Chat** action while CLI is
+active. The terminal stays mounted. Chat edit tool disclosures render bounded
+old/new blocks, preserve tabs with four-space tab stops and scroll long lines
+horizontally. Claude Edit projection retains diff content through tool completion;
+failed calls remain labelled failed, not represented as applied edits.
+
+
 Claude PTY sessions offer CLI / Chat in the existing mobile header. The shared
 `TerminalChatTranscript` owns rendering, visibility-paused keepalive and backend
 unavailability. Mobile injects wakes from `useSessions`; it opens no additional
@@ -1114,6 +1122,10 @@ Hibernation requires an idle agent and a verified resume session in its saved pr
 The normal Rust suspension path persists `reason: "idle_hibernate"` before ending the PTY. Opening the tab, submitting input or sending peer mail uses the shared wake path. Storage or resume-verification failures leave the live session intact.
 
 GitHub Work B8: registered accounts bind core B6 review threads and B7 actions through account-scoped PluginHost methods. The Rust adapter enforces net:http, on-disk GitHub provider consent and matching account/PR identity, then uses existing core policy. Projects move/clear coverage uses recorded public reads and documented mutation contracts; live writes and desktop verification remain pending.
+
+## Settings transport cutover (#1787-4778)
+
+MCP settings, POST /settings/action and IPC settings_action share generated Rust requests and owner dispatch. Config has no MCP compatibility alias. The complete owner inventory permits transactions. Typed workflows cover GitHub, Ego provider auth, upstream credentials, connection credentials, Telegram and available voice assets. Owner choice refresh uses explicit target/store/paths; describe remains cache-only. Live frontend refresh remains separate dependent work.
 
 ## Settings choice discovery (#1908-c327)
 
@@ -1142,7 +1154,7 @@ Internal voice settings refresh resolves devices, model state, installed voices 
 
 ### Settings restyle foundation (1936-0caa)
 
-The approved 2026-10-16 Settings restyle starts with a stable 1136px maximum shell and shared presentation-only vocabulary. Existing lazy mounting, persisted navigation width, configuration sources and save boundaries remain unchanged. Individual page adoption is separate work.
+The approved 2026-10-16 Settings restyle uses a stable 1136px maximum shell and shared presentation-only vocabulary across Application, Workspace, AI, Integrations, loaded plugin pages and repository pages. Existing lazy mounting, persisted navigation width, configuration sources and save boundaries remain unchanged. Search uses static and loaded-plugin catalogues without mounting all pages; expert results reveal the requested control without changing the persisted Expert preference. Section links wait for the selected page to mount and retain retired-tab mappings. Plugin loading/read failures stay inside the editor, and unloaded plugins cannot retain editors or search entries. S10 adds integrated boundary coverage and documentation; Commander/Paper visual comparison remains a separate capture gate.
 
 ### Terminal ego provider recovery
 
@@ -1162,3 +1174,11 @@ The backend retains fixed-kind numeric slow-event metadata in a bounded journal 
 ### Telegram request streaming (1959-162a)
 
 Telegram replies now use TUIC-driven receipt (👀), working (👨‍💻), waiting (🤔), answered (👍) and failed (👎) reactions. An ephemeral native draft shows Italian status lines or unapproved agent previews; it refreshes while work continues and the final reply replaces it. Acknowledgement of work requires inbox Read and a new recipient turn. PTY intent/activity and AI Chat assistant chunks share request correlation; finish remains authoritative after draft retirement. Telegram-mail-woken AI Chat turns automatically send their settled assistant text if finish has not answered. Queue and no-reply notices occur at ten minutes and sixty seconds after Read respectively. Restart keeps no request history. Phone rendering requires a live check after the backend restart.
+
+### Mobile session Chat presentation (#1974-e6ae)
+
+The session detail CLI/Chat projection uses the same TerminalChatTranscript and semantic Chat tokens as desktop terminal Chat. Shared font sizes cover prompt, reply, tool and hint text. The mobile switch keeps 44px targets and the existing CommandInput and keybar; no new terminal row is added. AI Chat is outside this change.
+
+### Mobile Telegram setup removal (#1976-711e)
+
+Mobile Settings does not mount or offer Telegram setup. Desktop Settings retains the shared Telegram configuration controls and existing backend transports.

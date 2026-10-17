@@ -18,7 +18,7 @@ pub struct TunnelProfile {
     pub user: String,
     #[schemars(extend("x-setting" = {"sensitivity":"private","apply":"live","effect":"Updates identity file for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
     pub identity_file: Option<PathBuf>,
-    #[schemars(extend("x-inventory-gap" = {"ownerStep":"Step 4f","reason":"ForwardSpec records have no stable IDs; owner must define stable record edits."}))]
+    #[schemars(extend("x-setting" = {"sensitivity":"private","apply":"live","effect":"Replaces all forwards for the current tunnel profile.","operations":["get","set"],"confirmationClass":"execution_authority"}, "x-atomic-list" = true))]
     pub forwards: Vec<ForwardSpec>,
     #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates options for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
     pub options: ProfileOptions,

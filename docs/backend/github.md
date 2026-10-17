@@ -520,3 +520,7 @@ merge queue policy and shared request budgets apply unchanged. The desktop comma
 `{account, reference, request}` payloads (IPC also supplies `pluginId`).
 The GitHub Work runtime binds both ports when it registers each configured account.
 No live write or desktop-load verification is implied by recorded-fixture tests.
+
+## Device-login invalidation (#1787-4778)
+
+Logout and disconnect advance the GitHub login generation. Settings device flows retain their creation generation; an older flow expires instead of completing. Credential activation and logout share an async serialization lock, so a token response racing logout cannot restore credentials after logout completes.

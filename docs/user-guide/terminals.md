@@ -438,3 +438,7 @@ refused without changing the draft. The status bar displays the refusal. Managed
 notices; MCP callers can use `session action=force_retry session_id=<id>`.
 Recovery clears when ego explicitly clears it, resumes busy/idle state, or
 returns to the shell prompt. This terminal protocol is separate from ACP retry.
+
+### Copying marked answers
+
+Terminal selection copy, AI Chat answer buttons (desktop and mobile), and the Answers view omit the leading `💬` protocol marker. List prefixes and emoji inside prose or fenced examples stay in the copied text.

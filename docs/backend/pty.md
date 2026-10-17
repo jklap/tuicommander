@@ -823,6 +823,15 @@ changes between Claude and Grok restarts the view. Fixture:
 
 ### Claude transcript Chat view
 
+Claude `Edit` inputs with string `file_path`, `old_string` and `new_string`
+project to ACP diff content. Old/new excerpts use the redacted 20,000-character
+text budget rather than the 1,000-character raw-input budget. The adapter keeps
+that bounded content with the pending tool ID and includes it again with the
+result, because ACP tool content updates replace the previous content. Missing
+fields and non-Edit calls retain their existing projection. Tool status remains
+authoritative: diff content alone does not mean that the edit succeeded.
+
+
 `chat_view::View::advance` reads complete JSONL rows through `transcript_tail`,
 projects them with `ClaudeAdapter`, and retains a bounded ACP update log. Each
 view retains an open file-identity handle: replacing a JSONL at the same path

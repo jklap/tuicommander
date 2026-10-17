@@ -24,6 +24,8 @@ const SCROLL_CHUNK_SIZE = 100;
 const SCROLL_UP_THRESHOLD = 300;
 
 interface OutputViewProps {
+	onAtBottomChange?: (atBottom: boolean) => void;
+	onRegisterScrollToBottom?: (jump: (() => void) | undefined) => void;
 	sessionId: string;
 	/** Hidden Chat output keeps its stream, and follows bottom on CLI re-entry. */
 	visible?: boolean;
@@ -167,6 +169,8 @@ export function OutputView(props: OutputViewProps) {
 			// Output can queue this frame before the user starts scrolling.
 			if (containerEl && props.visible !== false && (force || (!userScrolledUp && !touchActive))) {
 				containerEl.scrollTop = containerEl.scrollHeight;
+				lastScrollTop = containerEl.scrollTop;
+				props.onAtBottomChange?.(true);
 			}
 		});
 	}
@@ -176,6 +180,7 @@ export function OutputView(props: OutputViewProps) {
 		// scrollTop can be fractional while scrollHeight/clientHeight are rounded.
 		// Only tolerate rounding, not an upward gesture inside a near-bottom zone.
 		const atBottom = containerEl.scrollHeight - containerEl.scrollTop - containerEl.clientHeight <= 1;
+		props.onAtBottomChange?.(atBottom);
 		// Only an upward move detaches: the scroll event of our own follow scroll can be
 		// measured after a new chunk grew the content, and must not read as a detach.
 		if (atBottom) userScrolledUp = false;
@@ -186,6 +191,13 @@ export function OutputView(props: OutputViewProps) {
 			fetchOlderLines();
 		}
 	}
+
+	props.onRegisterScrollToBottom?.(() => {
+		userScrolledUp = false;
+		touchActive = false;
+		scrollToBottom(true);
+	});
+	onCleanup(() => props.onRegisterScrollToBottom?.(undefined));
 
 	createEffect(() => {
 		if (props.visible !== false) {

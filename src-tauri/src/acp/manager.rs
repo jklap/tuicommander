@@ -784,14 +784,15 @@ impl AcpClientManager {
     #[cfg(test)]
     pub(crate) fn test_peer_journal(&self, peer: &str) -> Arc<AcpEventJournal> {
         let id = AcpConnectionId::new();
-        let journal = Arc::new(AcpEventJournal::new(id, 1, self.notices.clone()));
+        let generation = self.next_generation.fetch_add(1, Ordering::Relaxed);
+        let journal = Arc::new(AcpEventJournal::new(id, generation, self.notices.clone()));
         let (commands, _) = mpsc::channel(1);
         self.connections.lock().insert(
             id,
             ConnectionHandle {
                 snapshot: AcpConnectionSnapshot {
                     connection_id: id,
-                    generation: 1,
+                    generation,
                     state: AcpConnectionState::Ready,
                     agent_info: None,
                     capabilities: None,
@@ -810,6 +811,23 @@ impl AcpClientManager {
             },
         );
         journal
+    }
+
+    /// Latest connected AI Chat wins only when Telegram has no explicit owner.
+    pub(crate) fn latest_live_peer(&self, peers: &[String]) -> Option<String> {
+        self.connections
+            .lock()
+            .values()
+            .filter(|connection| {
+                connection.snapshot.settlement.is_none()
+                    && connection.snapshot.state == AcpConnectionState::Ready
+                    && connection
+                        .peer_id
+                        .as_ref()
+                        .is_some_and(|peer| peers.contains(peer))
+            })
+            .max_by_key(|connection| connection.snapshot.generation)
+            .and_then(|connection| connection.peer_id.clone())
     }
 
     /// Observe only events accepted after this call for the peer's current connection.

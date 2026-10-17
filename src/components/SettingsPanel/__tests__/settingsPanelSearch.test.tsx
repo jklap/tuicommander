@@ -1,6 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import "../../../__tests__/mocks/tauri";
 import { fireEvent, render, waitFor } from "@solidjs/testing-library";
+import { createSignal } from "solid-js";
+import { mockInvoke } from "../../../__tests__/mocks/tauri";
 
 vi.mock("../../../stores/settings", () => ({
 	settingsStore: {
@@ -62,6 +64,7 @@ vi.mock("../../../stores/repoSettings", () => ({
 	repoSettingsStore: { get: vi.fn(() => undefined), getOrCreate: vi.fn(), update: vi.fn(), reset: vi.fn() },
 }));
 
+import { appLogger } from "../../../stores/appLogger";
 import { settingsStore } from "../../../stores/settings";
 import { SettingsPanel } from "../SettingsPanel";
 
@@ -102,12 +105,25 @@ async function openResult(container: HTMLElement, query: string, tab: string, ro
 describe("SettingsPanel search", () => {
 	beforeEach(() => {
 		vi.clearAllMocks();
+		vi.spyOn(appLogger, "warn").mockImplementation(() => {});
+		vi.spyOn(appLogger, "error").mockImplementation(() => {});
 		vi.mocked(settingsStore.isAiChatEnabled).mockReturnValue(false);
 	});
 
 	afterEach(() => {
 		delete (globalThis as Record<string, unknown>).__TAURI_SHIM__;
 		vi.unstubAllGlobals();
+		// These transport-only fixtures omit native config/home responses. Capture
+		// their known fallback diagnostics, but reject unrelated warning noise.
+		for (const [, message] of [...vi.mocked(appLogger.warn).mock.calls, ...vi.mocked(appLogger.error).mock.calls]) {
+			expect([
+				"Failed to load native tool config, using defaults",
+				"Failed to get home directory",
+				"Failed to load config defaults; expert settings stay visible",
+			]).toContain(message);
+		}
+		vi.mocked(appLogger.warn).mockRestore();
+		vi.mocked(appLogger.error).mockRestore();
 	});
 
 	it("shows no results until something is typed", () => {
@@ -160,6 +176,32 @@ describe("SettingsPanel search", () => {
 		await waitFor(() => expect(onSetting).toHaveBeenCalled());
 		// ...and it lands on the setting, not merely on the section that holds it
 		expect(onHeading).not.toHaveBeenCalled();
+	});
+
+	// Catches: searching the static catalogue eagerly mounts service pages and runs their probes.
+	it("finds service settings without mounting the service page", () => {
+		const { container } = open();
+		const callsBeforeSearch = mockInvoke.mock.calls.length;
+		fireEvent.input(searchInput(container), { target: { value: "upstream mcp servers" } });
+		expect(resultRows(container).some((row) => row.textContent?.includes("Upstream MCP Servers"))).toBe(true);
+		expect(mockInvoke.mock.calls.slice(callsBeforeSearch)).toEqual([]);
+		expect(container.querySelector("#settings-upstream-mcp")).toBeNull();
+	});
+
+	// Catches: a previous query masks a caller's new deep-linked page when Settings reopens.
+	it("clears a previous search when reopening at a different requested page", () => {
+		const [visible, setVisible] = createSignal(true);
+		const [tab, setTab] = createSignal("general");
+		const { container } = render(() => <SettingsPanel visible={visible()} initialTab={tab()} onClose={() => {}} />);
+		fireEvent.input(searchInput(container), { target: { value: "master volume" } });
+		expect(resultRows(container)).toHaveLength(1);
+		setVisible(false);
+		setTab("notifications");
+		setVisible(true);
+		expect(searchInput(container).value).toBe("");
+		expect(resultRows(container)).toHaveLength(0);
+		expect(container.querySelector("nav button[class*='active']")?.textContent).toBe("Notifications");
+		expect(container.textContent).toContain("Notification Settings");
 	});
 
 	it("restores the tab list when the query is cleared", () => {

@@ -110,6 +110,9 @@ mod policy_domain_tests;
 #[cfg(test)]
 mod policy_lifecycle_tests;
 
+pub mod api;
+mod prompts;
+
 #[cfg(test)]
 mod choice_tests;
 pub mod registration;
@@ -119,3 +122,6 @@ mod registration_tests;
 pub mod upstream_credentials;
 #[cfg(test)]
 mod upstream_credentials_tests;
+
+#[cfg(test)]
+mod api_tests;

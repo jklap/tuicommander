@@ -25,7 +25,11 @@ struct Args {
     vapid_private_key: Option<String>,
 
     /// Contact URI for VAPID subject claim (mailto: or https:).
-    #[arg(long, env = "RELAY_VAPID_SUBJECT", default_value = "mailto:admin@tuicommander.com")]
+    #[arg(
+        long,
+        env = "RELAY_VAPID_SUBJECT",
+        default_value = "mailto:admin@tuicommander.com"
+    )]
     vapid_subject: String,
 
     /// Session idle timeout in seconds. Sessions with no activity are cleaned up.
@@ -64,6 +68,7 @@ async fn main() -> anyhow::Result<()> {
     let conn = db::init(&args.db_path).await?;
     let state = Arc::new(relay::AppState {
         sessions: dashmap::DashMap::new(),
+        admission: std::sync::Mutex::new(()),
         db: Some(conn),
         token_cache: dashmap::DashMap::new(),
         vapid,
@@ -84,7 +89,11 @@ async fn main() -> anyhow::Result<()> {
     info!(addr = %args.bind, db = %args.db_path, timeout_secs = args.session_timeout_secs, "relay server starting");
 
     let listener = tokio::net::TcpListener::bind(args.bind).await?;
-    axum::serve(listener, router.into_make_service_with_connect_info::<std::net::SocketAddr>()).await?;
+    axum::serve(
+        listener,
+        router.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+    )
+    .await?;
 
     Ok(())
 }
