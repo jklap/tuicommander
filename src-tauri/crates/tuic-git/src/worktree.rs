@@ -3641,7 +3641,7 @@ pub fn list_local_branches(repo_path: String) -> Result<Vec<String>, String> {
 }
 
 /// Resolve a verified integration branch without network access.
-/// Prefer origin/HEAD, the main checkout's configured base, main/master, then
+/// Prefer main/master, origin/HEAD, the main checkout's configured base, then
 /// the main checkout's attached HEAD (never a linked checkout's HEAD).
 pub fn get_remote_default_branch(repo_path: &str) -> Result<String, String> {
     let repo = Path::new(repo_path);
@@ -3664,6 +3664,11 @@ pub fn get_remote_default_branch(repo_path: &str) -> Result<String, String> {
         }
         None
     };
+    for branch in ["main", "master"] {
+        if rev_at(repo, &format!("refs/heads/{branch}^{{commit}}")).is_ok() {
+            return Ok(branch.to_string());
+        }
+    }
     if let Some(out) = git_cmd(repo)
         .args(["symbolic-ref", "refs/remotes/origin/HEAD"])
         .run_silent()
@@ -3688,15 +3693,10 @@ pub fn get_remote_default_branch(repo_path: &str) -> Result<String, String> {
     {
         return Ok(reference);
     }
-    for branch in ["main", "master"] {
-        if rev_at(repo, &format!("refs/heads/{branch}^{{commit}}")).is_ok() {
-            return Ok(branch.to_string());
-        }
-    }
     if let Some(reference) = main_branch.as_deref().and_then(verified) {
         return Ok(reference);
     }
-    Err("Cannot resolve default branch: no valid origin/HEAD, configured base, main/master, or attached main checkout branch. Attach the main checkout to a branch or configure its branch.<name>.tuicommander-base.".to_string())
+    Err("Cannot resolve default branch: no valid main/master, origin/HEAD, configured base, or attached main checkout branch. Attach the main checkout to a branch or configure its branch.<name>.tuicommander-base.".to_string())
 }
 
 /// Fetch a remote ref if the ref name is a remote tracking branch (e.g. "origin/main").
@@ -5843,16 +5843,93 @@ mod tests {
         );
     }
 
-    /// Catches precedence inversion when a configured base differs from main.
+    /// Catches a stale main branch hiding work already integrated into the configured trunk.
     #[test]
-    fn default_branch_prefers_verified_origin_then_main_checkout_configured_base() {
+    fn worktree_lifecycle_stale_main_must_not_override_configured_develop() {
+        let (_temp, repo, _) = workspace_fixture();
+        git_cmd(&repo)
+            .args(["branch", "-m", "develop"])
+            .run()
+            .unwrap();
+        git_cmd(&repo).args(["branch", "main"]).run().unwrap();
+        git_cmd(&repo)
+            .args(["checkout", "-b", "feature/session"])
+            .run()
+            .unwrap();
+        set_branch_base(&repo.to_string_lossy(), "feature/session", "develop").unwrap();
+        let worktree = add_worktree(&repo, "feature/integrated");
+        commit_file(&worktree, "feature.txt", "completed work\n");
+        git_cmd(&repo)
+            .args(["branch", "-f", "develop", "feature/integrated"])
+            .run()
+            .unwrap();
+
+        let status = inspect_workspace_lifecycle(&repo, "feature/integrated");
+        assert_eq!(
+            status.commit_status,
+            WorkspaceCommitStatus::Merged,
+            "integrated into configured develop, not stale main: {status:?}"
+        );
+    }
+
+    /// Catches remote HEAD or configured base overriding the conventional trunk.
+    #[test]
+    fn default_branch_prefers_main_then_master_before_remote_head() {
         let (_temp, repo, _) = workspace_fixture();
         git_cmd(&repo).args(["branch", "-m", "main"]).run().unwrap();
+        git_cmd(&repo).args(["branch", "master"]).run().unwrap();
         git_cmd(&repo)
             .args(["branch", "integration"])
             .run()
             .unwrap();
         set_branch_base(&repo.to_string_lossy(), "main", "integration").unwrap();
+        git_cmd(&repo)
+            .args(["update-ref", "refs/remotes/origin/trunk", "HEAD"])
+            .run()
+            .unwrap();
+        git_cmd(&repo)
+            .args([
+                "symbolic-ref",
+                "refs/remotes/origin/HEAD",
+                "refs/remotes/origin/trunk",
+            ])
+            .run()
+            .unwrap();
+        assert_eq!(
+            get_remote_default_branch(&repo.to_string_lossy()).unwrap(),
+            "main"
+        );
+        git_cmd(&repo)
+            .args(["branch", "-m", "feature"])
+            .run()
+            .unwrap();
+        assert_eq!(
+            get_remote_default_branch(&repo.to_string_lossy()).unwrap(),
+            "master"
+        );
+        git_cmd(&repo)
+            .args(["branch", "-D", "master"])
+            .run()
+            .unwrap();
+        assert_eq!(
+            get_remote_default_branch(&repo.to_string_lossy()).unwrap(),
+            "origin/trunk"
+        );
+    }
+
+    /// Catches loss of configured-base fallback when no conventional trunk exists.
+    #[test]
+    fn default_branch_prefers_verified_origin_then_main_checkout_configured_base() {
+        let (_temp, repo, _) = workspace_fixture();
+        git_cmd(&repo)
+            .args(["branch", "-m", "feature/base"])
+            .run()
+            .unwrap();
+        git_cmd(&repo)
+            .args(["branch", "integration"])
+            .run()
+            .unwrap();
+        set_branch_base(&repo.to_string_lossy(), "feature/base", "integration").unwrap();
         assert_eq!(
             get_remote_default_branch(&repo.to_string_lossy()).unwrap(),
             "integration"

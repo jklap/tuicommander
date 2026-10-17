@@ -90,6 +90,11 @@ Click `+` next to a repository name. A dialog opens where you can:
 
 When "Prompt on create" is off (Settings → Git & GitHub → Worktree Defaults), clicking `+` instantly creates a linked worktree with an auto-generated name based on the default branch.
 
+The default branch is local `main`, then local `master`, then the remote HEAD
+branch. If none exists, TUICommander uses the main checkout's configured base,
+then its attached branch. This also supports repositories with no remote and
+a non-standard base branch. Linked worktrees do not supply the fallback branch.
+
 ### From Branch Right-Click (quick-clone)
 
 Right-click any non-main branch without a worktree → **Create Worktree**. This creates a new branch named `{source}--{random-name}` based on the selected branch, with a worktree directory.
