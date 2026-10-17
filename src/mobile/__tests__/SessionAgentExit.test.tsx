@@ -122,7 +122,7 @@ describe("mobile viewed agent exit", () => {
 	it("fresh_poll_returns_chat_to_cli_after_agent_exit", async () => {
 		const view = mount("claude");
 		stream.push({ ...waiting, agent_type: "claude" });
-		await fireEvent.click(view.getByRole("button", { name: "Chat", exact: true }));
+		await fireEvent.click(view.getByRole("button", { name: /^Chat$/ }));
 		expect(view.queryByText("Shell output")).toBeNull();
 		view.poll(shell);
 		expect(view.getByText("Shell output")).toBeTruthy();
@@ -136,7 +136,7 @@ describe("mobile viewed agent exit", () => {
 		view.close();
 		expect(view.getByText("Session ended")).toBeTruthy();
 		expect(view.container.querySelector("textarea")!.disabled).toBe(true);
-		await fireEvent.click(view.getByRole("button", { name: "Back", exact: true }));
+		await fireEvent.click(view.getByRole("button", { name: /^Back$/ }));
 		expect(view.back).toHaveBeenCalledOnce();
 	});
 });
