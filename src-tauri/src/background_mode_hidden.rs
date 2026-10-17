@@ -14,6 +14,8 @@ pub(crate) struct Visibility {
     watchers: HashMap<String, usize>,
     all_watchers: usize,
     remote_visible: HashSet<String>,
+    last_remote_activity: HashMap<String, std::time::Instant>,
+    last_global_observation: Option<std::time::Instant>,
 }
 
 impl Visibility {
@@ -25,6 +27,17 @@ impl Visibility {
                 .ws_clients
                 .get(id)
                 .is_some_and(|clients| clients.iter().any(|tx| !tx.is_closed()))
+    }
+
+    pub(crate) fn recently_active(&self, state: &AppState, id: &str) -> bool {
+        let timeout = std::time::Duration::from_secs(
+            u64::from(state.config.read().standby_timeout_minutes) * 60,
+        );
+        self.last_remote_activity
+            .get(id)
+            .into_iter()
+            .chain(self.last_global_observation.as_ref())
+            .any(|last| last.elapsed() < timeout)
     }
 
     fn refresh(&self, state: &AppState, id: &str) {
@@ -60,7 +73,24 @@ pub(crate) fn set_visible(state: &AppState, id: &str, visible: bool, desktop: bo
     } else {
         visibility.remote_visible.remove(id);
     }
+    if !desktop {
+        visibility
+            .last_remote_activity
+            .insert(id.into(), std::time::Instant::now());
+    }
     visibility.refresh(state, id);
+}
+
+/// A remote read or input is activity even without a persistent stream. Serialize
+/// with standby so it either prevents the stop or wakes the recorded group.
+pub(crate) fn record_remote_activity(state: &AppState, id: &str) {
+    let mut visibility = state.background_visibility.lock();
+    if state.session_maps.sessions.contains_key(id) {
+        visibility
+            .last_remote_activity
+            .insert(id.into(), std::time::Instant::now());
+        wake_visible(state, id, true);
+    }
 }
 
 /// Held by the stream/socket, including its catch-up phase, and dropped on disconnect.
@@ -77,7 +107,7 @@ impl RemoteWatch {
             } else {
                 visibility.all_watchers += 1;
             }
-            refresh_watch(&state, &visibility, id.as_deref());
+            refresh_watch(&state, &mut visibility, id.as_deref());
         }
         Self { state, id }
     }
@@ -95,17 +125,21 @@ impl Drop for RemoteWatch {
         } else {
             visibility.all_watchers -= 1;
         }
-        refresh_watch(&self.state, &visibility, self.id.as_deref());
+        refresh_watch(&self.state, &mut visibility, self.id.as_deref());
     }
 }
-fn refresh_watch(state: &AppState, visibility: &Visibility, id: Option<&str>) {
+fn refresh_watch(state: &AppState, visibility: &mut Visibility, id: Option<&str>) {
     if let Some(id) = id {
         if state.session_maps.session_visibility.contains_key(id)
             || state.session_maps.sessions.contains_key(id)
         {
+            visibility
+                .last_remote_activity
+                .insert(id.into(), std::time::Instant::now());
             visibility.refresh(state, id);
         }
     } else {
+        visibility.last_global_observation = Some(std::time::Instant::now());
         let ids: Vec<String> = state
             .session_maps
             .session_visibility
@@ -121,6 +155,7 @@ fn refresh_watch(state: &AppState, visibility: &Visibility, id: Option<&str>) {
 pub(crate) fn forget_session(state: &AppState, id: &str) {
     let mut visibility = state.background_visibility.lock();
     visibility.remote_visible.remove(id);
+    visibility.last_remote_activity.remove(id);
     visibility.desktop.remove(id);
     if let Some(saved) = visibility.saved.as_mut() {
         saved.remove(id);
@@ -261,4 +296,50 @@ pub(crate) fn refresh_tray(state: &AppState, windows: &impl Windows) {
     let attention = visibility.attention;
     drop(visibility);
     windows.tray_status(&text, attention);
+}
+
+#[cfg(test)]
+mod activity_tests {
+    use super::*;
+
+    // Catches: observation grace never expires, or cleanup leaves an old session protected.
+    #[test]
+    fn remote_observation_grace_expires_at_timeout_and_is_forgotten() {
+        let state = crate::state::tests_support::make_test_app_state();
+        state.config.write().standby_timeout_minutes = 1;
+        let mut visibility = state.background_visibility.lock();
+        let now = std::time::Instant::now();
+        visibility.last_remote_activity.insert("viewed".into(), now);
+        assert!(visibility.recently_active(&state, "viewed"));
+        assert!(!visibility.recently_active(&state, "other"));
+        visibility
+            .last_remote_activity
+            .insert("viewed".into(), now - std::time::Duration::from_secs(60));
+        assert!(!visibility.recently_active(&state, "viewed"));
+        visibility.last_remote_activity.insert("viewed".into(), now);
+        drop(visibility);
+        forget_session(&state, "viewed");
+        assert!(
+            !state
+                .background_visibility
+                .lock()
+                .recently_active(&state, "viewed")
+        );
+    }
+
+    // Catches: an all-session SSE disconnect omits grace or protects sessions forever.
+    #[test]
+    fn global_observation_grace_expires_and_zero_timeout_disables_grace() {
+        let state = crate::state::tests_support::make_test_app_state();
+        state.config.write().standby_timeout_minutes = 1;
+        let mut visibility = state.background_visibility.lock();
+        let now = std::time::Instant::now();
+        visibility.last_global_observation = Some(now);
+        assert!(visibility.recently_active(&state, "any-session"));
+        visibility.last_global_observation = Some(now - std::time::Duration::from_secs(60));
+        assert!(!visibility.recently_active(&state, "any-session"));
+        visibility.last_global_observation = Some(now);
+        state.config.write().standby_timeout_minutes = 0;
+        assert!(!visibility.recently_active(&state, "any-session"));
+    }
 }

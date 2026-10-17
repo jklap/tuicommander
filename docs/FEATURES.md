@@ -350,10 +350,11 @@ A multi-line editor docked under the terminal for writing a prompt without fight
 
 ### 1.21 Auto-Standby (Unix)
 
-Idle, unfocused terminals are suspended to stop them consuming CPU and battery. A background checker (every 30s) sends `SIGSTOP` to the entire process group of a session — `kill(-pgid, …)`, so children (dev servers, agent processes) are paused too, not just the shell.
+Idle, unfocused terminals can be paused to reduce CPU and battery use. A background checker (every 30s) sends `SIGSTOP` only when the PTY child owns the foreground process group. An agent running as a separate foreground job inside an interactive shell is not stopped: shell job control would reclaim the terminal and leave that job suspended. Processes in the eligible child's group are paused together.
 
 - **Entry conditions (all required)** — timeout enabled (`> 0`), tab not focused, shell state idle, no tracked agent background work, idle for at least the timeout, session startup settled, and not already in standby. Claude/Codex/Gemini/Grok/pi/OpenCode additionally require confirmed idle (explicit lifecycle marker or stable ready screen); silence-only idle cannot suspend them. Grok distinguishes its active Braille-spinner status row from the persistent `❯` composer.
-- **Wake** — `SIGCONT` fires the instant the tab is focused or a message arrives for the agent; the process resumes exactly where it stopped (no session loss, no restart)
+- **Remote activity** — remote input, HTTP output reads, and remote observer disconnects start a full timeout window before standby can resume; connected terminal WebSockets and SSE observers prevent standby. Recent local input also prevents standby.
+- **Wake** — `SIGCONT` targets the exact recorded stopped group when the tab is focused, remote input/output arrives, or a message arrives for the agent; the process resumes where it stopped (no session loss, no restart)
 - **Safety** — the process-group id is validated before signalling; an unsafe pgid is refused rather than risking a stop sent to the wrong group
 - **Pause badge** — suspended tabs show a pause indicator in the tab bar
 - **Event** — `session-standby` (`{ session_id, standby }`) emitted on stop/wake
@@ -923,8 +924,9 @@ Every terminal tab has a stable UUID (`tuicSession`) injected as the `TUIC_SESSI
   quota interface. Session-local `/stats` is not treated as account headroom.
 
 ### 6.7 Intent Event Tracking
-- Agents declare work phases via `intent: text (Title)` tokens at the start of a row. The canvas leaves marker rows and their soft-wrapped or indented hard-wrapped tails blank, preserving row coordinates. Blank rows and new output, answer, prompt or marker blocks end an indented tail. The token is also read when it follows the ack sentence on one row, and when the agent's own wrapping split it across many rows; terminal width distinguishes wrapped text from adjacent indented prose, and input-box chrome is excluded. A long intent keeps its full tab-title event while the Progress journal stores a redacted, capped copy
+- Agents declare work phases via `intent: text (Title)` tokens at the start of a row. The canvas tints intent rows and their soft-wrapped or indented hard-wrapped tails, preserving row coordinates. Blank rows and new output, answer, prompt or marker blocks end an indented tail. The token is also read when it follows the ack sentence on one row, and when the agent's own wrapping split it across many rows; terminal width distinguishes wrapped text from adjacent indented prose, and input-box chrome is excluded. A long intent keeps its full tab-title event while the Progress journal stores a redacted, capped copy
 - MCP instructions request an intent on its own line, at the start of every task and on each material phase change; the terminal Context bar shows it separately from the orchestrator assignment and user prompt
+- Ego uses its native status/composer pair to exclude input chrome. A second soft-wrapped intent remains visible to the parser while ego replaces that composer; historical submitted prompts do not hide it. Intent tint and state capture share one anchor grammar across agent types.
 - Session snapshots restore captured intent and the last substantial prompt after reconnect, even while the agent remains idle; live state updates use the same reconciliation path.
 - Intent titles may replace spawn-assigned tab labels; only an explicit user rename locks the tab title, including after reconnect
 - Colorization is agent-gated (only applied in sessions with a detected agent) to prevent false positives

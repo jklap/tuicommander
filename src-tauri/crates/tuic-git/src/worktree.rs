@@ -865,6 +865,7 @@ fn integration_bases(repo: &Path, default_branch: &str) -> Vec<String> {
     [
         format!("refs/remotes/origin/{default_branch}"),
         format!("refs/heads/{default_branch}"),
+        format!("refs/remotes/{default_branch}"),
     ]
     .into_iter()
     .filter(|base| rev_at(repo, &format!("{base}^{{commit}}")).is_ok())
@@ -2939,8 +2940,7 @@ pub fn delete_local_branch_impl(
     keep_worktree: bool,
 ) -> Result<(), String> {
     // Refuse to delete the default branch
-    let default_branch =
-        get_remote_default_branch(repo_path).unwrap_or_else(|_| "main".to_string());
+    let default_branch = get_remote_default_branch(repo_path)?;
     if branch_name == default_branch {
         return Err(format!("Refusing to delete default branch '{branch_name}'"));
     }
@@ -3640,36 +3640,63 @@ pub fn list_local_branches(repo_path: String) -> Result<Vec<String>, String> {
     Ok(branches)
 }
 
-/// Get the remote default branch for a repo.
-///
-/// Tries `git symbolic-ref refs/remotes/origin/HEAD` first, then falls back
-/// to checking if `main` or `master` exist as local branches.
+/// Resolve a verified integration branch without network access.
+/// Prefer origin/HEAD, the main checkout's configured base, main/master, then
+/// the main checkout's attached HEAD (never a linked checkout's HEAD).
 pub fn get_remote_default_branch(repo_path: &str) -> Result<String, String> {
-    // Try symbolic-ref first (cheapest, no network)
-    if let Some(out) = git_cmd(Path::new(repo_path))
+    let repo = Path::new(repo_path);
+    let verified = |branch: &str| -> Option<String> {
+        for prefix in ["refs/heads/", "refs/remotes/"] {
+            let reference = if branch.starts_with("refs/") {
+                branch.to_string()
+            } else {
+                format!("{prefix}{branch}")
+            };
+            if rev_at(repo, &format!("{reference}^{{commit}}")).is_ok() {
+                return Some(
+                    reference
+                        .strip_prefix("refs/heads/")
+                        .or_else(|| reference.strip_prefix("refs/remotes/"))
+                        .unwrap_or(&reference)
+                        .to_string(),
+                );
+            }
+        }
+        None
+    };
+    if let Some(out) = git_cmd(repo)
         .args(["symbolic-ref", "refs/remotes/origin/HEAD"])
         .run_silent()
+        && let Some(branch) = out.stdout.trim().strip_prefix("refs/remotes/origin/")
+        && let Some(reference) = verified(&format!("refs/heads/{branch}"))
+            .or_else(|| verified(&format!("refs/remotes/origin/{branch}")))
     {
-        let trimmed = out.stdout.trim().to_string();
-        // Output is like "refs/remotes/origin/main"
-        if let Some(branch) = trimmed.strip_prefix("refs/remotes/origin/")
-            && !branch.is_empty()
-        {
+        return Ok(reference);
+    }
+
+    let worktrees = git_cmd(repo)
+        .args(["worktree", "list", "--porcelain"])
+        .run()
+        .map_err(|error| format!("Cannot resolve default branch: {error}"))?;
+    let main_branch = parse_worktree_entries(&worktrees.stdout)
+        .into_iter()
+        .next()
+        .and_then(|entry| entry.branch);
+    if let Some(branch) = main_branch.as_deref()
+        && let Some(base) = get_branch_base(repo_path, branch)
+        && let Some(reference) = verified(&base)
+    {
+        return Ok(reference);
+    }
+    for branch in ["main", "master"] {
+        if rev_at(repo, &format!("refs/heads/{branch}^{{commit}}")).is_ok() {
             return Ok(branch.to_string());
         }
     }
-
-    // Fallback: check if main or master branches exist locally
-    let branches = list_local_branches(repo_path.to_string()).unwrap_or_default();
-    if branches.iter().any(|b| b == "main") {
-        return Ok("main".to_string());
+    if let Some(reference) = main_branch.as_deref().and_then(verified) {
+        return Ok(reference);
     }
-    if branches.iter().any(|b| b == "master") {
-        return Ok("master".to_string());
-    }
-
-    // Last resort: return "main"
-    Ok("main".to_string())
+    Err("Cannot resolve default branch: no valid origin/HEAD, configured base, main/master, or attached main checkout branch. Attach the main checkout to a branch or configure its branch.<name>.tuicommander-base.".to_string())
 }
 
 /// Fetch a remote ref if the ref name is a remote tracking branch (e.g. "origin/main").
@@ -3823,6 +3850,9 @@ pub fn list_base_ref_options(repo_path: String) -> Result<Vec<BaseRefOption>, St
             if short_name.ends_with("/HEAD") {
                 continue;
             }
+            if short_name == default_branch {
+                continue;
+            }
             remote_refs.push(BaseRefOption {
                 name: short_name,
                 kind: "remote".to_string(),
@@ -3838,8 +3868,13 @@ pub fn list_base_ref_options(repo_path: String) -> Result<Vec<BaseRefOption>, St
     // Build result: default first, then local, then remote
     let mut result = Vec::with_capacity(1 + local_refs.len() + remote_refs.len());
     result.push(BaseRefOption {
+        kind: if local_names.contains(&default_branch) {
+            "local"
+        } else {
+            "remote"
+        }
+        .to_string(),
         name: default_branch,
-        kind: "local".to_string(),
         is_default: true,
     });
     result.extend(local_refs);
@@ -5776,6 +5811,119 @@ mod tests {
         let first = generate_clone_branch_name("main", &[]);
         let second = generate_clone_branch_name("main", std::slice::from_ref(&first));
         assert_ne!(first, second, "Should generate unique names");
+    }
+
+    /// Catches a hard-coded main ref turning clean, integrated worktrees Unknown.
+    #[test]
+    fn worktree_lifecycle_without_main_uses_main_checkout_branch() {
+        let (_temp, repo, _workspaces) = workspace_fixture();
+        git_cmd(&repo)
+            .args(["branch", "-m", "feat/macos-mvp"])
+            .run()
+            .unwrap();
+        let worktree = add_worktree(&repo, "worktree-agent-completed");
+        commit_file(&worktree, "feature.txt", "completed work\n");
+        git_cmd(&repo)
+            .args(["merge", "--ff-only", "worktree-agent-completed"])
+            .run()
+            .unwrap();
+
+        let status = inspect_workspace_lifecycle(&repo, "worktree-agent-completed");
+        assert_eq!(
+            status.commit_status,
+            WorkspaceCommitStatus::Merged,
+            "{status:?}"
+        );
+        assert_eq!(status.removal_safety, WorkspaceRemovalSafety::Safe);
+        assert_eq!(status.error, None);
+        // Calling from a linked checkout must not pick its own HEAD as the base.
+        assert_eq!(
+            get_remote_default_branch(&worktree.to_string_lossy()).unwrap(),
+            "feat/macos-mvp"
+        );
+    }
+
+    /// Catches precedence inversion when a configured base differs from main.
+    #[test]
+    fn default_branch_prefers_verified_origin_then_main_checkout_configured_base() {
+        let (_temp, repo, _) = workspace_fixture();
+        git_cmd(&repo).args(["branch", "-m", "main"]).run().unwrap();
+        git_cmd(&repo)
+            .args(["branch", "integration"])
+            .run()
+            .unwrap();
+        set_branch_base(&repo.to_string_lossy(), "main", "integration").unwrap();
+        assert_eq!(
+            get_remote_default_branch(&repo.to_string_lossy()).unwrap(),
+            "integration"
+        );
+        git_cmd(&repo)
+            .args(["update-ref", "refs/remotes/origin/trunk", "HEAD"])
+            .run()
+            .unwrap();
+        git_cmd(&repo)
+            .args([
+                "symbolic-ref",
+                "refs/remotes/origin/HEAD",
+                "refs/remotes/origin/trunk",
+            ])
+            .run()
+            .unwrap();
+        assert_eq!(
+            get_remote_default_branch(&repo.to_string_lossy()).unwrap(),
+            "origin/trunk"
+        );
+        let options = list_base_ref_options(repo.to_string_lossy().into_owned()).unwrap();
+        assert_eq!(options[0].name, "origin/trunk");
+        assert_eq!(options[0].kind, "remote");
+        assert_eq!(
+            options
+                .iter()
+                .filter(|item| item.name == "origin/trunk")
+                .count(),
+            1
+        );
+        assert!(!integration_bases(&repo, "origin/trunk").is_empty());
+    }
+
+    /// Catches stale configuration hiding a valid master branch.
+    #[test]
+    fn default_branch_skips_missing_origin_and_configured_refs() {
+        let (_temp, repo, _) = workspace_fixture();
+        git_cmd(&repo)
+            .args(["branch", "-m", "master"])
+            .run()
+            .unwrap();
+        set_branch_base(&repo.to_string_lossy(), "master", "gone").unwrap();
+        git_cmd(&repo)
+            .args([
+                "symbolic-ref",
+                "refs/remotes/origin/HEAD",
+                "refs/remotes/origin/gone",
+            ])
+            .run()
+            .unwrap();
+        assert_eq!(
+            get_remote_default_branch(&repo.to_string_lossy()).unwrap(),
+            "master"
+        );
+    }
+
+    /// Catches detached main checkout falling back to an unrelated linked HEAD.
+    #[test]
+    fn default_branch_without_attached_main_checkout_returns_reason() {
+        let (_temp, repo, _) = workspace_fixture();
+        git_cmd(&repo)
+            .args(["branch", "-m", "feat/macos-mvp"])
+            .run()
+            .unwrap();
+        let linked = add_worktree(&repo, "agent-unmerged");
+        git_cmd(&repo).args(["checkout", "--detach"]).run().unwrap();
+        let error = get_remote_default_branch(&linked.to_string_lossy()).unwrap_err();
+        assert!(error.contains("attached main checkout branch"), "{error}");
+        let status = inspect_workspace_lifecycle(&repo, "agent-unmerged");
+        assert_eq!(status.removal_safety, WorkspaceRemovalSafety::Unknown);
+        assert_eq!(status.error.as_deref(), Some(error.as_str()));
     }
 
     #[test]
@@ -11812,7 +11960,7 @@ pub fn detect_orphan_worktrees_blocking(repo_path: String) -> Result<Vec<String>
         .args(["worktree", "list", "--porcelain"])
         .run()
         .map_err(|e| format!("git worktree list failed: {e}"))?;
-    let default_branch = get_remote_default_branch(&repo_path)?;
+    let mut default_branch = None;
     let mut orphans = Vec::new();
     for path in parse_orphan_worktrees(&out.stdout) {
         // Detached describes HEAD, not branch lifetime. A non-default branch
@@ -11820,7 +11968,11 @@ pub fn detect_orphan_worktrees_blocking(repo_path: String) -> Result<Vec<String>
         // Missing directories can only have their stale registration removed.
         if Path::new(&path).exists() {
             let head = rev_at(Path::new(&path), "HEAD")?;
-            if non_default_local_branch_at_head(&repo_path, &head, &default_branch)? {
+            let default_branch = match default_branch.as_ref() {
+                Some(branch) => branch,
+                None => default_branch.insert(get_remote_default_branch(&repo_path)?),
+            };
+            if non_default_local_branch_at_head(&repo_path, &head, default_branch)? {
                 continue;
             }
         }

@@ -2070,9 +2070,9 @@ pub struct SessionMaps {
     /// frontend on tab focus changes. Read by the watcher engine to evaluate
     /// the Unseen trigger (fires only when the terminal tab is not visible).
     pub(crate) session_visibility: DashMap<String, bool>,
-    /// Sessions currently in standby (SIGSTOP'd). session_id → epoch ms when stopped.
+    /// Sessions currently in standby (SIGSTOP'd). session_id → exact stopped pgid.
     #[cfg(unix)]
-    pub(crate) standby_sessions: DashMap<String, u64>,
+    pub(crate) standby_sessions: DashMap<String, i32>,
     /// Per-session marker tallies, so "the agents are ignoring the markers" can be
     /// answered with a number instead of by grepping scrollback — which counts any
     /// mention of the word and is capped by buffer size (#4421).
