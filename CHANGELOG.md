@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+- Document the integrated Settings restyle and cover lazy catalogue search, scoped plugin reads, empty catalogues, retired section links and close/reopen boundaries (#1945-a78d).
+
 - Settings: replace tunnel forwards as one validated atomic list and complete typed settings owner dispatch.
 - Align mobile session Chat prompt tint, answer theme rule and transcript typography with desktop through one shared token stylesheet (#1974-e6ae).
 - Add a mobile key-bar down arrow while CLI or Chat output is scrolled back; tap it to return to the latest output without sending terminal input (#1975-4a38).
