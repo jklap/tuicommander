@@ -1197,20 +1197,15 @@ pub(super) async fn set_session_visible(
     Json(body): Json<SessionVisibleRequest>,
 ) -> impl IntoResponse {
     let viewer_id = body.viewer_id.filter(|v| !v.is_empty());
-    state.set_session_visible(
+    crate::pty::apply_session_visibility(
+        &state,
         &session_id,
         viewer_id
             .as_deref()
             .unwrap_or(crate::state::LEGACY_VIEWER_ID),
         body.visible,
+        body.wake.unwrap_or(true),
     );
-    #[cfg(unix)]
-    if body.visible
-        && body.wake.unwrap_or(true)
-        && let Err(e) = crate::pty::wake_session(&state, &session_id)
-    {
-        tracing::warn!(session_id, error = %e, "Wake on focus failed");
-    }
     (StatusCode::OK, Json(serde_json::json!({ "ok": true })))
 }
 
@@ -6245,6 +6240,22 @@ mod tests {
             "POST /sessions/worktree must hold its response until the shell is idle"
         );
         close_session(State(state), axum::extract::Path(session_id)).await;
+    }
+
+    /// A terminal-store id sent where a PTY session id belongs is warned about and never recorded:
+    /// teardown only reaps the entries of ids that were real sessions.
+    #[tokio::test]
+    async fn set_session_visible_route_does_not_record_an_id_that_names_no_session() {
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+        let body: SessionVisibleRequest =
+            serde_json::from_value(serde_json::json!({"visible": true, "viewer_id": "v"})).unwrap();
+        let _ = set_session_visible(State(state.clone()), Path("term-6".to_string()), Json(body))
+            .await
+            .into_response();
+        assert!(
+            !state.session_maps.session_visibility.contains_key("term-6"),
+            "a terminal id sent as a session id must not be remembered for the process lifetime"
+        );
     }
 
     /// B2.3: the frontend's periodic keep-alive sends `wake: false` — it must

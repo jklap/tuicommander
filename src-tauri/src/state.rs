@@ -3466,6 +3466,20 @@ impl AppState {
             .collect()
     }
 
+    /// Drop every `session_visibility` entry whose session no longer exists, returning how many
+    /// went. Session teardown reaps the entries of ids that WERE sessions, so an id that never
+    /// named one (a client sending a terminal-store id like "term-6") would otherwise stay for the
+    /// life of the process. `apply_session_visibility` no longer records such ids; this clears the
+    /// ones already there and anything else that slips through. Dead sessions' entries are
+    /// irrelevant to the standby sweep, which only walks live sessions.
+    pub(crate) fn prune_orphan_session_visibility(&self) -> usize {
+        let before = self.session_maps.session_visibility.len();
+        self.session_maps
+            .session_visibility
+            .retain(|session_id, _| self.session_maps.sessions.contains_key(session_id));
+        before.saturating_sub(self.session_maps.session_visibility.len())
+    }
+
     /// Subscribe to lifecycle events for one PTY session. Subscription happens
     /// before callers inspect current state, closing the check-then-sleep race:
     /// a transition after subscription is retained by the receiver, while a

@@ -608,7 +608,10 @@ drops it at once. `visible: true` also wakes (SIGCONT) a session parked in stand
 `wake: false` — the frontend's 30 s keep-alive sends `wake: false`, skips while its document
 is hidden or its window unfocused, sends `visible: false` when the document hides and a waking
 `visible: true` on focus, so a minimised client's session can still reach standby. The desktop
-`set_session_visible` command takes the same optional `wake`.
+`set_session_visible` command takes the same optional `wake`. `:id` must be a **PTY session id**,
+never a frontend terminal-store id: a `visible: true` for an id that names no session is logged as a
+warning and not recorded (teardown only reaps the entries of ids that were real sessions), and the
+standby sweeper prunes any entry whose session no longer exists. The route still answers `ok`.
 
 The `/agents/map`, `/agents/map/data` and `/agents/map/prompt` routes were
 removed on 2026-09-23. The Progress Flow view (`/progress/flow`, see Project

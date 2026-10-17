@@ -587,14 +587,20 @@ pub(crate) fn resume_pty(
     state: State<'_, Arc<AppState>>,
     session_id: String,
 ) -> Result<(), String> {
+    resume_pty_core(&state, &session_id)
+}
+
+/// The body of `resume_pty`, callable without a Tauri `State` so it can be tested: clear the
+/// reader's flow-control pause and wake the session if auto-standby had parked it.
+pub(crate) fn resume_pty_core(state: &AppState, session_id: &str) -> Result<(), String> {
     let entry = state
         .session_maps
         .sessions
-        .get(&session_id)
+        .get(session_id)
         .ok_or_else(|| format!("Session not found: {session_id}"))?;
     entry.lock().paused.store(false, Ordering::Relaxed);
     #[cfg(unix)]
-    if let Err(e) = wake_session(&state, &session_id) {
+    if let Err(e) = wake_session(state, session_id) {
         tracing::debug!(session_id = %session_id, error = %e, "Wake on resume (may not be in standby)");
     }
     tracing::debug!(session_id = %session_id, "PTY reader resumed (flow control)");
@@ -1445,19 +1451,14 @@ pub(crate) async fn set_session_visible(
     wake: Option<bool>,
 ) -> Result<(), String> {
     let viewer_id = viewer_id.filter(|v| !v.is_empty());
-    state.set_session_visible(
+    apply_session_visibility(
+        &state,
         &session_id,
         viewer_id
             .as_deref()
             .unwrap_or(crate::state::LEGACY_VIEWER_ID),
         visible,
+        wake.unwrap_or(true),
     );
-    #[cfg(unix)]
-    if visible
-        && wake.unwrap_or(true)
-        && let Err(e) = wake_session(&state, &session_id)
-    {
-        tracing::warn!(session_id, error = %e, "Wake on focus failed");
-    }
     Ok(())
 }
