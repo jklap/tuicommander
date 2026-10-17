@@ -1,5 +1,5 @@
 import { cleanup, fireEvent, render, screen, waitFor } from "@solidjs/testing-library";
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { SessionDetailScreen } from "../screens/SessionDetailScreen";
 import type { SessionInfo } from "../useSessions";
 
@@ -14,8 +14,20 @@ vi.mock("../components/OutputView", () => ({ OutputView: () => <div /> }));
 vi.mock("../components/TerminalKeybar", () => ({ TerminalKeybar: () => <div /> }));
 vi.mock("../../stores/toasts", () => ({ toastsStore: { add: vi.fn() } }));
 
+// Match the isolated screen's known development warnings; unexpected warnings fail.
+let warnings: ReturnType<typeof vi.spyOn>;
+beforeEach(() => {
+	warnings = vi.spyOn(console, "warn").mockImplementation(() => {});
+});
 afterEach(() => {
 	cleanup();
+	for (const args of warnings.mock.calls) {
+		expect([
+			["computations created outside a `createRoot` or `render` will never be disposed"],
+			["[dictation] Failed to get dictation config"],
+		]).toContainEqual(args);
+	}
+	warnings.mockRestore();
 	rpc.mockClear();
 });
 
@@ -184,46 +196,49 @@ it.each(["Reading files", "Waiting for background terminal"])("shows a real task
 	expect(view.getByText(task)).not.toBeNull();
 });
 
-// Catches: an opened ego modal answer taking the idle-only atomic submit path,
-// which refuses the native awaiting interval as agent_not_ready instead of typing
-// the human answer into the modal (the same path used for an opened Codex modal).
-it("types an opened ego free-text answer into its waiting modal instead of requiring idle submission", async () => {
-	const session: SessionInfo = {
-		session_id: "ego-free-text",
-		cwd: "/repo",
-		worktree_path: null,
-		worktree_branch: null,
-		state: {
-			agent_type: "ego",
-			awaiting_input: true,
-			question_confident: true,
-			question_text: "Which release checks should we run?",
-			shell_state: "busy",
-			rate_limited: false,
-			last_activity_ms: 1,
-		},
-	};
-	const { getByRole, container } = render(() => (
-		<SessionDetailScreen
-			subscribeChatWake={() => () => {}}
-			session={session}
-			sessionExists
-			onBack={() => {}}
-			onOpenFiles={() => {}}
-		/>
-	));
-	await fireEvent.click(getByRole("button", { name: "Open ego question" }));
-	await fireEvent.input(container.querySelector("textarea")!, { target: { value: "Run the parser checks" } });
-	await fireEvent.click(getByRole("button", { name: "Send" }));
-	await waitFor(() =>
-		expect(rpc).toHaveBeenCalledWith("write_pty", {
-			sessionId: "ego-free-text",
-			data: "Run the parser checks",
-		}),
-	);
-	await waitFor(() => expect(rpc).toHaveBeenCalledWith("write_pty", { sessionId: "ego-free-text", data: "\r" }));
-	expect(rpc.mock.calls.some(([command]) => command === "submit_agent_reply")).toBe(false);
-});
+// Catches: opening an ego card bypasses the guarded human reply route, losing
+// the complete answer or clearing the local draft when submission is refused.
+it.each([true, false])(
+	"delivers an opened ego answer or retains its draft on refusal (accepted=%s)",
+	async (accepted) => {
+		const session: SessionInfo = {
+			session_id: "ego-free-text",
+			cwd: "/repo",
+			worktree_path: null,
+			worktree_branch: null,
+			state: {
+				agent_type: "ego",
+				awaiting_input: true,
+				question_confident: true,
+				question_text: "Which release checks should we run?",
+				shell_state: "busy",
+				rate_limited: false,
+				last_activity_ms: 1,
+			},
+		};
+		const { getByRole, container } = render(() => (
+			<SessionDetailScreen
+				subscribeChatWake={() => () => {}}
+				session={session}
+				sessionExists
+				onBack={() => {}}
+				onOpenFiles={() => {}}
+			/>
+		));
+		await fireEvent.click(getByRole("button", { name: "Open ego question" }));
+		await fireEvent.input(container.querySelector("textarea")!, { target: { value: "Run the parser checks" } });
+		rpc.mockResolvedValueOnce({ submitted: accepted, acknowledged: accepted });
+		await fireEvent.click(getByRole("button", { name: "Send" }));
+		await waitFor(() => {
+			const delivered = rpc.mock.calls
+				.filter(([command]) => command === "write_pty" || command === "submit_agent_reply")
+				.map(([command, args]) => (command === "write_pty" ? args.data : `${args.input}\r`))
+				.join("");
+			expect(delivered).toContain("Run the parser checks\r");
+			expect(container.querySelector("textarea")!.value).toBe(accepted ? "" : "Run the parser checks");
+		});
+	},
+);
 
 // Catches: opening the question card after typing switches transports and sends
 // Enter without the locally held answer, so the real modal receives no reply.

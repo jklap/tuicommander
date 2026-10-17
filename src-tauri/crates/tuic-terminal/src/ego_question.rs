@@ -122,7 +122,19 @@ pub fn parse_ego_free_text_question(rows: &[String]) -> Option<ParsedEvent> {
         return None;
     }
     let mut start = end;
-    while start > 0 && !rows[start - 1].trim().is_empty() {
+    while start > 0 {
+        let row = rows[start - 1].trim();
+        if row.is_empty()
+            || row.starts_with("εgo:")
+            || row.starts_with("Ctrl+B backgrounds")
+            || row.starts_with("Ctrl+Enter steers")
+            || row.contains("Option+P models")
+            || matches!(row, "/help" | "· /help")
+            || (row.chars().count() >= 3
+                && row.chars().all(|ch| matches!(ch, '─' | '━' | '═' | '-')))
+        {
+            break;
+        }
         start -= 1;
     }
     let prompt_text = rows[start..end]
@@ -218,6 +230,29 @@ mod tests {
         assert_eq!(selection_mode, Some(ChoiceSelectionMode::ToggleEnter));
         assert_eq!(options[0].label, "[x] Parser regression");
         assert_eq!(options[1].label, "[ ] Mobile answer controls");
+    }
+
+    /// Catches: contiguous startup/help or earlier output leaking into a wrapped modal question.
+    #[test]
+    fn ego_free_text_question_stops_at_the_nearest_screen_boundary() {
+        for boundary in [
+            "εgo: ego 0.1.0 · openrouter/openai/gpt-6.1-sol",
+            "Ctrl+B backgrounds · Esc interrupts · Enter queues · Up recalls",
+            "Ctrl+Enter steers · Ctrl+S draft · Option+P models · /help",
+            "────────────────────",
+        ] {
+            let question = parse_ego_free_text_question(&rows(&[
+                "Earlier output must not become part of the question",
+                boundary,
+                "Which release checks",
+                "should we run?",
+                ">",
+            ]));
+            assert!(
+                matches!(question, Some(ParsedEvent::Question { prompt_text, confident: true })
+                if prompt_text == "Which release checks should we run?")
+            );
+        }
     }
 
     /// Catches: awaiting arriving before the modal repaint exposing a busy spinner as a question.

@@ -12136,9 +12136,16 @@ fn captured_ego_question_reaches_awaiting_and_full_mobile_choices() {
 #[test]
 fn captured_ego_question_forms_keep_mobile_answer_controls() {
     let mut failures = Vec::new();
-    for mode in ["single", "multiple", "free_text"] {
+    for mode in ["single", "multiple", "free_text", "fresh_free_text"] {
         for cols in [120, 44] {
-            let fixture = format!("ego-{mode}-{cols}-1973.tcap");
+            if mode == "fresh_free_text" && cols == 44 {
+                continue;
+            }
+            let fixture = if mode == "fresh_free_text" {
+                "ego-fresh-free-text-1980.tcap".to_owned()
+            } else {
+                format!("ego-{mode}-{cols}-1973.tcap")
+            };
             let capture = crate::pty_capture::decode_capture(&agent_prompt_fixture(&fixture))
                 .expect("recorded real ego question");
             let (rows, cols) = capture.geometry.unwrap();
@@ -12175,7 +12182,7 @@ fn captured_ego_question_forms_keep_mobile_answer_controls() {
             } else {
                 "toggle-enter"
             };
-            let prompt_ok = if mode == "free_text" {
+            let prompt_ok = if mode.ends_with("free_text") {
                 session.choice_prompt.is_none()
             } else {
                 session.choice_prompt.as_ref().is_some_and(|prompt| {
@@ -12193,7 +12200,12 @@ fn captured_ego_question_forms_keep_mobile_answer_controls() {
             }
             if !session.awaiting_input
                 || !session.question_confident
-                || session.question_text.as_deref() != Some("Which release checks should we run?")
+                || session.question_text.as_deref()
+                    != Some(if mode == "fresh_free_text" {
+                        "Which release check should we run?"
+                    } else {
+                        "Which release checks should we run?"
+                    })
                 || !prompt_ok
             {
                 failures.push(format!(

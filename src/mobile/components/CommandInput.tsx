@@ -113,12 +113,7 @@ export function CommandInput(props: CommandInputProps) {
 	const [choiceSending, setChoiceSending] = createSignal(false);
 	const [codexNotesMode, setCodexNotesMode] = createSignal(false);
 	const atomicReply = () =>
-		props.managedSession &&
-		props.awaitingInput &&
-		!props.choicePrompt &&
-		!props.questionText &&
-		!props.codexQuestionOpen &&
-		!codexNotesMode();
+		props.managedSession && props.awaitingInput && !props.choicePrompt && !props.codexQuestionOpen && !codexNotesMode();
 	// A multi-question form replaces its prompt without an empty frame between
 	// the answered question and the next one, so a new prompt re-arms the buttons too.
 	// Keyed on content, not object identity: an identical snapshot redelivered
