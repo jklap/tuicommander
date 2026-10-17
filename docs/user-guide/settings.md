@@ -647,7 +647,7 @@ The **Application → All settings (Expert)** page provides typed scalar and str
 
 Reads show owner state and a revision. Save changes only that field with its read revision. A remote update keeps a dirty draft and its old revision, so a conflicting save cannot silently overwrite the new state. **Discard draft and reload** explicitly abandons that draft. Exposure/execution edits first return a proposal; **Ask for confirmation** uses the existing human dialog. If persistence succeeded but runtime application failed, or the transport lost the outcome, the inspector disables writes until you reload authoritative state. Read back before retrying.
 
-General also exposes content-index memory budget, attachment byte limit and background WebView unload delay as expert resource controls. Enum-backed shared selects use catalogue values while retaining their existing readable labels. Search includes the inspector descriptors.
+General also exposes content-index memory budget, attachment byte limit and background WebView unload delay as expert resource controls. Enum-backed shared selects use catalogue values while retaining their existing readable labels. Search includes the inspector descriptors. In browser mode, these results open machine-owned fields in the HTTP-capable inspector; they do not open desktop-only controls such as the native global-hotkey recorder.
 
 The explicit source ledgers distinguish read-only identities, derived credentials, legacy snapshots and separate domain controls. CircleCI credentials and dictation corrections still use owners outside the catalogue (1991-bd88, 1992-d4fa). Global/repository PR visibility filters remain transient pending 1993-e7af; their presence is not a durable-persistence guarantee.
 

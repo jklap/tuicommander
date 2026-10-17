@@ -363,7 +363,7 @@ export const TIPS: Tip[] = [
 	{
 		feature: "Plugin File Previews",
 		description:
-			"Install preview plugins from Settings > Plugins > Browse to open DOCX and XLSX files or inspect, filter, explain, and edit SQLite databases directly from the File Browser.",
+			"Install preview plugins from Settings > Manage plugins > Browse to open DOCX and XLSX files or inspect, filter, explain, and edit SQLite databases directly from the File Browser.",
 		shortcut: null,
 	},
 	{
