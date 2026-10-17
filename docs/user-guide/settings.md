@@ -534,6 +534,10 @@ Use **Follow task** in an item detail to follow comments locally; use **Unfollow
 
 GitHub provides a full normal-comment count, so an increase is detected even beyond the first page. Jira and GitLab provide paged comment entries: newly observed comments notify when their creation time is newer than the prior baseline, or when a previously unseen comment ID shares its latest timestamp. Unloaded pages, unseen review sources and items that are not refreshed cannot produce a notice. Editing a comment or loading older history does not notify. No Linear provider is shipped, so it is not covered.
 
+## Settings MCP access (#1787-4778)
+
+Enable the settings native tool under MCP to permit an agent to describe and edit settings. It is disabled by default, even if the removed config tool was enabled. Secrets are write-only. Changes to external access or the trusted executable require the existing confirmation dialog. The owner inventory is complete. Use explicit target/store/paths for owner reads and dynamic-choice describe/refresh. Typed workflows select their store and operation; credentials remain write-only. Future unresolved owner gaps block edits.
+
 
 Agent model settings support typed model edits without starting a CLI. Explicit
 choice refresh probes only the addressed Claude run config with `--help`, using

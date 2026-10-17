@@ -1052,6 +1052,10 @@ pub(crate) struct AppConfig {
     #[serde(default = "default_disabled_native_tools")]
     #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates disabled native tools for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
     pub(crate) disabled_native_tools: Vec<String>,
+    /// Host-only opt-in; legacy config enablement never grants settings authority.
+    #[serde(default)]
+    #[schemars(extend("x-not-setting" = "Host-issued MCP settings access policy; only trusted UI can enable it."))]
+    pub(crate) settings_mcp_enabled: bool,
     /// Collapse all MCP tools into 3 meta-tools (search_tools, get_tool_schema, call_tool).
     /// Reduces AI context from ~35k to ~500 tokens. Default: false (individual tools exposed).
     #[serde(default)]
@@ -1210,7 +1214,7 @@ fn is_false(value: &bool) -> bool {
 /// `config` and `debug` stay off until the user enables them — for a fresh
 /// install and for a config.json written before the field existed.
 fn default_disabled_native_tools() -> Vec<String> {
-    vec!["config".to_string(), "debug".to_string()]
+    vec!["settings".to_string(), "debug".to_string()]
 }
 
 fn default_update_channel() -> String {
@@ -1343,6 +1347,7 @@ impl Default for AppConfig {
             disabled_agents: Vec::new(),
             disabled_mcp_agents: Vec::new(),
             disabled_native_tools: default_disabled_native_tools(),
+            settings_mcp_enabled: false,
             intent_tab_title: true,
             suggest_followups: true,
             progress_tracking: true,
@@ -2962,7 +2967,8 @@ fn commit_config_change_locked(
         serde_json::from_value(next_json).map_err(|e| format!("Invalid config: {e}"))?;
 
     let effects = ConfigSaveEffects {
-        tools_changed: cached.disabled_native_tools != next.disabled_native_tools
+        tools_changed: cached.settings_mcp_enabled != next.settings_mcp_enabled
+            || cached.disabled_native_tools != next.disabled_native_tools
             || cached.collapse_tools != next.collapse_tools,
         server_changed: server_settings_changed(&cached, &next),
     };
@@ -5462,6 +5468,7 @@ mod tests {
             disabled_agents: vec!["codex".to_string()],
             disabled_mcp_agents: vec!["windsurf".to_string()],
             disabled_native_tools: vec!["plugin_dev_guide".to_string()],
+            settings_mcp_enabled: false,
             intent_tab_title: false,
             suggest_followups: false,
             global_hotkey: Some("CommandOrControl+Shift+T".to_string()),
@@ -5547,7 +5554,7 @@ mod tests {
     }
 
     #[test]
-    fn old_config_without_disabled_native_tools_keeps_config_and_debug_disabled() {
+    fn old_config_without_disabled_native_tools_keeps_settings_and_debug_disabled() {
         // A config.json written before the field existed must not expose the
         // `config` and `debug` MCP tools that a fresh install keeps disabled.
         let loaded: AppConfig = serde_json::from_str(
@@ -5556,7 +5563,7 @@ mod tests {
         .unwrap();
         assert_eq!(
             loaded.disabled_native_tools,
-            vec!["config".to_string(), "debug".to_string()]
+            vec!["settings".to_string(), "debug".to_string()]
         );
     }
 

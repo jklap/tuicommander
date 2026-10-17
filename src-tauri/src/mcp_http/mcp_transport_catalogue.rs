@@ -207,9 +207,9 @@ pub(super) fn render_mcp_instructions(
     // A spawned child's suggestion buttons are never shown to anyone.
     let show_suggest = show_suggest && !ctx.spawned_child;
     out.push_str("## TUIC Protocol — Required Output Markers\n\n");
-    out.push_str("Mandatory even when concise; omission breaks UI.\n\n");
+    out.push_str("Required for the UI.\n\n");
     out.push_str(&format!(
-        "- `ack` — exactly once per MCP connection or reconnect, the first assistant message MUST start: `TUICommander v{ver} is connected.` Never repeat it on each conversational turn.\n"
+        "- `ack` — once per MCP connection/reconnect: start your first message with `TUICommander v{ver} is connected.` Never repeat per turn.\n"
     ));
     if show_intent {
         out.push_str("- `intent: <desc> (<title>)` on its own line, at the start of every user task and on each material work-phase change. Describe the work currently in progress in present tense; `<title>` ≤3 words, spaces not hyphens.\n");
@@ -429,7 +429,6 @@ pub(super) const AGENT_ACTIONS: &str = "spawn, register, list_peers, send, inbox
 pub(super) const REPO_ACTIONS: &str = "list, add, active, status, branch_integrations, branch_integration, worktree_list, worktree_lifecycle, worktree_create, worktree_remove, orphan_cleanup_answer, branch_delete, progress_list, work_item, work_item_act";
 pub(super) const UI_ACTIONS: &str = "tab, toast, confirm, screenshot";
 pub(super) const TASK_ACTIONS: &str = "get, cancel";
-pub(super) const CONFIG_ACTIONS: &str = "get, save, list_prompts, load_prompt, save_prompt";
 pub(super) const DEBUG_ACTIONS: &str = "agent_detection, logs, sessions, invoke_js, help";
 #[cfg(any(feature = "dictation", test))]
 pub(super) const VOICE_ACTIONS: &str = "speak, stop, status";
@@ -502,7 +501,7 @@ pub(super) const NATIVE_TOOL_SUMMARIES: &[(&str, &str)] = &[
         "workflow_run",
         "Start workflow graphs and inspect their execution history.",
     ),
-    ("config", "Read and update application settings."),
+    ("settings", "Settings."),
     ("debug", "Inspect application logs and runtime state."),
     (
         "voice",
@@ -701,16 +700,9 @@ pub(super) fn native_tool_definitions() -> serde_json::Value {
             "inputSchema": { "type": "object", "properties": {}, "required": [] }
         },
         {
-            "name": "config",
-            "description": "Read or write app configuration.\n\nActions (pass as 'action' parameter):\n- get: Returns app config (shell, font, theme, etc.). Password hash is stripped.\n- save: Persists configuration. Requires config object. Partial updates OK.\n- list_prompts: Lists saved smart prompts (id, label, pinned — no text).\n- load_prompt: Returns full prompt entry by id (requires 'id' param).\n- save_prompt: Upserts a prompt by id (requires 'id', 'label', 'text'; optional 'pinned'). Localhost only.",
-            "inputSchema": { "type": "object", "properties": {
-                "action": { "type": "string", "description": "One of: get, save, list_prompts, load_prompt, save_prompt" },
-                "config": { "type": "object", "description": "Config fields to save (action=save)" },
-                "id": { "type": "string", "description": "Prompt id (action=load_prompt, save_prompt)" },
-                "label": { "type": "string", "description": "Prompt label (action=save_prompt)" },
-                "text": { "type": "string", "description": "Prompt text (action=save_prompt)" },
-                "pinned": { "type": "boolean", "description": "Pin prompt (action=save_prompt, optional)" }
-            }, "required": ["action"] }
+            "name": "settings",
+            "description": "Describe, read and edit Rust-owned settings. Actions: describe, get, set, reset, patch, perform, refresh. Describe pages are bounded; writes require the authoritative expectedRevision and explicit target. Secrets are write-only. Exposure or execution-authority edits require ui confirm with the backend proposalId, then replay the exact request with approval. Prompts use the prompts store and stable IDs. Disabled by default; only trusted UI can enable access.",
+            "inputSchema": crate::settings::api::request_schema()
         },
         {
             "name": "debug",
@@ -781,7 +773,7 @@ pub(super) fn meta_tool_definitions(state: &Arc<AppState>) -> serde_json::Value 
          without searching for it again.\n\n\
          Domains available: terminal pane sessions (tmux replacement), AI agent orchestration + \
          messaging, repos/GitHub PRs/worktrees, UI tabs + notifications, plugin authoring \
-         reference, app config, diagnostics{upstream_suffix}."
+         reference, typed settings, diagnostics{upstream_suffix}."
     );
 
     serde_json::json!([
@@ -877,11 +869,11 @@ pub(crate) fn native_tool_catalog() -> Vec<serde_json::Value> {
 /// every listing/search path uses the same rules — adding a future config
 /// flag means editing one place instead of chasing duplicated closures.
 pub(super) fn filtered_native_tools(state: &Arc<AppState>) -> Vec<serde_json::Value> {
-    let (disabled, progress_tracking) = {
+    let (disabled, progress_tracking, settings_enabled) = {
         let cfg = state.config.read();
         let disabled: std::collections::HashSet<String> =
             cfg.disabled_native_tools.iter().cloned().collect();
-        (disabled, cfg.progress_tracking)
+        (disabled, cfg.progress_tracking, cfg.settings_mcp_enabled)
     };
     native_tool_definitions()
         .as_array()
@@ -900,7 +892,7 @@ pub(super) fn filtered_native_tools(state: &Arc<AppState>) -> Vec<serde_json::Va
             if !progress_tracking && name == "progress" {
                 return false;
             }
-            !disabled.contains(name)
+            (name != "settings" || settings_enabled) && !disabled.contains(name)
         })
         .collect()
 }
@@ -1101,7 +1093,7 @@ pub(super) fn handle_get_tool_schema_for_session(
 
 /// Handle `call_tool` meta-tool — dispatch a named tool call to either
 /// the native handler or the upstream proxy, preserving `addr` for
-/// localhost-only restrictions (config save, notify confirm).
+/// localhost-only restrictions (settings mutation, notify confirm).
 pub(super) async fn handle_call_tool(
     state: &Arc<AppState>,
     addr: SocketAddr,

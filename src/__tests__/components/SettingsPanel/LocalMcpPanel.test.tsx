@@ -29,9 +29,16 @@ import { uiStore } from "../../../stores/ui";
 import { rpc } from "../../../transport";
 import { mockInvoke } from "../../mocks/tauri";
 
-const nativeTools = ["session", "plugin_dev_guide", "config", "debug", "remote", "secret", "progress", "telegram"].map(
-	(name) => ({ name, summary: `${name} summary`, description: `${name} full description` }),
-);
+const nativeTools = [
+	"session",
+	"plugin_dev_guide",
+	"settings",
+	"debug",
+	"remote",
+	"secret",
+	"progress",
+	"telegram",
+].map((name) => ({ name, summary: `${name} summary`, description: `${name} full description` }));
 
 describe("LocalMcpPanel", () => {
 	beforeEach(() => {
@@ -185,7 +192,7 @@ describe("LocalMcpPanel", () => {
 
 	describe("expert controls", () => {
 		const DEFAULTS = {
-			app: { collapse_tools: false, disabled_native_tools: ["config", "debug"] },
+			app: { collapse_tools: false, disabled_native_tools: ["settings", "debug"] },
 			notifications: {},
 			agent_settings: {},
 		};
@@ -210,7 +217,7 @@ describe("LocalMcpPanel", () => {
 		const nativeToolToggles = (view: ReturnType<typeof render>) => view.queryByText("plugin_dev_guide");
 
 		it("hides Collapse tools at its default, but keeps the basic native tool toggles", async () => {
-			const view = await renderWith({ collapse_tools: false, disabled_native_tools: ["config", "debug"] });
+			const view = await renderWith({ collapse_tools: false, disabled_native_tools: ["settings", "debug"] });
 			expect(collapseTools(view)).toBeNull();
 			expect(nativeToolToggles(view)).not.toBeNull();
 			expect(view.getByText("Native tools")).toBeDefined();
@@ -218,14 +225,14 @@ describe("LocalMcpPanel", () => {
 		});
 
 		it("shows Collapse tools once its saved value differs from the default", async () => {
-			const view = await renderWith({ collapse_tools: true, disabled_native_tools: ["config", "debug"] });
+			const view = await renderWith({ collapse_tools: true, disabled_native_tools: ["settings", "debug"] });
 			expect(collapseTools(view)).not.toBeNull();
 			view.unmount();
 		});
 
 		it("shows Collapse tools at its default in expert mode", async () => {
 			uiStore.setSettingsExpertMode(true);
-			const view = await renderWith({ collapse_tools: false, disabled_native_tools: ["config", "debug"] });
+			const view = await renderWith({ collapse_tools: false, disabled_native_tools: ["settings", "debug"] });
 			expect(collapseTools(view)).not.toBeNull();
 			view.unmount();
 		});
@@ -246,9 +253,9 @@ describe("LocalMcpPanel", () => {
 			await vi.advanceTimersByTimeAsync(0);
 			expect(nativeToolToggles(view)).toBeNull();
 
-			answer({ collapse_tools: false, disabled_native_tools: ["config", "debug"] });
+			answer({ collapse_tools: false, disabled_native_tools: ["settings", "debug"] });
 			await vi.advanceTimersByTimeAsync(0);
-			const configToggle = view.getByText("config").closest("div")?.parentElement?.querySelector("input");
+			const configToggle = view.getByRole("checkbox", { name: "settings" }) as HTMLInputElement;
 			expect(configToggle?.checked).toBe(false);
 			view.unmount();
 		});
@@ -257,7 +264,7 @@ describe("LocalMcpPanel", () => {
 		// not fall back to the section heading.
 		it("scrolls to each indexed TUIC Tools control, not just its section", async () => {
 			uiStore.setSettingsExpertMode(true);
-			const view = await renderWith({ collapse_tools: false, disabled_native_tools: ["config", "debug"] });
+			const view = await renderWith({ collapse_tools: false, disabled_native_tools: ["settings", "debug"] });
 			const entries = SETTINGS_SEARCH_INDEX.filter(
 				(entry) => entry.tab === "mcp" && entry.section === "TUIC Tools" && entry.label,
 			);
@@ -276,4 +283,29 @@ describe("LocalMcpPanel", () => {
 			view.unmount();
 		});
 	});
+});
+
+// Catches: legacy config access silently enabling the replacement settings tool.
+it("requires trusted UI opt-in even when settings is absent from disabled names", async () => {
+	vi.useFakeTimers();
+	vi.mocked(rpc).mockImplementation((command: string) => {
+		if (command === "load_config") return Promise.resolve({ disabled_native_tools: [], settings_mcp_enabled: false });
+		if (command === "get_mcp_status") return Promise.resolve({ native_tools: nativeTools });
+		return Promise.resolve(undefined);
+	});
+	mockInvoke.mockImplementation((command: string) =>
+		Promise.resolve(command === "load_config" ? { disabled_native_tools: [], settings_mcp_enabled: false } : undefined),
+	);
+	const view = render(() => <LocalMcpPanel />);
+	await vi.advanceTimersByTimeAsync(0);
+	const toggle = view.getByRole("checkbox", { name: "settings" });
+	expect((toggle as HTMLInputElement).checked).toBe(false);
+	fireEvent.click(toggle);
+	await vi.advanceTimersByTimeAsync(0);
+	expect(mockInvoke).toHaveBeenCalledWith(
+		"save_config",
+		expect.objectContaining({ config: expect.objectContaining({ settings_mcp_enabled: true }) }),
+	);
+	view.unmount();
+	vi.useRealTimers();
 });

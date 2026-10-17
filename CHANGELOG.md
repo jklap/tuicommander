@@ -6,6 +6,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+- Settings: replace tunnel forwards as one validated atomic list and complete typed settings owner dispatch.
 - Align mobile session Chat prompt tint, answer theme rule and transcript typography with desktop through one shared token stylesheet (#1974-e6ae).
 - Add a mobile key-bar down arrow while CLI or Chat output is scrolled back; tap it to return to the latest output without sending terminal input (#1975-4a38).
 - Remove Telegram setup from mobile Settings; desktop Settings remains the configuration owner (#1976-711e).
@@ -15,6 +16,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - Tidy AI Chat into one header row with labelled overflow actions, compact process disclosures, latest-answer suggestions, and no synthetic history timing (#1958-b67e).
 
+- Complete generated settings MCP/HTTP/IPC owner dispatch, remove the legacy MCP config action, and invalidate pending GitHub settings device flows on logout (#1787-4778). Typed owners and explicit target guards are wired; the complete-inventory gate remains enforced.
 - Restyle repository Settings with inherited override rows, script cards, team sharing, and a scoped reset action.
 
 - Restyle Agents Settings and named run editors while preserving machine ownership, draft saves, terminal permissions, and hibernation policy.
@@ -22,6 +24,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Restyle Workspace Settings with section cards, aligned terminal and Git fields, and action-first shortcut rows while preserving existing behavior.
 - Bound `tuic bg` completion command labels to one line and 120 characters; keep the full command before job output in the log (#1950-43b7).
 ### Fixed
+- Let gated HTTP and IPC settings edits confirm and commit through the existing human dialog; keep HTTP approvals stable across TCP ports and require approval for tunnel forward-list replacement (#1787-4778).
 - Omit hidden answer markers when copying terminal selections or AI Chat answers, including mobile and the Answers view. (#1963-c7f6)
 - Restore contextual help for repository Design Mode and automation scripts in Settings (#1946-5de3).
 - Resolve worktree lifecycle bases for repositories without main/master, and explain when no base branch is available (#1961-bab6).

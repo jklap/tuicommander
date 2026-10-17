@@ -333,12 +333,12 @@ is a count (at most 32 distinct names per subagent, the rest counted as
 | `PUT` | `/config` | Save app config |
 | `POST` | `/auth/hash-password` | Hash password for remote access |
 
-`GET /config` and MCP `config action=get` redact remote-access secrets:
+`GET /config` redact remote-access secrets:
 `services.auth.password_hash`, `services.auth.session_token`,
 `services.relay.token`, and `services.push.vapid_private_key`. The config shape
 exposes only the corresponding `*_exists` booleans for secret presence.
 
-`PUT /config` and MCP `config action=save` require `{ base, config }`, where
+`PUT /config` require `{ base, config }`, where
 `base` is the caller's loaded snapshot and `config` is its edited document.
 The backend applies only the base-to-config changes to the latest locked file;
 unchanged fields keep concurrent edits. Both also share `server_settings_changed` with
@@ -852,7 +852,7 @@ instead of nine, keeps a measurable 10.7%.
 
 ### MCP Native Tools
 
-Native tools are organized by domain. Two (`config`, `debug`) are disabled by default via `disabled_native_tools`; listing, search, schema lookup and dispatch respect this filter in both full and collapsed mode. The enabled `progress` tool is additionally kept on the direct collapsed surface.
+Native tools are organized by domain. Two (`settings`, `debug`) are disabled by default via `disabled_native_tools`; listing, search, schema lookup and dispatch respect this filter in both full and collapsed mode. The enabled `progress` tool is additionally kept on the direct collapsed surface.
 
 The payload measurements above predate `voice` and are left as recorded: they
 say what was measured, not what the list costs today.
@@ -868,10 +868,10 @@ say what was measured, not what the list costs today.
 | `ui` | tab, toast, confirm, screenshot | Enabled |
 | `plugin_dev_guide` | *(no actions — returns guide text)* | Enabled |
 | `voice` | speak, stop, status | Enabled |
-| `config` | get, save, list_ai_prompts, load_ai_prompt, save_ai_prompt, list_prompts, load_prompt, save_prompt | Disabled |
+| `settings` | describe, get, set, reset, patch, perform, refresh | Disabled; trusted UI opt-in required |
 | `debug` | agent_detection, logs, sessions, invoke_js, help | Disabled |
 
-The `disabled_native_tools` config key accepts an array of tool names to hide from `tools/list`. Default: `["config", "debug"]`.
+The `disabled_native_tools` config key accepts an array of tool names to hide from `tools/list`. Default: `["settings", "debug"]`.
 
 Settings reads `native_tools` from `get_mcp_status` / `GET /mcp/status`. Both transports use `native_tool_catalog`, projected from the same unfiltered definitions used by MCP. Entries contain `name`, a dedicated user-facing English `summary` (at most 70 characters) declared alongside the registry, and the complete `description`. The `workflow_run` entry summarizes graph starts and execution history. Summaries are app metadata only and are not added to MCP `tools/list`; full MCP descriptions stay unchanged. Disabled tools remain in this app inventory so users can re-enable them. No native tool is always on: even `progress` can be disabled and is also gated by global `progress_tracking`. Upstream tools and meta-tools do not belong to this inventory.
 
@@ -1074,7 +1074,7 @@ Custom URL schemes (`vscode://`, `x-devonthink://`, etc.) do **not** work inside
 ### One tool family, and why the second one went
 
 TUICommander exposes **one** MCP tool family: `session`, `agent`, `task`,
-`remote`, `repo`, `story`, `progress`, `ui`, `plugin_dev_guide`, `voice`, `config`, `debug`. Few tools,
+`remote`, `repo`, `story`, `progress`, `ui`, `plugin_dev_guide`, `voice`, `settings`, `debug`. Few tools,
 many actions.
 
 It used to expose a second — 13 flat `ai_terminal_*` tools behind the
@@ -2336,6 +2336,22 @@ merge queue policy and shared request budgets apply unchanged. The desktop comma
 `{account, reference, request}` payloads (IPC also supplies `pluginId`).
 The GitHub Work runtime binds both ports when it registers each configured account.
 No live write or desktop-load verification is implied by recorded-fixture tests.
+
+### Settings cutover (#1787-4778)
+
+`settings` replaces the removed MCP `config` tool without an alias. Its schema is generated from Rust action DTOs. `settings_action(request)` and `POST /settings/action` use the same envelope and owner services. Describe has optional area/store/id filters and cursor pagination (1–128 fields). Reads and edits use an explicit target; edits require expectedRevision. Prompts remain available through the stable-ID `prompts` store; get `/prompts` lists id/label/text/pinned records, while keyed leaf reads and create/remove patches retain stable identities. Typed workflows use perform with an explicit machine target and a store-selected operation DTO for github_accounts, ego (also expectedRevision), upstreams, connections, telegram and voice in dictation builds. Targeted describe/refresh uses target/store/paths through the registered owner resolver. Connection credential reads use /{id}/credential and return separate password/pairingToken presence. Credential writes retire only that runtime and reconnect it only when it was active; an explicit later disconnect retires the queued reconnect. Explicit refresh for ego refreshes the configured owner's provider catalogue; describe never performs a network refresh.
+
+MCP access requires settings_mcp_enabled, enabled only by trusted UI; legacy config enablement grants no settings authority. MCP mutations remain loopback-only. HTTP retains local-or-authenticated access and IPC retains native host trust. Exposure proposals use ui confirm proposalId and an exact replay with approval. Secrets remain write-only. Owner transactions and perform remain unavailable while the native inventory gap ledger is nonempty; describe reports inventoryComplete.
+
+Gated HTTP and IPC edits return `confirmation_required` with `proposalId` and do not write.
+Replay the exact original edit with `approval: "<proposalId>"` and `confirm: true`.
+The same request opens the existing all-client human confirmation dialog, waits for the
+answer, and, only after approval, commits the exact edit under its original caller.
+A decline, expiry, changed edit, caller mismatch or reused approval cannot commit.
+HTTP proposal identity uses the source IP, not the ephemeral TCP port; every request
+still requires local or authenticated access. MCP callers can continue to use
+`ui action=confirm proposalId=...` followed by an exact replay with `approval`.
+Tunnel forward lists, including empty replacements, require confirmation like tunnel ports.
 
 `session action=force_retry` is a blocking, localhost-only terminal control.
 It resolves the normal session address, requires a live ego recovery snapshot

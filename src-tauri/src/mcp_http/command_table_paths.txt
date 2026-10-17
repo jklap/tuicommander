@@ -351,6 +351,7 @@
 /sessions/x/visible
 /sessions/x/write
 /sessions/x/write-parts
+/settings/action
 /stats
 /stories/action
 /stories/capabilities

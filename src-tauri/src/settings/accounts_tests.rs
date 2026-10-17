@@ -14,7 +14,7 @@ pub(super) fn isolated() -> (tempfile::TempDir, impl Drop, Arc<crate::state::App
 #[tokio::test]
 async fn cloud_pat_cannot_bypass_login() {
     let (_dir, _guard, state) = isolated();
-    let settings = GithubSettings::new(state);
+    let settings = GithubSettings::new(state.clone());
     let error = settings
         .perform(GithubAction::AddEnterprise {
             host: "https://github.com".into(),
@@ -106,7 +106,7 @@ async fn github_secret_reads_return_presence_only() {
     add_account_record(account, Some("named-oauth-canary")).unwrap();
     *state.github.token.write() = Some("ambient-env-canary".into());
     *state.github.token_source.write() = crate::github_auth::TokenSource::Env;
-    let settings = GithubSettings::new(state);
+    let settings = GithubSettings::new(state.clone());
     let read = settings.read().await.unwrap();
     let accounts = read["accounts"].as_array().unwrap();
     let named = accounts.iter().find(|a| a["id"] == "named-viewer").unwrap();
@@ -129,7 +129,7 @@ async fn label_edit_reads_back_and_cloud_secret_replacement_is_refused() {
         Some("label-token-canary"),
     )
     .unwrap();
-    let settings = GithubSettings::new(state);
+    let settings = GithubSettings::new(state.clone());
     let reply = settings
         .perform(GithubAction::SetLabel {
             id: "label-viewer".into(),
@@ -190,7 +190,7 @@ async fn binding_uses_registered_remote_and_stale_revision_writes_nothing() {
         );
     }
     let path = repo.to_str().unwrap().to_owned();
-    let settings = GithubSettings::new(state);
+    let settings = GithubSettings::new(state.clone());
     let revision = settings.read().await.unwrap()["bindingsRevision"]
         .as_str()
         .unwrap()
@@ -266,7 +266,7 @@ async fn unreadable_secret_is_unavailable_and_unsafe_enterprise_input_is_not_ech
         Some("vault-canary"),
     )
     .unwrap();
-    let settings = GithubSettings::new(state);
+    let settings = GithubSettings::new(state.clone());
     crate::credentials::MOCK_FAIL_READS.store(true, std::sync::atomic::Ordering::SeqCst);
     let result = settings.read().await;
     crate::credentials::reset_test_faults();
