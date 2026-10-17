@@ -4,8 +4,10 @@ import { createSignal } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { Transcript } from "../../components/AIChatPanel/Transcript";
 import { CommandInput } from "../components/CommandInput";
+import { MobileJumpBottom } from "../components/MobileJumpBottom";
 import { OutputView } from "../components/OutputView";
 import { TerminalKeybar } from "../components/TerminalKeybar";
+import styles from "../screens/SessionDetailScreen.module.css";
 
 const { rpc, subscribePty } = vi.hoisted(() => ({
 	rpc: vi.fn(),
@@ -39,29 +41,27 @@ async function setup(mode: "CLI" | "Chat") {
 	};
 	const view = render(() => (
 		<>
-			{mode === "CLI" ? (
-				<OutputView sessionId="owned" onAtBottomChange={setAtBottom} onRegisterScrollToBottom={register} />
-			) : (
-				<Transcript
-					mobile
-					entries={() => [{ id: "answer", kind: "agent", text: "Latest answer" }]}
-					busy={() => false}
-					emptyMessage=""
-					onAtBottomChange={setAtBottom}
-					onRegisterScrollToBottom={register}
-				/>
-			)}
+			<div class={styles.outputArea} data-output-area>
+				{mode === "CLI" ? (
+					<OutputView sessionId="owned" onAtBottomChange={setAtBottom} onRegisterScrollToBottom={register} />
+				) : (
+					<Transcript
+						mobile
+						entries={() => [{ id: "answer", kind: "agent", text: "Latest answer" }]}
+						busy={() => false}
+						emptyMessage=""
+						onAtBottomChange={setAtBottom}
+						onRegisterScrollToBottom={register}
+					/>
+				)}
+				<MobileJumpBottom visible={!atBottom()} onScrollToBottom={() => jump?.()} />
+			</div>
 			<TerminalKeybar sessionId="owned" />
-			<CommandInput
-				sessionId="owned"
-				sessionExists={false}
-				showScrollToBottom={!atBottom()}
-				onScrollToBottom={() => jump?.()}
-			/>
+			<CommandInput sessionId="owned" sessionExists={false} />
 		</>
 	));
 	const viewport = (
-		mode === "CLI" ? view.container.firstElementChild : view.getByLabelText("Chat transcript")
+		mode === "CLI" ? view.container.firstElementChild?.firstElementChild : view.getByLabelText("Chat transcript")
 	) as HTMLDivElement;
 	let top = 0;
 	Object.defineProperties(viewport, {
@@ -89,11 +89,12 @@ async function setup(mode: "CLI" | "Chat") {
 }
 
 describe.each(["CLI", "Chat"] as const)("mobile %s jump to bottom", (mode) => {
-	it("hides at bottom and on manual return, preventing a stale or initially visible jump button", async () => {
+	it("floats outside composer and hides at bottom, catching misplaced or stale jump controls", async () => {
 		const view = await setup(mode);
 		expect(view.queryByRole("button", { name: "Scroll to bottom" })).toBeNull();
 		view.scroll(1200);
-		expect(view.getByRole("button", { name: "Scroll to bottom" })).toBeTruthy();
+		const button = view.getByRole("button", { name: "Scroll to bottom" });
+		expect(button.parentElement).not.toBe(view.getByRole("button", { name: "Send" }).parentElement);
 		view.scroll(1599.5);
 		expect(view.queryByRole("button", { name: "Scroll to bottom" })).toBeNull();
 	});
