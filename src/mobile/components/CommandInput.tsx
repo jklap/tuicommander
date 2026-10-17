@@ -502,7 +502,7 @@ export function CommandInput(props: CommandInputProps) {
 	}
 
 	return (
-		<div class={styles.form} style={{ position: "relative" }}>
+		<div class={styles.form}>
 			<Show when={uploading()}>
 				{(name) => (
 					<div class={styles.uploading} role="status">
