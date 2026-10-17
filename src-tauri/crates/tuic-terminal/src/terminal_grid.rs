@@ -554,9 +554,13 @@ fn encode_cell(buf: &mut Vec<u8>, cell: &Cell, colors: &Colors) {
 ///
 /// Alacritty stores zero-width codepoints on the preceding base cell. Every
 /// text extraction path must read the pair together or decomposed Unicode is
-/// silently reduced to its base character.
+/// silently reduced to its base character. Synthetic wide-character spacers
+/// carry layout only and must not contribute text or text length.
 fn push_cell_text(text: &mut String, cell: &Cell) {
-    if cell.flags.contains(Flags::WIDE_CHAR_SPACER) {
+    if cell
+        .flags
+        .intersects(Flags::WIDE_CHAR_SPACER | Flags::LEADING_WIDE_CHAR_SPACER)
+    {
         return;
     }
 
@@ -567,7 +571,10 @@ fn push_cell_text(text: &mut String, cell: &Cell) {
 }
 
 fn cell_text_utf8_len(cell: &Cell) -> usize {
-    if cell.flags.contains(Flags::WIDE_CHAR_SPACER) {
+    if cell
+        .flags
+        .intersects(Flags::WIDE_CHAR_SPACER | Flags::LEADING_WIDE_CHAR_SPACER)
+    {
         return 0;
     }
     let base_len = if cell.c == '\0' { 1 } else { cell.c.len_utf8() };
@@ -581,7 +588,10 @@ fn cell_text_utf8_len(cell: &Cell) -> usize {
 }
 
 fn cell_text_utf16_len(cell: &Cell) -> usize {
-    if cell.flags.contains(Flags::WIDE_CHAR_SPACER) {
+    if cell
+        .flags
+        .intersects(Flags::WIDE_CHAR_SPACER | Flags::LEADING_WIDE_CHAR_SPACER)
+    {
         return 0;
     }
     let base_len = if cell.c == '\0' {

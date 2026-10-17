@@ -116,7 +116,9 @@ screen: increasing terminal rows can move history back into the viewport and
 make the two representations overlap.
 
 Clipboard selections use the same absolute grid coordinates. TUICommander joins
-rows marked with `WRAPLINE`, trims terminal padding, and then removes only
+rows marked with `WRAPLINE`, preserves real spaces at wrapped margins, omits
+synthetic `WIDE_CHAR_SPACER` and `LEADING_WIDE_CHAR_SPACER` cells from text and
+text-length accounting, trims unwrapped terminal padding, and then removes only
 coherent multi-line Claude space/NBSP `▎` visual gutters. Claude composer
 selections remove one leading `❯ ` and two continuation-margin columns only
 when the ordered selection starts at grid column zero with the marker in the
