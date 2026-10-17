@@ -1,12 +1,18 @@
 # Telegram channel for TUICommander
 
-**Stories:** 1438-79b4, 1959-162a. **Updated:** 2026-10-16.
+**Stories:** 1438-79b4, 1959-162a, 1983-1b47. **Updated:** 2026-10-17.
 Offline implementation is available; live mint deployment remains pending.
 
 ## Consumer contract and registration
 
 Any TUIC agent may opt in with `telegram {"action":"register"}`. Caller identity
 comes from its authenticated MCP session, never an argument or configured target.
+Without explicit registration, the latest-connected live AI Chat peer receives
+allowlisted text. If several chats are connected, connection order selects the
+fallback, not the focused tab. Explicit registration always wins and is not
+replaced by opening or reconnecting AI Chat. Only when neither owner exists does
+the adapter send the no-agent instruction.
+
 One agent is registered at a time. A new registration replaces the previous agent
 and sends it one native TUIC mail: "Your Telegram registration was replaced by
 another agent." Repeated registration by the same agent sends no notice.
@@ -24,9 +30,8 @@ supported through their MCP session identity. Registration lives only in memory;
 another register call. No agent dropdown or target UUID belongs in configuration.
 
 An allowlisted private chat delivers text as JSON in native TUIC mail to the
-registered agent. Text never becomes shell input. Native inbox and wake arbitration
-remain authoritative: busy agents receive mail at a safe boundary. Without a live
-registration, the bot replies exactly "No agent is listening. Ask an agent in TUICommander to register for Telegram.", drops the text
+registered agent, or the live AI Chat fallback. Text never becomes shell input. Native inbox and wake arbitration
+remain authoritative: busy agents receive mail at a safe boundary. With neither a live registration nor an AI Chat fallback, the bot replies exactly "No agent is listening. Ask an agent in TUICommander to register for Telegram.", drops the text
 and advances the cursor. Non-allowlisted chats stay silently dropped.
 
 ## Placement and native state
@@ -60,7 +65,7 @@ there are no target peer, token, chat selector, approval or idempotency argument
 | `finish` | `request_id`, `text`; sends the exact final reply even after draft retirement and returns known `message_ids`. Completed requests return the same IDs. |
 | `send` | `text`, optional rows of `{label,data}` buttons; returns known `message_ids`. |
 
-Only the registered agent may begin/activity/finish/send. Others receive
+Only the registered agent, or the selected live AI Chat fallback when no agent is registered, may begin/activity/finish/send. Others receive
 `telegram_not_registered: call telegram register first`. Receipt and working
 acknowledgements are TUIC-driven; begin and activity are optional. A PTY agent
 calls finish with its complete authored reply. No raw PTY text, tool arguments or hidden reasoning
@@ -120,7 +125,7 @@ final returns an error and is never blindly retried.
 
 Buttons contain random opaque wire handles bound to the current chat and message.
 New persistent messages retire old handles. A valid choice sends one structured
-native mail to the current registered agent; successful mail consumes all handles
+native mail to the current registered agent or AI Chat fallback; successful mail consumes all handles
 before one acknowledgement and one selected-label edit attempt. The selected
 keyboard uses `{"text":label,"disabled":{}}` without `callback_data`.
 There is no callback expiry, eviction quota or acknowledgement retry state.

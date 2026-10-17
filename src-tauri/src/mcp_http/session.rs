@@ -2076,6 +2076,33 @@ use crate::chrome::find_chrome_cutoff;
 /// Borrows: it reports a cutoff and reads nothing else, so taking the rows by
 /// value only forced every caller to clone a screen it already had in hand.
 fn trim_screen_chrome(rows: &[String]) -> TrimResult {
+    // The resume picker owns the screen: its search-box border and highlighted
+    // session are not composer chrome. Keep this presentation exception here;
+    // the shared parser cutoff must still exclude the bottom input zone.
+    let resume_picker = rows
+        .iter()
+        .rposition(|row| {
+            let title = row.trim();
+            title == "Resume session" || title.starts_with("Resume session (")
+        })
+        .is_some_and(|title| {
+            let modal = &rows[title + 1..];
+            modal.iter().any(|row| row.trim_start().starts_with("│ ⌕ "))
+                && modal
+                    .iter()
+                    .any(|row| row.contains("Type to search") || row.contains("Type to Search"))
+                && modal
+                    .iter()
+                    .rev()
+                    .find(|row| !row.trim().is_empty())
+                    .is_some_and(|row| {
+                        row.trim_end().ends_with("Esc to cancel")
+                            || row.trim_end().ends_with("Esc to clear")
+                    })
+        });
+    if resume_picker {
+        return TrimResult { cutoff: rows.len() };
+    }
     let refs: Vec<&str> = rows.iter().map(|s| s.as_str()).collect();
     let cutoff = find_chrome_cutoff(&refs).unwrap_or(rows.len());
     TrimResult { cutoff }
@@ -3676,6 +3703,82 @@ mod tests {
                 "mobile screen lost {expected:?}: {visible:#?}"
             );
         }
+    }
+
+    // Catches: the resume search-box border or highlighted session is treated
+    // as composer chrome, removing session rows from HTTP and log-WS screens.
+    #[test]
+    fn captured_claude_mobile_resume_survives_screen_trim() {
+        let capture = crate::pty_capture::decode_capture(include_bytes!(
+            "../fixtures/agent_prompts/claude-mobile-resume-1971.tcap"
+        ))
+        .expect("real Claude resume capture");
+        let (rows, cols) = capture.geometry.expect("captured terminal geometry");
+        let mut grid = crate::state::VtLogBuffer::new(rows, cols, 2000);
+        let mut utf8 = crate::state::Utf8ReadBuffer::new();
+        let mut escape = crate::state::EscapeAwareBuffer::new();
+        let mut populated = false;
+        let mut searched = false;
+        let mut ready_rows = None;
+        let mut dialog_rows = None;
+        for record in capture.records {
+            if record.direction != crate::pty_capture::CaptureDirection::Output {
+                continue;
+            }
+            let data = utf8.push(&record.data);
+            let data = escape.push(&data);
+            let (clean, _) = crate::state::strip_kitty_sequences(&data);
+            grid.process(clean.as_bytes());
+            let rows = grid.screen_rows();
+            if rows.iter().any(|row| row.trim() == "❯") {
+                ready_rows = Some(rows.clone());
+            }
+            if !rows.iter().any(|row| row.trim() == "Resume session") {
+                continue;
+            }
+            let expected = if rows.iter().any(|row| row.contains("❯ Mobile resume seed"))
+                && rows.iter().any(|row| row.contains("Esc to cancel"))
+            {
+                populated = true;
+                [
+                    "Mobile resume seed",
+                    "Test color selection question",
+                    "Esc to cancel",
+                ]
+            } else if rows
+                .iter()
+                .any(|row| row.contains("No sessions match \"z\"."))
+                && rows.iter().any(|row| row.contains("Esc to clear"))
+            {
+                searched = true;
+                ["│ ⌕ z", "No sessions match \"z\".", "Esc to clear"]
+            } else {
+                continue;
+            };
+            let visible = &rows[..trim_screen_chrome(&rows).cutoff];
+            let streamed = poll_screen(&grid, 0).screen.expect("log-WS screen");
+            for expected in expected {
+                assert!(
+                    visible.iter().any(|row| row.contains(expected)),
+                    "HTTP screen lost {expected:?}: {visible:#?}"
+                );
+                assert!(
+                    streamed.iter().any(|row| row.text().contains(expected)),
+                    "log-WS screen lost {expected:?}"
+                );
+            }
+            // Rendering a modal is not permission to widen the parser's input.
+            let refs: Vec<_> = rows.iter().map(String::as_str).collect();
+            assert!(find_chrome_cutoff(&refs).is_some());
+            dialog_rows = Some(rows);
+        }
+        assert!(populated, "capture must contain the populated picker");
+        assert!(searched, "capture must contain the no-matches search state");
+        // A retained modal transcript above a ready composer is not an open
+        // picker: its old footer must not disable ordinary composer trimming.
+        let mut dismissed = dialog_rows.unwrap();
+        dismissed.extend(ready_rows.expect("captured ready composer"));
+        assert!(trim_screen_chrome(&dismissed).cutoff < dismissed.len());
     }
 
     // --- Log-WS screen polling (604-cb45 F14) ---

@@ -222,6 +222,9 @@ session mounted and opens `FilesScreen` with the entry’s original checkout roo
 scrolled up or touching the output, it retains the loaded rows instead of
 evicting the content being read. Older-history pages extend that reading window.
 The next log update after following resumes restores the 500-line tail.
+The backend preserves the full Claude `/resume` modal in both the initial HTTP
+screen and log-WebSocket frames, including session rows and no-match results;
+the mobile view does not reconstruct the picker from transcript text.
 
 Terminal ego single-choice questions use the header question action to toggle the existing `ChoicePromptOverlay`. Full titles and option labels wrap within its scrollable overlay. Opening is explicit; the terminal keeps its full height. The composer uses the backend navigation selection mode and its existing in-flight guard to submit only once.
 
@@ -284,6 +287,9 @@ a queued agent message can look like prompt input. A Tab request from the
 composer or keybar accepts one strict extension of a nonempty local draft.
 Explicit keybar Up/Down accepts one history replacement after its PTY write is
 acknowledged, including an empty line, and updates the edit delta baseline.
+When a managed agent awaits an answer without parsed choices, keybar Tab and
+Up/Down still go to the PTY so an open picker can navigate. These keys do not
+import history into the local answer draft.
 Typing, sending, Escape, or a failed write cancels the request. A history response
 arriving before the HTTP acknowledgement is dropped, causing a missed recall.
 Because snapshots have no causal request ID, an unrelated delayed snapshot after
@@ -832,6 +838,8 @@ FileBrowserPanel subscribes to successful folder-drop completion and routes it t
 ### Settings presentation vocabulary
 
 `SettingsPrimitives.tsx` provides SettingPageHeader, SectionCard, SettingRow, StatusSummary, ListRow, EmptyState and DangerZone. These components render caller-owned content only. SettingRow reuses SettingField label and descriptive IDs, including field errors; controls remain the existing UI Input/Select/Textarea components. SectionCard and DangerZone titles are understood by the static Settings search extractor and render h3 anchors. Existing field consumers retain their stacked layout unless they opt into row presentation.
+
+Settings integration keeps `SettingsPanel` as the page-selection owner. Search catalogue reads do not mount page consumers; plugin `describe` supplies navigation and search while scoped `get` starts only when the editor mounts. Search reveals expert keys before the next-frame scroll without persisting Expert Mode. Section links preserve retired-tab mappings, ignore missing anchors and cancel scheduled work on close. `pluginSettingsTab.test.tsx`, `settingsPanelSearch.test.tsx`, `settingsPanelExpert.test.tsx` and `DeepLinkSection.test.tsx` cover these shared boundaries, including local loading/errors and removal during pending plugin reads. No global save transaction or status inference belongs in the shell.
 
 The Pocket Voice picker includes installed and downloadable catalogue voices for the active language. A missing configured voice stays selected with a Not Downloaded label and an adjacent Download row.
 

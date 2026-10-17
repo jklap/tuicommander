@@ -279,8 +279,10 @@ export const NotificationsTab: Component = () => {
 					</div>
 
 					<div class={s.group}>
-						<label>{t("notifications.label.orchestration", "Orchestration")}</label>
-						<ContextualHelp label={t("notifications.label.orchestration", "Orchestration")} />
+						<div class={s.helpLabel}>
+							<label>{t("notifications.label.orchestration", "Orchestration")}</label>
+							<ContextualHelp label={t("notifications.label.orchestration", "Orchestration")} />
+						</div>
 						<SettingToggle
 							row
 							checked={notificationsStore.state.config.silence_remote_completions}
@@ -306,8 +308,10 @@ export const NotificationsTab: Component = () => {
 				{/* Outside the audio Show on purpose — the bell is visual, so the setting
 			    must stay reachable on a machine with no audio output. */}
 				<div class={s.group}>
-					<label>{t("notifications.label.toolbarBell", "Toolbar Bell")}</label>
-					<ContextualHelp label={t("notifications.label.toolbarBell", "Toolbar Bell")} />
+					<div class={s.helpLabel}>
+						<label>{t("notifications.label.toolbarBell", "Toolbar Bell")}</label>
+						<ContextualHelp label={t("notifications.label.toolbarBell", "Toolbar Bell")} />
+					</div>
 					<SettingToggle
 						row
 						checked={notificationsStore.state.config.toasts_in_bell}

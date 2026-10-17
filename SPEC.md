@@ -847,7 +847,7 @@ excluded from this protocol and local mail survives hub loss.
 
 ## Telegram channel implementation status (#1438-79b4)
 
-The headless daemon provides native Telegram mail, correlated drafts, exact final replies, done/blocked notices and opaque callbacks. Any MCP-bound TUIC agent opts in with `telegram register`; one volatile registration replaces the previous agent with one mail notice. Registration ends on MCP session end, PTY close or agent exit while its shell remains. No configured agent UUID is required. Allowed inbound without an agent replies "No agent is listening. Ask an agent in TUICommander to register for Telegram." and drops; strangers stay silent. Only the cursor persists, so restart may lose unread mail and requires registration again. Single-destination sends and private token/allowlist authorization remain. See [Telegram channel](docs/design/telegram-channel.md). Live mint deployment remains pending.
+The headless daemon provides native Telegram mail, correlated drafts, exact final replies, done/blocked notices and opaque callbacks. Any MCP-bound TUIC agent opts in with `telegram register`; one volatile registration replaces the previous agent with one mail notice. Registration ends on MCP session end, PTY close or agent exit while its shell remains. No configured agent UUID is required. Without explicit registration, allowed inbound reaches the latest-connected live AI Chat peer; connection order, not selected tab, resolves multiple live chats. Explicit registration always wins. Allowed inbound with neither kind of agent replies "No agent is listening. Ask an agent in TUICommander to register for Telegram." and drops; strangers stay silent. Only the cursor persists, so restart may lose unread mail and requires registration again. Single-destination sends and private token/allowlist authorization remain. See [Telegram channel](docs/design/telegram-channel.md). Live mint deployment remains pending.
 
 Workflow safety: pinned checks own process trees and stop on timeout, run cancellation, and shutdown. Operator decisions and workflow policy mutations require host Human authority (desktop IPC or credential-authenticated HTTP). Workflow plan Done requires current integration evidence for every approved story; stale canonical refs reopen its derived state until recertification.
 
@@ -1099,6 +1099,13 @@ Shared wake (B6, #1807-4f1f): `session_wake::ensure_live` serializes durable res
 
 ## Mobile Claude terminal Chat view
 
+Phone sessions offer a direct **Read file edits in Chat** action while CLI is
+active. The terminal stays mounted. Chat edit tool disclosures render bounded
+old/new blocks, preserve tabs with four-space tab stops and scroll long lines
+horizontally. Claude Edit projection retains diff content through tool completion;
+failed calls remain labelled failed, not represented as applied edits.
+
+
 Claude PTY sessions offer CLI / Chat in the existing mobile header. The shared
 `TerminalChatTranscript` owns rendering, visibility-paused keepalive and backend
 unavailability. Mobile injects wakes from `useSessions`; it opens no additional
@@ -1147,7 +1154,7 @@ Internal voice settings refresh resolves devices, model state, installed voices 
 
 ### Settings restyle foundation (1936-0caa)
 
-The approved 2026-10-16 Settings restyle starts with a stable 1136px maximum shell and shared presentation-only vocabulary. Existing lazy mounting, persisted navigation width, configuration sources and save boundaries remain unchanged. Individual page adoption is separate work.
+The approved 2026-10-16 Settings restyle uses a stable 1136px maximum shell and shared presentation-only vocabulary across Application, Workspace, AI, Integrations, loaded plugin pages and repository pages. Existing lazy mounting, persisted navigation width, configuration sources and save boundaries remain unchanged. Search uses static and loaded-plugin catalogues without mounting all pages; expert results reveal the requested control without changing the persisted Expert preference. Section links wait for the selected page to mount and retain retired-tab mappings. Plugin loading/read failures stay inside the editor, and unloaded plugins cannot retain editors or search entries. S10 adds integrated boundary coverage and documentation; Commander/Paper visual comparison remains a separate capture gate.
 
 ### Terminal ego provider recovery
 

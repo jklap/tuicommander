@@ -15179,13 +15179,13 @@ async fn ego_second_recorded_intent_replaces_context_and_title_1964() {
             &state,
         );
         while let Ok(event) = receiver.try_recv() {
-            if let crate::state::AppEvent::PtyParsed { parsed, .. } = &event {
-                if parsed["type"] == "intent" {
-                    intents.push((
-                        parsed["text"].as_str().unwrap().to_string(),
-                        parsed["title"].as_str().map(str::to_string),
-                    ));
-                }
+            if let crate::state::AppEvent::PtyParsed { parsed, .. } = &event
+                && parsed["type"] == "intent"
+            {
+                intents.push((
+                    parsed["text"].as_str().unwrap().to_string(),
+                    parsed["title"].as_str().map(str::to_string),
+                ));
             }
             crate::state::tests_support::apply_replay_event(&state, &event);
         }

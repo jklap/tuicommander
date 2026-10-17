@@ -425,6 +425,13 @@ its highlighted `❯ N. option` row must not act as a composer cutoff. The
 agent-specific choice parser publishes its navigation contract through
 `SessionState.choice_prompt.selection_mode`.
 
+The HTTP and log-WebSocket screen trim also retains an active Claude `/resume`
+modal, including populated and no-match search states. Its title, search field,
+and final search/cancel footer identify the presentation boundary. Search-box
+borders and the selected session are not composer chrome. This exception does
+not change the shared bottom-zone cutoff used by output and state parsers.
+A retained modal above a later ready composer does not disable normal trimming.
+
 ```rust
 impl VtLogBuffer {
     fn new(rows: u16, cols: u16, capacity: usize) -> Self  // Create with terminal size
@@ -815,6 +822,15 @@ changes between Claude and Grok restarts the view. Fixture:
 `fixtures/chat_view/grok_chat_history.jsonl` (real rows, payloads replaced).
 
 ### Claude transcript Chat view
+
+Claude `Edit` inputs with string `file_path`, `old_string` and `new_string`
+project to ACP diff content. Old/new excerpts use the redacted 20,000-character
+text budget rather than the 1,000-character raw-input budget. The adapter keeps
+that bounded content with the pending tool ID and includes it again with the
+result, because ACP tool content updates replace the previous content. Missing
+fields and non-Edit calls retain their existing projection. Tool status remains
+authoritative: diff content alone does not mean that the edit succeeded.
+
 
 `chat_view::View::advance` reads complete JSONL rows through `transcript_tail`,
 projects them with `ClaudeAdapter`, and retains a bounded ACP update log. Each

@@ -6,6 +6,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+- Show structured file edits as old/new blocks with aligned tabs and horizontal scrolling in Chat; add a phone CLI shortcut to read edits without unmounting the terminal (#1982-ee68).
+
+- Give phone session names more header space by moving voice and tasks into More; keep CLI/Chat direct and tablet controls unchanged (#1981-0caf).
+
+- Document the integrated Settings restyle and cover lazy catalogue search, scoped plugin reads, empty catalogues, retired section links and close/reopen boundaries (#1945-a78d).
+
 - Settings: replace tunnel forwards as one validated atomic list and complete typed settings owner dispatch.
 - Align mobile session Chat prompt tint, answer theme rule and transcript typography with desktop through one shared token stylesheet (#1974-e6ae).
 - Add a mobile key-bar down arrow while CLI or Chat output is scrolled back; tap it to return to the latest output without sending terminal input (#1975-4a38).
@@ -25,6 +31,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Bound `tuic bg` completion command labels to one line and 120 characters; keep the full command before job output in the log (#1950-43b7).
 ### Fixed
 - Preserve original spaces across terminal soft wraps in MCP text, copied selections, ego questions and mobile CLI output; keep hard line breaks (#1977-063c).
+- Preserve Claude /resume session rows and filtered results in mobile CLI output without widening agent-state parsing (#1971-5834).
+- Forward mobile key-bar arrows and Tab to waiting Claude pickers without overwriting the local answer draft (#1972-128e).
+- Route Telegram messages to the latest-connected live AI Chat when no agent has explicitly registered; keep explicit ownership authoritative and preserve in-flight replies when another chat connects (#1983-1b47).
+- Keep Settings contextual help beside its label, including repository scripts and narrow layouts (#1965-d50f).
+- Give Paper semantic branch and PR markers readable theme colors in Settings and the sidebar; keep filled merged badge labels readable independently of accent action colors (#1968-baa4).
+- Use readable identity foregrounds on agent color tiles in Settings (#1967-404e).
+- Restore Settings text, enabled action and tooltip contrast on themed surfaces (#1966-514a).
 - Let gated HTTP and IPC settings edits confirm and commit through the existing human dialog; keep HTTP approvals stable across TCP ports and require approval for tunnel forward-list replacement (#1787-4778).
 - Omit hidden answer markers when copying terminal selections or AI Chat answers, including mobile and the Answers view. (#1963-c7f6)
 - Restore contextual help for repository Design Mode and automation scripts in Settings (#1946-5de3).

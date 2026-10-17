@@ -158,6 +158,37 @@ const ToolActivity: Component<{
 									{call.status === "failed" ? "Failed" : call.status === "completed" ? "Completed" : "Running"}
 								</span>
 							</summary>
+							<For each={call.content}>
+								{(content) => (
+									<Show when={content.type === "diff" && content}>
+										{(diff) => (
+											<figure class={s.editDiff} aria-label={`Edit diff: ${diff().path}`}>
+												<figcaption>{diff().path}</figcaption>
+												<div
+													class={s.editDiffScroll}
+													role="region"
+													aria-label={`Scrollable edit: ${diff().path}`}
+													tabindex="0"
+												>
+													<div class={s.editDiffVersions}>
+														<Show when={diff().oldText != null}>
+															<div class={s.editDiffOld}>
+																<span>Old</span>
+																<pre aria-label="Old text">{diff().oldText}</pre>
+															</div>
+														</Show>
+														<div class={s.editDiffNew}>
+															<span>New</span>
+															<pre aria-label="New text">{diff().newText}</pre>
+														</div>
+													</div>
+												</div>
+												<div class={s.editDiffHint}>Scroll horizontally to read long lines →</div>
+											</figure>
+										)}
+									</Show>
+								)}
+							</For>
 							<Show when={toolCallDetail(call)}>
 								<div class={s.toolCallBody}>
 									{toolCallDetail(call)}
