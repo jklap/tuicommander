@@ -162,6 +162,15 @@ fn mcp_automation_tool_is_discoverable_with_all_definition_actions() {
         .iter()
         .find(|tool| tool["name"] == "automations")
         .unwrap();
+    let definition = &tool["inputSchema"]["properties"]["definition"];
+    assert_eq!(definition["required"], json!(["name", "prompt"]));
+    assert_eq!(definition["properties"]["in_secs"]["minimum"], 1);
+    assert!(
+        tool["description"]
+            .as_str()
+            .unwrap()
+            .starts_with("One-shot:")
+    );
     assert_eq!(
         tool["inputSchema"]["properties"]["action"]["enum"],
         json!([

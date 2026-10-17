@@ -71,6 +71,7 @@ impl DefinitionStore {
             let changed = *item != definition;
             if item.cron != definition.cron
                 || item.once_local != definition.once_local
+                || item.once_at != definition.once_at
                 || item.timezone != definition.timezone
             {
                 definition.validate_schedule_at(chrono::Utc::now())?;

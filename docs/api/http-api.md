@@ -3012,7 +3012,7 @@ the identical message. Malformed HTTP JSON/envelopes use Axum extraction errors.
 | template | template_id, repository, run_config, optional/null timezone | Fresh unsaved AutomationDefinition with enabled:false; omitted zone uses host local IANA zone |
 | `list` | None | Array of `{definition,next_run_ms,last_status}` |
 | `get` | `id` | Stored definition |
-| `create` | `definition` | Stored definition, including resolved timezone |
+| `create` | `definition`, optionally with `in_secs` instead of an absolute schedule | Stored definition, resolved timezone/local fire time and computed `next_run_ms` |
 | `update` | `definition`, optional `id`; or `id,enabled` | Stored definition |
 | `pause`, `resume` | `id` | `{ok:true}`; atomic enabled-only edit |
 | `delete` | `id` | `{ok:true}`; history retained |
@@ -3026,6 +3026,15 @@ the identical message. Malformed HTTP JSON/envelopes use Axum extraction errors.
 | `preset` | `preset`: hourly/daily/weekdays/weekly cadence | `{cron}` |
 
 Definitions use the snake_case storage model, including optional `once_local`.
+Create accepts `in_secs` (positive integer elapsed seconds from the host UTC clock)
+as an alternative to cron and `once_local`; combinations are rejected. Relative
+creation stores the local time in the selected IANA zone and an exact UTC `once_at`
+so a DST fold cannot move the occurrence. Preserve `once_at` for unchanged schedule
+edits; clear it when changing the schedule. `next_run_ms` in create replies is
+computed, not stored; update/preview ignore this read-only field.
+HTTP/IPC callers without bound agent identity supply all normal definition fields.
+Bound MCP callers can omit id, repository, run_config, workspace, enabled,
+grace_secs, overlap and max_duration_secs; see the MCP guide for caller-only defaults.
 Update replaces only the named definition and rejects a changed id; enabled-only
 update preserves concurrent edits. Supplying both `definition` and `enabled` is
 an error. Create ignores client creator provenance; update preserves it.

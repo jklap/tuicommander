@@ -9,7 +9,7 @@ use std::sync::Arc;
 pub fn tool_definition() -> Value {
     json!({
         "name": "automations",
-        "description": "Manage automations through the shared HTTP/IPC API. list returns definition, next_run_ms and last_status. create/update return the saved definition; update accepts definition or enabled, exactly one. run_now starts a run; run reads a saved run; list_runs and summary read history. preview/preview_definition and preset resolve schedules. templates lists built-in recipes; template returns a disabled unsaved draft using template_id, repository, run_config and optional timezone (host local by default). Creation records the bound caller session; delete retains history. worktree_preview inspects saved run provenance and safety; cleanup_worktree explicitly removes only a safe final run worktree, retaining history.",
+        "description": "One-shot: {\"action\":\"create\",\"definition\":{\"name\":\"Recheck\",\"prompt\":\"Check again\",\"in_secs\":3600}}. The host resolves its clock and bound caller's repository/saved agent profile; other create fields have safe defaults. No date/list/get needed: create returns the saved definition with once_local, timezone and next_run_ms. in_secs, cron and once_local are exclusive; missing caller context requires explicit fields. update accepts definition or id+enabled. list/get read definitions; pause/resume/delete retain history. run_now starts a run; run/list_runs/summary read history. preview/preview_definition/preset resolve schedules; templates/template supply disabled drafts. worktree_preview/cleanup_worktree inspect/remove safe run workspaces.",
         "inputSchema": {
             "type": "object", "additionalProperties": false,
             "required": ["action"],
@@ -31,7 +31,7 @@ pub fn tool_definition() -> Value {
                 ]},
                 "definition": {
                     "type":"object", "additionalProperties":false,
-                    "required":["id","name","prompt","run_config","repository","workspace","cron","enabled","grace_secs","overlap","max_duration_secs"],
+                    "required":["name","prompt"],
                     "properties": {
                         "id":{"type":"string"}, "name":{"type":"string"}, "prompt":{"type":"string"},
                         "run_config":{"type":"string"}, "repository":{"type":"string"},
@@ -39,6 +39,8 @@ pub fn tool_definition() -> Value {
                             {"type":"object","additionalProperties":false,"required":["mode"],"properties":{"mode":{"const":"existing"}}},
                             {"type":"object","additionalProperties":false,"required":["mode","base_branch"],"properties":{"mode":{"const":"new_per_run"},"base_branch":{"type":"string"}}}
                         ]},
+                        "in_secs":{"type":"integer","minimum":1,"description":"Elapsed seconds from host now; exclusive with cron and once_local"},
+                        "once_at":{"type":["string","null"],"description":"Exact UTC occurrence returned by the host; preserve on unchanged schedule edits"},
                         "once_local":{"type":["string","null"],"description":"Local YYYY-MM-DDTHH:MM:SS; cron must be empty"},
                         "created_by_session":{"type":["string","null"],"description":"Ignored on create; host owns provenance"},
                         "cron":{"type":"string"}, "timezone":{"type":"string","description":"IANA zone; defaults to local on creation"},

@@ -10,6 +10,7 @@ export interface AutomationDefinition {
 	workspace: { mode: "existing" } | { mode: "new_per_run"; base_branch: string };
 	cron: string;
 	once_local?: string | null;
+	once_at?: string | null;
 	timezone: string;
 	enabled: boolean;
 	grace_secs: number;

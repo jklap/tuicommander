@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+- Create one-shot automations with name, prompt and a relative delay; the host resolves caller defaults and returns the saved fire time without extra clock/list/get calls (#2001-5c1f).
+
 - Preserve unrelated repo-root tabs when a worktree is removed or recycled; terminal placement and cleanup follow cwd instead of stale workspace membership (#1999-95b0).
 - Keep the selected workspace's active tab and pane layout consistent when saved tabs are restored to another workspace by cwd (#1999-95b0).
 ### Added

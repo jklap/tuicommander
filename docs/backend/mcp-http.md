@@ -2184,7 +2184,26 @@ with `definition`, `next_run_ms` and `last_status`; create/update return the sav
 definition. Update accepts a full definition (optional id), or id and enabled.
 Errors use `{ "error": "..." }` with the identical backend validation text.
 
-Creation requires a bound agent session. The host sets `created_by_session`;
+A bound agent can create a one-shot in one call:
+
+```json
+{"action":"create","definition":{"name":"Recheck","prompt":"Check again","in_secs":3600}}
+```
+
+The host resolves the elapsed delay from its own UTC clock. It defaults repository
+from this caller's live cwd, ACP root or registered project, never another tab.
+`run_config` defaults to the caller agent's saved default profile (or its only
+profile). Missing or ambiguous context requires an explicit field; errors name it.
+Generated IDs combine the name and a UUID. Other defaults are existing workspace,
+enabled=true, grace_secs=43200, overlap=skip and max_duration_secs=3600.
+Create returns the saved fields plus `next_run_ms` and the resolved
+`once_local`/`timezone`; no date, list or get call is needed. `in_secs` must be a
+positive integer and cannot accompany cron or `once_local`. The stored `once_at`
+preserves the exact UTC instant across DST folds. Preserve it for unchanged
+schedule edits, or clear it when changing the schedule. Computed `next_run_ms` is
+read-only and is ignored when a reply is passed to update or preview.
+
+MCP creation requires a bound agent session. The host sets `created_by_session`;
 input cannot impersonate a creator, and updates preserve the original creator.
 Pause/resume edit only `enabled` under the store lock. Deleting a definition
 retains run history. `run_now` uses the same runtime owner and refusal rules as

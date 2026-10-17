@@ -2920,6 +2920,12 @@ reserves before dispatch and records precheck decisions and launch pointers.
 Precheck stdout never changes the literal prompt. Public execution controls and
 completion/maximum-duration integration remain pending.
 
+### Lean one-shot automation creation
+
+One-shot automation creation accepts `name`, `prompt` and `in_secs` from a bound
+agent. Host-resolved caller defaults and returned next-run/local fire times remove
+clock, list and get lookups; exact UTC storage preserves elapsed delays across DST.
+
 ### Automations dialog (backend integration pending)
 
 Machine-local scheduled-run editor with search, backend cadence/zone preview,

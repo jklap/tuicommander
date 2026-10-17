@@ -29,7 +29,7 @@ pub(crate) enum AutomationAction {
         id: String,
     },
     Create {
-        definition: AutomationDefinition,
+        definition: Value,
     },
     Update {
         id: Option<String>,
@@ -116,8 +116,11 @@ pub(crate) async fn execute_as(
     state: Arc<AppState>,
     caller: Caller,
 ) -> Result<Value, String> {
-    let action = parse(input)?;
+    let mut action = parse(input)?;
     caller.creator(&action)?;
+    if let AutomationAction::Create { definition } = &mut action {
+        super::create::apply_caller_defaults(definition, &state, &caller)?;
+    }
     if let AutomationAction::RunNow { id } = action {
         return value(AutomationRuntime::run_now(&state, &id).await?);
     }
@@ -149,7 +152,12 @@ pub(crate) async fn execute_as(
     .map_err(|error| format!("Automation task failed: {error}"))?
 }
 
-pub(crate) fn parse(input: Value) -> Result<AutomationAction, String> {
+pub(crate) fn parse(mut input: Value) -> Result<AutomationAction, String> {
+    // Create replies include a read-only next occurrence; round-tripping a saved
+    // definition into update/preview must not persist that computed metadata.
+    if let Some(definition) = input.get_mut("definition").and_then(Value::as_object_mut) {
+        definition.remove("next_run_ms");
+    }
     serde_json::from_value(input).map_err(|error| format!("Invalid automation action: {error}"))
 }
 
@@ -204,13 +212,22 @@ pub(crate) fn execute_stored_as(
         )?),
         AutomationAction::Get { id } => value(definitions.get(&id)?),
         AutomationAction::Create { definition } => {
+            let definition = super::create::resolve(definition, now)?;
             let id = definition.id.clone();
             actions::execute(
                 definitions,
                 DefinitionAction::Create { definition },
                 creator,
             )?;
-            value(definitions.get(&id)?)
+            let saved = definitions.get(&id)?;
+            let next = if saved.enabled {
+                saved.schedule()?.next_after(now)?
+            } else {
+                None
+            };
+            let mut reply = value(&saved)?;
+            reply["next_run_ms"] = json!(next.map(|time| time.timestamp_millis()));
+            Ok(reply)
         }
         AutomationAction::Update {
             id,

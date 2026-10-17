@@ -281,3 +281,26 @@ fn canonical_run_lookup_survives_definition_deletion() {
 }
 
 mod templates;
+
+// Catches: relative requests requiring a caller-computed wall clock or rejecting in_secs.
+#[test]
+fn relative_create_uses_host_clock_not_caller_wall_time() {
+    let (_dir, definitions, owner) = setup();
+    let host_now: DateTime<Utc> = "2099-10-10T08:00:00Z".parse().unwrap();
+    let mut input = definition("relative");
+    input["cron"] = json!("");
+    input["in_secs"] = json!(3600);
+    let saved = execute_stored_as(
+        &definitions,
+        owner.store(),
+        parse(json!({"action":"create","definition":input})).unwrap(),
+        host_now,
+        Caller::Agent(Some("caller".into())),
+    )
+    .unwrap();
+    assert_eq!(saved["once_local"], "2099-10-10T09:00:00");
+    assert_eq!(
+        saved["next_run_ms"],
+        host_now.timestamp_millis() + 3_600_000
+    );
+}

@@ -119,3 +119,12 @@ Search for **Automations**, **scheduler** or **schedule** in the command palette
 Definition cards show a short repository name; hover it for the full path. Daily, weekly, hourly and every-N-minute schedules have plain-language labels. Other expressions retain their cron text. Next-run times come from the backend and use the definition's timezone.
 
 Use Left/Right or Home/End on the Definitions and Runs tabs. New automation, Refresh and search share a toolbar. **Select first automation on open** is enabled by default; clear it to select definitions manually. This preference is saved for the current browser/WebView. Refresh does not replace unsaved edits.
+
+### Ask an agent to schedule a one-time check
+
+A bound agent can call `automations` once with
+`{"action":"create","definition":{"name":"Recheck","prompt":"Check again","in_secs":3600}}`.
+The host uses its own clock and this caller's repository and saved agent profile.
+It returns the saved schedule and next-run timestamp; no clock or list lookup is
+needed. If the caller has no saved default profile, specify `run_config`.
+Elapsed delays remain exact across daylight-saving changes.
