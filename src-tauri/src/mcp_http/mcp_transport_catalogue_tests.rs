@@ -2038,3 +2038,23 @@ fn instructions_make_no_claim_about_the_user_or_the_platform() {
         }
     }
 }
+
+/// Catches: discovery forces a second schema fetch for an unchanged admitted tool.
+#[test]
+fn catalogue_schema_reuse_avoids_second_discovery_hop() {
+    let state = test_state();
+    let definition = serde_json::json!({
+        "name": "needle", "description": "Needle discovery.",
+        "inputSchema": {"type": "object", "properties": {}}
+    });
+    *state.mcp.tool_search_index.write() =
+        crate::tool_search::ToolSearchIndex::build(&[definition.clone()]);
+    let args = serde_json::json!({"query": "needle", "schema_byte_budget": 4096});
+    let first = handle_search_tools(&state, &args);
+    assert_eq!(first["top_schema"], definition);
+    let second = handle_search_tools(&state, &args);
+    assert_eq!(second["top_schema"], first["top_schema"]);
+    assert_eq!(second["catalogue_generation"], first["catalogue_generation"]);
+    assert!(first["catalogue_generation"].is_string());
+    assert_eq!(handle_get_tool_schema(&state, &serde_json::json!({"tool_name": "needle"})), definition);
+}
