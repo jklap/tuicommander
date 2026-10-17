@@ -167,6 +167,7 @@ export const TelegramTab: Component = () => {
 											class={s.input}
 											type="password"
 											autocomplete="new-password"
+											placeholder="Enter bot token"
 											value={token()}
 											onInput={(e) => setToken(e.currentTarget.value)}
 										/>

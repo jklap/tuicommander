@@ -97,7 +97,7 @@ export const PluginSettingsTab: Component<{ page: PluginSettingsPage }> = (props
 					</svg>
 				}
 				description="Settings supplied by this loaded plugin. Changes retain the plugin’s declared scope and save behavior."
-				scope="Plugin-owned"
+				scope="Plugin"
 				breadcrumb={`Plugin settings / ${props.page.label}`}
 				source={`Source: ${pluginStore.getPlugin(props.page.id)?.builtIn ? "bundled with TUICommander" : "installed plugin"} · ${props.page.id}`}
 			/>

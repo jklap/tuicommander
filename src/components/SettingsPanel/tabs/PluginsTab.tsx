@@ -417,7 +417,7 @@ export const PluginsTab: Component<{
 				<SettingPageHeader
 					title="Manage plugins"
 					description="Manage installed plugins and browse the community registry."
-					scope="Application"
+					scope="Application defaults"
 					breadcrumb="Plugins / Manage plugins"
 				/>
 				<button

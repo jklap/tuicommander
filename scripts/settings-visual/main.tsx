@@ -7,6 +7,7 @@ import {repositoriesStore} from '../../src/stores/repositories';
 import {pluginStore} from '../../src/stores/pluginStore';
 import {SettingsPanel} from '../../src/components/SettingsPanel/SettingsPanel';
 import {calls,pluginManifest} from './rpc';
+import {loadThemes} from '../../src/themes';
 const params=new URLSearchParams(location.search);
 const theme=params.get('theme')==='light'?paper:commander;
 document.documentElement.dataset.theme=params.get('theme')==='light'?'vscode-light':'commander';
@@ -15,5 +16,6 @@ for(const [key,value] of Object.entries(theme.appChrome))document.documentElemen
 settingsStore.setExperimentalFeaturesEnabled(true);
 pluginStore.registerPlugin('fixture',{loaded:true,manifest:pluginManifest as any});
 repositoriesStore.add({path:'/workspace/fixture-project',displayName:'Fixture project'});
+await loadThemes();
 render(()=><SettingsPanel visible onClose={()=>{}} initialTab={params.get('tab')??'general'}/>,document.getElementById('preview')!);
 (window as any).auditCalls=calls;

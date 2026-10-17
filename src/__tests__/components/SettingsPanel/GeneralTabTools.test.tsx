@@ -56,6 +56,13 @@ describe("GeneralTab developer tools sections", () => {
 
 	afterEach(() => cleanup());
 
+	// Catches: desktop-only children leave a misleading empty Local tools card in browser mode.
+	it("hides the desktop-only Local tools card in browser mode", () => {
+		mockIsTauri.mockReturnValue(false);
+		const view = render(() => <GeneralTab />);
+		expect(view.queryByRole("region", { name: "Local tools" })).toBeNull();
+	});
+
 	// Catches: the tray selector changes no preference or Never still offers Background.
 	it("applies the tray preference and removes Background when Never is selected", () => {
 		settingsStore.setTrayIcon("background_only");

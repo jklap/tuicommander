@@ -132,7 +132,7 @@ export const NotificationsTab: Component = () => {
 				title="Notifications"
 				breadcrumb="Application / Notifications"
 				description="Audio alerts, visual notices and operating-system notifications."
-				scope="Application"
+				scope="Application defaults"
 			/>
 			<SectionCard title={t("notifications.heading.notificationSettings", "Notification Settings")}>
 				<Show

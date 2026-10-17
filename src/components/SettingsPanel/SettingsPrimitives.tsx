@@ -15,7 +15,7 @@ export function SettingPageHeader(props: {
 	breadcrumb?: string;
 }) {
 	return (
-		<div>
+		<div class={s.pageHeaderBlock} data-settings-page-header>
 			<Show when={props.breadcrumb}>
 				<div class={s.breadcrumb}>{props.breadcrumb}</div>
 			</Show>

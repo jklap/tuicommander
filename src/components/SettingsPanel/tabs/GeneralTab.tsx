@@ -38,7 +38,7 @@ interface MdkbStatus {
 	version: string | null;
 }
 
-export const GeneralTab: Component = () => {
+export const GeneralTab: Component<{ onOpenAiChat?: () => void }> = (props) => {
 	const [cliStatus, setCliStatus] = createSignal<CliStatus | null>(null);
 	const [cliInstalling, setCliInstalling] = createSignal(false);
 	const [mdkbStatus, setMdkbStatus] = createSignal<MdkbStatus | null>(null);
@@ -222,154 +222,166 @@ export const GeneralTab: Component = () => {
 				title="General"
 				breadcrumb="Application / General"
 				description="Application behavior, updates and local tools."
-				scope="Application"
+				scope="Application defaults"
 			/>
-			<SectionCard title="Local tools">
-				<Show when={isTauri() && cliStatus()}>
-					<SettingRow
-						label={t("general.heading.cli", "TUIC CLI")}
-						hint={
-							cliStatus()?.installed
-								? `${t("general.hint.cliInstalled", "Installed at {path}", { path: cliStatus()?.path ?? "/usr/local/bin/tuic" })}${!cliStatus()?.version_match ? ` ${cliStatus()?.auto_updatable ? t("general.hint.cliOutdated", "(update pending — restart to apply)") : t("general.hint.cliUpdateAvailable", "(update available)")}` : ""}`
-								: t(
-										"general.hint.cliNotInstalled",
-										"Install the TUIC CLI to control TUICommander from any terminal or script. Open files and URLs as tabs, manage PTY sessions, and query repository status. Useful for scripting automation.",
-									)
-						}
-						help={t(
-							"general.hint.cliInfo",
-							"The TUIC CLI lets you control TUICommander from any terminal or script. Open files and URLs as tabs, manage PTY sessions (create, list, send input, read output), and query repository status. Useful for scripting automation.",
-						)}
-					>
-						{() => (
+			<Show when={isTauri()}>
+				<SectionCard title="Local tools">
+					<Show when={isTauri() && cliStatus()}>
+						<SettingRow
+							label={t("general.heading.cli", "TUIC CLI")}
+							hint={
+								cliStatus()?.installed
+									? `${t("general.hint.cliInstalled", "Installed at {path}", { path: cliStatus()?.path ?? "/usr/local/bin/tuic" })}${!cliStatus()?.version_match ? ` ${cliStatus()?.auto_updatable ? t("general.hint.cliOutdated", "(update pending — restart to apply)") : t("general.hint.cliUpdateAvailable", "(update available)")}` : ""}`
+									: t(
+											"general.hint.cliNotInstalled",
+											"Install the TUIC CLI to control TUICommander from any terminal or script. Open files and URLs as tabs, manage PTY sessions, and query repository status. Useful for scripting automation.",
+										)
+							}
+							help={t(
+								"general.hint.cliInfo",
+								"The TUIC CLI lets you control TUICommander from any terminal or script. Open files and URLs as tabs, manage PTY sessions (create, list, send input, read output), and query repository status. Useful for scripting automation.",
+							)}
+						>
+							{() => (
+								<div>
+									<Show when={!cliStatus()?.installed || !cliStatus()?.version_match}>
+										<button class={s.testBtn} onClick={handleInstallCli} disabled={cliInstalling()}>
+											{cliInstalling()
+												? t("general.btn.installing", "Installing...")
+												: cliStatus()?.installed
+													? t("general.btn.updateCli", "Update")
+													: t("general.btn.installCli", "Install TUIC CLI")}
+										</button>
+									</Show>
+									<Show when={cliStatus()?.installed}>
+										<button class={s.testBtn} onClick={handleUninstallCli}>
+											{t("general.btn.uninstallCli", "Uninstall")}
+										</button>
+									</Show>
+								</div>
+							)}
+						</SettingRow>
+					</Show>
+					<Show when={isTauri()}>
+						<SettingRow
+							label={t("general.heading.codeIntelligence", "Code Intelligence")}
+							hint={
+								mdkbStatus()?.available
+									? `${t("general.hint.mdkbInstalled", "Installed at {path}", { path: mdkbStatus()?.binaryPath ?? "unknown" })}${mdkbStatus()?.version ? ` v${mdkbStatus()?.version}` : ""}`
+									: t(
+											"general.hint.mdkbNotInstalled",
+											"Install MDKB to enable outline, go-to-definition, and find references in the code editor.",
+										)
+							}
+							error={mdkbError() ?? undefined}
+							help={t(
+								"general.hint.codeIntelligenceInfo",
+								"Integrates with MDKB to provide code navigation features in the editor: Cmd+Click go-to-definition, Shift+F12 find references, and symbol outline. Also serves as a persistent memory manager for AI agents, fully integrated with TUICommander. MDKB indexes your repositories and exposes a local daemon for fast lookups.",
+							)}
+						>
+							{() => (
+								<Show
+									when={mdkbStatus()?.available}
+									fallback={
+										<button class={s.testBtn} onClick={handleInstallMdkb} disabled={mdkbInstalling()}>
+											{mdkbInstalling()
+												? t("general.btn.installing", "Installing...")
+												: t("general.btn.installMdkb", "Install MDKB")}
+										</button>
+									}
+								>
+									<button class={s.testBtn} onClick={handleUninstallMdkb}>
+										{t("general.btn.uninstallMdkb", "Uninstall")}
+									</button>
+								</Show>
+							)}
+						</SettingRow>
+					</Show>
+					<Show when={isTauri()}>
+						<>
 							<div>
-								<Show when={!cliStatus()?.installed || !cliStatus()?.version_match}>
-									<button class={s.testBtn} onClick={handleInstallCli} disabled={cliInstalling()}>
-										{cliInstalling()
-											? t("general.btn.installing", "Installing...")
-											: cliStatus()?.installed
-												? t("general.btn.updateCli", "Update")
-												: t("general.btn.installCli", "Install TUIC CLI")}
-									</button>
-								</Show>
-								<Show when={cliStatus()?.installed}>
-									<button class={s.testBtn} onClick={handleUninstallCli}>
-										{t("general.btn.uninstallCli", "Uninstall")}
-									</button>
-								</Show>
-							</div>
-						)}
-					</SettingRow>
-				</Show>
-				<Show when={isTauri()}>
-					<SettingRow
-						label={t("general.heading.codeIntelligence", "Code Intelligence")}
-						hint={
-							mdkbStatus()?.available
-								? `${t("general.hint.mdkbInstalled", "Installed at {path}", { path: mdkbStatus()?.binaryPath ?? "unknown" })}${mdkbStatus()?.version ? ` v${mdkbStatus()?.version}` : ""}`
-								: t(
-										"general.hint.mdkbNotInstalled",
-										"Install MDKB to enable outline, go-to-definition, and find references in the code editor.",
-									)
-						}
-						error={mdkbError() ?? undefined}
-						help={t(
-							"general.hint.codeIntelligenceInfo",
-							"Integrates with MDKB to provide code navigation features in the editor: Cmd+Click go-to-definition, Shift+F12 find references, and symbol outline. Also serves as a persistent memory manager for AI agents, fully integrated with TUICommander. MDKB indexes your repositories and exposes a local daemon for fast lookups.",
-						)}
-					>
-						{() => (
-							<Show
-								when={mdkbStatus()?.available}
-								fallback={
-									<button class={s.testBtn} onClick={handleInstallMdkb} disabled={mdkbInstalling()}>
-										{mdkbInstalling()
-											? t("general.btn.installing", "Installing...")
-											: t("general.btn.installMdkb", "Install MDKB")}
-									</button>
-								}
-							>
-								<button class={s.testBtn} onClick={handleUninstallMdkb}>
-									{t("general.btn.uninstallMdkb", "Uninstall")}
-								</button>
-							</Show>
-						)}
-					</SettingRow>
-				</Show>
-				<Show when={isTauri()}>
-					<>
-						<div>
-							<SettingRow
-								label={t("general.heading.customLaunchers", "Custom Launchers")}
-								help={
-									<>
-										{t(
-											"general.hint.customLaunchers",
-											'Define your own tools for the "Open in" menu. Each argument may use {path}, {file}, {fileDir}, {repo}, {cwd}, {home}, {line}, {column} placeholders. One argument per line.',
-										)}
-									</>
-								}
-								hint={launchers().length ? `${launchers().length} custom launchers` : "No custom launchers"}
-							>
-								{() => (
-									<button class={s.testBtn} onClick={addLauncher}>
-										{t("general.btn.addLauncher", "Add launcher")}
-									</button>
-								)}
-							</SettingRow>
-							<For each={launchers()}>
-								{(launcher) => (
-									<div
-										class={s.group}
-										style={{
-											border: "1px solid var(--border)",
-											"border-radius": "var(--radius-md)",
-											padding: "8px",
-											"margin-bottom": "8px",
-										}}
-									>
-										<div style={{ display: "flex", gap: "8px", "align-items": "center", "margin-bottom": "6px" }}>
-											<input
-												type="checkbox"
-												checked={launcher.enabled}
-												title={t("general.label.launcherEnabled", "Enabled")}
-												onChange={(e) => updateLauncher(launcher.id, { enabled: e.currentTarget.checked })}
-											/>
+								<SettingRow
+									label={t("general.heading.customLaunchers", "Custom Launchers")}
+									help={
+										<>
+											{t(
+												"general.hint.customLaunchers",
+												'Define your own tools for the "Open in" menu. Each argument may use {path}, {file}, {fileDir}, {repo}, {cwd}, {home}, {line}, {column} placeholders. One argument per line.',
+											)}
+										</>
+									}
+									hint={launchers().length ? `${launchers().length} custom launchers` : "No custom launchers"}
+								>
+									{() => (
+										<button class={s.testBtn} onClick={addLauncher}>
+											{t("general.btn.addLauncher", "Add launcher")}
+										</button>
+									)}
+								</SettingRow>
+								<For each={launchers()}>
+									{(launcher) => (
+										<div
+											class={s.group}
+											style={{
+												border: "1px solid var(--border)",
+												"border-radius": "var(--radius-md)",
+												padding: "8px",
+												"margin-bottom": "8px",
+											}}
+										>
+											<div style={{ display: "flex", gap: "8px", "align-items": "center", "margin-bottom": "6px" }}>
+												<input
+													type="checkbox"
+													checked={launcher.enabled}
+													title={t("general.label.launcherEnabled", "Enabled")}
+													onChange={(e) => updateLauncher(launcher.id, { enabled: e.currentTarget.checked })}
+												/>
+												<Input
+													type="text"
+													value={launcher.name}
+													placeholder={t("general.placeholder.launcherName", "Name")}
+													onInput={(e) => updateLauncher(launcher.id, { name: e.currentTarget.value })}
+													style={{ flex: "1" }}
+												/>
+												<button class={s.testBtn} onClick={() => removeLauncher(launcher.id)}>
+													{t("general.btn.remove", "Remove")}
+												</button>
+											</div>
 											<Input
 												type="text"
-												value={launcher.name}
-												placeholder={t("general.placeholder.launcherName", "Name")}
-												onInput={(e) => updateLauncher(launcher.id, { name: e.currentTarget.value })}
-												style={{ flex: "1" }}
+												value={launcher.executable}
+												placeholder={t(
+													"general.placeholder.launcherExec",
+													"Executable (e.g. code, or /usr/local/bin/code)",
+												)}
+												onInput={(e) => updateLauncher(launcher.id, { executable: e.currentTarget.value })}
+												style={{ width: "100%", "margin-bottom": "6px" }}
 											/>
-											<button class={s.testBtn} onClick={() => removeLauncher(launcher.id)}>
-												{t("general.btn.remove", "Remove")}
-											</button>
+											<Textarea
+												value={launcher.args.join("\n")}
+												placeholder={"--goto\n{file}:{line}:{column}"}
+												rows={3}
+												onInput={(e) => updateLauncher(launcher.id, { args: e.currentTarget.value.split("\n") })}
+												style={{ width: "100%", "font-family": "var(--font-mono)", "font-size": "var(--font-sm)" }}
+											/>
 										</div>
-										<Input
-											type="text"
-											value={launcher.executable}
-											placeholder={t(
-												"general.placeholder.launcherExec",
-												"Executable (e.g. code, or /usr/local/bin/code)",
-											)}
-											onInput={(e) => updateLauncher(launcher.id, { executable: e.currentTarget.value })}
-											style={{ width: "100%", "margin-bottom": "6px" }}
-										/>
-										<Textarea
-											value={launcher.args.join("\n")}
-											placeholder={"--goto\n{file}:{line}:{column}"}
-											rows={3}
-											onInput={(e) => updateLauncher(launcher.id, { args: e.currentTarget.value.split("\n") })}
-											style={{ width: "100%", "font-family": "var(--font-mono)", "font-size": "var(--font-sm)" }}
-										/>
-									</div>
-								)}
-							</For>
-						</div>
-					</>
-				</Show>
-			</SectionCard>
+									)}
+								</For>
+							</div>
+						</>
+					</Show>
+				</SectionCard>
+			</Show>
+			<Show when={props.onOpenAiChat}>
+				<SectionCard
+					title="AI chat defaults"
+					description="Models, permissions and workspace access for new conversations."
+				>
+					<button class={s.testBtn} onClick={() => props.onOpenAiChat?.()}>
+						Open AI Chat settings
+					</button>
+				</SectionCard>
+			</Show>
 			<SectionCard title={t("general.heading.general", "General")}>
 				{/* A picker with one option is not a choice. */}
 				<Show when={AVAILABLE_LOCALES.length > 1}>

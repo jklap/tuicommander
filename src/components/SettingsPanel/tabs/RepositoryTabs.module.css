@@ -23,3 +23,5 @@
 
 .switchGroup { border-top: 1px solid var(--border); }
 .switchGroup .rowSwitch { display: block; margin-left: auto; }
+
+.page > [data-settings-page-header] { margin-bottom: 8px; }

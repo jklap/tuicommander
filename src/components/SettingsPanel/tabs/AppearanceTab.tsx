@@ -103,7 +103,7 @@ export const AppearanceTab: Component = () => {
 				title="Appearance"
 				breadcrumb="Application / Appearance"
 				description="Tabs, chat presentation and repository groups."
-				scope="Application"
+				scope="Application defaults"
 			/>
 			<SectionCard title={t("appearance.heading.tabs", "Tabs")}>
 				<SettingSelect

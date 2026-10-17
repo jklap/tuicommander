@@ -104,7 +104,15 @@ export const EgoPerimeterSection: Component<{ client?: EgoPerimeterClient }> = (
 								{loaded().profile ?? t("perimeter.userDefaults", "user defaults")}
 							</p>
 							<SettingRow label="Workspace · set in TUICommander">
-								{() => <span>{loaded().effective.workspace}</span>}
+								{(id, descriptionId) => (
+									<Input
+										id={id}
+										aria-describedby={descriptionId()}
+										value={loaded().effective.workspace}
+										readOnly
+										title={loaded().effective.workspace}
+									/>
+								)}
 							</SettingRow>
 							<For each={loaded().effective.roots}>
 								{(root) => (
