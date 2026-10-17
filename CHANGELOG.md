@@ -8,6 +8,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - Discover and manage the write-only CircleCI credential through the shared Settings owner across MCP, IPC and HTTP (#1991-bd88).
 
+- Add desktop and mobile terminal Chat view for exact-bound ego sessions through the documented local transcript v1 export, with tool cards, goal continuation notices and compaction resets (#1969-ac9b).
 - Place the mobile jump-to-bottom control beside Send, outside the key bar so it cannot cover arrow keys (#1988-0233).
 
 - Preserve full mobile CLI startup, permission and selection dialogs in initial HTTP and live log-WebSocket screens (#1987-606c).
@@ -45,6 +46,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Restyle Workspace Settings with section cards, aligned terminal and Git fields, and action-first shortcut rows while preserving existing behavior.
 - Bound `tuic bg` completion command labels to one line and 120 characters; keep the full command before job output in the log (#1950-43b7).
 ### Fixed
+- Keep the shared desktop CLI/Chat switch above the conversation and preserve line breaks in notice cards (#1969-ac9b).
 - Keep mobile question cards theme-readable and above the terminal key bar, including ego free-text questions (#1973-3d1b).
 - Apply confirmed username and password changes live in headless Settings without reporting a persisted apply failure or restarting the desktop listener; real listener changes keep their restart contract (#1984-3472).
 

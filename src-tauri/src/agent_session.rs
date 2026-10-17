@@ -999,6 +999,23 @@ fn ego_session_for_pid(sessions_dir: &Path, pid: u32) -> Option<String> {
         .map(|(_, name)| name)
 }
 
+/// Exact terminal Chat binding, with the same store the live process reads.
+/// A failed environment read must not fall back to a different user's store.
+pub(crate) fn ego_chat_session_for_pid(pid: u32) -> Option<(PathBuf, String)> {
+    let env = crate::process_env::read_process_environment(pid).ok()?;
+    let value = |name: &str| {
+        env.iter().find_map(|entry| {
+            let (key, value) = entry.split_once('=')?;
+            (key == name).then(|| value.to_owned())
+        })
+    };
+    let home = value("EGO_HOME")
+        .map(PathBuf::from)
+        .or_else(|| value("HOME").map(|home| PathBuf::from(home).join(".ego")))?;
+    let session = ego_session_for_pid(&home.join("sessions"), pid)?;
+    Some((home, session))
+}
+
 /// ego has no per-cwd layout and no fallback: without a pid there is no honest
 /// binding, and `ego resume` with no id already continues the workspace's latest.
 fn discover_ego_session(agent_pid: Option<u32>, ego_home: Option<&str>) -> Option<String> {
