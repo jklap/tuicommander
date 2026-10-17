@@ -347,3 +347,14 @@ ownership reads started with old coordinates, even if an interim old-frame paint
 refilled the cache after the resize request. Prefix reads classify each 256-row
 chunk once and retain one preceding row for blank separation and wrap semantics;
 they do not rescan the accumulated prefix.
+
+
+### Incremental projected painting (#2003-f218)
+
+Hidden marker rows do not force a full canvas clear. Stable projections clear and
+paint only dirty display rows, using projected coordinates. A dirty hidden row
+does not clear the visible content that occupies its old backend coordinate.
+The renderer retains the backend owner and marker-span layout of each display
+slot. Projection changes invalidate only slots whose owner or marker span changed,
+including old bottom slots that must be cleared after rows move upward.
+Geometry, theme and other explicit full repaint requests still clear the canvas.

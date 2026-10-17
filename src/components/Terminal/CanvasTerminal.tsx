@@ -611,10 +611,9 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 		const markers = planViewportMarkers(frame, dirtyIndices);
 		projectedDisplayOffset = frame.displayOffset;
 		const projection = new ViewportProjection(rowMap, markers.hidden, markers.answerMarkers);
-		const projectionChanged = projection.key !== viewportProjection.key;
 		viewportProjection = projection;
 		gridRenderer.paintGrid(rowMap, m, {
-			fullRepaint: fullRepaintNeeded || projectionChanged,
+			fullRepaint: fullRepaintNeeded,
 			projection: viewportProjection,
 			dirtyIndices:
 				dirtyIndices &&
