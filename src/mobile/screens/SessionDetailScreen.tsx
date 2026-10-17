@@ -68,6 +68,8 @@ export function SessionDetailScreen(props: SessionDetailScreenProps) {
 		sessionExists: () => props.sessionExists,
 		subscribeWake: props.subscribeChatWake,
 	});
+	const [cliAtBottom, setCliAtBottom] = createSignal(true);
+	let jumpCli: (() => void) | undefined;
 	const [browserDictating, setBrowserDictating] = createSignal(false);
 	const voice = useMobileVoice(
 		() => props.session.session_id,
@@ -456,6 +458,10 @@ export function SessionDetailScreen(props: SessionDetailScreenProps) {
 				<chat.View />
 				<OutputView
 					visible={!chat.active()}
+					onAtBottomChange={setCliAtBottom}
+					onRegisterScrollToBottom={(fn) => {
+						jumpCli = fn;
+					}}
 					sessionId={props.session.session_id}
 					onOpenFileLink={props.onOpenFileLink}
 					onStateChange={setWsState}
@@ -479,6 +485,8 @@ export function SessionDetailScreen(props: SessionDetailScreenProps) {
 				/>
 			</Show>
 			<TerminalKeybar
+				showScrollToBottom={chat.active() ? !chat.atBottom() : !cliAtBottom()}
+				onScrollToBottom={() => (chat.active() ? chat.scrollToBottom() : jumpCli?.())}
 				sessionId={props.session.session_id}
 				agentType={sessionState()?.agent_type as string | null | undefined}
 				awaitingInput={sessionState()?.awaiting_input}
