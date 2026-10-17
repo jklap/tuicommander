@@ -1,3 +1,7 @@
+## Live Settings credentials (1984-3472) — Rust restart required
+
+- [ ] After Boss manually restarts `make dev` or installs `make build`, use an isolated instance to approve a username or password change in Settings. Confirm the save succeeds and new Basic Auth/login requests use the new credentials without restarting the listener. Real headless listener port changes must still report persisted-but-unavailable application. No live desktop restart was performed by this peer.
+
 ## Mobile voice handset (1979-89e1)
 
 - [ ] [VISUAL] After the Mac unlocks, capture the mobile session header in Commander dark and Paper light. Include the idle handset, armed handset, and unchanged composer dictation microphone. Confirm the handset is readable at phone and iPad sizes. The screen was locked during implementation; no visual capture is claimed.
