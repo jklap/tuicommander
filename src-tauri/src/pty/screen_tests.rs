@@ -1765,3 +1765,51 @@ fn shell_return_recovery_preserves_live_agent_observations() {
         );
     }
 }
+
+/// Catches: a second shell observation overtakes exit recovery while the reader
+/// owns the grid, leaving the exited agent's alternate screen stuck forever.
+#[test]
+fn newer_shell_observation_does_not_cancel_pending_exit_screen_recovery() {
+    let state = crate::state::tests_support::make_test_app_state();
+    let sid = "overlapping-shell-exit";
+    agent_session(&state, sid, SHELL_IDLE);
+    let mut vt = VtLogBuffer::new(8, 80, 100);
+    vt.process(b"primary shell\x1b[?1049h\x1b[HExited agent");
+    state.grid.vt_log_buffers.insert(sid.into(), Mutex::new(vt));
+
+    std::thread::scope(|scope| {
+        // The reader can hold the grid while HTTP and the silence timer both
+        // observe shell return. Hold it until both observations have committed.
+        let grid = state.grid.vt_log_buffers.get(sid).unwrap();
+        let reader_guard = grid.lock();
+        let first = scope.spawn(|| {
+            apply_foreground_agent_observation(&state, sid, 1, None, true, false, "bash".into())
+        });
+        let setup_limit = std::time::Instant::now() + std::time::Duration::from_secs(60);
+        while state
+            .session_maps
+            .session_states
+            .get(sid)
+            .unwrap()
+            .foreground_probe_generation
+            != 1
+        {
+            if std::time::Instant::now() >= setup_limit {
+                drop(reader_guard);
+                panic!("setup: first foreground observation did not commit");
+            }
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        apply_foreground_agent_observation(&state, sid, 2, None, true, false, "bash".into());
+        drop(reader_guard);
+        first.join().unwrap();
+    });
+
+    let grid = state.grid.vt_log_buffers.get(sid).unwrap();
+    let grid = grid.lock();
+    let lines = grid.grid_get_lines(0, grid.grid_total_lines()).join("\n");
+    assert!(
+        lines.contains("primary shell") && !lines.contains("Exited agent"),
+        "newer shell sample cancelled exit recovery; terminal still shows: {lines:?}"
+    );
+}
