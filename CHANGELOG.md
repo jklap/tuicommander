@@ -24,6 +24,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Restyle Workspace Settings with section cards, aligned terminal and Git fields, and action-first shortcut rows while preserving existing behavior.
 - Bound `tuic bg` completion command labels to one line and 120 characters; keep the full command before job output in the log (#1950-43b7).
 ### Fixed
+- Preserve original spaces across terminal soft wraps in MCP text, copied selections, ego questions and mobile CLI output; keep hard line breaks (#1977-063c).
 - Let gated HTTP and IPC settings edits confirm and commit through the existing human dialog; keep HTTP approvals stable across TCP ports and require approval for tunnel forward-list replacement (#1787-4778).
 - Omit hidden answer markers when copying terminal selections or AI Chat answers, including mobile and the Answers view. (#1963-c7f6)
 - Restore contextual help for repository Design Mode and automation scripts in Settings (#1946-5de3).

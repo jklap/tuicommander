@@ -1882,32 +1882,36 @@ impl TerminalGrid {
             });
         }
 
-        // Trim trailing whitespace-only spans with default attrs
-        while let Some(last) = spans.last() {
-            if last.fg.is_none()
-                && last.bg.is_none()
-                && !last.bold
-                && !last.italic
-                && !last.underline
-                && last.text.trim_end().is_empty()
-            {
-                spans.pop();
-            } else {
-                break;
+        // A wrapped row's final spaces are content, not unused grid padding.
+        // Its continuation is concatenated without a separator by text readers.
+        if !self.row_wrapped(line) {
+            // Trim trailing whitespace-only spans with default attrs
+            while let Some(last) = spans.last() {
+                if last.fg.is_none()
+                    && last.bg.is_none()
+                    && !last.bold
+                    && !last.italic
+                    && !last.underline
+                    && last.text.trim_end().is_empty()
+                {
+                    spans.pop();
+                } else {
+                    break;
+                }
             }
-        }
-        if let Some(last) = spans.last_mut() {
-            let trimmed = last.text.trim_end().to_string();
-            if trimmed.is_empty()
-                && last.fg.is_none()
-                && last.bg.is_none()
-                && !last.bold
-                && !last.italic
-                && !last.underline
-            {
-                spans.pop();
-            } else {
-                last.text = trimmed;
+            if let Some(last) = spans.last_mut() {
+                let trimmed = last.text.trim_end().to_string();
+                if trimmed.is_empty()
+                    && last.fg.is_none()
+                    && last.bg.is_none()
+                    && !last.bold
+                    && !last.italic
+                    && !last.underline
+                {
+                    spans.pop();
+                } else {
+                    last.text = trimmed;
+                }
             }
         }
 
@@ -2517,8 +2521,10 @@ impl TerminalGrid {
                 }
                 push_cell_text(&mut text, cell);
             }
-            let trimmed_len = text.trim_end().len();
-            text.truncate(trimmed_len);
+            if !self.row_wrapped(line) {
+                let trimmed_len = text.trim_end().len();
+                text.truncate(trimmed_len);
+            }
             result.push_str(&text);
 
             if abs_row < r1 {
@@ -2960,8 +2966,10 @@ impl TerminalGrid {
                 }
                 push_cell_text(&mut text, cell);
             }
-            let trimmed_len = text.trim_end().len();
-            text.truncate(trimmed_len);
+            if !self.row_wrapped(line) {
+                let trimmed_len = text.trim_end().len();
+                text.truncate(trimmed_len);
+            }
             rows.push(text);
         }
         rows
@@ -2981,8 +2989,10 @@ impl TerminalGrid {
             }
             push_cell_text(&mut text, cell);
         }
-        let trimmed_len = text.trim_end().len();
-        text.truncate(trimmed_len);
+        if !self.row_wrapped(line) {
+            let trimmed_len = text.trim_end().len();
+            text.truncate(trimmed_len);
+        }
         Some(text)
     }
 
@@ -3447,6 +3457,98 @@ mod tests {
                 "the wire format ships whole rows"
             );
         }
+    }
+
+    /// Catches trimming a real separator at a soft margin and losing wrap metadata.
+    #[test]
+    fn softwrap_1977_preserves_original_spaces_in_text_and_log() {
+        for bytes in [
+            include_bytes!("../../../src/fixtures/agent_prompts/softwrap-spaces-1977-24.tcap")
+                .as_slice(),
+            include_bytes!("../../../src/fixtures/agent_prompts/softwrap-spaces-1977-64.tcap")
+                .as_slice(),
+        ] {
+            let capture = crate::pty_capture::decode_capture(bytes).unwrap();
+            let (rows, cols) = capture.geometry.unwrap();
+            let mut grid = TerminalGrid::new(rows, cols, 100);
+            let mut raw = Vec::new();
+            for record in capture.records {
+                raw.extend_from_slice(&record.data);
+                grid.process(&record.data);
+            }
+            let expected = String::from_utf8(raw).unwrap().replace("\r\n", "\n");
+            let join = |rows: Vec<(String, bool)>| {
+                let mut text = String::new();
+                let mut previous_wrap = true;
+                for (row, wraps) in rows {
+                    if !previous_wrap {
+                        text.push('\n');
+                    }
+                    text.push_str(&row);
+                    previous_wrap = wraps;
+                }
+                text.trim_end_matches('\n').to_owned()
+            };
+            assert_eq!(
+                join(
+                    grid.screen_text_rows()
+                        .into_iter()
+                        .zip(grid.screen_row_wraps())
+                        .collect()
+                ),
+                expected,
+                "MCP screen text at {cols} columns"
+            );
+            let lines = grid.screen_log_lines();
+            assert_eq!(
+                join(
+                    lines
+                        .iter()
+                        .map(|line| (line.text(), line.wrapped))
+                        .collect()
+                ),
+                expected,
+                "mobile log at {cols} columns"
+            );
+            assert_eq!(
+                grid.get_selection_text(0, 0, rows as usize - 1, cols as usize - 1),
+                expected,
+                "copied text must preserve the same spaces"
+            );
+            let serialized = serde_json::to_value(&lines).unwrap();
+            assert!(
+                serialized
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|line| line["wrapped"] == true),
+                "mobile must receive WRAPLINE"
+            );
+            grid.process(b"\r\n1\r\n2\r\n3\r\n4\r\n5\r\n6\r\n7\r\n8");
+            let history = grid.read_scrollback_log_lines(100);
+            assert!(
+                join(
+                    history
+                        .iter()
+                        .map(|line| (line.text(), line.wrapped))
+                        .collect()
+                )
+                .starts_with(&expected),
+                "history must retain the same separators"
+            );
+        }
+    }
+
+    /// Catches dropping a styled whitespace-only span at a soft-wrap boundary.
+    #[test]
+    fn softwrap_1977_keeps_styled_margin_space() {
+        let mut grid = TerminalGrid::new(3, 4, 10);
+        grid.process(b"abc\x1b[31m \x1b[0mdef");
+        let lines = grid.screen_log_lines();
+        assert_eq!(lines[0].text(), "abc ");
+        assert!(lines[0].wrapped);
+        assert!(lines[0].spans.last().unwrap().fg.is_some());
+        assert_eq!(grid.get_logical_line(0).1, "abc def");
     }
 
     /// The premise under F23: alacritty reports narrow column bounds when only a

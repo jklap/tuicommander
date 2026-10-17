@@ -107,8 +107,8 @@ pub struct LogLine {
     /// True when the row this line ends on soft-wraps: its text continues in
     /// the next log line (or the first screen row). Lets a reader that works
     /// on text (redaction) rejoin a logical line that scrolled into the log
-    /// across separate `process` calls. Never serialized.
-    #[serde(skip)]
+    /// across separate `process` calls. Serialized so mobile readers use the
+    /// same exact boundary instead of guessing from row lengths.
     pub wrapped: bool,
     /// True when part of this line's logical line never reached the log (rows
     /// evicted, or scrolled off while capture was suspended). Readers cannot

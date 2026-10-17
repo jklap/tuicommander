@@ -343,3 +343,7 @@ different replaced record never licenses deleting an omitted history record.
 ### History-anchored viewport scrolling
 
 History-anchored scrolling uses `TerminalGrid::screen_origin()` (`total_scrolled`) and `scroll_to_anchor`; it resolves the all-time row to a display offset under the VT lock. The existing fork origin and history cap provide the coordinate; no new fork patch is required.
+
+### Soft-wrap extraction contract
+
+`TerminalGrid` uses the existing alacritty WRAPLINE flag for text and styled-log extraction. Wrapped rows retain their trailing cells, including a real space in the final column. Non-wrapped rows still trim unused terminal padding. No fork patch is needed: the grid already carries the required boundary. The log wire format exposes this flag as `wrapped` for mobile output.
