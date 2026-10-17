@@ -1,3 +1,7 @@
+## Agent exit backend cleanup (1990-66ac) — Rust restart required
+
+- [ ] After Boss manually restarts `make dev` or installs `make build`, exit Claude from a mobile-only terminal. Confirm shell output replaces the old agent screen in both the open view and a fresh page, and the session card drops the old intent/task. Repeat with an agent that restores its alternate screen normally. No live desktop was restarted by this peer.
+
 ## Live Settings credentials (1984-3472) — Rust restart required
 
 - [ ] After Boss manually restarts `make dev` or installs `make build`, use an isolated instance to approve a username or password change in Settings. Confirm the save succeeds and new Basic Auth/login requests use the new credentials without restarting the listener. Real headless listener port changes must still report persisted-but-unavailable application. No live desktop restart was performed by this peer.

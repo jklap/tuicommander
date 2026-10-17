@@ -41,6 +41,17 @@ this lifecycle through spawn binding, cleanup, reconnect and session publication
 It fails on the pre-repair revision `1137eeb6f`. This proves a reachable removal
 path, not that this sequence caused the historical incident in story 1673.
 
+## Agent return to the shell
+
+The backend foreground observation transition owns exit cleanup for desktop,
+browser and headless clients. When an observed agent identity is revoked, it
+clears `agent_intent` and `current_task`. If the agent left the alternate screen
+active, the same transition flushes buffered synchronized output and restores the
+primary grid with display-only exit sequences. It marks the frame ticker dirty;
+HTTP terminal-line reads use the restored grid without a mounted desktop view.
+No recovery sequence is written to PTY stdin. A stale foreground observation,
+an unobserved startup preset, or a temporary helper does not trigger cleanup.
+
 ## Session Lifecycle
 
 ```
