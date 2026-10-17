@@ -1,3 +1,8 @@
+## Guided event configuration (2012-72ff)
+
+- [ ] On a throwaway headless owner or browser-mode instance, send each Configure Smart Prompt to a test agent and verify the step-by-step interview stops on missing owner/profile/GitHub auth/skills and unsupported intake, without saving or launching work. Automated library tests verify the delivered prompt contract, not model compliance.
+- [ ] After beta, with Boss-approved repository/test issue and authorization on the owner, run one labelled-issue-to-draft-PR pilot. Retain independent reviewer/check receipts on the published commit, the real draft PR URL and reconciliation evidence. No live GitHub publication or credentials were used by this change.
+
 ## Continuous answer gutter (1998-d826)
 
 - [ ] [VISUAL] Capture the worktree CLI gutter for the real Claude answer fixture with blank rows, section headings and marked list items; confirm one continuous line and no line on trailing unmarked prose or tool output. Both headless Chrome capture attempts failed to produce a PNG; the bounded retry stopped its own Chrome/Vite processes after 35 seconds. The production-plan regression passes, but it is not screenshot evidence. No Rust change or backend restart is required.

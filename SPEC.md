@@ -992,6 +992,11 @@ host to open. A rejection keeps the draft. Tasks shell mounting is separate.
 
 
 Automation worktree cleanup (#1623-8b2a): Automation runs retain automation/run IDs and the exact created workspace path and ID in their saved snapshot, including after definition deletion. Worktree cleanup is explicit and limited to final runs. The backend resolves the saved identity and rechecks shared Git integration/archive proof, dirt, submodule commits and live sessions; it never forces removal or closes sessions. Shared `automation_action` actions `worktree_preview` and `cleanup_worktree` accept a saved run `id` on IPC, HTTP, MCP and CLI.
+
+### Guided event configuration (#2012-72ff)
+
+Three built-in Smart Prompts guide issue-to-draft-PR, incoming PR review and authorized bounded-fix configuration. They open in the composer for review and ask for owner/profile/GitHub/skill prerequisites, confirmed policy limits and supported host capabilities. They do not add a GitHub event runtime or grant publication authority; unavailable intake/publication stops with a draft policy. The after-beta live pilot is not yet verified. See [Guided event configuration](docs/user-guide/event-driven-templates.md).
+
 ### Built-in automation templates
 
 New automation drafts offer weekday repository audit, release readiness, daily

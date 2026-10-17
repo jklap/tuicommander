@@ -119,3 +119,7 @@ Search for **Automations**, **scheduler** or **schedule** in the command palette
 Definition cards show a short repository name; hover it for the full path. Daily, weekly, hourly and every-N-minute schedules have plain-language labels. Other expressions retain their cron text. Next-run times come from the backend and use the definition's timezone.
 
 Use Left/Right or Home/End on the Definitions and Runs tabs. New automation, Refresh and search share a toolbar. **Select first automation on open** is enabled by default; clear it to select definitions manually. This preference is saved for the current browser/WebView. Refresh does not replace unsaved edits.
+
+### Guided GitHub event configuration
+
+For step-by-step policy setup, use the three [event configuration Smart Prompts](event-driven-templates.md), not the scheduled draft templates above. The guides verify the owning daemon, agent/reviewer profiles, GitHub auth, skills and supported intake/publication APIs. Missing capabilities stop the interview; no event subscription is created by applying a scheduled template.
