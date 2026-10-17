@@ -113,5 +113,11 @@ pub(crate) async fn plugin_settings_action_impl(
     plugin_id: String,
     action: PluginAction,
 ) -> Result<Value, crate::settings::request::Failure> {
-    state.plugin_settings.action(&plugin_id, action).await
+    let mut reply = state.plugin_settings.action(&plugin_id, action).await?;
+    if reply["persisted"] == true {
+        let generation =
+            crate::settings::api::publish_change(state, &format!("plugins.{plugin_id}"), true);
+        reply["generation"] = serde_json::json!(generation);
+    }
+    Ok(reply)
 }

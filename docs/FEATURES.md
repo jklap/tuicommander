@@ -3173,3 +3173,7 @@ Telegram Settings includes a newest-first, process-local log of the last 20 inbo
 Telegram replies now use TUIC-driven receipt (👀), working (👨‍💻), waiting (🤔), answered (👍) and failed (👎) reactions. An ephemeral native draft shows Italian status lines or unapproved agent previews; it refreshes while work continues and the final reply replaces it. Acknowledgement of work requires inbox Read and a new recipient turn. PTY intent/activity and AI Chat assistant chunks share request correlation; finish remains authoritative after draft retirement. Telegram-mail-woken AI Chat turns automatically send their settled assistant text if finish has not answered. Queue and no-reply notices occur at ten minutes and sixty seconds after Read respectively. Restart keeps no request history. Phone rendering requires a live check after the backend restart.
 
 Terminal text fidelity: soft-wrap rows preserve original spaces in session text, mobile CLI output, copied selections and ego question labels; explicit hard breaks remain. Chat uses its separate transcript source.
+
+### Settings MCP live refresh
+
+Durable settings-facade writes publish a value-free process-local generation to desktop and SSE clients. Open settings consumers reread affected sections without saving; dirty edits survive, stale reads are discarded, and reconnect refetches snapshots. Vault-only credential writes and persisted apply failures also invalidate readers. Remote notices remain scoped to their owning connection.

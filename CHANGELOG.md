@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+- Live Settings refresh after MCP writes, with value-free change generations, dirty-edit preservation and reconnect recovery (#1788-2163).
+
 - Use Start/Stop voice call labels in the phone More menu, consistent with the tablet header (#1979-89e1, #1981-0caf).
 
 - Allow explicit mobile replies while an agent awaits input without requiring an idle shell; keep recognized question controls and show the actual refusal reason without losing the answer (#1980-47b7).

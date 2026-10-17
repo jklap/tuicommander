@@ -659,7 +659,9 @@ pub(crate) async fn save_mcp_upstreams_with_credentials_inner(
         &state.mcp.upstream_registry,
         || std::future::ready(()),
     )
-    .await
+    .await?;
+    crate::settings::api::publish_change(state, "upstreams", true);
+    Ok(())
 }
 
 #[cfg(test)]
@@ -726,6 +728,8 @@ pub(crate) fn update_upstream_auth(name: &str, auth: UpstreamAuth) -> Result<(),
 }
 
 fn set_upstream_auth(name: &str, auth: Option<UpstreamAuth>) -> Result<(), String> {
+    // DEFERRED (2026-10-17) — #1989-22fe: this legacy auth owner has no AppState;
+    // keep its publisher wiring in the remaining legacy-owner inventory.
     let found =
         ConfigFile::<UpstreamMcpConfig>::new(UPSTREAMS_FILE).update_with_strict(|config| {
             match config.servers.iter_mut().find(|s| s.name == name) {

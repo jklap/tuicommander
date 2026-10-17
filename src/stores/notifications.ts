@@ -1,4 +1,4 @@
-import { createStore } from "solid-js/store";
+import { createStore, reconcile } from "solid-js/store";
 import { invoke } from "../invoke";
 import {
 	DEFAULT_NOTIFICATION_CONFIG,
@@ -7,6 +7,7 @@ import {
 	notificationManager,
 } from "../notifications";
 import { showNativeNotice } from "../services/nativeNotifications";
+import { reportSettingsConflicts, settingsRefresh } from "../services/settingsRefresh";
 import { isTauri } from "../transport";
 import { createConfigDeltaWriter } from "../utils/configDeltaWriter";
 import { appLogger } from "./appLogger";
@@ -77,6 +78,18 @@ function createNotificationsStore() {
 	});
 
 	const actions = {
+		startRemoteSync(): () => void {
+			return settingsRefresh.register({
+				section: "notifications",
+				read: () => invoke<NotificationConfig>("load_notification_config"),
+				apply: (loaded) => {
+					const merged = notificationWriter.adopt({ ...copyDefaults(), ...loaded }, state.config);
+					setState("config", reconcile(merged.value));
+					notificationManager.updateConfig(merged.value);
+					reportSettingsConflicts(merged.conflicts);
+				},
+			});
+		},
 		/** Show a card when an MCP notice arrives from a terminal the user is not viewing. */
 		setAutoToastCards(enabled: boolean): void {
 			setState("autoToastCards", enabled);

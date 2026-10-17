@@ -2990,6 +2990,7 @@ fn commit_config_change_locked(
     // remember to — and the relay toggle silently needing an app restart is
     // exactly what that costs.
     crate::relay_client::notify_config_changed(state);
+    crate::settings::api::publish_change(state, "app", !effects.server_changed);
     #[cfg(feature = "desktop")]
     if let Some(app) = state.app_handle.read().as_ref() {
         crate::background_mode::tray::desktop::schedule_sync(app);
@@ -4134,6 +4135,7 @@ pub(crate) fn save_repositories(
     let changed = save_repositories_request(config).map_err(|error| error.to_string())?;
     if changed {
         state.notify_repositories_changed();
+        crate::settings::api::publish_change(&state, "repositories_registration", true);
     }
     Ok(())
 }

@@ -163,8 +163,9 @@ pub(crate) const ORIGIN_MARKER: &str = "__tuic_origin";
 /// `state.rs` ignores `RemoteMirrored`, and `/events`, where a client that
 /// asked for the mirror wants it.
 #[cfg_attr(all(not(feature = "desktop"), not(test)), allow(dead_code))]
-const WINDOW_MIRRORABLE_EVENTS: [&str; 15] = [
+const WINDOW_MIRRORABLE_EVENTS: [&str; 16] = [
     "session-state-changed",
+    "settings-changed",
     "session-closed",
     "progress-recorded",
     "workflow-run-changed",
@@ -304,7 +305,8 @@ fn apply_frame(state: &Arc<AppState>, connection_id: &str, frame: &Frame) -> boo
     // deliver a toast from a chunk already buffered when that happens.
     if matches!(
         frame.event.as_str(),
-        "mcp-toast"
+        "settings-changed"
+            | "mcp-toast"
             | "mcp-confirm"
             | "mcp-confirm-resolved"
             | "review-progress"

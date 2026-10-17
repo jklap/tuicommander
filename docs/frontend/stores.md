@@ -790,3 +790,11 @@ The settings Voice picker combines `speechVoices` (installed) with the language-
 snapshot. `useAgentPolling.applySessionState` applies it from both lifecycle
 catch-up and push snapshots; omission clears it. It never changes shell busy
 semantics, awaiting state, or turn completion.
+
+### Settings reload coordination
+
+`services/settingsRefresh.ts` owns one disposable settings-event subscription per window. Readers register a section and optional remote connection, plus separate read and non-saving apply functions. It coalesces same-turn hints, deduplicates each owner/section generation, invalidates older in-flight reads and refetches on SSE resync. A remote-machine hint only reaches readers registered for that connection.
+
+App settings, notifications, preferences, repository defaults and overrides, registration metadata, agent configurations, prompts, pane layout, tunnels, connection metadata and upstream lists adopt reads without bootstrap migration. Mounted owner pages also refresh GitHub, ego, Telegram and plugin settings. Dirty form fields remain local; same-field conflicts produce a content-free notice. `createConfigDeltaWriter.adopt` advances the backend baseline and suppresses unsent writes created before the incoming snapshot.
+
+Snapshot adoption merges object leaves. Arrays are atomic owner values: concurrent changes to the same list retain the local list and report a conflict instead of guessing an index-based merge. A remote disconnect cancels in-flight adoption; reconnect clears that owner's generation cursor and fetches a fresh snapshot.

@@ -1705,3 +1705,11 @@ recovery. Bearer rotation validates the proposed config through the upstream own
 before writing the vault. An existing custom `Authorization` header conflicts with bearer
 auth; rejection preserves the saved config and credentials. Only the changed enabled
 upstream reconnects. No credential value is returned.
+
+### Settings change generations
+
+The shared settings facade assigns a process-local monotonic generation after a durable transaction or owner workflow, including vault-only writes and persisted apply failures. It returns the generation in the receipt and dual-emits `settings-changed` with `{section, generation, persisted, applied}`. Existing AppConfig saves use the same publisher. The event contains no setting values, credential keys or secret-derived hashes. Owner CAS revisions retain their existing meaning; the generation is only an invalidation cursor and is not persisted.
+
+Frontend readers subscribe once per window and reread their section through non-saving read/apply paths. They advance the acknowledged baseline together with the rendered state, retain dirty fields, report same-field conflicts, cancel obsolete queued writes and discard stale in-flight reads. Reconnect clears generation high-water marks and rereads active sections because a restarted process starts a new counter. Mirrored events retain their connection identity and cannot reload local-machine settings.
+
+Legacy desktop and HTTP save adapters for notifications, preferences, repository settings/defaults, prompts, agents, keybindings and pane layout use the same publisher without changing owner signatures. State-bearing registration, plugin and upstream save paths also publish. Remaining legacy credential/auth writers without this state context are tracked in #1989-22fe; they do not yet provide complete cross-client invalidation.

@@ -40,7 +40,10 @@ pub(crate) async fn save_tunnel_profile(
         return err_json(StatusCode::BAD_REQUEST, &e);
     }
     match ProfileStore::save(&state.data_dir, &profile) {
-        Ok(()) => (StatusCode::OK, Json(serde_json::json!({"id": profile.id}))).into_response(),
+        Ok(()) => {
+            crate::settings::api::publish_change(&state, "tunnels", true);
+            (StatusCode::OK, Json(serde_json::json!({"id": profile.id}))).into_response()
+        }
         Err(e) => err_json(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
     }
 }
@@ -53,7 +56,10 @@ pub(crate) async fn delete_tunnel_profile(
     state.tunnel_manager.stop_if_running(&id);
 
     match ProfileStore::delete(&state.data_dir, None, &id) {
-        Ok(true) => (StatusCode::OK, Json(serde_json::json!({"deleted": true}))).into_response(),
+        Ok(true) => {
+            crate::settings::api::publish_change(&state, "tunnels", true);
+            (StatusCode::OK, Json(serde_json::json!({"deleted": true}))).into_response()
+        }
         Ok(false) => err_json(StatusCode::NOT_FOUND, "profile not found"),
         Err(e) => err_json(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
     }

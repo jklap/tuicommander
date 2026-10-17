@@ -1,6 +1,7 @@
-import { type Component, createEffect, createSignal, For, onMount, Show } from "solid-js";
+import { type Component, createEffect, createSignal, For, onCleanup, onMount, Show } from "solid-js";
 import { createStore, reconcile } from "solid-js/store";
 import { t } from "../../../../i18n";
+import { settingsRefresh } from "../../../../services/settingsRefresh";
 import { appLogger } from "../../../../stores/appLogger";
 import { rpc } from "../../../../transport";
 import { writeClipboard } from "../../../../utils/clipboard";
@@ -32,6 +33,19 @@ export const LocalMcpPanel: Component = () => {
 	const [bridgeInfo, setBridgeInfo] = createSignal<{ bridge_path: string; config_snippet: string } | null>(null);
 	const [bridgeInfoOpen, setBridgeInfoOpen] = createSignal(false);
 	const [snippetCopied, setSnippetCopied] = createSignal(false);
+
+	onCleanup(
+		settingsRefresh.register({
+			section: "app",
+			read: () => rpc<AppConfig>("load_config"),
+			apply: (config) => {
+				setDisabledNativeTools(config.disabled_native_tools ?? []);
+				setSettingsEnabled(config.settings_mcp_enabled ?? false);
+				setCollapseTools(config.collapse_tools ?? false);
+				setNativeToolsLoaded(true);
+			},
+		}),
+	);
 
 	onMount(async () => {
 		try {

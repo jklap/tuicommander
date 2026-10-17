@@ -29,6 +29,26 @@ pub enum OwnerAction {
     },
 }
 
+impl OwnerAction {
+    pub(super) fn section(&self) -> &str {
+        match self {
+            Self::GithubAccounts { .. } => "github_accounts",
+            Self::Connections { .. } => "connections",
+            Self::Telegram { .. } => "telegram",
+            Self::Upstreams { .. } => "upstreams",
+            Self::Ego { .. } => "ego",
+            #[cfg(feature = "dictation")]
+            Self::Voice { .. } => "voice",
+        }
+    }
+
+    // These owner APIs return presence/readback rather than a transaction receipt.
+    // Their successful return follows the durable owner write, including vault-only edits.
+    pub(super) fn success_is_durable(&self) -> bool {
+        matches!(self, Self::Connections { .. } | Self::Telegram { .. })
+    }
+}
+
 impl Settings {
     pub(super) async fn perform(
         &self,

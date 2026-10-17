@@ -1,5 +1,6 @@
 import { type Component, createSignal, For, onCleanup, onMount, Show } from "solid-js";
 import { t } from "../../../i18n";
+import { settingsRefresh } from "../../../services/settingsRefresh";
 import { appLogger } from "../../../stores/appLogger";
 import { githubStore } from "../../../stores/github";
 import type {
@@ -137,6 +138,28 @@ export const GitHubTab: Component = () => {
 
 	let pollTimer: ReturnType<typeof setTimeout> | undefined;
 	let cancelled = false;
+
+	const readAccounts = async () => {
+		const repoPaths = activeRepos().map((repo) => repo.path);
+		const [accounts, auth, resolutions] = await Promise.all([
+			rpc<GitHubAccount[]>("github_list_accounts"),
+			rpc<AuthStatus>("github_auth_status"),
+			rpc<Record<string, RepoResolutionDto>>("github_resolve_repos", { repoPaths }),
+		]);
+		return { accounts, auth, resolutions };
+	};
+	for (const section of ["github_accounts", "github_bindings"])
+		onCleanup(
+			settingsRefresh.register({
+				section,
+				read: readAccounts,
+				apply: (snapshot) => {
+					setAccounts(snapshot.accounts);
+					setAuthStatus(snapshot.auth);
+					setResolutions(snapshot.resolutions);
+				},
+			}),
+		);
 
 	onMount(() => {
 		fetchStatus();

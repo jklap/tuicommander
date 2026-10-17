@@ -2,6 +2,7 @@ import { batch, untrack } from "solid-js";
 import { createStore, produce } from "solid-js/store";
 import { AGENT_TYPES } from "../agents";
 import { invoke, listen } from "../invoke";
+import { settingsRefresh } from "../services/settingsRefresh";
 import { setRepoConnectionLookup } from "../transportRuntime";
 import type { SavedTerminal } from "../types";
 import { pathBasename, pathStartsWith, pathStripPrefix } from "../utils/pathUtils";
@@ -859,6 +860,19 @@ function createRepositoriesStore() {
 	const startRemoteSync = (): void => {
 		if (remoteSyncStarted) return;
 		remoteSyncStarted = true;
+		const stopSettings = settingsRefresh.register({
+			section: "repositories_registration",
+			read: loadPersistedSnapshot,
+			apply: (fresh) => {
+				if (!fresh) return;
+				if (saveInFlight) {
+					remoteSyncPending = true;
+					return;
+				}
+				adoptRemoteRepositories(fresh);
+			},
+		});
+		window.addEventListener("beforeunload", stopSettings, { once: true });
 		onSaveSettled = () => {
 			if (remoteSyncPending) syncFromDisk();
 		};
