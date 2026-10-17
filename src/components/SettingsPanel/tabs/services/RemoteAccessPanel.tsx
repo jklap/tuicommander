@@ -501,8 +501,7 @@ export const RemoteAccessPanel: Component = () => {
 					</ExpertSetting>
 				</Show>
 			</SectionCard>
-			<SectionCard title="Tailscale HTTPS">
-				<ContextualHelp label="Tailscale HTTPS" />
+			<SectionCard title="Tailscale HTTPS" help={<ContextualHelp label="Tailscale HTTPS" />}>
 				<Show when={!tailscaleState()}>
 					<p class={s.hint}>Tailscale status not checked.</p>
 				</Show>

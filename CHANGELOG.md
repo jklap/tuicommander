@@ -6,6 +6,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+- Keep compact Settings color targets circular and reserve layout space for MCP heading actions (#1945-a78d).
+- Align Settings help badges and row actions, restore the General status/local-tools layout, and correct compact repository navigation and shortcut spacing (#1945-a78d).
+
 - Preserve unrelated repo-root tabs when a worktree is removed or recycled; terminal placement and cleanup follow cwd instead of stale workspace membership (#1999-95b0).
 - Keep the selected workspace's active tab and pane layout consistent when saved tabs are restored to another workspace by cwd (#1999-95b0).
 ### Added
