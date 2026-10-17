@@ -161,5 +161,12 @@ Ego host-handle expiry test.
 `persisted_apply_failure_publishes_unapplied_generation` covers the facade's
 persisted-but-unapplied result. Recovery reads the durable value and new owner
 revision, checks the persisted file, and emits no second mutation event. These
-contracts require coordinator test execution; source additions alone do not
-complete Step 10.
+contracts passed coordinator-owned targeted Linux validation at `b4ace7721`:
+33 tests covered startup workflows, the device deadline, provenance and account/
+Ego consumers; a separate `--no-default-features` run passed both
+`startup_uses_only_published_schema` and the persisted-apply-failure test.
+
+These results validate the isolated contracts, not complete live onboarding.
+Step 10 remains open for human-assisted GitHub/Ego authentication and recorded
+provider-expiry evidence. No successful authentication, external expired-token
+response, or native desktop validation is inferred from these runs.
