@@ -270,7 +270,7 @@ export function SessionDetailScreen(props: SessionDetailScreenProps) {
 				<Show when={voice.available()}>
 					<button
 						type="button"
-						class={styles.headerAction}
+						class={`${styles.headerAction} ${styles.secondaryAction}`}
 						classList={{ [styles.voiceActive]: voice.armed() }}
 						aria-label={voice.armed() ? "Stop voice conversation" : "Start voice conversation"}
 						aria-pressed={voice.armed()}
@@ -294,7 +294,7 @@ export function SessionDetailScreen(props: SessionDetailScreenProps) {
 				</Show>
 				<button
 					type="button"
-					class={styles.headerAction}
+					class={`${styles.headerAction} ${styles.secondaryAction}`}
 					aria-label={`Session tasks, ${sessionState()?.active_sub_tasks ?? 0} active`}
 					onClick={() => setHeaderPanel("tasks")}
 				>
@@ -354,6 +354,31 @@ export function SessionDetailScreen(props: SessionDetailScreenProps) {
 			</header>
 			<Show when={moreOpen()}>
 				<div class={styles.overflow}>
+					<Show when={voice.available()}>
+						<button
+							type="button"
+							class={styles.phoneAction}
+							aria-pressed={voice.armed()}
+							disabled={browserDictating()}
+							onClick={() => {
+								setMoreOpen(false);
+								void voice.toggle();
+							}}
+						>
+							{voice.armed() ? "Stop voice conversation" : "Start voice conversation"}
+						</button>
+					</Show>
+					<button
+						type="button"
+						class={styles.phoneAction}
+						aria-label={`Tasks, ${sessionState()?.active_sub_tasks ?? 0} active`}
+						onClick={() => {
+							setMoreOpen(false);
+							setHeaderPanel("tasks");
+						}}
+					>
+						Tasks <span>{sessionState()?.active_sub_tasks ?? 0}</span>
+					</button>
 					<button
 						type="button"
 						onClick={() => {
