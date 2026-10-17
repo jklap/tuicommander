@@ -6,7 +6,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
-- Keep quoted answer markers in Claude prompt echoes out of the answer gutter and Answers view (#1389-3a47).
+- Keep quoted answer markers in Claude and Codex prompt echoes out of the answer gutter and Answers view, including long prompts above the viewport lookback, while preserving blank-separated indented answers (#1389-3a47).
 
 - Do not restore ego question badges or notification sounds from answered selectors retained above a newer composer (#1997-eb30).
 

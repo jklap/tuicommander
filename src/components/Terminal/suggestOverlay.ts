@@ -36,7 +36,7 @@ export const OUTPUT_ROW_RE = /^(?:\s*[●⏺]|•)/;
 /** A continuation row of an answer: indented under the agent's bullet. */
 const ANSWER_CONTINUATION_RE = /^ {2,}\S/;
 /** A user prompt row; an indented one still ends the answer. */
-export const PROMPT_ROW_RE = /^\s*❯/;
+export const PROMPT_ROW_RE = /^\s*[❯›]/;
 /** A fenced code block delimiter. Inside a fence a bullet, marker or prompt glyph is content. */
 const FENCE_RE = /^\s*```/;
 /** A list item, table row or quotation belongs to the answer above it. */
@@ -58,15 +58,21 @@ function isAnswerBoundary(text: string): boolean {
 
 /**
  * First output row after a user prompt. Claude echoes pasted hard lines with
- * indentation, so a marker inside that echo is not output. An agent bullet or
- * an unindented marker starts output; soft wraps never start a new block.
+ * indentation, so indentation alone cannot identify output. An agent bullet,
+ * a column-zero marker, or a blank-separated marker starts output. A marker
+ * embedded in uninterrupted pasted prose stays in the prompt. Soft wraps never
+ * start a new block.
  */
 export function promptEnd(start: number, totalRows: number, getRow: (i: number) => RowSnapshot | null): number {
 	let next = start + 1;
 	for (; next < totalRows; next++) {
 		const row = getRow(next);
 		if (!row) break;
-		if (!row.isWrapped && (OUTPUT_ROW_RE.test(row.text) || (/^\S/.test(row.text) && ANSWER_MARKER_RE.test(row.text))))
+		if (
+			!row.isWrapped &&
+			(OUTPUT_ROW_RE.test(row.text) ||
+				(ANSWER_MARKER_RE.test(row.text) && (/^\S/.test(row.text) || getRow(next - 1)?.text.trim() === "")))
+		)
 			break;
 	}
 	return next;

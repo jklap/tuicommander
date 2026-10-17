@@ -61,7 +61,7 @@ function joinLogicalLine(rows: readonly RowSnapshot[], from: number): { text: st
 
 /**
  * The prompt block at the top of a turn: the prompt row plus every following row
- * up to the first agent output (bullet) or unindented 💬 row. A multi-line or hard-wrapped
+ * up to the first agent output (bullet), unindented 💬 row or blank-separated 💬 row. A multi-line or hard-wrapped
  * prompt spans several logical lines, so reading one logical line cut it short
  * (#1369). Soft-wrapped rows are concatenated, hard lines joined with a newline.
  */
