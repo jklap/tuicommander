@@ -233,6 +233,43 @@ fn is_task_list_row(text: &str) -> bool {
     false
 }
 
+/// Locate ego's native composer, never a historical submitted `> prompt`.
+/// During output insertion the old composer can be overwritten before its next
+/// repaint. In that gap there is no chrome anchor, rather than an earlier one.
+/// Returns the prompt row and whether its status reports active work.
+pub fn find_ego_composer(rows: &[impl AsRef<str>]) -> Option<(usize, bool)> {
+    let prompt = rows.iter().rposition(|row| {
+        let row = row.as_ref();
+        row.starts_with("> ") || row.trim_end() == ">"
+    })?;
+    if prompt == 0
+        || rows[prompt + 1..]
+            .iter()
+            .any(|row| !row.as_ref().trim().is_empty())
+    {
+        return None;
+    }
+    let status = rows[prompt - 1].as_ref().trim_end();
+    let working = ["◐", "◓", "◑", "◒"].iter().any(|frame| {
+        status
+            .strip_prefix(frame)
+            .and_then(|rest| rest.strip_prefix(" Working "))
+            .and_then(|rest| rest.strip_suffix("s · Esc to interrupt"))
+            .is_some_and(|seconds| seconds.parse::<u64>().is_ok())
+    });
+    (working || (status.contains(" · ctx ") && status.contains(" · trust=")))
+        .then_some((prompt, working))
+}
+
+/// Agent-specific chrome uses the same native composer shape as readiness.
+/// Other agents retain the existing shared separator/prompt grammar.
+pub fn find_agent_chrome_cutoff(rows: &[&str], agent_type: Option<&str>) -> Option<usize> {
+    if agent_type == Some("ego") {
+        return find_ego_composer(rows).map(|(prompt, _)| prompt - 1);
+    }
+    find_chrome_cutoff(rows)
+}
+
 /// Find the row index where agent chrome starts (from the bottom).
 ///
 /// Returns `Some(cutoff)` where `rows[0..cutoff]` are content and
@@ -442,6 +479,37 @@ fn extend_cutoff_upward(rows: &[&str], anchor: usize) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ego_transient_output_does_not_trim_at_a_submitted_prompt() {
+        let rows = [
+            "> old submitted task",
+            "",
+            "intent: new wrapped task",
+            "(Latest task)",
+        ];
+        assert_eq!(find_agent_chrome_cutoff(&rows, Some("ego")), None);
+    }
+
+    #[test]
+    fn ego_draft_composer_keeps_protocol_looking_input_out_of_content() {
+        let rows = [
+            "intent: real output (Real)",
+            "model · ctx 1% · trust=trusted",
+            "> intent: retained draft (Draft)",
+        ];
+        assert_eq!(find_agent_chrome_cutoff(&rows, Some("ego")), Some(1));
+    }
+
+    #[test]
+    fn ego_working_composer_keeps_status_and_prompt_out_of_content() {
+        let rows = [
+            "intent: real output (Real)",
+            "◐ Working 12s · Esc to interrupt",
+            "> ",
+        ];
+        assert_eq!(find_agent_chrome_cutoff(&rows, Some("ego")), Some(1));
+    }
 
     // --- Bottom zone: the input area and everything under it ---
     //

@@ -23,6 +23,7 @@
 {"fixture":"src-tauri/src/fixtures/agent_prompts/ego-clean-lifecycle-1902.tcap","events":17}
 {"fixture":"src-tauri/src/fixtures/agent_prompts/ego-composer-1957-narrow.tcap","events":36}
 {"fixture":"src-tauri/src/fixtures/agent_prompts/ego-composer-1957.tcap","events":33}
+{"fixture":"src-tauri/src/fixtures/agent_prompts/ego-intent-1964.tcap","events":52}
 {"fixture":"src-tauri/src/fixtures/agent_prompts/ego-provider-recovery-1902.tcap","events":34}
 {"fixture":"src-tauri/src/fixtures/agent_prompts/ego-single-question-20261012.tcap","events":20}
 {"fixture":"src-tauri/src/fixtures/agent_prompts/goose-1.49.0-idle.tcap","events":97}
