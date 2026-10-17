@@ -248,8 +248,8 @@ describe("LocalMcpPanel", () => {
 
 			answer({ collapse_tools: false, disabled_native_tools: ["config", "debug"] });
 			await vi.advanceTimersByTimeAsync(0);
-			const configToggle = view.getByText("config").closest("div")?.parentElement?.querySelector("input");
-			expect(configToggle?.checked).toBe(false);
+			const configToggle = view.getByRole("checkbox", { name: "config" }) as HTMLInputElement;
+			expect(configToggle.checked).toBe(false);
 			view.unmount();
 		});
 

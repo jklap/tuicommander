@@ -221,6 +221,7 @@
   --changes: #d29922;
   --urgent: #ffd700;
   --merged: #ae83ff;
+  --text-on-merged: #000000;
   --unseen: #c084fc;
   /* Deleted-line counts. Lighter than --error so a negative diff does not read
      as an alarm, and legible at 10px (#ef4444 on --bg-tertiary is 3.65:1). */
@@ -329,6 +330,7 @@ html {
   --attention: #895003;
   --changes: #805900;
   --merged: #7540b0;
+  --text-on-merged: #ffffff;
   --diff-del: var(--error);
   --repo-text-shade: 40%;
 }

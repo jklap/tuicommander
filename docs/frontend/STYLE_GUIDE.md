@@ -73,7 +73,8 @@ Values shown are the `:root` defaults of `global.css` (the former VS Code Dark p
 | `--warning` | `#dcdcaa` | Caution, pending, main branch icon (yellow) |
 | `--attention` | `#e8984c` | Actionable alerts, confirmation prompts (orange) |
 | `--error` | `#f48771` | Errors, failures, closed PRs (coral) |
-| `--merged` | `#a371f7` | PR merged badge (purple) |
+| `--merged` | `#ae83ff` | PR merged marker and badge background (purple; Paper uses `#7540b0`) |
+| `--text-on-merged` | `#000000` | Filled merged badge label (Paper uses `#ffffff`); independent of accent action foreground |
 | `--unseen` | `#c084fc` | Terminal completed while user wasn't viewing (purple, clears on view) |
 | `--diff-del` | `--error` mixed 25% with white | Deleted-line counts in the sidebar stats badge. Lighter than `--error` so a negative diff does not read as an alarm; `vscode-light` resets it to `--error` |
 | `--border` | `#3e3e42` | All borders and dividers |
@@ -471,7 +472,7 @@ Full-screen overlay. All pages share `width: min(1136px, calc(100vw - 48px))`, `
 |-------|-----------|--------|------------|-------|
 | Open | `--success` | none | `--text-on-success` | — |
 | Draft | transparent | `1px dashed --fg-muted` | `--fg-muted` | — |
-| Merged | `#a371f7` | none | `--text-on-accent` | — |
+| Merged | `--merged` | none | `--text-on-merged` | — |
 | Closed | `--error` | none | `--text-on-error` | — |
 | Conflict | `--error` | none | `--text-on-error` | pulse-opacity 1.5s |
 | CI Failed | `--error` | none | `--text-on-error` | bold |

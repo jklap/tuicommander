@@ -1016,7 +1016,7 @@
 
 .prMerged {
   background: var(--merged);
-  color: var(--text-on-accent);
+  color: var(--text-on-merged);
 }
 
 .prClosed {

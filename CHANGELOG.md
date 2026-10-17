@@ -23,7 +23,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Bound `tuic bg` completion command labels to one line and 120 characters; keep the full command before job output in the log (#1950-43b7).
 ### Fixed
 - Keep Settings contextual help beside its label, including repository scripts and narrow layouts (#1965-d50f).
-- Give Paper semantic branch and PR markers readable theme colors in Settings and the sidebar (#1968-baa4).
+- Give Paper semantic branch and PR markers readable theme colors in Settings and the sidebar; keep filled merged badge labels readable independently of accent action colors (#1968-baa4).
 - Use readable identity foregrounds on agent color tiles in Settings (#1967-404e).
 - Restore Settings text, enabled action and tooltip contrast on themed surfaces (#1966-514a).
 - Omit hidden answer markers when copying terminal selections or AI Chat answers, including mobile and the Answers view. (#1963-c7f6)
