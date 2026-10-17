@@ -153,7 +153,7 @@ it("follows_second_search_selection_without_leaving_the_inspector", async () => 
 	const first = settingsCatalogue.fields["app.shell"];
 	const second = settingsCatalogue.fields["app.theme"];
 	invoke.mockImplementation((_command, { request }) => Promise.resolve(snapshot(request.paths[0], "")));
-	const [selection, select] = createSignal(first.id);
+	const [selection, select] = createSignal<string>(first.id);
 	const view = render(() => <AllSettingsTab initialSetting={selection()} />);
 	await waitFor(() => expect(view.container.querySelector(`[data-setting-id="${first.id}"]`)).not.toBeNull());
 	select(second.id);
