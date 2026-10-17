@@ -16,10 +16,12 @@ import { isTauri } from "../../../transport";
 import { openDialog } from "../../../utils/nativeDialog";
 import { Input } from "../../ui/Input";
 import { Textarea } from "../../ui/Textarea";
+import { ContextualHelp } from "../ContextualHelp";
 import { ExpertSetting } from "../ExpertSetting";
 import { InfoBadge } from "../InfoBadge";
 import { SettingInput, SettingSelect, SettingSlider, SettingToggle } from "../SettingFields";
 import s from "../Settings.module.css";
+import { SectionCard, SettingPageHeader } from "../SettingsPrimitives";
 import { SETTINGS_SECTION_EGO } from "../sections";
 
 interface CliStatus {
@@ -159,510 +161,536 @@ export const GeneralTab: Component = () => {
 	];
 
 	return (
-		<div class={s.section}>
-			<h3>{t("general.heading.general", "General")}</h3>
-
-			{/* A picker with one option is not a choice. */}
-			<Show when={AVAILABLE_LOCALES.length > 1}>
-				<SettingSelect
-					label={t("general.label.language", "Language")}
-					value={settingsStore.state.language}
-					onChange={(v) => settingsStore.setLanguage(v)}
-					options={languageOptions}
-					hint={t("general.hint.language", "Language of the TUICommander interface")}
-				/>
-			</Show>
-
-			<SettingToggle
-				checked={settingsStore.state.showLastPrompt}
-				onChange={(v) => settingsStore.setShowLastPrompt(v)}
-				label="Show agent context bar"
-				hint="Display the model's current intent, its orchestrator-assigned task, and the last prompt sent to an agent"
+		<div class={`${s.section} ${s.applicationPage}`}>
+			<SettingPageHeader
+				title="General"
+				breadcrumb="Application / General"
+				description="Application behavior, updates and local tools."
+				scope="Application"
 			/>
+			<SectionCard title={t("general.heading.general", "General")}>
+				{/* A picker with one option is not a choice. */}
+				<Show when={AVAILABLE_LOCALES.length > 1}>
+					<SettingSelect
+						row
+						label={t("general.label.language", "Language")}
+						value={settingsStore.state.language}
+						onChange={(v) => settingsStore.setLanguage(v)}
+						options={languageOptions}
+						hint={t("general.hint.language", "Language of the TUICommander interface")}
+					/>
+				</Show>
 
-			<h3>{t("general.heading.confirmations", "Confirmations")}</h3>
-
-			<Show when={isTauri()}>
-				<SettingSelect
-					label={t("general.label.closeBehavior", "When closing the main window")}
-					value={settingsStore.state.closeBehavior}
-					onChange={(value) => settingsStore.setCloseBehavior(value as CloseBehavior)}
-					options={[
-						{ value: "ask", label: t("general.closeBehavior.ask", "Ask") },
-						...(settingsStore.state.trayIcon === "never"
-							? []
-							: [{ value: "background", label: t("general.closeBehavior.background", "Background") }]),
-						{ value: "quit", label: t("general.closeBehavior.quit", "Quit") },
-					]}
-					hint={t(
-						"general.hint.closeBehavior",
-						"Background hides visible windows and keeps sessions running. Quit still confirms when enabled.",
-					)}
-				/>
-			</Show>
-
-			<Show when={isTauri()}>
-				<SettingSelect
-					label={t("general.label.trayIcon", "Tray and menu-bar icon")}
-					value={settingsStore.state.trayIcon}
-					onChange={(value) => settingsStore.setTrayIcon(value as TrayIconPreference)}
-					options={[
-						{ value: "always", label: t("general.trayIcon.always", "Always") },
-						{ value: "background_only", label: t("general.trayIcon.backgroundOnly", "Only in background") },
-						{ value: "never", label: t("general.trayIcon.never", "Never") },
-					]}
-					hint={t(
-						"general.hint.trayIcon",
-						"Never disables Background. Without a tray host, including stock GNOME, closing minimizes the window so it remains reachable.",
-					)}
-				/>
-			</Show>
-
-			<Show when={isTauri() && isMacOS()}>
 				<SettingToggle
-					checked={settingsStore.state.hideDockIcon}
-					onChange={(enabled) => settingsStore.setHideDockIcon(enabled)}
-					label={t("general.toggle.hideDockIcon", "Hide Dock icon in background")}
-					hint={t("general.hint.hideDockIcon", "Restore the Dock icon when TUICommander is shown again")}
+					row
+					checked={settingsStore.state.showLastPrompt}
+					onChange={(v) => settingsStore.setShowLastPrompt(v)}
+					label="Show agent context bar"
+					hint="Display the model's current intent, its orchestrator-assigned task, and the last prompt sent to an agent"
 				/>
-			</Show>
-			<SettingToggle
-				checked={settingsStore.state.confirmBeforeQuit}
-				onChange={(v) => settingsStore.setConfirmBeforeQuit(v)}
-				label={t("general.toggle.confirmBeforeQuit", "Confirm before quitting")}
-				hint={t("general.hint.confirmBeforeQuit", "Confirm real quit when terminal sessions are active")}
-			/>
+			</SectionCard>
+			<SectionCard title={t("general.heading.confirmations", "Confirmations")}>
+				<Show when={isTauri()}>
+					<SettingSelect
+						row
+						label={t("general.label.closeBehavior", "When closing the main window")}
+						value={settingsStore.state.closeBehavior}
+						onChange={(value) => settingsStore.setCloseBehavior(value as CloseBehavior)}
+						options={[
+							{ value: "ask", label: t("general.closeBehavior.ask", "Ask") },
+							...(settingsStore.state.trayIcon === "never"
+								? []
+								: [{ value: "background", label: t("general.closeBehavior.background", "Background") }]),
+							{ value: "quit", label: t("general.closeBehavior.quit", "Quit") },
+						]}
+						hint={t(
+							"general.hint.closeBehavior",
+							"Background hides visible windows and keeps sessions running. Quit still confirms when enabled.",
+						)}
+					/>
+				</Show>
 
-			<SettingToggle
-				checked={settingsStore.state.confirmBeforeClosingTab}
-				onChange={(v) => settingsStore.setConfirmBeforeClosingTab(v)}
-				label={t("general.toggle.confirmBeforeClosingTab", "Confirm before closing a tab")}
-				hint={t("general.hint.confirmBeforeClosingTab", "Show a confirmation dialog when closing a terminal tab")}
-			/>
+				<Show when={isTauri()}>
+					<SettingSelect
+						row
+						label={t("general.label.trayIcon", "Tray and menu-bar icon")}
+						value={settingsStore.state.trayIcon}
+						onChange={(value) => settingsStore.setTrayIcon(value as TrayIconPreference)}
+						options={[
+							{ value: "always", label: t("general.trayIcon.always", "Always") },
+							{ value: "background_only", label: t("general.trayIcon.backgroundOnly", "Only in background") },
+							{ value: "never", label: t("general.trayIcon.never", "Never") },
+						]}
+						hint={t(
+							"general.hint.trayIcon",
+							"Never disables Background. Without a tray host, including stock GNOME, closing minimizes the window so it remains reachable.",
+						)}
+					/>
+				</Show>
 
-			<h3>{t("general.heading.powerManagement", "Power Management")}</h3>
-
-			<SettingToggle
-				checked={settingsStore.state.preventSleepWhenBusy}
-				onChange={(v) => settingsStore.setPreventSleepWhenBusy(v)}
-				label={t("general.toggle.preventSleepWhenBusy", "Prevent sleep when busy")}
-				hint={t("general.hint.preventSleepWhenBusy", "Keep the system awake while scripts are running")}
-			/>
-
-			<ExpertSetting configKey="app.standby_timeout_minutes" value={settingsStore.state.standbyTimeoutMinutes}>
-				<SettingSlider
-					label="Auto-Standby Timeout"
-					value={settingsStore.state.standbyTimeoutMinutes}
-					onChange={(v) => settingsStore.setStandbyTimeoutMinutes(v)}
-					min={0}
-					max={60}
-					step={1}
-					formatValue={(v) => (v === 0 ? "Off" : `${v} min`)}
-					hint="Pause idle background sessions after this duration to save resources. 0 = disabled."
+				<Show when={isTauri() && isMacOS()}>
+					<SettingToggle
+						row
+						checked={settingsStore.state.hideDockIcon}
+						onChange={(enabled) => settingsStore.setHideDockIcon(enabled)}
+						label={t("general.toggle.hideDockIcon", "Hide Dock icon in background")}
+						hint={t("general.hint.hideDockIcon", "Restore the Dock icon when TUICommander is shown again")}
+					/>
+				</Show>
+				<SettingToggle
+					row
+					checked={settingsStore.state.confirmBeforeQuit}
+					onChange={(v) => settingsStore.setConfirmBeforeQuit(v)}
+					label={t("general.toggle.confirmBeforeQuit", "Confirm before quitting")}
+					hint={t("general.hint.confirmBeforeQuit", "Confirm real quit when terminal sessions are active")}
 				/>
-			</ExpertSetting>
 
-			<ExpertSetting configKey="app.index_strategy" value={settingsStore.state.indexStrategy}>
-				<SettingSelect
-					label="Content Indexing"
-					value={settingsStore.state.indexStrategy}
-					onChange={(v) =>
-						settingsStore.setIndexStrategy(v as "active_only" | "active_and_switch" | "all_sequential" | "disabled")
-					}
-					options={[
-						{ value: "disabled", label: "Disabled" },
-						{ value: "active_only", label: "Active repo only" },
-						{ value: "active_and_switch", label: "Active + on switch" },
-						{ value: "all_sequential", label: "All repos at boot" },
-					]}
-					hint="When to build search indexes. Set to Disabled to turn off background indexing entirely."
+				<SettingToggle
+					row
+					checked={settingsStore.state.confirmBeforeClosingTab}
+					onChange={(v) => settingsStore.setConfirmBeforeClosingTab(v)}
+					label={t("general.toggle.confirmBeforeClosingTab", "Confirm before closing a tab")}
+					hint={t("general.hint.confirmBeforeClosingTab", "Show a confirmation dialog when closing a terminal tab")}
 				/>
-			</ExpertSetting>
-
-			<h3>{t("general.heading.updates", "Updates")}</h3>
-
-			<SettingToggle
-				checked={settingsStore.state.autoUpdateEnabled}
-				onChange={(v) => settingsStore.setAutoUpdateEnabled(v)}
-				label={t("general.toggle.autoUpdateEnabled", "Automatically check for updates")}
-				hint={t("general.hint.autoUpdateEnabled", "Download and install updates in the background")}
-			/>
-
-			<SettingToggle
-				checked={settingsStore.state.deferUpdateRelaunch}
-				onChange={(v) => settingsStore.setDeferUpdateRelaunch(v)}
-				label={t("general.toggle.deferUpdateRelaunch", "Wait for agents before restarting")}
-				hint={t(
-					"general.hint.deferUpdateRelaunch",
-					"After an update installs, restart only when no session is busy or waiting for input",
-				)}
-			/>
-
-			<SettingToggle
-				checked={settingsStore.state.eagerResumeAfterUpdate}
-				onChange={(v) => settingsStore.setEagerResumeAfterUpdate(v)}
-				label={t("general.toggle.eagerResumeAfterUpdate", "Resume all agents after an update")}
-				hint={t(
-					"general.hint.eagerResumeAfterUpdate",
-					"After the app restarts for an update, resume every agent tab with a confirmed session on every branch, without visiting each one",
-				)}
-			/>
-
-			<ExpertSetting configKey="app.update_channel" value={settingsStore.state.updateChannel}>
-				<SettingSelect
-					label={t("general.label.updateChannel", "Update Channel")}
-					value={settingsStore.state.updateChannel}
-					onChange={(v) => settingsStore.setUpdateChannel(v as UpdateChannel)}
-					options={updateChannelOptions}
-					hint={
-						settingsStore.state.updateChannel !== "stable"
-							? t("general.hint.updateChannelWarning", "Beta and nightly builds may be unstable")
-							: t("general.hint.updateChannel", "Choose which release channel to receive updates from")
-					}
-					hintStyle={settingsStore.state.updateChannel !== "stable" ? { color: "var(--warning, #e5c07b)" } : undefined}
+			</SectionCard>
+			<SectionCard title={t("general.heading.powerManagement", "Power Management")}>
+				<SettingToggle
+					row
+					checked={settingsStore.state.preventSleepWhenBusy}
+					onChange={(v) => settingsStore.setPreventSleepWhenBusy(v)}
+					label={t("general.toggle.preventSleepWhenBusy", "Prevent sleep when busy")}
+					hint={t("general.hint.preventSleepWhenBusy", "Keep the system awake while scripts are running")}
 				/>
-			</ExpertSetting>
 
-			<div class={s.group}>
-				<button
-					class={s.testBtn}
-					onClick={() => {
-						updaterStore.checkForUpdate().catch((err: unknown) => appLogger.debug("app", "Update check failed", err));
-					}}
-					disabled={updaterStore.state.checking || updaterStore.state.downloading}
-				>
-					{updaterStore.state.checking
-						? t("general.btn.checking", "Checking...")
-						: t("general.btn.checkNow", "Check Now")}
-				</button>
-				<Show when={updaterStore.state.available && updaterStore.state.version}>
-					<p class={s.hint} style={{ color: "var(--success)" }}>
-						{t("general.hint.updateAvailable", "Version {version} is available!", {
-							version: updaterStore.state.version ?? "",
-						})}
-					</p>
-				</Show>
-				<Show
-					when={
-						!updaterStore.state.available &&
-						!updaterStore.state.checking &&
-						!updaterStore.state.error &&
-						!updaterStore.state.noRelease &&
-						!updaterStore.state.unsupported
-					}
-				>
-					<p class={s.hint}>{t("general.hint.latestVersion", "You are on the latest version")}</p>
-				</Show>
-				<Show when={updaterStore.state.unsupported}>
-					<p class={s.hint} style={{ color: "var(--fg-muted)" }}>
-						{updaterStore.state.unsupported}
-					</p>
-				</Show>
-				<Show when={updaterStore.state.noRelease}>
-					<p class={s.hint} style={{ color: "var(--fg-muted)" }}>
-						{t("general.hint.noRelease", "No {channel} releases published yet", {
-							channel: settingsStore.state.updateChannel,
-						})}
-					</p>
-				</Show>
-				<Show when={updaterStore.state.error}>
-					<p class={s.hint} style={{ color: "var(--accent-red, #f44747)" }}>
-						{updaterStore.state.error}
-					</p>
-				</Show>
-			</div>
+				<ExpertSetting configKey="app.standby_timeout_minutes" value={settingsStore.state.standbyTimeoutMinutes}>
+					<SettingSlider
+						row
+						label="Auto-Standby Timeout"
+						value={settingsStore.state.standbyTimeoutMinutes}
+						onChange={(v) => settingsStore.setStandbyTimeoutMinutes(v)}
+						min={0}
+						max={60}
+						step={1}
+						formatValue={(v) => (v === 0 ? "Off" : `${v} min`)}
+						hint="Pause idle background sessions after this duration to save resources. 0 = disabled."
+					/>
+				</ExpertSetting>
 
+				<ExpertSetting configKey="app.index_strategy" value={settingsStore.state.indexStrategy}>
+					<SettingSelect
+						row
+						label="Content Indexing"
+						value={settingsStore.state.indexStrategy}
+						onChange={(v) =>
+							settingsStore.setIndexStrategy(v as "active_only" | "active_and_switch" | "all_sequential" | "disabled")
+						}
+						options={[
+							{ value: "disabled", label: "Disabled" },
+							{ value: "active_only", label: "Active repo only" },
+							{ value: "active_and_switch", label: "Active + on switch" },
+							{ value: "all_sequential", label: "All repos at boot" },
+						]}
+						hint="When to build search indexes. Set to Disabled to turn off background indexing entirely."
+					/>
+				</ExpertSetting>
+			</SectionCard>
+			<SectionCard title={t("general.heading.updates", "Updates")}>
+				<SettingToggle
+					row
+					checked={settingsStore.state.autoUpdateEnabled}
+					onChange={(v) => settingsStore.setAutoUpdateEnabled(v)}
+					label={t("general.toggle.autoUpdateEnabled", "Automatically check for updates")}
+					hint={t("general.hint.autoUpdateEnabled", "Download and install updates in the background")}
+				/>
+
+				<SettingToggle
+					row
+					checked={settingsStore.state.deferUpdateRelaunch}
+					onChange={(v) => settingsStore.setDeferUpdateRelaunch(v)}
+					label={t("general.toggle.deferUpdateRelaunch", "Wait for agents before restarting")}
+					hint={t(
+						"general.hint.deferUpdateRelaunch",
+						"After an update installs, restart only when no session is busy or waiting for input",
+					)}
+				/>
+
+				<SettingToggle
+					row
+					checked={settingsStore.state.eagerResumeAfterUpdate}
+					onChange={(v) => settingsStore.setEagerResumeAfterUpdate(v)}
+					label={t("general.toggle.eagerResumeAfterUpdate", "Resume all agents after an update")}
+					hint={t(
+						"general.hint.eagerResumeAfterUpdate",
+						"After the app restarts for an update, resume every agent tab with a confirmed session on every branch, without visiting each one",
+					)}
+				/>
+
+				<ExpertSetting configKey="app.update_channel" value={settingsStore.state.updateChannel}>
+					<SettingSelect
+						row
+						label={t("general.label.updateChannel", "Update Channel")}
+						value={settingsStore.state.updateChannel}
+						onChange={(v) => settingsStore.setUpdateChannel(v as UpdateChannel)}
+						options={updateChannelOptions}
+						hint={
+							settingsStore.state.updateChannel !== "stable"
+								? t("general.hint.updateChannelWarning", "Beta and nightly builds may be unstable")
+								: t("general.hint.updateChannel", "Choose which release channel to receive updates from")
+						}
+						hintStyle={
+							settingsStore.state.updateChannel !== "stable" ? { color: "var(--warning, #e5c07b)" } : undefined
+						}
+					/>
+				</ExpertSetting>
+
+				<div class={s.group}>
+					<button
+						class={s.testBtn}
+						onClick={() => {
+							updaterStore.checkForUpdate().catch((err: unknown) => appLogger.debug("app", "Update check failed", err));
+						}}
+						disabled={updaterStore.state.checking || updaterStore.state.downloading}
+					>
+						{updaterStore.state.checking
+							? t("general.btn.checking", "Checking...")
+							: t("general.btn.checkNow", "Check Now")}
+					</button>
+					<Show when={updaterStore.state.available && updaterStore.state.version}>
+						<p class={s.hint} style={{ color: "var(--success)" }}>
+							{t("general.hint.updateAvailable", "Version {version} is available!", {
+								version: updaterStore.state.version ?? "",
+							})}
+						</p>
+					</Show>
+					<Show
+						when={
+							!updaterStore.state.available &&
+							!updaterStore.state.checking &&
+							!updaterStore.state.error &&
+							!updaterStore.state.noRelease &&
+							!updaterStore.state.unsupported
+						}
+					>
+						<p class={s.hint}>{t("general.hint.latestVersion", "You are on the latest version")}</p>
+					</Show>
+					<Show when={updaterStore.state.unsupported}>
+						<p class={s.hint} style={{ color: "var(--fg-muted)" }}>
+							{updaterStore.state.unsupported}
+						</p>
+					</Show>
+					<Show when={updaterStore.state.noRelease}>
+						<p class={s.hint} style={{ color: "var(--fg-muted)" }}>
+							{t("general.hint.noRelease", "No {channel} releases published yet", {
+								channel: settingsStore.state.updateChannel,
+							})}
+						</p>
+					</Show>
+					<Show when={updaterStore.state.error}>
+						<p class={s.hint} style={{ color: "var(--accent-red, #f44747)" }}>
+							{updaterStore.state.error}
+						</p>
+					</Show>
+				</div>
+			</SectionCard>
 			<Show when={isTauri() && cliStatus()}>
-				<h3>
-					{t("general.heading.cli", "TUIC CLI")}
+				<SectionCard title={t("general.heading.cli", "TUIC CLI")}>
 					<InfoBadge>
 						{t(
 							"general.hint.cliInfo",
 							"The TUIC CLI lets you control TUICommander from any terminal or script. Open files and URLs as tabs, manage PTY sessions (create, list, send input, read output), and query repository status. Useful for scripting automation.",
 						)}
 					</InfoBadge>
-				</h3>
 
-				<div class={s.group}>
-					<Show
-						when={cliStatus()!.installed}
-						fallback={
-							<>
-								<p class={s.hint}>
-									{t(
-										"general.hint.cliNotInstalled",
-										"Install the TUIC CLI to control TUICommander from any terminal or script. Open files and URLs as tabs, manage PTY sessions, and query repository status. Useful for scripting automation.",
-									)}
-								</p>
-								<button
-									class={s.testBtn}
-									onClick={handleInstallCli}
-									disabled={cliInstalling()}
-									style={{ "margin-top": "8px" }}
-								>
-									{cliInstalling()
-										? t("general.btn.installing", "Installing...")
-										: t("general.btn.installCli", "Install TUIC CLI")}
+					<div class={s.group}>
+						<Show
+							when={cliStatus()!.installed}
+							fallback={
+								<>
+									<p class={s.hint}>
+										{t(
+											"general.hint.cliNotInstalled",
+											"Install the TUIC CLI to control TUICommander from any terminal or script. Open files and URLs as tabs, manage PTY sessions, and query repository status. Useful for scripting automation.",
+										)}
+									</p>
+									<button
+										class={s.testBtn}
+										onClick={handleInstallCli}
+										disabled={cliInstalling()}
+										style={{ "margin-top": "8px" }}
+									>
+										{cliInstalling()
+											? t("general.btn.installing", "Installing...")
+											: t("general.btn.installCli", "Install TUIC CLI")}
+									</button>
+								</>
+							}
+						>
+							<p class={s.hint} style={{ color: "var(--success)" }}>
+								{t("general.hint.cliInstalled", "Installed at {path}", {
+									path: cliStatus()!.path ?? "/usr/local/bin/tuic",
+								})}
+								{!cliStatus()!.version_match && (
+									<span style={{ color: "var(--warning, #e5c07b)", "margin-left": "8px" }}>
+										{cliStatus()!.auto_updatable
+											? t("general.hint.cliOutdated", "(update pending — restart to apply)")
+											: t("general.hint.cliUpdateAvailable", "(update available)")}
+									</span>
+								)}
+							</p>
+							<div style={{ display: "flex", gap: "8px", "margin-top": "8px" }}>
+								<Show when={!cliStatus()!.version_match}>
+									<button class={s.testBtn} onClick={handleInstallCli} disabled={cliInstalling()}>
+										{cliInstalling() ? t("general.btn.updating", "Updating...") : t("general.btn.updateCli", "Update")}
+									</button>
+								</Show>
+								<button class={s.testBtn} onClick={handleUninstallCli}>
+									{t("general.btn.uninstallCli", "Uninstall")}
 								</button>
-							</>
-						}
-					>
-						<p class={s.hint} style={{ color: "var(--success)" }}>
-							{t("general.hint.cliInstalled", "Installed at {path}", {
-								path: cliStatus()!.path ?? "/usr/local/bin/tuic",
-							})}
-							{!cliStatus()!.version_match && (
-								<span style={{ color: "var(--warning, #e5c07b)", "margin-left": "8px" }}>
-									{cliStatus()!.auto_updatable
-										? t("general.hint.cliOutdated", "(update pending — restart to apply)")
-										: t("general.hint.cliUpdateAvailable", "(update available)")}
-								</span>
-							)}
-						</p>
-						<div style={{ display: "flex", gap: "8px", "margin-top": "8px" }}>
-							<Show when={!cliStatus()!.version_match}>
-								<button class={s.testBtn} onClick={handleInstallCli} disabled={cliInstalling()}>
-									{cliInstalling() ? t("general.btn.updating", "Updating...") : t("general.btn.updateCli", "Update")}
-								</button>
-							</Show>
-							<button class={s.testBtn} onClick={handleUninstallCli}>
-								{t("general.btn.uninstallCli", "Uninstall")}
-							</button>
-						</div>
-					</Show>
-				</div>
+							</div>
+						</Show>
+					</div>
+				</SectionCard>
 			</Show>
 
 			<Show when={isTauri()}>
-				<h3>
-					{t("general.heading.codeIntelligence", "Code Intelligence")}
+				<SectionCard title={t("general.heading.codeIntelligence", "Code Intelligence")}>
 					<InfoBadge>
 						{t(
 							"general.hint.codeIntelligenceInfo",
 							"Integrates with MDKB to provide code navigation features in the editor: Cmd+Click go-to-definition, Shift+F12 find references, and symbol outline. Also serves as a persistent memory manager for AI agents, fully integrated with TUICommander. MDKB indexes your repositories and exposes a local daemon for fast lookups.",
 						)}
 					</InfoBadge>
-				</h3>
 
-				<div class={s.group}>
-					<Show
-						when={mdkbStatus()?.available}
-						fallback={
-							<>
-								<p class={s.hint}>
-									{t(
-										"general.hint.mdkbNotInstalled",
-										"Install MDKB to enable outline, go-to-definition, and find references in the code editor.",
-									)}
-								</p>
-								<button
-									class={s.testBtn}
-									onClick={handleInstallMdkb}
-									disabled={mdkbInstalling()}
-									style={{ "margin-top": "8px" }}
-								>
-									{mdkbInstalling()
-										? t("general.btn.installing", "Installing...")
-										: t("general.btn.installMdkb", "Install MDKB")}
-								</button>
-							</>
-						}
-					>
-						<p class={s.hint} style={{ color: "var(--success)" }}>
-							{t("general.hint.mdkbInstalled", "Installed at {path}", {
-								path: mdkbStatus()!.binaryPath ?? "unknown",
-							})}
-							{mdkbStatus()!.version && (
-								<span style={{ "margin-left": "8px", color: "var(--fg-muted)" }}>v{mdkbStatus()!.version}</span>
-							)}
-						</p>
-						<button class={s.testBtn} onClick={handleUninstallMdkb} style={{ "margin-top": "8px" }}>
-							{t("general.btn.uninstallMdkb", "Uninstall")}
-						</button>
-						<Show when={mdkbError()}>
-							<p class={s.hint} style={{ color: "var(--error)" }}>
-								{mdkbError()}
-							</p>
-						</Show>
-					</Show>
-				</div>
-			</Show>
-
-			<h3 id={SETTINGS_SECTION_EGO}>
-				{t("general.heading.ego", "ego")}
-				<InfoBadge>
-					{t(
-						"general.hint.aiChatInfo",
-						"The AI Chat panel talks to the ego binary over ACP. Select the ego executable to enable it.",
-					)}
-				</InfoBadge>
-			</h3>
-
-			{/* The native picker exists only on desktop; a browser client names the path by hand. */}
-			<Show
-				when={isTauri()}
-				fallback={
-					<SettingInput
-						label={t("general.label.egoExecutable", "ego executable")}
-						value={settingsStore.state.egoExecutable}
-						onInput={(v) => settingsStore.setEgoExecutable(v)}
-						placeholder={t("general.placeholder.egoExecutable", "/usr/local/bin/ego")}
-						hint={t("general.hint.egoExecutable", "Path to the ego binary the AI Chat panel talks to over ACP")}
-					/>
-				}
-			>
-				<div class={s.group}>
-					<label>{t("general.label.egoExecutable", "ego executable")}</label>
-					<Show
-						when={settingsStore.isAcpConfigured()}
-						fallback={
-							<p class={s.hint}>
-								{t(
-									"general.hint.egoExecutableEmpty",
-									"Not configured: the AI Chat panel cannot start a conversation until you select the ego binary.",
+					<div class={s.group}>
+						<Show
+							when={mdkbStatus()?.available}
+							fallback={
+								<>
+									<p class={s.hint}>
+										{t(
+											"general.hint.mdkbNotInstalled",
+											"Install MDKB to enable outline, go-to-definition, and find references in the code editor.",
+										)}
+									</p>
+									<button
+										class={s.testBtn}
+										onClick={handleInstallMdkb}
+										disabled={mdkbInstalling()}
+										style={{ "margin-top": "8px" }}
+									>
+										{mdkbInstalling()
+											? t("general.btn.installing", "Installing...")
+											: t("general.btn.installMdkb", "Install MDKB")}
+									</button>
+								</>
+							}
+						>
+							<p class={s.hint} style={{ color: "var(--success)" }}>
+								{t("general.hint.mdkbInstalled", "Installed at {path}", {
+									path: mdkbStatus()!.binaryPath ?? "unknown",
+								})}
+								{mdkbStatus()!.version && (
+									<span style={{ "margin-left": "8px", color: "var(--fg-muted)" }}>v{mdkbStatus()!.version}</span>
 								)}
 							</p>
-						}
-					>
-						<p class={s.hint} style={{ color: "var(--success)" }}>
-							{t("general.hint.egoConfigured", "Configured at {path}", {
-								path: settingsStore.state.egoExecutable,
-							})}
-						</p>
-					</Show>
-					<div style={{ display: "flex", gap: "8px", "margin-top": "8px" }}>
-						<button class={s.testBtn} onClick={handleSelectEgo}>
-							{t("general.btn.selectEgo", "Select…")}
-						</button>
-						<Show when={settingsStore.isAcpConfigured()}>
-							<button class={s.testBtn} onClick={() => settingsStore.setEgoExecutable("")}>
-								{t("general.btn.clearEgo", "Clear")}
+							<button class={s.testBtn} onClick={handleUninstallMdkb} style={{ "margin-top": "8px" }}>
+								{t("general.btn.uninstallMdkb", "Uninstall")}
 							</button>
+							<Show when={mdkbError()}>
+								<p class={s.hint} style={{ color: "var(--error)" }}>
+									{mdkbError()}
+								</p>
+							</Show>
 						</Show>
 					</div>
-				</div>
+				</SectionCard>
 			</Show>
-			<SettingInput
-				label={t("general.label.egoProfile", "ego profile")}
-				value={settingsStore.state.egoProfile}
-				onInput={(name) => settingsStore.setEgoProfile(name)}
-				placeholder={t("general.placeholder.egoProfile", "coordinator")}
-				hint={t(
-					"general.hint.egoProfile",
-					"Optional profile from ego's user configuration. Use one name without spaces or a leading dash.",
-				)}
-			/>
-			<SettingInput
-				label={t("general.label.aiChatWorkspace", "AI Chat workspace")}
-				value={workspaceDraft()}
-				onInput={(path) => {
-					setWorkspaceDraft(path);
-					if (settingsStore.setAiChatWorkspace(path)) setWorkspaceRefused(false);
-				}}
-				onBlur={() => setWorkspaceRefused(settingsStore.state.aiChatWorkspace !== workspaceDraft().trim())}
-				placeholder={homeDirectory()}
-				hint={
-					workspaceRefused()
-						? t("general.hint.aiChatWorkspaceRefused", "The AI Chat workspace must be an absolute path.")
-						: t(
-								"general.hint.aiChatWorkspace",
-								"Folder AI Chat runs in. Leave empty for the home directory of the machine running ego. A missing folder is created.",
-							)
-				}
-			/>
 
-			<h3>{t("developerTools.heading.ide", "IDE")}</h3>
-
-			<SettingSelect
-				label={t("general.label.defaultIde", "Default IDE")}
-				value={settingsStore.state.ide}
-				onChange={(v) => settingsStore.setIde(v as IdeType)}
-				options={ideOptions}
-				hint={t("general.hint.defaultIde", "IDE used to open repositories")}
-			/>
-
-			<Show when={isTauri()}>
-				<h3>{t("general.heading.customLaunchers", "Custom Launchers")}</h3>
-				<div class={s.group}>
-					<p class={s.hint}>
+			<SectionCard title={t("general.heading.ego", "ego")}>
+				<div id={SETTINGS_SECTION_EGO}>
+					<InfoBadge>
 						{t(
-							"general.hint.customLaunchers",
-							'Define your own tools for the "Open in" menu. Each argument may use {path}, {file}, {fileDir}, {repo}, {cwd}, {home}, {line}, {column} placeholders. One argument per line.',
+							"general.hint.aiChatInfo",
+							"The AI Chat panel talks to the ego binary over ACP. Select the ego executable to enable it.",
 						)}
-					</p>
-					<For each={launchers()}>
-						{(launcher) => (
-							<div
-								class={s.group}
-								style={{
-									border: "1px solid var(--border)",
-									"border-radius": "var(--radius-md)",
-									padding: "8px",
-									"margin-bottom": "8px",
-								}}
-							>
-								<div style={{ display: "flex", gap: "8px", "align-items": "center", "margin-bottom": "6px" }}>
-									<input
-										type="checkbox"
-										checked={launcher.enabled}
-										title={t("general.label.launcherEnabled", "Enabled")}
-										onChange={(e) => updateLauncher(launcher.id, { enabled: e.currentTarget.checked })}
-									/>
+					</InfoBadge>
+				</div>
+
+				{/* The native picker exists only on desktop; a browser client names the path by hand. */}
+				<Show
+					when={isTauri()}
+					fallback={
+						<SettingInput
+							row
+							label={t("general.label.egoExecutable", "ego executable")}
+							value={settingsStore.state.egoExecutable}
+							onInput={(v) => settingsStore.setEgoExecutable(v)}
+							placeholder={t("general.placeholder.egoExecutable", "/usr/local/bin/ego")}
+							hint={t("general.hint.egoExecutable", "Path to the ego binary the AI Chat panel talks to over ACP")}
+						/>
+					}
+				>
+					<div class={s.group}>
+						<div class={s.helpLabel}>
+							<label>{t("general.label.egoExecutable", "ego executable")}</label>
+							<ContextualHelp label="ego executable" />
+						</div>
+						<Show
+							when={settingsStore.isAcpConfigured()}
+							fallback={
+								<p class={s.hint}>
+									{t(
+										"general.hint.egoExecutableEmpty",
+										"Not configured: the AI Chat panel cannot start a conversation until you select the ego binary.",
+									)}
+								</p>
+							}
+						>
+							<p class={s.hint} style={{ color: "var(--success)" }}>
+								{t("general.hint.egoConfigured", "Configured at {path}", {
+									path: settingsStore.state.egoExecutable,
+								})}
+							</p>
+						</Show>
+						<div style={{ display: "flex", gap: "8px", "margin-top": "8px" }}>
+							<button class={s.testBtn} onClick={handleSelectEgo}>
+								{t("general.btn.selectEgo", "Select…")}
+							</button>
+							<Show when={settingsStore.isAcpConfigured()}>
+								<button class={s.testBtn} onClick={() => settingsStore.setEgoExecutable("")}>
+									{t("general.btn.clearEgo", "Clear")}
+								</button>
+							</Show>
+						</div>
+					</div>
+				</Show>
+				<SettingInput
+					row
+					label={t("general.label.egoProfile", "ego profile")}
+					value={settingsStore.state.egoProfile}
+					onInput={(name) => settingsStore.setEgoProfile(name)}
+					placeholder={t("general.placeholder.egoProfile", "coordinator")}
+					hint={t(
+						"general.hint.egoProfile",
+						"Optional profile from ego's user configuration. Use one name without spaces or a leading dash.",
+					)}
+				/>
+				<SettingInput
+					row
+					label={t("general.label.aiChatWorkspace", "AI Chat workspace")}
+					value={workspaceDraft()}
+					onInput={(path) => {
+						setWorkspaceDraft(path);
+						if (settingsStore.setAiChatWorkspace(path)) setWorkspaceRefused(false);
+					}}
+					onBlur={() => setWorkspaceRefused(settingsStore.state.aiChatWorkspace !== workspaceDraft().trim())}
+					placeholder={homeDirectory()}
+					hint={
+						workspaceRefused()
+							? t("general.hint.aiChatWorkspaceRefused", "The AI Chat workspace must be an absolute path.")
+							: t(
+									"general.hint.aiChatWorkspace",
+									"Folder AI Chat runs in. Leave empty for the home directory of the machine running ego. A missing folder is created.",
+								)
+					}
+				/>
+			</SectionCard>
+			<SectionCard title={t("developerTools.heading.ide", "IDE")}>
+				<SettingSelect
+					row
+					label={t("general.label.defaultIde", "Default IDE")}
+					value={settingsStore.state.ide}
+					onChange={(v) => settingsStore.setIde(v as IdeType)}
+					options={ideOptions}
+					hint={t("general.hint.defaultIde", "IDE used to open repositories")}
+				/>
+			</SectionCard>
+			<Show when={isTauri()}>
+				<SectionCard title={t("general.heading.customLaunchers", "Custom Launchers")}>
+					<div class={s.group}>
+						<p class={s.hint}>
+							{t(
+								"general.hint.customLaunchers",
+								'Define your own tools for the "Open in" menu. Each argument may use {path}, {file}, {fileDir}, {repo}, {cwd}, {home}, {line}, {column} placeholders. One argument per line.',
+							)}
+						</p>
+						<For each={launchers()}>
+							{(launcher) => (
+								<div
+									class={s.group}
+									style={{
+										border: "1px solid var(--border)",
+										"border-radius": "var(--radius-md)",
+										padding: "8px",
+										"margin-bottom": "8px",
+									}}
+								>
+									<div style={{ display: "flex", gap: "8px", "align-items": "center", "margin-bottom": "6px" }}>
+										<input
+											type="checkbox"
+											checked={launcher.enabled}
+											title={t("general.label.launcherEnabled", "Enabled")}
+											onChange={(e) => updateLauncher(launcher.id, { enabled: e.currentTarget.checked })}
+										/>
+										<Input
+											type="text"
+											value={launcher.name}
+											placeholder={t("general.placeholder.launcherName", "Name")}
+											onInput={(e) => updateLauncher(launcher.id, { name: e.currentTarget.value })}
+											style={{ flex: "1" }}
+										/>
+										<button class={s.testBtn} onClick={() => removeLauncher(launcher.id)}>
+											{t("general.btn.remove", "Remove")}
+										</button>
+									</div>
 									<Input
 										type="text"
-										value={launcher.name}
-										placeholder={t("general.placeholder.launcherName", "Name")}
-										onInput={(e) => updateLauncher(launcher.id, { name: e.currentTarget.value })}
-										style={{ flex: "1" }}
+										value={launcher.executable}
+										placeholder={t(
+											"general.placeholder.launcherExec",
+											"Executable (e.g. code, or /usr/local/bin/code)",
+										)}
+										onInput={(e) => updateLauncher(launcher.id, { executable: e.currentTarget.value })}
+										style={{ width: "100%", "margin-bottom": "6px" }}
 									/>
-									<button class={s.testBtn} onClick={() => removeLauncher(launcher.id)}>
-										{t("general.btn.remove", "Remove")}
-									</button>
+									<Textarea
+										value={launcher.args.join("\n")}
+										placeholder={"--goto\n{file}:{line}:{column}"}
+										rows={3}
+										onInput={(e) => updateLauncher(launcher.id, { args: e.currentTarget.value.split("\n") })}
+										style={{ width: "100%", "font-family": "var(--font-mono)", "font-size": "var(--font-sm)" }}
+									/>
 								</div>
-								<Input
-									type="text"
-									value={launcher.executable}
-									placeholder={t("general.placeholder.launcherExec", "Executable (e.g. code, or /usr/local/bin/code)")}
-									onInput={(e) => updateLauncher(launcher.id, { executable: e.currentTarget.value })}
-									style={{ width: "100%", "margin-bottom": "6px" }}
-								/>
-								<Textarea
-									value={launcher.args.join("\n")}
-									placeholder={"--goto\n{file}:{line}:{column}"}
-									rows={3}
-									onInput={(e) => updateLauncher(launcher.id, { args: e.currentTarget.value.split("\n") })}
-									style={{ width: "100%", "font-family": "var(--font-mono)", "font-size": "var(--font-sm)" }}
-								/>
-							</div>
-						)}
-					</For>
-					<button class={s.testBtn} onClick={addLauncher}>
-						{t("general.btn.addLauncher", "Add launcher")}
-					</button>
-				</div>
+							)}
+						</For>
+						<button class={s.testBtn} onClick={addLauncher}>
+							{t("general.btn.addLauncher", "Add launcher")}
+						</button>
+					</div>
+				</SectionCard>
 			</Show>
 
-			<h3>{t("general.heading.experimental", "Experimental Features")}</h3>
-
-			<div class={s.group}>
-				<p class={s.warning}>
-					{t("general.hint.experimentalWarning", "These features are under active development and may be unstable.")}
-				</p>
-				<div class={s.toggle}>
-					<input
-						type="checkbox"
-						checked={settingsStore.state.experimentalFeaturesEnabled}
-						onChange={(e) => settingsStore.setExperimentalFeaturesEnabled(e.currentTarget.checked)}
-					/>
-					<span>{t("general.toggle.experimentalFeatures", "Enable experimental features")}</span>
+			<SectionCard title={t("general.heading.experimental", "Experimental Features")}>
+				<div class={s.group}>
+					<p class={s.warning}>
+						{t("general.hint.experimentalWarning", "These features are under active development and may be unstable.")}
+					</p>
+					<div class={s.toggle}>
+						<input
+							type="checkbox"
+							checked={settingsStore.state.experimentalFeaturesEnabled}
+							onChange={(e) => settingsStore.setExperimentalFeaturesEnabled(e.currentTarget.checked)}
+						/>
+						<span>{t("general.toggle.experimentalFeatures", "Enable experimental features")}</span>
+					</div>
+					<p class={s.hint}>
+						{t(
+							"general.hint.experimentalFeatures",
+							"Opt in to features under active development: the AI Chat panel and SSH Tunnels.",
+						)}
+					</p>
 				</div>
-				<p class={s.hint}>
-					{t(
-						"general.hint.experimentalFeatures",
-						"Opt in to features under active development: the AI Chat panel and SSH Tunnels.",
-					)}
-				</p>
-			</div>
+			</SectionCard>
 		</div>
 	);
 };

@@ -7,6 +7,15 @@ mod ego_schema;
 pub mod model;
 pub mod policy;
 
+#[cfg(test)]
+mod layout_owner_tests;
+
+pub(crate) mod app_choices;
+#[cfg(test)]
+mod app_choices_tests;
+pub mod keybindings;
+pub mod layout;
+
 pub mod native;
 pub mod notifications;
 pub(crate) mod plugin_migrations;
@@ -22,6 +31,7 @@ pub mod request;
 pub mod service;
 pub mod telegram;
 pub mod transaction;
+pub mod ui_owners;
 pub mod upstreams;
 #[cfg(feature = "dictation")]
 pub mod voice;
@@ -99,3 +109,19 @@ mod policy_domain_tests;
 
 #[cfg(test)]
 mod policy_lifecycle_tests;
+
+pub mod api;
+mod prompts;
+
+#[cfg(test)]
+mod choice_tests;
+pub mod registration;
+#[cfg(test)]
+mod registration_tests;
+
+pub mod upstream_credentials;
+#[cfg(test)]
+mod upstream_credentials_tests;
+
+#[cfg(test)]
+mod api_tests;

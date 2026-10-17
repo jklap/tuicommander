@@ -68,6 +68,15 @@ When detected:
 
 Binary detection uses `resolve_cli()` — Rust probes well-known directories so agents are found even in release builds where the user's shell PATH isn't available.
 
+### Unconfirmed ego input
+
+If an ego input write is unconfirmed, TUICommander does not send that payload
+again. A new, stable empty ego composer can restore readiness and release later
+queued commands and background completion wakes. Retained draft text still
+blocks injection. A blocked raw write reports uncertainty after two seconds;
+it can still complete, so do not resend it automatically. Session close remains
+available without waiting for that writer.
+
 ## Rate Limit Detection
 
 When an agent hits a rate limit, TUICommander detects it from terminal output:
@@ -346,4 +355,9 @@ Redacted text is limited to 32 KiB per section and 64 KiB across 16 captured sec
 
 ### Answer terminal ego questions on mobile
 
-When ego waits for your answer, the session shows **Input**. For a single-choice question, tap the question icon in the header. Read the full question and options, then tap one option. The card floats above the terminal; tap the header icon again to close it. Suggestions from the previous reply stay hidden while an answer is pending.
+When ego waits for your answer, the session shows **Input**. Tap the question icon in the header to read the full question. For a single-choice question, tap one option. For a multiple-choice question, tap the options to toggle their checkmarks, then tap **Submit answers**. For a free-text question, type your reply in the composer and tap **Send**. The card floats above the terminal; tap the header icon again to close it. Suggestions from the previous reply stay hidden while an answer is pending.
+
+Ego terminal intents use the same marker grammar as Claude and Codex. A new
+`intent: description (Title)` replaces the Context bar intent and, when intent
+titles are enabled and the tab is not user-renamed, the tab title. Soft-wrapped
+ego output is not hidden by an earlier submitted prompt during composer repaint.

@@ -9,6 +9,7 @@ import {
 	shouldValidateSelectionSnapshot,
 	viewportRowToSelectionRow,
 } from "../canvasTerminalSelection";
+import { readProjectedSelectionText } from "../canvasTerminalText";
 import type { DecodedRow } from "../canvasTerminalUtils";
 
 function row(text: string): DecodedRow {
@@ -25,6 +26,20 @@ function row(text: string): DecodedRow {
 }
 
 describe("canvas terminal selection controller", () => {
+	// catches: backend reads trim trailing newlines per retained run, deleting the
+	// one visible separator before a removed suggestion paragraph when runs join.
+	it("preserves the visible paragraph separator when backend retained reads trim trailing newlines", async () => {
+		const texts = ["answer", "", "suggest: [ A | B | C ]", "", "footer"];
+		const rows = new Map(texts.map((text, index) => [index, row(text.padEnd(24, " "))]));
+		const text = await readProjectedSelectionText({ row: 0, col: 0 }, { row: 4, col: 5 }, rows, async (start, end) =>
+			texts
+				.slice(start.row, end.row + 1)
+				.join("\n")
+				.replace(/\n+$/, ""),
+		);
+		expect(text).toBe("answer\n\nfooter");
+	});
+
 	it("keeps a selected row stable while parked history grows", () => {
 		const before = { historyBase: 40, historySize: 100, displayOffset: 50, screenRows: 24 };
 		const selectedRow = viewportRowToSelectionRow(before, 7);

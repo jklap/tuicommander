@@ -12132,6 +12132,160 @@ fn captured_ego_question_reaches_awaiting_and_full_mobile_choices() {
     );
 }
 
+/// Catches: ego multiple/free-text questions losing their mobile question card.
+#[test]
+fn captured_ego_question_forms_keep_mobile_answer_controls() {
+    let mut failures = Vec::new();
+    for mode in ["single", "multiple", "free_text", "fresh_free_text"] {
+        for cols in [120, 44] {
+            if mode == "fresh_free_text" && cols == 44 {
+                continue;
+            }
+            let fixture = if mode == "fresh_free_text" {
+                "ego-fresh-free-text-1980.tcap".to_owned()
+            } else {
+                format!("ego-{mode}-{cols}-1973.tcap")
+            };
+            let capture = crate::pty_capture::decode_capture(&agent_prompt_fixture(&fixture))
+                .expect("recorded real ego question");
+            let (rows, cols) = capture.geometry.unwrap();
+            let sid = "ego-question-forms";
+            let (state, silence) = chunk_trace_state(sid);
+            state.grid.vt_log_buffers.insert(
+                sid.into(),
+                Mutex::new(crate::state::VtLogBuffer::new(rows, cols, 2000)),
+            );
+            state
+                .session_maps
+                .session_states
+                .get_mut(sid)
+                .unwrap()
+                .agent_type = Some("ego".into());
+            let mut rx = state.event_bus.subscribe();
+            let mut processor = ChunkProcessor::new(None, None);
+            let mut utf8 = Utf8ReadBuffer::new();
+            let mut escape = EscapeAwareBuffer::new();
+            for record in capture.records {
+                if record.direction != crate::pty_capture::CaptureDirection::Output {
+                    continue;
+                }
+                let data = escape.push(&utf8.push(&record.data));
+                let (clean, _) = crate::state::strip_kitty_sequences(&data);
+                processor.process_chunk(&clean, &silence, sid, &state);
+                while let Ok(event) = rx.try_recv() {
+                    crate::state::tests_support::apply_replay_event(&state, &event);
+                }
+            }
+            let session = state.session_maps.session_states.get(sid).unwrap();
+            let expected_mode = if mode == "single" {
+                "navigate-enter"
+            } else {
+                "toggle-enter"
+            };
+            let prompt_ok = if mode.ends_with("free_text") {
+                session.choice_prompt.is_none()
+            } else {
+                session.choice_prompt.as_ref().is_some_and(|prompt| {
+                    prompt.options.len() == 2
+                        && prompt.options[0].label.contains("Parser regression")
+                        && prompt.options[1].label.contains("Mobile answer controls")
+                        && serde_json::to_value(prompt.selection_mode).unwrap() == expected_mode
+                })
+            };
+            if std::env::var_os("TUIC_QUESTION_EVIDENCE").is_some() {
+                println!(
+                    "EGO1973:{}",
+                    serde_json::json!({"fixture": fixture, "state": &*session})
+                );
+            }
+            if !session.awaiting_input
+                || !session.question_confident
+                || session.question_text.as_deref()
+                    != Some(if mode == "fresh_free_text" {
+                        "Which release check should we run?"
+                    } else {
+                        "Which release checks should we run?"
+                    })
+                || !prompt_ok
+            {
+                failures.push(format!(
+                    "{fixture}: awaiting={}, question={:?}, choice={:?}",
+                    session.awaiting_input, session.question_text, session.choice_prompt
+                ));
+            }
+        }
+    }
+    assert!(
+        failures.is_empty(),
+        "real ego question forms lost mobile controls:\n{}",
+        failures.join("\n")
+    );
+}
+
+/// Catches inserting spaces mid-word in a soft-wrapped title, option or footer.
+#[test]
+fn softwrap_1977_question_uses_original_word_boundaries() {
+    let capture =
+        crate::pty_capture::decode_capture(&agent_prompt_fixture("softwrap-question-1977-24.tcap"))
+            .expect("controlled PTY selector recording");
+    let (rows, cols) = capture.geometry.unwrap();
+    let sid = "ego-question-capture";
+    let (state, silence) = chunk_trace_state(sid);
+    state.grid.vt_log_buffers.insert(
+        sid.into(),
+        Mutex::new(crate::state::VtLogBuffer::new(rows, cols, 2000)),
+    );
+    state
+        .session_maps
+        .session_states
+        .get_mut(sid)
+        .unwrap()
+        .agent_type = Some("ego".into());
+    let mut rx = state.event_bus.subscribe();
+    let mut processor = ChunkProcessor::new(None, None);
+    let mut utf8 = Utf8ReadBuffer::new();
+    let mut escape = EscapeAwareBuffer::new();
+    for record in capture.records {
+        if record.direction != crate::pty_capture::CaptureDirection::Output {
+            continue;
+        }
+        let data = escape.push(&utf8.push(&record.data));
+        let (clean, _) = crate::state::strip_kitty_sequences(&data);
+        processor.process_chunk(&clean, &silence, sid, &state);
+        while let Ok(event) = rx.try_recv() {
+            crate::state::tests_support::apply_replay_event(&state, &event);
+        }
+    }
+    let session = state.session_maps.session_states.get(sid).unwrap();
+    assert!(
+        session.awaiting_input,
+        "soft-wrapped selector was not detected"
+    );
+    let prompt = session
+        .choice_prompt
+        .as_ref()
+        .expect("ego question must have mobile choices");
+    assert_eq!(
+        prompt.title,
+        "Does Boss authorize editing the orchestrator registry?"
+    );
+    assert_eq!(
+        prompt
+            .options
+            .iter()
+            .map(|o| o.label.as_str())
+            .collect::<Vec<_>>(),
+        vec![
+            "Yes, authorize registry integration",
+            "No, leave it unchanged",
+        ]
+    );
+    assert_eq!(
+        prompt.selection_mode,
+        Some(crate::output_parser::ChoiceSelectionMode::NavigateEnter)
+    );
+}
+
 /// Everything a refactor of `process_chunk` is allowed to leave unchanged.
 #[derive(Debug, PartialEq)]
 struct ChunkTrace {
@@ -13077,6 +13231,7 @@ mod grid_delivery_tests {
                 }),
                 webview_label: "main".to_string(),
                 epoch: gate.epoch(),
+                visible: AtomicBool::new(true),
             },
         );
         (gate, received)
@@ -13099,6 +13254,113 @@ mod grid_delivery_tests {
     /// the gap, not for the expected value, so a machine five times slower than
     /// this one still passes.
     const BROWSER_FRAMES_EXPECTED: u64 = 6;
+
+    /// Catches a paused desktop suppressing the independent WS stream.
+    #[cfg(feature = "desktop")]
+    #[test]
+    fn paused_desktop_keeps_browser_damage() {
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+        let mut rx = grid_session(&state, "paused-desktop");
+        let (gate, received) = subscribe_a_frozen_webview(&state, "paused-desktop");
+        for _ in 0..3 {
+            gate.mark_sent();
+            gate.abandon();
+        }
+        let frame = cut_frame(&state, "paused-desktop", "browser text");
+        send_grid_frame(&state, "paused-desktop", frame);
+        assert!(row_count(&rx.borrow_and_update().frame) > 0);
+        assert!(received.lock().is_empty());
+    }
+
+    /// Catches a hidden terminal's bell being trapped in the grid frame stream.
+    #[cfg(feature = "desktop")]
+    #[test]
+    fn hidden_desktop_bell_reaches_session_event_bus_without_frames() {
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+        let _rx = grid_session(&state, "hidden-bell");
+        let (_gate, received) = subscribe_a_frozen_webview(&state, "hidden-bell");
+        state
+            .grid
+            .channels
+            .get("hidden-bell")
+            .unwrap()
+            .visible
+            .store(false, Ordering::Relaxed);
+        let mut events = state.event_bus.subscribe();
+        let silence = Arc::new(Mutex::new(SilenceState::new()));
+        let mut processor = ChunkProcessor::new(None, None);
+        processor.process_chunk("\x07", &silence, "hidden-bell", &state);
+        let mut bell = false;
+        while let Ok(event) = events.try_recv() {
+            if matches!(event, crate::state::AppEvent::PtyBell { session_id } if session_id == "hidden-bell")
+            {
+                bell = true;
+            }
+        }
+        assert!(
+            bell,
+            "background bell was not emitted without frame serialization"
+        );
+        assert!(received.lock().is_empty());
+    }
+
+    /// Catches desktop channel admission ignoring hidden viewport state.
+    #[cfg(feature = "desktop")]
+    #[test]
+    fn hidden_desktop_emits_no_frames_and_show_restores_grid_and_scroll() {
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+        let mut rx = grid_session(&state, "hidden-desktop");
+        let (_gate, received) = subscribe_a_frozen_webview(&state, "hidden-desktop");
+        state
+            .grid
+            .channels
+            .get("hidden-desktop")
+            .unwrap()
+            .visible
+            .store(false, Ordering::Relaxed);
+        assert!(!desktop_grid_visible(&state, "hidden-desktop"));
+        use std::fmt::Write;
+        let mut output = String::new();
+        for i in 0..40 {
+            write!(output, "line {i}\r\n").unwrap();
+        }
+        let frame = cut_frame(&state, "hidden-desktop", &output);
+        send_grid_frame(&state, "hidden-desktop", frame);
+        assert!(
+            received.lock().is_empty(),
+            "hidden desktop received grid bytes"
+        );
+        assert!(
+            row_count(&rx.borrow_and_update().frame) > 0,
+            "browser must remain live"
+        );
+        let expected = {
+            let vt = state.grid.vt_log_buffers.get("hidden-desktop").unwrap();
+            let mut vt = vt.lock();
+            vt.grid_scroll_to_offset(5);
+            vt.serialize_full_frame()
+        };
+        state
+            .grid
+            .channels
+            .get("hidden-desktop")
+            .unwrap()
+            .visible
+            .store(true, Ordering::Relaxed);
+        let full = {
+            let vt = state.grid.vt_log_buffers.get("hidden-desktop").unwrap();
+            let mut vt = vt.lock();
+            vt.grid_force_full_damage();
+            vt.serialize_dirty_rows()
+        };
+        send_grid_frame(&state, "hidden-desktop", full);
+        assert_eq!(
+            received.lock().last().unwrap(),
+            &expected,
+            "show changed grid or scroll position"
+        );
+        assert_eq!(u32::from_le_bytes(expected[7..11].try_into().unwrap()), 5);
+    }
 
     #[cfg(feature = "desktop")]
     #[tokio::test(flavor = "current_thread", start_paused = false)]
@@ -14050,6 +14312,15 @@ fn replay_oracle_all_committed_tcap_preserves_chunk_decisions() {
                 .starts_with(agent)
                 || fixture.contains(&format!("/{agent}-"))
         })
+        .or_else(|| {
+            // These controlled printf recordings declare the parser under test,
+            // not the identity of a live agent (see each capture's provenance).
+            match std::path::Path::new(&fixture).file_name()?.to_str()? {
+                "softwrap-question-1977-24.tcap" => Some("ego"),
+                "softwrap-spaces-1977-24.tcap" | "softwrap-spaces-1977-64.tcap" => Some("shell"),
+                _ => None,
+            }
+        })
         .unwrap_or_else(|| panic!("{fixture}: declare capture's agent before recording a golden"));
         let capture =
             crate::pty_capture::decode_capture(&std::fs::read(root.join(&fixture)).unwrap())
@@ -14769,4 +15040,268 @@ fn recorded_claude_stop_hooks_keep_public_session_working_with_pending_choices()
         "a retained suggest candidate must not mark running Stop hooks completed"
     );
     assert_eq!(snapshot.shell_state.as_deref(), Some("busy"));
+}
+
+/// Catches: a native ego recovery frame being ignored and leaving hours of false working state.
+#[test]
+fn ego_recovery_frame_reaches_session_stream() {
+    let state = crate::state::tests_support::make_test_app_state();
+    let sid = "ego-recovery";
+    agent_session(&state, sid, SHELL_BUSY);
+    state
+        .session_maps
+        .session_states
+        .get_mut(sid)
+        .unwrap()
+        .agent_type = Some("ego".into());
+    state
+        .grid
+        .vt_log_buffers
+        .insert(sid.into(), Mutex::new(VtLogBuffer::new(24, 80, 1000)));
+    let silence = state.session_maps.silence_states.get(sid).unwrap().clone();
+    let mut processor = ChunkProcessor::new(None, None);
+    let mut events = state.event_bus.subscribe();
+    processor.process_chunk("\x1b]7770;ego-recovery={\"phase\":\"waiting\",\"next_attempt_ms\":1792100000000,\"attempt\":3}\x07", &silence, sid, &state);
+    let recovery = std::iter::from_fn(|| events.try_recv().ok()).find_map(|event| match event {
+        crate::state::AppEvent::PtyParsed { parsed, .. }
+            if parsed["type"] == "provider-recovery" =>
+        {
+            Some(parsed)
+        }
+        _ => None,
+    });
+    assert_eq!(recovery.unwrap()["recovery"]["attempt"], 3);
+}
+
+/// Catches: recovery bypassing agent ownership or surviving explicit lifecycle clears.
+#[test]
+fn ego_recovery_rejects_foreign_agents_and_preserves_wire_order() {
+    for (agent, frame, expected) in [
+        ("codex", "", 0),
+        ("ego", "\x1b]7770;ego-recovery=clear\x07", 2),
+        ("ego", "\x1b]7770;state=busy\x07", 2),
+        ("ego", "\x1b]7770;state=idle\x07", 2),
+        ("ego", "\x1b]133;A\x07", 2),
+    ] {
+        let state = crate::state::tests_support::make_test_app_state();
+        let sid = "recovery-order";
+        agent_session(&state, sid, SHELL_BUSY);
+        state
+            .session_maps
+            .session_states
+            .get_mut(sid)
+            .unwrap()
+            .agent_type = Some(agent.into());
+        state
+            .grid
+            .vt_log_buffers
+            .insert(sid.into(), Mutex::new(VtLogBuffer::new(24, 80, 1000)));
+        let silence = state.session_maps.silence_states.get(sid).unwrap().clone();
+        let mut processor = ChunkProcessor::new(None, None);
+        let mut events = state.event_bus.subscribe();
+        let input = format!(
+            "\x1b]7770;ego-recovery={{\"phase\":\"retrying\",\"next_attempt_ms\":null,\"attempt\":1}}\x07{frame}"
+        );
+        processor.process_chunk(&input, &silence, sid, &state);
+        let recovery: Vec<_> = std::iter::from_fn(|| events.try_recv().ok())
+            .filter_map(|event| match event {
+                crate::state::AppEvent::PtyParsed { parsed, .. }
+                    if parsed["type"] == "provider-recovery" =>
+                {
+                    Some(parsed)
+                }
+                _ => None,
+            })
+            .collect();
+        assert_eq!(recovery.len(), expected, "{agent} {frame:?}");
+        if expected == 2 {
+            assert!(recovery[1]["recovery"].is_null());
+        }
+    }
+}
+
+/// Catches: a normal ego turn inventing recovery clears without a recovery frame.
+#[test]
+fn ego_recovery_clean_lifecycle_emits_no_recovery_events() {
+    let capture =
+        crate::pty_capture::decode_capture(&agent_prompt_fixture("ego-clean-lifecycle-1902.tcap"))
+            .expect("real clean producer capture");
+    let (rows, cols) = capture.geometry.unwrap();
+    let state = crate::state::tests_support::make_test_app_state();
+    let sid = "clean-ego-lifecycle";
+    agent_session(&state, sid, SHELL_BUSY);
+    state
+        .session_maps
+        .session_states
+        .get_mut(sid)
+        .unwrap()
+        .agent_type = Some("ego".into());
+    state
+        .grid
+        .vt_log_buffers
+        .insert(sid.into(), Mutex::new(VtLogBuffer::new(rows, cols, 2000)));
+    let silence = state.session_maps.silence_states.get(sid).unwrap().clone();
+    let mut processor = ChunkProcessor::new(None, None);
+    let mut events = state.event_bus.subscribe();
+    for record in capture.records {
+        if record.direction == crate::pty_capture::CaptureDirection::Output {
+            processor.process_chunk(
+                &String::from_utf8_lossy(&record.data),
+                &silence,
+                sid,
+                &state,
+            );
+        }
+    }
+    let parsed: Vec<_> = std::iter::from_fn(|| events.try_recv().ok())
+        .filter_map(|event| match event {
+            crate::state::AppEvent::PtyParsed { parsed, .. } => Some(parsed),
+            _ => None,
+        })
+        .collect();
+    assert!(parsed.iter().any(|event| event["type"] == "shell-state"));
+    assert!(
+        !parsed
+            .iter()
+            .any(|event| event["type"] == "provider-recovery")
+    );
+}
+
+/// Catches: real ego output framing or interleaved input losing recovery transitions.
+#[test]
+fn ego_recovery_recorded_producer_replays_wait_retry_clear() {
+    let capture = crate::pty_capture::decode_capture(&agent_prompt_fixture(
+        "ego-provider-recovery-1902.tcap",
+    ))
+    .expect("real producer capture");
+    let (rows, cols) = capture.geometry.expect("recorded geometry");
+    let state = crate::state::tests_support::make_test_app_state();
+    let sid = "recorded-ego-recovery";
+    agent_session(&state, sid, SHELL_BUSY);
+    state
+        .session_maps
+        .session_states
+        .get_mut(sid)
+        .unwrap()
+        .agent_type = Some("ego".into());
+    state
+        .grid
+        .vt_log_buffers
+        .insert(sid.into(), Mutex::new(VtLogBuffer::new(rows, cols, 2000)));
+    let silence = state.session_maps.silence_states.get(sid).unwrap().clone();
+    let mut processor = ChunkProcessor::new(None, None);
+    let mut events = state.event_bus.subscribe();
+    for record in capture.records {
+        if record.direction == crate::pty_capture::CaptureDirection::Output {
+            processor.process_chunk(
+                &String::from_utf8_lossy(&record.data),
+                &silence,
+                sid,
+                &state,
+            );
+        }
+    }
+    let phases: Vec<_> = std::iter::from_fn(|| events.try_recv().ok())
+        .filter_map(|event| match event {
+            crate::state::AppEvent::PtyParsed { parsed, .. }
+                if parsed["type"] == "provider-recovery" =>
+            {
+                Some(
+                    parsed["recovery"]["phase"]
+                        .as_str()
+                        .unwrap_or("clear")
+                        .to_string(),
+                )
+            }
+            _ => None,
+        })
+        .collect();
+    let waiting = phases
+        .iter()
+        .position(|phase| phase == "waiting")
+        .expect("waiting snapshot");
+    let retrying = phases
+        .iter()
+        .position(|phase| phase == "retrying")
+        .expect("retrying snapshot");
+    assert!(waiting < retrying, "{phases:?}");
+    assert!(
+        phases[retrying + 1..].iter().any(|phase| phase == "clear"),
+        "{phases:?}"
+    );
+}
+
+/// Catches a stale ego intent/title when generic chrome trimming hides a newer
+/// marker below a historical separator or submitted prompt.
+#[cfg(unix)]
+#[tokio::test(flavor = "current_thread")]
+async fn ego_second_recorded_intent_replaces_context_and_title_1964() {
+    let capture = crate::pty_capture::decode_capture(&agent_prompt_fixture("ego-intent-1964.tcap"))
+        .expect("real ego capture");
+    let (rows, cols) = capture.geometry.expect("recorded geometry");
+    let state = std::sync::Arc::new(crate::state::tests_support::make_test_app_state());
+    state.config.write().progress_tracking = false;
+    let sid = "ego-intent-1964";
+    crate::state::tests_support::insert_dummy_session(&state, sid);
+    agent_session(&state, sid, SHELL_BUSY);
+    state
+        .session_maps
+        .session_states
+        .get_mut(sid)
+        .unwrap()
+        .agent_type = Some("ego".into());
+    state.grid.vt_log_buffers.insert(
+        sid.into(),
+        Mutex::new(crate::state::VtLogBuffer::new(rows, cols, 2000)),
+    );
+    let silence = state.session_maps.silence_states.get(sid).unwrap().clone();
+    let mut receiver = state.event_bus.subscribe();
+    let mut processor = ChunkProcessor::new(None, None);
+    let mut intents = Vec::new();
+    for record in capture.records {
+        if record.direction != crate::pty_capture::CaptureDirection::Output {
+            continue;
+        }
+        processor.process_chunk(
+            std::str::from_utf8(&record.data).expect("UTF-8 capture"),
+            &silence,
+            sid,
+            &state,
+        );
+        while let Ok(event) = receiver.try_recv() {
+            if let crate::state::AppEvent::PtyParsed { parsed, .. } = &event
+                && parsed["type"] == "intent"
+            {
+                intents.push((
+                    parsed["text"].as_str().unwrap().to_string(),
+                    parsed["title"].as_str().map(str::to_string),
+                ));
+            }
+            crate::state::tests_support::apply_replay_event(&state, &event);
+        }
+    }
+    let expected = "Recording the second real ego intent while preserving its wrapped title";
+    assert_eq!(
+        intents.last(),
+        Some(&(expected.to_string(), Some("Latest task".to_string()))),
+        "latest Intent event drives desktop tab title; all events: {intents:?}"
+    );
+    assert_eq!(
+        state
+            .session_maps
+            .session_states
+            .get(sid)
+            .unwrap()
+            .agent_intent
+            .as_deref(),
+        Some(expected),
+        "the context bar and remote/mobile snapshots read accumulated session intent"
+    );
+    assert!(
+        intents.iter().any(
+            |(text, title)| text == "Checking the initial recorded ego task"
+                && title.as_deref() == Some("Initial task")
+        ),
+        "the first marker must also be observed"
+    );
 }

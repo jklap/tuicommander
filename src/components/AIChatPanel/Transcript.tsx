@@ -26,6 +26,7 @@ import type { AcpToolCall, AcpToolCallContent } from "../../types/acp";
 import { cx } from "../../utils";
 import { writeClipboard } from "../../utils/clipboard";
 import { handleOpenUrl } from "../../utils/openUrl";
+import { stripAnswerMarkers } from "../../utils/stripAnswerMarkers";
 import { TerminalUserText, terminalAnswerRows, terminalToolTitle } from "../Terminal/chatPresentation";
 import { filePathRegex, matchWebUrls } from "../Terminal/linkProvider";
 import { ANSWER_MARKER_RE, answerBlockRanges, type ChatBlock } from "../Terminal/suggestOverlay";
@@ -76,9 +77,12 @@ function toolName(title: string): string {
 	return title.split(/\s+-lc\s+|\s+-c\s+/, 1)[0];
 }
 
-const ToolActivity: Component<{ calls: () => AcpToolCall[]; observeDuration?: boolean; terminalAgent?: string }> = (
-	props,
-) => {
+const ToolActivity: Component<{
+	calls: () => AcpToolCall[];
+	observeDuration?: boolean;
+	terminalAgent?: string;
+	intent?: { title?: string | null; text: string };
+}> = (props) => {
 	const startedAt = performance.now();
 	let finishedAt: number | undefined;
 	let observedCount = 0;
@@ -109,10 +113,22 @@ const ToolActivity: Component<{ calls: () => AcpToolCall[]; observeDuration?: bo
 						status() === "Failed" ? s.toolCallFailure : status() === "Running" ? s.toolCallPending : s.toolCallSuccess,
 					)}
 				/>
+				<Show when={props.intent}>
+					<span class={s.stepTitle}>{props.intent?.title ?? "Status"}</span>
+					<span class={s.stepDescription}>{props.intent?.text}</span>
+				</Show>
 				<span class={s.toolCallCount}>
-					{props.calls().length} tool {props.calls().length === 1 ? "call" : "calls"}
+					{props.calls().length}{" "}
+					{props.calls().every((call) => call.kind === "read")
+						? props.calls().length === 1
+							? "read"
+							: "reads"
+						: props.calls().length === 1
+							? "tool call"
+							: "tool calls"}{" "}
+					›
 				</span>
-				<span class={s.toolActivityTitles}>
+				<span class={s.toolActivityTitles} hidden={!!props.intent}>
 					{props
 						.calls()
 						.slice(0, 2)
@@ -142,6 +158,37 @@ const ToolActivity: Component<{ calls: () => AcpToolCall[]; observeDuration?: bo
 									{call.status === "failed" ? "Failed" : call.status === "completed" ? "Completed" : "Running"}
 								</span>
 							</summary>
+							<For each={call.content}>
+								{(content) => (
+									<Show when={content.type === "diff" && content}>
+										{(diff) => (
+											<figure class={s.editDiff} aria-label={`Edit diff: ${diff().path}`}>
+												<figcaption>{diff().path}</figcaption>
+												<div
+													class={s.editDiffScroll}
+													role="region"
+													aria-label={`Scrollable edit: ${diff().path}`}
+													tabindex="0"
+												>
+													<div class={s.editDiffVersions}>
+														<Show when={diff().oldText != null}>
+															<div class={s.editDiffOld}>
+																<span>Old</span>
+																<pre aria-label="Old text">{diff().oldText}</pre>
+															</div>
+														</Show>
+														<div class={s.editDiffNew}>
+															<span>New</span>
+															<pre aria-label="New text">{diff().newText}</pre>
+														</div>
+													</div>
+												</div>
+												<div class={s.editDiffHint}>Scroll horizontally to read long lines →</div>
+											</figure>
+										)}
+									</Show>
+								)}
+							</For>
 							<Show when={toolCallDetail(call)}>
 								<div class={s.toolCallBody}>
 									{toolCallDetail(call)}
@@ -169,18 +216,24 @@ function activityRows(
 	refusals: Map<string, string>;
 	thoughts: Map<string, string>;
 	intermediate: Set<string>;
+	intents: Map<string, { title?: string | null; text: string }>;
+	mergedIntents: Set<string>;
 } {
 	const visible: AcpTranscriptEntry[] = [];
 	const calls = new Map<string, AcpToolCall[]>();
 	const refusals = new Map<string, string>();
 	const thoughts = new Map<string, string>();
 	const intermediate = new Set<string>();
+	const intents = new Map<string, { title?: string | null; text: string }>();
+	const mergedIntents = new Set<string>();
+	let pendingIntent: { id: string; title?: string | null; text: string } | undefined;
 	// Assistant text of the open turn that no tool call has followed yet.
 	let pendingText: string[] = [];
 	let current: AcpToolCall[] | undefined;
 	for (const entry of entries) {
 		if (entry.kind === "agent") {
 			const projected = projectChatProtocolText(entry.text);
+			if (projected.intent) pendingIntent = { id: entry.id, ...projected.intent };
 			if (!projected.body.trim() && !projected.intent && !(showSuggestions && projected.suggestions.length)) continue;
 		}
 		if (entry.kind === "thought") {
@@ -211,7 +264,10 @@ function activityRows(
 			}
 			refusals.set(entry.id, reply.join(" ").replace(/\s+/g, " ").trim());
 		}
-		if (entry.kind === "user" || entry.kind === "settled" || entry.kind === "failed") pendingText = [];
+		if (entry.kind === "user" || entry.kind === "settled" || entry.kind === "failed") {
+			pendingText = [];
+			pendingIntent = undefined;
+		}
 		if (entry.kind === "agent" && !ANSWER_LINE_RE.test(projectChatProtocolText(entry.text).body))
 			pendingText.push(entry.id);
 		if (entry.kind === "tool") {
@@ -220,6 +276,11 @@ function activityRows(
 			if (!current) {
 				current = [];
 				calls.set(entry.id, current);
+				if (pendingIntent) {
+					intents.set(entry.id, pendingIntent);
+					mergedIntents.add(pendingIntent.id);
+					pendingIntent = undefined;
+				}
 				visible.push(entry);
 			}
 			current.push(entry.call);
@@ -227,15 +288,19 @@ function activityRows(
 			visible.push(entry);
 		}
 	}
-	return { visible, calls, refusals, thoughts, intermediate };
+	return { visible, calls, refusals, thoughts, intermediate, intents, mergedIntents };
 }
 
 export interface TranscriptSearchRef {
 	open: () => void;
-	close: () => void;
+	/** Close Find and report whether it was open. */
+	close: () => boolean;
 }
 
 export interface TranscriptProps {
+	/** Let a host expose the existing follow state and jump action outside the transcript. */
+	onAtBottomChange?: (atBottom: boolean) => void;
+	onRegisterScrollToBottom?: (jump: (() => void) | undefined) => void;
 	/** Terminal-only reading layout; the agent scopes Claude Bash descriptions. */
 	terminalAgent?: string;
 	/** Lets a containing terminal route its Find action to this transcript. */
@@ -251,6 +316,7 @@ export interface TranscriptProps {
 	retry?: () => string | null;
 	emptyMessage: string;
 	onOpenFile?: (href: string) => void | Promise<boolean | undefined> | Promise<void>;
+	onOpenTable?: (source: string) => void;
 	onClear?: () => void;
 	canForkAtMessage?: () => boolean;
 	onFork?: (messageId: string) => void;
@@ -264,12 +330,16 @@ export interface TranscriptProps {
 	children?: JSX.Element;
 }
 
-const CopyButton: Component<{ label: string; text: string }> = (props) => (
+const CopyButton: Component<{ label: string; text: string; answer?: boolean }> = (props) => (
 	<button
 		type="button"
 		class={s.copyAction}
 		aria-label={props.label}
-		onClick={() => void writeClipboard(props.text).catch((error) => appLogger.error("ai-chat", "Copy failed", error))}
+		onClick={() =>
+			void writeClipboard(props.answer ? stripAnswerMarkers(props.text) : props.text).catch((error) =>
+				appLogger.error("ai-chat", "Copy failed", error),
+			)
+		}
 	>
 		Copy
 	</button>
@@ -365,7 +435,7 @@ const UserText: Component<{ text: string; onOpenFile?: (href: string) => void }>
 	);
 };
 
-/** Reuse the terminal's answer marker and left rule, after Markdown has rendered.
+/** Reuse the terminal's answer marker ranges after Markdown has rendered.
  * An answer spans the blocks the grid highlights (`answerBlockRanges`); the 💬 glyph is
  * dropped from each marked paragraph, which keeps `data-tuic-answer-start` so a later pass
  * still finds it. Code examples and quotations keep their literal marker; stored/copy text stays intact. */
@@ -427,9 +497,20 @@ function stripAnswerMarker(head: HTMLElement): void {
 export const Transcript: Component<TranscriptProps> = (props) => {
 	const activity = createMemo(() => {
 		const activity = activityRows(props.entries(), !!props.onSuggestion);
-		if (props.terminalAgent) activity.visible = terminalAnswerRows(activity.visible, activity.intermediate);
+		if (props.terminalAgent) {
+			activity.visible = terminalAnswerRows(activity.visible, activity.intermediate);
+			activity.mergedIntents.clear();
+		}
 		return activity;
 	});
+	const latestAnswerId = createMemo(
+		() =>
+			props.entries().findLast((entry) => {
+				if (entry.kind !== "agent") return false;
+				const projected = projectChatProtocolText(entry.text);
+				return !!projected.body.trim() || projected.suggestions.length > 0;
+			})?.id,
+	);
 	const firstLocalId = createMemo(() =>
 		activity().visible.some((entry) => entry.inherited)
 			? activity().visible.find((entry) => !entry.inherited)?.id
@@ -467,6 +548,7 @@ export const Transcript: Component<TranscriptProps> = (props) => {
 			if (container && stickToBottom && !touchActive) {
 				container.scrollTop = container.scrollHeight;
 				lastScrollTop = container.scrollTop;
+				props.onAtBottomChange?.(true);
 			}
 		});
 	});
@@ -476,8 +558,11 @@ export const Transcript: Component<TranscriptProps> = (props) => {
 		if (container) {
 			container.scrollTop = container.scrollHeight;
 			lastScrollTop = container.scrollTop;
+			props.onAtBottomChange?.(true);
 		}
 	};
+	props.onRegisterScrollToBottom?.(scrollToBottom);
+	onCleanup(() => props.onRegisterScrollToBottom?.(undefined));
 	const onTouchEnd = () => {
 		touchActive = false;
 		if (stickToBottom) scrollToBottom();
@@ -485,6 +570,7 @@ export const Transcript: Component<TranscriptProps> = (props) => {
 	const onScroll = () => {
 		if (!container) return;
 		const atBottom = container.scrollHeight - container.clientHeight - container.scrollTop <= 1;
+		props.onAtBottomChange?.(atBottom);
 		if (atBottom) stickToBottom = true;
 		else if (container.scrollTop < lastScrollTop) stickToBottom = false;
 		lastScrollTop = container.scrollTop;
@@ -512,9 +598,12 @@ export const Transcript: Component<TranscriptProps> = (props) => {
 		});
 	};
 	const closeSearch = () => {
+		const wasOpen = finding();
+		if (!wasOpen) return false;
 		clearSearchSelection();
 		setFinding(false);
 		matchIndex = -1;
+		return wasOpen;
 	};
 	props.onSearchRef?.({ open: openSearch, close: closeSearch });
 	onCleanup(() => {
@@ -742,8 +831,10 @@ export const Transcript: Component<TranscriptProps> = (props) => {
 												<Show
 													when={
 														projected().body.trim() ||
-														projected().intent ||
-														(props.onSuggestion && projected().suggestions.length > 0)
+														(projected().intent && !activity().mergedIntents.has(agent().id)) ||
+														(props.onSuggestion &&
+															latestAnswerId() === agent().id &&
+															projected().suggestions.length > 0)
 													}
 												>
 													<div
@@ -755,7 +846,13 @@ export const Transcript: Component<TranscriptProps> = (props) => {
 																: undefined
 														}
 													>
-														<Show when={projected().intent}>
+														<Show
+															when={
+																projected().intent && !activity().mergedIntents.has(agent().id)
+																	? projected().intent
+																	: undefined
+															}
+														>
 															{(intent) => (
 																<div class={s.agentIntent} aria-label="Agent intent">
 																	<span>{intent().title ?? "Status"}</span>
@@ -770,6 +867,17 @@ export const Transcript: Component<TranscriptProps> = (props) => {
 																}}
 																content={projected().body}
 																incremental={true}
+																tableActions={
+																	!props.terminalAgent && props.onOpenTable
+																		? {
+																				copy: (source) =>
+																					void writeClipboard(source).catch((error) =>
+																						appLogger.error("ai-chat", "Copy failed", error),
+																					),
+																				open: props.onOpenTable,
+																			}
+																		: undefined
+																}
 																onLinkClick={props.onOpenFile}
 																autoLinkFiles={true}
 																onCodeCopy={(text) =>
@@ -780,7 +888,7 @@ export const Transcript: Component<TranscriptProps> = (props) => {
 															/>
 														</Show>
 														<div class={s.replyActions}>
-															<CopyButton label="Copy assistant message" text={agent().text} />
+															<CopyButton label="Copy assistant message" text={agent().text} answer />
 															<Show when={props.canForkAtMessage?.() && agent().messageId}>
 																<button
 																	type="button"
@@ -796,7 +904,13 @@ export const Transcript: Component<TranscriptProps> = (props) => {
 																</button>
 															</Show>
 														</div>
-														<Show when={props.onSuggestion && projected().suggestions.length > 0}>
+														<Show
+															when={
+																props.onSuggestion &&
+																latestAnswerId() === agent().id &&
+																projected().suggestions.length > 0
+															}
+														>
 															<div class={s.suggestedReplies} aria-label="Suggested replies">
 																<For each={projected().suggestions}>
 																	{(item) => (
@@ -841,6 +955,7 @@ export const Transcript: Component<TranscriptProps> = (props) => {
 										{(tool) => (
 											<ToolActivity
 												calls={() => activity().calls.get(tool().id) ?? []}
+												intent={props.terminalAgent ? undefined : activity().intents.get(tool().id)}
 												observeDuration={props.observeToolDuration}
 												terminalAgent={props.terminalAgent}
 											/>

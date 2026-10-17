@@ -271,6 +271,22 @@ function createAppLogger() {
 			last.timestamp = Date.now();
 			// Bump revision so UI sees updated repeat count
 			setRevision((r) => r + 1);
+			// UI coalescing must not discard a second stall's numeric metadata.
+			if (
+				level !== "debug" &&
+				source === "app" &&
+				(message.startsWith("SLOW git.refreshBatch:") ||
+					message.startsWith("SLOW git.statsBatch:") ||
+					message.startsWith("UI freeze:"))
+			) {
+				pushToRust(
+					level,
+					source,
+					message,
+					data === undefined ? undefined : JSON.stringify(data, logDataReplacer),
+					audience,
+				);
+			}
 			return;
 		}
 

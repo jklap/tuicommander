@@ -129,3 +129,73 @@ describe("transcript presentation", () => {
 		expect(grid[0]).not.toContain(blocks[4].textContent ?? "");
 	});
 });
+
+// Catches: old suggested replies remaining actionable after a newer answer.
+it("offers suggestions only beneath the latest answer", () => {
+	const { getAllByRole } = render(() => (
+		<Transcript
+			busy={() => false}
+			emptyMessage=""
+			onSuggestion={() => {}}
+			entries={() => [
+				{ id: "a", kind: "agent", text: "First answer\n\nsuggest: [ Old one | Old two | Old three ]" },
+				{ id: "u", kind: "user", text: "Next" },
+				{ id: "b", kind: "agent", text: "Latest answer\n\nsuggest: [ New one | New two | New three ]" },
+			]}
+		/>
+	));
+	expect(
+		getAllByRole("button")
+			.filter((button) => button.closest('[aria-label="Suggested replies"]'))
+			.map((button) => button.textContent),
+	).toEqual(["New one", "New two", "New three"]);
+});
+// TEST-CHANGE (#1970-e1f4): Boss wants failed output closed by default, superseding #1958's expansion.
+// Catches: process intent using a separate row, or failed group/call details opening automatically.
+it("merges intent into the activity line and keeps failed group and call closed", () => {
+	const { container } = transcript([
+		{ id: "intent", kind: "agent", text: "intent: Reading the source (Source check)" },
+		{
+			id: "tool",
+			kind: "tool",
+			call: {
+				toolCallId: "read",
+				kind: "read",
+				title: "Read source",
+				status: "failed",
+				content: [{ type: "content", content: { type: "text", text: "File unavailable" } }],
+			},
+		},
+	]);
+	const activity = container.querySelector<HTMLDetailsElement>("details[class*=toolActivity]")!;
+	expect([activity.open, activity.querySelector("details")?.open]).toEqual([false, false]);
+	expect(activity.querySelector("summary")?.textContent).toContain("Failed");
+	expect(activity.querySelector("summary span[class*=toolCallFailure]")).not.toBeNull();
+	activity.open = true;
+	const call = activity.querySelector("details")!;
+	expect(call.open).toBe(false);
+	call.open = true;
+	expect(call.textContent).toContain("File unavailable");
+	expect(activity.querySelector("summary")?.textContent).toContain("Source check");
+	expect(activity.querySelector("summary")?.textContent).toContain("Reading the source");
+	expect(activity.querySelector("summary")?.textContent).toContain("1 read");
+	expect(container.querySelector('[aria-label="Agent intent"]')).toBeNull();
+});
+
+// Catches: an ACP message boundary leaving the final suggestion-only chunk invisible.
+it("keeps suggestions in a separate final message actionable without reviving old chips", () => {
+	const { container } = render(() => (
+		<Transcript
+			entries={() => [
+				{ id: "answer", kind: "agent", text: "Answer\n\nsuggest: [ Old A | Old B | Old C ]" },
+				{ id: "suggestions", kind: "agent", text: "suggest: [ Next A | Next B | Next C ]" },
+			]}
+			busy={() => false}
+			emptyMessage=""
+			onSuggestion={() => {}}
+		/>
+	));
+	expect(
+		[...container.querySelectorAll('[aria-label="Suggested replies"] button')].map((button) => button.textContent),
+	).toEqual(["Next A", "Next B", "Next C"]);
+});

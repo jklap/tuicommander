@@ -1,5 +1,33 @@
 use super::*;
 
+/// One guarded retry transaction shared by MCP, HTTP and desktop IPC.
+pub(crate) fn force_retry_provider_recovery(
+    state: &AppState,
+    session_id: &str,
+) -> Result<(), String> {
+    let transaction = state.input_transaction(session_id);
+    let _input = transaction.lock();
+    let recovering = state
+        .session_maps
+        .session_states
+        .get(session_id)
+        .is_some_and(|session| {
+            session.agent_type.as_deref() == Some("ego") && session.provider_recovery.is_some()
+        });
+    if !recovering {
+        return Err("Session is not an ego terminal in provider recovery".into());
+    }
+    if state
+        .session_maps
+        .input_buffers
+        .get(session_id)
+        .is_some_and(|buffer| !buffer.lock().content().is_empty())
+    {
+        return Err("Session composer is not empty".into());
+    }
+    write_agent_command_to_pty(state, session_id, "/retry")
+}
+
 pub(super) struct ParentLifecycleDispatch {
     pub(super) parent_id: String,
     pub(super) message_id: String,
@@ -34,6 +62,13 @@ pub(super) fn describe_lifecycle_payload(
                 "child agent {child} has not taken its initial prompt yet; it stays queued for the child's next ready window"
             ),
         };
+    }
+    if payload["state"] == "recovering" {
+        let recovery = &payload["provider_recovery"];
+        return format!(
+            "child agent {child} is waiting for provider recovery (phase {}, attempt {}, next_attempt_ms {}) — force retry with session action=force_retry",
+            recovery["phase"], recovery["attempt"], recovery["next_attempt_ms"]
+        );
     }
     let state_desc = payload
         .get("state")
@@ -338,6 +373,14 @@ pub(crate) fn should_inject_now(state: &AppState, session_id: &str) -> bool {
     submission_ready(state, session_id, false)
 }
 
+fn human_reply_waiting(state: &AppState, session_id: &str) -> bool {
+    state
+        .session_maps
+        .session_states
+        .get(session_id)
+        .is_some_and(|session| session.awaiting_input)
+}
+
 fn submission_ready(state: &AppState, session_id: &str, human_reply: bool) -> bool {
     if !session_is_agent(state, session_id) {
         return false;
@@ -365,12 +408,15 @@ fn submission_ready(state: &AppState, session_id: &str, human_reply: bool) -> bo
         .get(session_id)
         .map(|s| s.question_confident)
         .unwrap_or(false);
-    idle && !state
-        .session_maps
-        .silence_states
-        .get(session_id)
-        .is_some_and(|silence| silence.lock().injection_delivery_uncertain)
-        && idle_is_confirmed(state, session_id)
+    // A native question may keep its shell BUSY. Human answers are not idle
+    // work: the awaiting flag itself grants this one explicit input path.
+    let answering_question = human_reply && human_reply_waiting(state, session_id);
+    (answering_question || (idle && idle_is_confirmed(state, session_id)))
+        && !state
+            .session_maps
+            .silence_states
+            .get(session_id)
+            .is_some_and(|silence| silence.lock().injection_delivery_uncertain)
         && (human_reply || !blocked_on_question)
         && !has_partial_user_input(state, session_id)
 }
@@ -395,7 +441,7 @@ pub(super) fn has_partial_user_input(state: &AppState, session_id: &str) -> bool
 pub(super) struct InjectionClaim {
     pub(super) token: u64,
     /// The claim moved the atom IDLE→BUSY. A mid-turn voice claim
-    /// (`claim_composer_for_voice`) did not, so its rollback must not hand a
+    /// (`claim_composer_for_human_input`) did not, so its rollback must not hand a
     /// working agent an idle edge it never had.
     took_idle: bool,
 }
@@ -414,6 +460,9 @@ fn claim_idle_for_submission(
 ) -> Option<InjectionClaim> {
     if !submission_ready(state, session_id, human_reply) {
         return None;
+    }
+    if human_reply && human_reply_waiting(state, session_id) {
+        return claim_composer_for_human_input(state, session_id);
     }
     let prior_idle_confirmed = state
         .session_maps
@@ -453,7 +502,7 @@ fn finish_idle_claim(
     })
 }
 
-/// Reserve an agent's composer for one hands-free turn, busy or not.
+/// Reserve an agent's composer for explicit human input, busy or not.
 ///
 /// An idle agent is claimed exactly as the queue claims it, minus the
 /// confirmed-idle requirement. A working agent keeps its BUSY atom — it is
@@ -465,7 +514,7 @@ fn finish_idle_claim(
 /// queue flush can claim IDLE→BUSY and type its entry in the same few ms. The
 /// writer mutex keeps the bytes unspliced; only the order of the two
 /// submissions can swap. Not worth changing the state machine for now.
-fn claim_composer_for_voice(state: &AppState, session_id: &str) -> Option<InjectionClaim> {
+fn claim_composer_for_human_input(state: &AppState, session_id: &str) -> Option<InjectionClaim> {
     let prior_idle_confirmed = state
         .session_maps
         .silence_states
@@ -623,6 +672,15 @@ fn agent_composer_rejection(
     if has_partial_user_input(state, session_id) {
         return Some(("partial_composer", "partial"));
     }
+    if human_reply
+        && state
+            .session_maps
+            .session_states
+            .get(session_id)
+            .is_some_and(|session| session.choice_prompt.is_some())
+    {
+        return Some(("selection_required", "empty"));
+    }
     if !human_reply
         && state
             .session_maps
@@ -654,6 +712,7 @@ pub(crate) fn agent_submission_rejection_detail(
             format!("No supported agent has been detected in this PTY; foreground process: {foreground}. Start a supported agent and wait for backend detection, or launch a custom wrapper through an agent run configuration. TUIC_SESSION identifies the terminal, not an agent.")
         }
         "partial_composer" => "The composer contains unfinished user input. Submit or clear that input before sending another command.".into(),
+        "selection_required" => "This question requires an option selection. Open the question and use its answer controls.".into(),
         "awaiting_input" => "An approval or question owns the composer. Have the user answer it, or use an explicit human reply; automated submit must wait.".into(),
         "agent_not_ready" => {
             if state.session_maps.session_states.get(session_id).is_some_and(|session| {
@@ -666,6 +725,8 @@ pub(crate) fn agent_submission_rejection_detail(
                 .is_some_and(|silence| silence.lock().injection_delivery_uncertain)
             {
                 "A previous PTY write has an uncertain outcome. Inspect terminal output and wait for confirmed readiness; do not resend text that may already have reached the agent.".into()
+            } else if human_reply_waiting(state, session_id) {
+                "The agent is waiting for input, but its question composer could not be claimed. Inspect the question and use its answer controls.".into()
             } else if state.session_maps.shell_states.get(session_id)
                 .is_some_and(|shell| shell.load(Ordering::Acquire) == SHELL_BUSY)
             {
@@ -707,7 +768,10 @@ pub(super) fn agent_submission_rejection(
     // A confident question belongs to the human. Its parked automated entries
     // cannot drain until the answer clears the question, and must not prevent
     // that answer from reaching the composer.
-    if !(human_reply && blocked_on_confident_question(state, session_id)) {
+    if !(human_reply
+        && (human_reply_waiting(state, session_id)
+            || blocked_on_confident_question(state, session_id)))
+    {
         // The agent IS ready, so anything still parked can be typed right now.
         // Level-triggered: the BUSY→IDLE edge that normally drains this queue may
         // already have passed, and nothing else would fire it. Draining here is the
@@ -785,7 +849,7 @@ pub(crate) fn write_agent_submission_to_pty(
     write_submission_to_pty(state, session_id, text, false)
 }
 
-/// An explicit human answer may claim a confident question's composer; an
+/// An explicit human answer may claim a waiting question's composer, busy or idle; an
 /// automated agent submission continues to wait for that question to clear.
 pub(crate) fn write_human_reply_to_pty(
     state: &AppState,
@@ -980,6 +1044,7 @@ pub(super) fn agent_submit_profile(agent_type: Option<&str>) -> AgentSubmitProfi
     use SubmitConfirmation::{HookOnly, LegacyWrite, PromptGone, WorkingScreen};
     let (enter_gap, confirmation) = match agent_type {
         Some("codex") => (INJECT_ENTER_GAP, WorkingScreen),
+        Some("ego") => (UNVERIFIED_ENTER_GAP, WorkingScreen),
         Some("claude" | "opencode" | "goose" | "grok" | "pi") => (INJECT_ENTER_GAP, WorkingScreen),
         Some("gemini") => (INJECT_ENTER_GAP, PromptGone),
         Some("amp" | "cursor" | "droid") => (INJECT_ENTER_GAP, LegacyWrite),
@@ -1346,7 +1411,7 @@ pub(crate) fn deliver_urgent_mail_notice(
     let notice = format!(
         "URGENT mail from {sender_id}: read agent inbox before your next step (agent action=inbox)"
     );
-    let Some(claim) = claim_composer_for_voice(state, session_id) else {
+    let Some(claim) = claim_composer_for_human_input(state, session_id) else {
         return Err(if has_partial_user_input(state, session_id) {
             "composer_has_user_text"
         } else {
@@ -2383,7 +2448,7 @@ pub(crate) fn write_voice_turn(
     if has_partial_user_input(state, session_id) {
         return Ok(VoiceWrite::Held(VoiceHold::Draft));
     }
-    let Some(claim) = claim_composer_for_voice(state, session_id) else {
+    let Some(claim) = claim_composer_for_human_input(state, session_id) else {
         return Ok(VoiceWrite::Held(
             if has_partial_user_input(state, session_id) {
                 VoiceHold::Draft
@@ -2436,15 +2501,29 @@ pub(crate) fn clear_queued_commands(state: &AppState, session_id: &str) -> usize
         .unwrap_or(0)
 }
 
+/// Bound the caller's wait, not the kernel operation: a timed-out write may
+/// still complete. Never report this as a safe-to-retry rejection.
+pub(crate) async fn run_bounded_pty_input<T: Send + 'static>(
+    write: impl FnOnce() -> Result<T, String> + Send + 'static,
+) -> Result<T, String> {
+    match tokio::time::timeout(
+        std::time::Duration::from_secs(2),
+        tokio::task::spawn_blocking(write),
+    )
+    .await
+    {
+        Ok(result) => result.map_err(|error| format!("PTY input task failed: {error}"))?,
+        Err(_) => Err("PTY input timed out; delivery is uncertain and may still complete. Do not resend automatically; inspect the session or close it.".into()),
+    }
+}
+
 #[cfg(feature = "desktop")]
 pub(super) async fn write_pty_parts_off_thread(
     state: Arc<AppState>,
     session_id: String,
     parts: Vec<String>,
 ) -> Result<(), String> {
-    tokio::task::spawn_blocking(move || write_pty_parts_blocking(&state, &session_id, &parts))
-        .await
-        .map_err(|e| format!("Task join error: {e}"))?
+    run_bounded_pty_input(move || write_pty_parts_blocking(&state, &session_id, &parts)).await
 }
 
 #[cfg(feature = "desktop")]

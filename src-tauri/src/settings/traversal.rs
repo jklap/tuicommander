@@ -105,9 +105,10 @@ impl Catalogue {
                 availability,
             );
         }
-        if let Some(items) = node
-            .get("items")
-            .filter(|v| v.get("properties").is_some() || v.get("oneOf").is_some())
+        if node["x-atomic-list"] != true
+            && let Some(items) = node
+                .get("items")
+                .filter(|v| v.get("properties").is_some() || v.get("oneOf").is_some())
         {
             let key = node
                 .get("x-collection-key")
@@ -194,9 +195,9 @@ impl Catalogue {
                 .and_then(Value::as_str)
                 .map(|resolver| Choices::Dynamic {
                     resolver: resolver.into(),
+                    values: None,
                     availability: Availability::Unavailable {
-                        reason: "Owner choice resolver is not yet registered; see inventory gap"
-                            .into(),
+                        reason: "Explicit owner refresh required".into(),
                     },
                 })
                 .or_else(|| {
@@ -256,6 +257,7 @@ fn strip_annotations(value: &mut Value, secret: bool) {
         Value::Object(map) => {
             map.remove("x-setting");
             map.remove("x-collection-key");
+            map.remove("x-atomic-list");
             map.remove("x-choice-resolver");
             if secret {
                 map.remove("default");

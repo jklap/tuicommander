@@ -4,12 +4,14 @@ use crate::settings::{request::*, service::Store, transaction::Prepared};
 use std::sync::Arc;
 
 pub(crate) struct AppSettingsStore {
-    state: Arc<crate::AppState>,
+    state: std::sync::Weak<crate::AppState>,
 }
 
 impl AppSettingsStore {
     pub(crate) fn new(state: Arc<crate::AppState>) -> Self {
-        Self { state }
+        Self {
+            state: Arc::downgrade(&state),
+        }
     }
 
     fn latest(&self, file: &ConfigFile<AppConfig>) -> Result<AppConfig, Failure> {
@@ -24,7 +26,12 @@ impl AppSettingsStore {
             migrate_flat_services(&mut json);
             serde_json::from_value(json).map_err(|_| Error::new("app", "store_failed"))?
         } else {
-            self.state.config.read().clone()
+            self.state
+                .upgrade()
+                .ok_or_else(|| Error::new("app", "unavailable"))?
+                .config
+                .read()
+                .clone()
         };
         migrate_legacy_session_token_duration(&mut config);
         for (value, exists, secret) in [
@@ -77,11 +84,20 @@ impl Store for AppSettingsStore {
         serde_json::to_value(self.latest(&file)?).map_err(|_| Error::new("app", "store_failed"))
     }
 
+    async fn refresh_choices(
+        &self,
+        resolver: &str,
+        _path: &str,
+    ) -> Result<Vec<serde_json::Value>, Failure> {
+        crate::settings::app_choices::refresh(resolver).await
+    }
+
     fn validate_proposal(
         &self,
         latest: &serde_json::Value,
         value: &serde_json::Value,
     ) -> Result<(), Failure> {
+        crate::settings::app_choices::validate(value)?;
         let next: AppConfig =
             serde_json::from_value(value.clone()).map_err(|_| Error::new("app", "invalid_type"))?;
         if latest.get("ego_executable") != value.get("ego_executable")
@@ -118,8 +134,13 @@ impl Store for AppSettingsStore {
         if reply.changed_ids.is_empty() {
             return Ok(reply);
         }
-        let cached = self.state.config.read();
-        let tools_changed = cached.disabled_native_tools != next.disabled_native_tools
+        let state = self
+            .state
+            .upgrade()
+            .ok_or_else(|| Error::new("app", "unavailable"))?;
+        let cached = state.config.read();
+        let tools_changed = cached.settings_mcp_enabled != next.settings_mcp_enabled
+            || cached.disabled_native_tools != next.disabled_native_tools
             || cached.collapse_tools != next.collapse_tools;
         let server_changed = server_settings_changed(&cached, &next);
         let reflow_changed = cached.scrollback_reflow != next.scrollback_reflow;
@@ -127,7 +148,12 @@ impl Store for AppSettingsStore {
         // Preserve the existing vault snapshot/rollback and atomic config-file write.
         save_app_config_with(next.clone(), |disk| file.write_atomic(disk))
             .map_err(|_| Error::new("app", "store_failed"))?;
-        *self.state.config.write() = next;
+        *self
+            .state
+            .upgrade()
+            .ok_or_else(|| Error::new("app", "unavailable"))?
+            .config
+            .write() = next;
         reply.persisted = true;
         for (enabled, effect) in [
             (tools_changed, "tools_changed"),
@@ -153,21 +179,43 @@ impl AppSettingsStore {
     fn apply_committed(&self, reply: &CommitReply) -> Result<bool, Failure> {
         // File/config locks were dropped before the effect phase.
         if reply.effects.iter().any(|e| e == "tools_changed") {
-            let _ = self.state.mcp.tools_changed.send(());
+            let _ = self
+                .state
+                .upgrade()
+                .ok_or_else(|| Error::new("app", "unavailable"))?
+                .mcp
+                .tools_changed
+                .send(());
         }
         let server_changed = reply.effects.iter().any(|e| e == "server_changed");
         if server_changed {
             #[cfg(feature = "desktop")]
             crate::mcp_http::restart_after_server_settings_change(
-                &self.state,
+                &self
+                    .state
+                    .upgrade()
+                    .ok_or_else(|| Error::new("app", "unavailable"))?,
                 "settings transaction committed",
             );
         }
         if reply.effects.iter().any(|e| e == "reflow_changed") {
             self.state
-                .apply_reflow_history(self.state.config.read().scrollback_reflow);
+                .upgrade()
+                .ok_or_else(|| Error::new("app", "unavailable"))?
+                .apply_reflow_history(
+                    self.state
+                        .upgrade()
+                        .ok_or_else(|| Error::new("app", "unavailable"))?
+                        .config
+                        .read()
+                        .scrollback_reflow,
+                );
         }
-        crate::relay_client::notify_config_changed(&self.state);
+        let state = self
+            .state
+            .upgrade()
+            .ok_or_else(|| Error::new("app", "unavailable"))?;
+        crate::relay_client::notify_config_changed(state.as_ref());
         #[cfg(not(feature = "desktop"))]
         if server_changed {
             return Err(Error::new("app", "unavailable"));

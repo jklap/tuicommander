@@ -1,0 +1,3 @@
+{
+  "anchor": "^[\\t ]*(?:[●⏺•◦][\\t ]+)?(?:TUICommander[\\t ]+v[0-9][^\\s]*[\\t ]+is[\\t ]+connected\\.[\\t ]+)?intent:"
+}

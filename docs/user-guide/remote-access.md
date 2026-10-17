@@ -97,6 +97,20 @@ The app launches in standalone mode (no browser chrome) for a native-like experi
 
 **The title can look faded on an iPhone.** In the installed PWA the "TUICommander" title in the top bar may look soft or faded, strongest at the top edge. We attribute this to the iOS status-bar edge effect, not to the app. Evidence: in a 390x844 mobile emulation with a 62 px top safe-area inset, the computed styles of the title and every ancestor up to `html` have `opacity: 1`, and `filter`, `backdrop-filter`, `text-shadow`, `mask-image` and `mix-blend-mode` all `none`, so nothing in our CSS fades it. Limit: this is an inference from the absence of a CSS cause; no iPhone layer inspection was possible, so it is not confirmed on a device.
 
+At phone widths up to 430 px, the session header keeps CLI/Chat one tap away.
+Open **More session actions** for **Start voice call** / **Stop voice call** and session tasks. Tablet
+headers keep these controls directly in the bar. Tap the session name for details.
+
+For Claude sessions on a phone, tap **Read file edits in Chat** above the CLI
+output. This switches the reading surface without closing the terminal or
+clearing its history; returning to CLI follows the latest output. Expand the tool activity and edit to read its **Old**
+and **New** text. Tab stops align at four spaces. Swipe the edit block sideways
+for long lines rather than wrapping coloured terminal rows. Switch back with
+**CLI** for permission prompts. Edit excerpts are bounded to 20,000 characters
+per version; an ellipsis marks a truncated excerpt. A failed tool card describes
+a proposed edit, not a successful file change.
+
+
 Both mobile composers use **+**, a text box with a microphone when browser speech is available, and **Send**. Tap **+ → Attach file** to choose a file or **Take photo** to open the camera capture picker. In a terminal, the upload
 inserts its `@path` into the draft; review the draft and tap Send when ready.
 In mobile AI Chat, images join the image draft and other files appear as file
@@ -137,6 +151,7 @@ and [WebKit's open support issue](https://bugs.webkit.org/show_bug.cgi?id=194593
 The question is encrypted to the phone's Web Push subscription. It does not
 pass through TUICommander's content-blind cloud relay. TUICommander sends at
 most one question or completion push per session every 30 seconds.
+Session notices use the session display name, or the agent and repository when no name is set. Progress notices show the progress message, not the tool arguments.
 Notifications from different sessions remain separate. A newer notification
 for one session can replace its earlier one; tapping either remaining session
 notification opens that session.
@@ -144,6 +159,34 @@ notification opens that session.
 ### Keyboard correction
 
 Mobile **Settings → Input → Autocorrect and spellcheck** is on by default. It enables autocorrect, spellcheck and sentence capitalization in the terminal prompt composer. Turn it off for literal command entry. The choice stays in this browser or installed PWA across reloads. File and code editors keep spellcheck off. Keyboard suggestions still depend on your phone keyboard settings.
+
+### Connection loss and recovery
+
+If the server cannot be reached, the mobile app shows one connection banner with **Retry now**. Tabs remain available, but their content stays hidden until the connection returns; mounted views and unsent drafts are retained. A successful automatic session poll or manual retry reloads failed view reads without restarting the app. Failed reads do not mean that repositories or ego are unconfigured. Files retains the repository and subdirectory you tried to open if the first read fails. After a linked file opens successfully, later recoveries do not reload it over an unsaved edit. An authentication refusal shows **Sign in** instead of repeating network retries.
+
+### Automatic mobile resume diagnostics
+
+The mobile app saves up to 30 recent lifecycle snapshots in per-tab
+`sessionStorage`. Snapshots include visibility, pagehide/pageshow and their
+`persisted` flags, freeze/resume, root child count, shell geometry, visual
+viewport, CSS app height/top, and the mobile terminal connection phase. The
+recorder does not depend on animation frames, reload the page, or change the UI.
+It does not store terminal output, WebSocket URLs, query tokens or credentials.
+
+On the next boot, a prior document without a clean pagehide, or one that ended
+hidden, sends its saved trail automatically to the backend log ring as a warning
+with source `app` and message `Mobile previous document lifecycle trail`.
+A failed upload stays pending and retries on online/resume or another boot.
+The pending report is removed after the log API acknowledges it. This is evidence
+of the prior lifecycle, not proof of a crash: a normal reload after hiding can
+also produce a report. Session storage does not survive every form of browser
+storage eviction or a closed tab. No manual copy action is needed.
+
+The existing `Mobile resume has an empty or off-screen shell` warning still
+checks the resumed shell after an animation frame. A missing warning does not
+prove that the document or compositor was healthy. The reported iPhone grey
+screen still needs evidence from the failing device; these diagnostics do not
+claim to fix it.
 
 ### Mobile Features
 Tap the attachment icon to the left of the session input to choose a photo or file. The
@@ -154,7 +197,8 @@ Hold Send with a finger or mouse, then select **Queue** to hold your current age
 
 
 - **Sessions list** — See all running agents with status (idle, busy, question, rate-limited, error)
-- **Session detail** — Live output streaming, quick-reply chips (Yes/No/Enter/Ctrl-C), text input. The terminal keybar Ctrl button opens Ctrl+C, Ctrl+B, Ctrl+D and Ctrl+Enter. A choice sends once and closes; tap outside or press Escape to dismiss. Ctrl+C and Ctrl+D use danger colours. Ctrl+Enter is agent-aware: it submits in Claude Code and ego, and inserts a newline in Codex, OpenCode, Goose, Grok and pi. Other agents use documented or conservative fallback keys; ordinary Enter remains the submit key.
+- **Return to latest output** — Scroll back in a session’s CLI or Chat output to show the down-arrow at the right end of the key bar, above Send. Tap it to return to the bottom without sending terminal input. It hides when you reach the bottom, including by manual scrolling.
+- **Session detail** — Opening an ego free-text question card preserves your unsent answer. Send submits the complete answer through the guarded human-reply path, whether the card is open or closed; a refused reply keeps the draft. Live output streaming, quick-reply chips (Yes/No/Enter/Ctrl-C), text input. The terminal keybar Ctrl button opens Ctrl+C, Ctrl+B, Ctrl+D and Ctrl+Enter. A choice sends once and closes; tap outside or press Escape to dismiss. Ctrl+C and Ctrl+D use danger colours. Ctrl+Enter is agent-aware: it submits in Claude Code and ego, and inserts a newline in Codex, OpenCode, Goose, Grok and pi. Other agents use documented or conservative fallback keys; ordinary Enter remains the submit key.
 - **Files** — Browse a configured repository, view `.md` files as rendered Markdown or other text as plain text, and tap Edit to change and save source files up to 1 MB
 - **Question banner** — Instant notification when any agent needs input, with quick-reply buttons
 - **Activity feed** — Chronological event feed grouped by time
@@ -789,3 +833,16 @@ Use the same input below to reply. Select **CLI** for permission prompts or ques
 that are not in the transcript. If the backend cannot bind the transcript, the view
 returns to CLI and shows the reason. CLI returns to the latest output; its stream
 stays connected while Chat is open. Chat reads pause while the page is hidden.
+
+### Recovering a short Direct host name
+
+If DNS cannot resolve a short Direct host name, TUIC checks the advertised
+Tailscale peers. With exactly one matching peer, it retries once with that
+peer's full DNS name. Only the URL host changes; the scheme, port, path and TLS
+certificate checks stay unchanged. SSH aliases, IP addresses, full DNS names,
+and errors other than DNS failures do not use this fallback.
+
+A successful recovery uses the resolved endpoint for the current session.
+Remote Machines shows the effective address and **Save resolved address**.
+Select that action to update the saved connection without disconnecting it.
+Leaving the action alone keeps the original saved address.

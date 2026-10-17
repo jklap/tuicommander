@@ -257,7 +257,15 @@ ParsedEvent::Intent {
 }
 ```
 
-Detected as a plain-prefix token at the start of a row: `intent: <text> (<title>)`, optionally behind an agent bullet glyph or the wrap indent.
+Detected as a plain-prefix token at the start of a row: `intent: <text> (<title>)`, optionally behind an agent bullet glyph or the wrap indent. The intent anchor grammar is stored in
+`crates/tuic-terminal/src/intent_marker.json` and consumed by both Rust capture
+and the frontend tint classifier. All agent types use this grammar.
+
+Ego chrome is bounded by its native status-row/composer pair, shared with the
+ready-screen adapter. A historical submitted `> prompt` or transcript separator
+is not a live composer. When a soft-wrapped response temporarily overwrites the
+old composer before its repaint, the response remains eligible for parsing;
+the next intent updates both session state and the tab-title event.
 
 AI Chat receives ACP markdown chunks in both desktop and browser mode, without
 terminal rows or wrap metadata. `protocolText.ts` interprets the joined answer
@@ -609,9 +617,55 @@ from the authoritative backend `agent_type`, not from a title heuristic.
 
 Viewport scroll requests do not alter parsed output. History-anchored scrolling resolves the requested all-time row after output processing, under the same VT lock; capped history clamps an evicted anchor to the oldest retained row.
 
+### ego empty-composer recovery (1957)
+
+ego PTY sessions have a recorded native screen adapter. An empty column-zero
+`>` composer directly below the model/context/trust status row is Ready. The
+native rotating `Working` row reports activity. Retained or wrapped text,
+modal rows, and unrecognized layouts do not prove readiness.
+
+An ordinary uncertain injection is not replayed. For ego only, a fresh empty
+composer repaint after uncertainty was recorded can clear the latch after the
+normal 1.5-second stable-screen confirmation. A pre-write cached screen cannot
+clear it. The foreground/background-work probe remains a separate idle gate.
+Once idle, the existing queue flush can deliver the next queued command or BG
+wake. Other agents retain their existing uncertain-write recovery contracts.
+
 ### ego terminal questions
 
-The terminal ego CLI reports human-question waits with OSC 7770 awaiting and resumes busy after settlement. TUIC also recognizes its single-choice selector only for ego sessions, anchored to `Up/Down or number selects; Enter answers; Esc cancels.` and a highlighted numbered option. Wrapped question and option rows are joined in Rust into `choice-prompt`, using `navigate-enter` selection. This creates authoritative awaiting state even for older ego builds without the native signal. Multiple-choice and free-text questions keep the native awaiting signal and terminal/composer controls; they are not misrepresented as single-choice dialogs.
+The terminal ego CLI reports human-question waits with OSC 7770 awaiting and resumes busy after settlement. TUIC recognizes ego selectors by their exact single-choice or multiple-choice footer and a highlighted numbered option. Footer matching ignores whitespace so a narrow terminal can wrap in the middle of a word. Single-choice uses `navigate-enter`; multiple-choice uses `toggle-enter`, preserves the visible `[ ]`/`[x]` marks, and submits only on explicit Enter. Changed checkbox labels update the existing choice state. During a confident ego wait, a free-text modal above an empty `>` row supplies the question text without creating numbered choices. An empty composer alone never establishes a question, and a busy spinner is rejected. Desktop and mobile read the same accumulated state; mobile opens the full question card on demand and uses the existing composer for free-text replies. The recorded 1973 captures cover each form at 120 and 44 columns. A fresh-session output-ring export also covers startup/help rows contiguous with the free-text modal. Free-text extraction stops at the nearest blank, separator, startup banner or shortcut-help row, preserving wrapped question rows below it. Opening the mobile card does not change the explicit human-reply transport or stream the draft into the PTY.
+
+### ego terminal provider recovery (1902)
+
+The existing OSC 7770 consumer accepts the following UTF-8 byte frames (the
+notation `ESC` means byte `0x1b`, `BEL` means `0x07`):
+
+```text
+ESC ]7770;ego-recovery={"phase":"waiting","next_attempt_ms":1792100000000,"attempt":3} BEL
+ESC ]7770;ego-recovery={"phase":"retrying","next_attempt_ms":null,"attempt":4} BEL
+ESC ]7770;ego-recovery=clear BEL
+```
+
+`ESC \` is also a valid terminator. The value is compact JSON, not base64.
+Only detected ego PTY sessions accept this status. The value is at most 256
+UTF-8 bytes. The object has exactly these fields: `phase` is `waiting` or
+`retrying`; `attempt` is an integer in `1..=4294967295`; `next_attempt_ms` is
+an integer Unix epoch millisecond timestamp in `0..=8640000000000000` for
+`waiting`, and must be null for `retrying`. Unknown fields, invalid values,
+and oversized payloads are ignored without changing the previous snapshot.
+The producer sends a complete snapshot whenever its recovery phase, attempt,
+or next attempt changes. `clear` explicitly removes recovery. Busy/idle
+OSC 7770 state markers and shell OSC 133 A also remove recovery, so a stale
+provider outage cannot survive resumed work or return to the shell. These
+lifecycle markers emit a clear only while recovery is active, including a
+snapshot earlier in the same chunk. A stream without a recovery frame emits no
+recovery events merely because its shell or agent changes state.
+
+Recovery is a presentation overlay on the running turn, not an idle/awaiting
+signal. Consumers show the phase, attempt, next attempt time and a countdown;
+a countdown reaching zero does not invent a successful recovery. Force retry
+submits `/retry` once to that same PTY through the normal agent-aware command
+submission path. It does not attach ACP or launch another ego process.
 
 ## Codex native session identity
 
@@ -622,3 +676,13 @@ above 32 KiB and foreign TUIC UUIDs are rejected. `codex_binding.rs` validates
 live foreground ownership and the rollout header before Chat or lifecycle
 snapshots expose exactness. Ordinary text and heuristic discovery cannot bind
 Codex Chat. Shell OSC 133 A revokes the binding.
+
+The recovery event is `provider-recovery` with a `recovery` object or null.
+It is delivered in original OSC order, including clears in the same chunk.
+`SessionState.provider_recovery` is the durable per-session presentation value;
+repeat snapshots do not generate additional parent entry notices. The existing
+session-state stream carries updates to desktop and browser consumers.
+
+### Ego selector row boundaries
+
+Before parsing an ego question, the PTY reader concatenates rows linked by the grid WRAPLINE flag. It preserves original spaces and adds none inside words. Hard line breaks still separate the title, numbered options and footer. Footer recognition remains in the ego parser; it does not infer prose boundaries from row length.

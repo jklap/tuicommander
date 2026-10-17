@@ -48,6 +48,16 @@ impl Edit {
 #[derive(Clone, Debug, Deserialize, Serialize, JsonSchema)]
 #[serde(tag = "action", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Request {
+    Describe {
+        target: Target,
+        store: String,
+        paths: Vec<String>,
+    },
+    Refresh {
+        target: Target,
+        store: String,
+        paths: Vec<String>,
+    },
     Get {
         target: Target,
         store: String,
@@ -80,7 +90,9 @@ pub enum Request {
 impl Request {
     pub fn store(&self) -> &str {
         match self {
-            Self::Get { store, .. }
+            Self::Describe { store, .. }
+            | Self::Refresh { store, .. }
+            | Self::Get { store, .. }
             | Self::Set { store, .. }
             | Self::Reset { store, .. }
             | Self::Patch { store, .. } => store,
@@ -155,6 +167,8 @@ pub struct CommitReply {
 #[serde(rename_all = "camelCase")]
 pub struct Snapshot {
     pub revision: String,
+    #[serde(skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub choices: std::collections::BTreeMap<String, super::model::Choices>,
     pub values: std::collections::BTreeMap<String, StoredValue>,
 }
 

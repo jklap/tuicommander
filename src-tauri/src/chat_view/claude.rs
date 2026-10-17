@@ -11,7 +11,7 @@
 //! a new CLI version must not blank the view.
 
 use std::borrow::Cow;
-use std::collections::HashSet;
+use std::collections::HashMap;
 
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -85,7 +85,7 @@ pub(crate) struct AdapterStats {
 #[derive(Default)]
 pub(crate) struct ClaudeAdapter {
     pub stats: AdapterStats,
-    known_tools: HashSet<String>,
+    known_tools: HashMap<String, Option<Value>>,
     /// Message id of the previous update when it was agent text, so a second
     /// text block of the same message is separated from the first.
     last_agent_text_of: Option<String>,
@@ -175,9 +175,7 @@ impl ClaudeAdapter {
         let id = block.get("tool_use_id").and_then(Value::as_str)?;
         // The call opened before the window: a card for it would be an empty
         // one titled with the raw id.
-        if !self.known_tools.remove(id) {
-            return None;
-        }
+        let diff = self.known_tools.remove(id)?;
         let failed = block.get("is_error").and_then(Value::as_bool) == Some(true);
         let text = clean(
             &tool_result_text(block.get("content")),
@@ -188,9 +186,12 @@ impl ClaudeAdapter {
             "toolCallId": id,
             "status": if failed { "failed" } else { "completed" },
         });
+        let mut content: Vec<Value> = diff.into_iter().collect();
         if !text.is_empty() {
-            update["content"] =
-                json!([{ "type": "content", "content": { "type": "text", "text": text } }]);
+            content.push(json!({ "type": "content", "content": { "type": "text", "text": text } }));
+        }
+        if !content.is_empty() {
+            update["content"] = json!(content);
         }
         Some(update)
     }
@@ -255,15 +256,33 @@ impl ClaudeAdapter {
         let id = block.get("id").and_then(Value::as_str)?;
         let name = block.get("name").and_then(Value::as_str).unwrap_or("tool");
         let input = block.get("input").cloned().unwrap_or(Value::Null);
-        self.known_tools.insert(id.to_owned());
-        Some(json!({
+        // Keep the bounded edit beside the pending id: a result replaces ACP
+        // content, so it must carry the edit as well as the execution summary.
+        let diff = match (
+            name,
+            input.get("file_path").and_then(Value::as_str),
+            input.get("old_string").and_then(Value::as_str),
+            input.get("new_string").and_then(Value::as_str),
+        ) {
+            ("Edit", Some(path), Some(old), Some(new)) => Some(json!({
+                "type": "diff", "path": clean(path, MAX_INPUT_STRING_CHARS),
+                "oldText": clean(old, MAX_TEXT_CHARS), "newText": clean(new, MAX_TEXT_CHARS),
+            })),
+            _ => None,
+        };
+        self.known_tools.insert(id.to_owned(), diff.clone());
+        let mut update = json!({
             "sessionUpdate": "tool_call",
             "toolCallId": id,
             "title": tool_title(name, &input),
             "kind": tool_kind(name),
             "status": "in_progress",
             "rawInput": cap_strings(&input),
-        }))
+        });
+        if let Some(diff) = diff {
+            update["content"] = json!([diff]);
+        }
+        Some(update)
     }
 }
 

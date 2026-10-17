@@ -333,12 +333,12 @@ is a count (at most 32 distinct names per subagent, the rest counted as
 | `PUT` | `/config` | Save app config |
 | `POST` | `/auth/hash-password` | Hash password for remote access |
 
-`GET /config` and MCP `config action=get` redact remote-access secrets:
+`GET /config` redact remote-access secrets:
 `services.auth.password_hash`, `services.auth.session_token`,
 `services.relay.token`, and `services.push.vapid_private_key`. The config shape
 exposes only the corresponding `*_exists` booleans for secret presence.
 
-`PUT /config` and MCP `config action=save` require `{ base, config }`, where
+`PUT /config` require `{ base, config }`, where
 `base` is the caller's loaded snapshot and `config` is its edited document.
 The backend applies only the base-to-config changes to the latest locked file;
 unchanged fields keep concurrent edits. Both also share `server_settings_changed` with
@@ -691,7 +691,9 @@ When intent markers are enabled for the connecting agent, initialize instruction
 
 Initialize instruction prose stays within the existing 1,600-byte classic and
 1,664-byte collapsed empty-state budgets. Compact wording preserves the answer
-marker, urgent mail and progress reporting rules.
+marker, urgent mail and progress reporting rules. The answer marker can start a
+row or the text of a Markdown list item; status, tool and hook/task notices stay
+excluded.
 
 TUIC supplies protocol instructions and tool descriptions on different wire
 surfaces. Client receipt does not prove that the model can read either surface
@@ -850,7 +852,7 @@ instead of nine, keeps a measurable 10.7%.
 
 ### MCP Native Tools
 
-Native tools are organized by domain. Two (`config`, `debug`) are disabled by default via `disabled_native_tools`; listing, search, schema lookup and dispatch respect this filter in both full and collapsed mode. The enabled `progress` tool is additionally kept on the direct collapsed surface.
+Native tools are organized by domain. Two (`settings`, `debug`) are disabled by default via `disabled_native_tools`; listing, search, schema lookup and dispatch respect this filter in both full and collapsed mode. The enabled `progress` tool is additionally kept on the direct collapsed surface.
 
 The payload measurements above predate `voice` and are left as recorded: they
 say what was measured, not what the list costs today.
@@ -866,10 +868,10 @@ say what was measured, not what the list costs today.
 | `ui` | tab, toast, confirm, screenshot | Enabled |
 | `plugin_dev_guide` | *(no actions — returns guide text)* | Enabled |
 | `voice` | speak, stop, status | Enabled |
-| `config` | get, save, list_ai_prompts, load_ai_prompt, save_ai_prompt, list_prompts, load_prompt, save_prompt | Disabled |
+| `settings` | describe, get, set, reset, patch, perform, refresh | Disabled; trusted UI opt-in required |
 | `debug` | agent_detection, logs, sessions, invoke_js, help | Disabled |
 
-The `disabled_native_tools` config key accepts an array of tool names to hide from `tools/list`. Default: `["config", "debug"]`.
+The `disabled_native_tools` config key accepts an array of tool names to hide from `tools/list`. Default: `["settings", "debug"]`.
 
 Settings reads `native_tools` from `get_mcp_status` / `GET /mcp/status`. Both transports use `native_tool_catalog`, projected from the same unfiltered definitions used by MCP. Entries contain `name`, a dedicated user-facing English `summary` (at most 70 characters) declared alongside the registry, and the complete `description`. The `workflow_run` entry summarizes graph starts and execution history. Summaries are app metadata only and are not added to MCP `tools/list`; full MCP descriptions stay unchanged. Disabled tools remain in this app inventory so users can re-enable them. No native tool is always on: even `progress` can be disabled and is also gated by global `progress_tracking`. Upstream tools and meta-tools do not belong to this inventory.
 
@@ -1072,7 +1074,7 @@ Custom URL schemes (`vscode://`, `x-devonthink://`, etc.) do **not** work inside
 ### One tool family, and why the second one went
 
 TUICommander exposes **one** MCP tool family: `session`, `agent`, `task`,
-`remote`, `repo`, `story`, `progress`, `ui`, `plugin_dev_guide`, `voice`, `config`, `debug`. Few tools,
+`remote`, `repo`, `story`, `progress`, `ui`, `plugin_dev_guide`, `voice`, `settings`, `debug`. Few tools,
 many actions.
 
 It used to expose a second — 13 flat `ai_terminal_*` tools behind the
@@ -1841,6 +1843,10 @@ bar also keeps repo-scoped tabs visible when a repository has no active workspac
      `false` includes `urgent_fallback_reason` for the queued fallback. The
      receipt cannot prove the model acted. One unread notice per sender and
      recipient covers further urgent mail until inbox observation clears it.
+     An unfinished notice reservation expires after 30 seconds so an abandoned
+     writer cannot suppress later urgent sends. Completion of the expired
+     reservation cannot settle a newer message's reservation; this lease does
+     not retry the earlier payload or claim that the model consumed it.
      The recorded CLI contract, including unused immediate-send gesture
      findings, is in `src-tauri/src/fixtures/agent_mail/urgent_cli_probe_2026_09_27.json`.
    - **Channel push**: `notifications/claude/channel` is available to external Claude Code clients with an active SSE stream and no managed PTY. It is a best-effort notification; the inbox remains authoritative.
@@ -2104,7 +2110,7 @@ replay horizon, not unbounded or restart-persistent exactly-once delivery.
 
 ## Telegram adapter groundwork
 
-The headless `telegram` tool exposes `register`, `unregister`, `begin`, `activity`, `finish` and `send` through the normal MCP registry and dispatch. Registration uses the caller's MCP-bound TUIC identity, replaces the previous agent with one native mail and is never persisted. MCP session end, PTY close or foreground-agent exit retires it. Other callers must register before outbound actions. Authorized text with no agent gets "Nessun agent registrato" and is dropped; strangers stay silent. Native stable-ID inbox/wake delivery remains authoritative. See [the Telegram design](../design/telegram-channel.md).
+The headless `telegram` tool exposes `register`, `unregister`, `begin`, `activity`, `finish` and `send` through the normal MCP registry and dispatch. Registration uses the caller's MCP-bound TUIC identity, replaces the previous agent with one native mail and is never persisted. MCP session end, PTY close or foreground-agent exit retires it. Without an explicit owner, the latest-connected live AI Chat peer is the fallback for inbound text and may use the reply tools. Explicit registration always wins. Connecting another AI Chat changes only future inbound delivery; existing requests keep their original reply peer. Request-specific reply tools require that peer’s MCP binding. Explicit registration takeover revokes pending requests. Other callers must register before outbound actions. Authorized text with neither a registered owner nor a live AI Chat peer gets "No agent is listening. Ask an agent in TUICommander to register for Telegram." and is dropped; strangers stay silent. Native stable-ID inbox/wake delivery remains authoritative. See [the Telegram design](../design/telegram-channel.md).
 
 Native remote health, authentication, session-list, and SSE clients strip request URLs from reqwest errors before publishing them. Token-authenticated native HTTP requests send the existing `tui-session` cookie header rather than a query token; browser WebSocket query authentication is unchanged.
 
@@ -2234,17 +2240,22 @@ HTTP route or IPC command. Its reads and results contain credential presence onl
 `settings::ego::EgoSettingsStore` targets `profile` with the configured profile ID,
 or `machine` for the user base. It captures trusted executable, workspace and
 profile together per operation, clears ambient `EGO_PROFILE`, and invokes only
-`config ls/set/unset`, `models --json` without refresh, and `auth status`.
+`config capabilities/snapshot/batch`, `models --json` without refresh, and `auth status`.
 The model slug selects the provider. Managed DTOs discard unknown owner fields;
 credential type/expiry and process diagnostics never enter settings replies,
 effects or audit data. Credentials are read-only set/unset markers.
 
-Each managed key is one atomic leaf. Null/reset invokes owner `unset`; explicit
-`roots: []` invokes `set roots=[]`. The managed keys are `model`, `roots` and
-`network`; Ego itself enforces its scope rules. A patch changing multiple keys is rejected before any write because
-Ego's CLI has no atomic batch operation. The adapter checks latest revisions and
-serializes its own mutations, but an external CLI writer can race the read/write
-boundary; the owner-gap ledger records the missing conditional-write API. Failed
+Managed keys (`model`, `roots`, `network`, `exec_paths`) are atomic leaves.
+Null/reset sends an owner unset; explicit empty arrays stay explicit. A patch is
+one `config batch --if-revision` against the opaque revision from `config snapshot`.
+This protects against external CLI writers as well as host requests. Atomicity is
+limited to the selected Ego user document, never other settings stores. Owners
+without advertised atomic batch and compare-and-swap support fail closed.
+Base-only provider headers and credential commands have typed write-only auth
+actions (`EgoAuthAction`) and presence-only catalogue fields. Auth actions always
+select the base owner, independent of the launch profile. Profile-target reads
+of these machine-owned auth paths return `not_found`, not a false unset status. No read executes a
+credential command or attempts to recover an owner-redacted value. Failed
 readback after a successful write reports `persisted: true` and `nextAction: get`.
 
 Launch defaults (`ego_executable`, `ego_profile`, `ai_chat_workspace`) stay in the
@@ -2253,10 +2264,6 @@ transport registration and executable confirmation belong to later plan steps.
 The Providers tab shows the base model when the configured profile has none, as
 Ego resolves it, and creates a missing AI Chat workspace like ACP does. Existing Ego IPC/HTTP commands retain
 identical shapes; model reads/writes now honor configured profile/workspace.
-
-`exec_paths`, `auth.PROVIDER.headers` and `credential_command` remain owner gaps:
-isolated installed-Ego probes returned exit 2 (`unknown config key`). No editor or
-raw-file fallback is used. Credentials are never read from `auth.json`.
 
 Tasks brief preparation uses `POST /tasks/start-work-prompt`, the HTTP twin of
 `build_start_work_prompt`. Both accept `repoPath` and `input` with key, nullable
@@ -2329,3 +2336,30 @@ merge queue policy and shared request budgets apply unchanged. The desktop comma
 `{account, reference, request}` payloads (IPC also supplies `pluginId`).
 The GitHub Work runtime binds both ports when it registers each configured account.
 No live write or desktop-load verification is implied by recorded-fixture tests.
+
+### Settings cutover (#1787-4778)
+
+`settings` replaces the removed MCP `config` tool without an alias. Its schema is generated from Rust action DTOs. `settings_action(request)` and `POST /settings/action` use the same envelope and owner services. Describe has optional area/store/id filters and cursor pagination (1–128 fields). Reads and edits use an explicit target; edits require expectedRevision. Prompts remain available through the stable-ID `prompts` store; get `/prompts` lists id/label/text/pinned records, while keyed leaf reads and create/remove patches retain stable identities. Typed workflows use perform with an explicit machine target and a store-selected operation DTO for github_accounts, ego (also expectedRevision), upstreams, connections, telegram and voice in dictation builds. Targeted describe/refresh uses target/store/paths through the registered owner resolver. Connection credential reads use /{id}/credential and return separate password/pairingToken presence. Credential writes retire only that runtime and reconnect it only when it was active; an explicit later disconnect retires the queued reconnect. Explicit refresh for ego refreshes the configured owner's provider catalogue; describe never performs a network refresh.
+
+MCP access requires settings_mcp_enabled, enabled only by trusted UI; legacy config enablement grants no settings authority. MCP mutations remain loopback-only. HTTP retains local-or-authenticated access and IPC retains native host trust. Exposure proposals use ui confirm proposalId and an exact replay with approval. Secrets remain write-only. Owner transactions and perform remain unavailable while the native inventory gap ledger is nonempty; describe reports inventoryComplete.
+
+Gated HTTP and IPC edits return `confirmation_required` with `proposalId` and do not write.
+Replay the exact original edit with `approval: "<proposalId>"` and `confirm: true`.
+The same request opens the existing all-client human confirmation dialog, waits for the
+answer, and, only after approval, commits the exact edit under its original caller.
+A decline, expiry, changed edit, caller mismatch or reused approval cannot commit.
+HTTP proposal identity uses the source IP, not the ephemeral TCP port; every request
+still requires local or authenticated access. MCP callers can continue to use
+`ui action=confirm proposalId=...` followed by an exact replay with `approval`.
+Tunnel forward lists, including empty replacements, require confirmation like tunnel ports.
+
+`session action=force_retry` is a blocking, localhost-only terminal control.
+It resolves the normal session address, requires a live ego recovery snapshot
+and an empty tracked composer, serializes input and submits `/retry` once via
+the standard agent writer. It does not queue or attach ACP. Remote-qualified MCP
+session control remains limited to the existing supported remote actions; the
+browser status-bar control uses its owning daemon's normal PTY write transport.
+
+### Telegram request streaming (1959-162a)
+
+Telegram replies now use TUIC-driven receipt (👀), working (👨‍💻), waiting (🤔), answered (👍) and failed (👎) reactions. An ephemeral native draft shows Italian status lines or unapproved agent previews; it refreshes while work continues and the final reply replaces it. Acknowledgement of work requires inbox Read and a new recipient turn. PTY intent/activity and AI Chat assistant chunks share request correlation; finish remains authoritative after draft retirement. Telegram-mail-woken AI Chat turns automatically send their settled assistant text if finish has not answered. Queue and no-reply notices occur at ten minutes and sixty seconds after Read respectively. Restart keeps no request history. Phone rendering requires a live check after the backend restart.

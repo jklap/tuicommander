@@ -57,6 +57,7 @@ vi.mock("../../utils/openUrl", () => ({ handleOpenUrl: mockOpenUrl }));
 
 // Mock stores before importing the component
 vi.mock("../../stores/repositories", () => ({
+	resolveRepoPathFor: (path: string) => path,
 	repositoriesStore: {
 		state: {
 			repositories: {} as Record<string, unknown>,
@@ -234,6 +235,8 @@ describe("Sidebar", () => {
 		// feature-behavior block can enable it and the gating block can rely on off.
 		settingsStore.setTabTreeEnabled(false);
 		_resetMergedActivityAccum();
+		// Rich rows cache fetch times; cases that move the clock must not inherit them.
+		progressStore.resetForTests();
 	});
 
 	afterEach(() => {
@@ -819,6 +822,20 @@ describe("Sidebar", () => {
 			expect(chip).toBeTruthy();
 			expect(chip.getAttribute("data-tooltip")).toContain("removal is blocked");
 			expect(chip.getAttribute("data-tooltip")).toContain("boom");
+		});
+
+		// Catches: a missing integration base rendered as an unexplained Unknown chip.
+		it("names a missing base branch and preserves its actionable reason", () => {
+			const error = "Cannot resolve default branch: attach the main checkout to a branch.";
+			withBranch(
+				richBranch({
+					lifecycleStatus: { dirtyFiles: null, commitStatus: "unknown", removalSafety: "unknown", error },
+				}),
+			);
+			const { container } = render(() => <Sidebar {...defaultProps()} />);
+			const chip = [...container.querySelectorAll(".richChip")].find((c) => c.textContent === "No base branch");
+			expect(chip).toBeTruthy();
+			expect(chip?.getAttribute("data-tooltip")).toContain(error);
 		});
 
 		// Catches: rich chips explaining themselves through title=, which touch and WKWebView never show.
@@ -2322,6 +2339,16 @@ describe("Sidebar", () => {
 			expect(container.querySelector(".lifecycleBadge")?.getAttribute("data-tooltip")).toBe(
 				"Status unavailable: TUICommander could not verify local changes or merge state, so removal is blocked. git status failed",
 			);
+		});
+
+		// Catches: compact density hiding the base-resolution failure behind Unknown.
+		it("labels missing base branches in compact lifecycle badges", () => {
+			const error = "Cannot resolve default branch: attach the main checkout to a branch.";
+			const container = renderLifecycle({
+				lifecycleStatus: { dirtyFiles: null, commitStatus: "unknown", removalSafety: "unknown", error },
+			});
+			expect(container.querySelector(".lifecycleBadge")?.textContent).toBe("No base branch");
+			expect(container.querySelector(".lifecycleBadge")?.getAttribute("data-tooltip")).toContain(error);
 		});
 
 		/** A main checkout is not removable from this list, so the whole question

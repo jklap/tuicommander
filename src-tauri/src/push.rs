@@ -183,6 +183,59 @@ pub(crate) fn reserve_push_slot(
     true
 }
 
+/// Build the user-facing session notice separately from its navigation identity.
+pub(crate) fn session_push_payload(
+    session_id: &str,
+    display_name: Option<&str>,
+    agent_type: Option<&str>,
+    cwd: Option<&str>,
+    prompt: &str,
+) -> (String, String) {
+    let usable = |value: &str| !value.trim().is_empty() && value.trim() != session_id;
+    let name = display_name
+        .filter(|value| usable(value))
+        .map(str::trim)
+        .map(str::to_owned)
+        .unwrap_or_else(|| {
+            let agent = agent_type
+                .filter(|value| usable(value))
+                .unwrap_or("Terminal");
+            let repo = cwd
+                .and_then(|path| path.rsplit(['/', '\\']).find(|part| !part.is_empty()))
+                .filter(|value| usable(value));
+            match repo {
+                Some(repo) => format!("{agent} · {repo}"),
+                None => agent.to_owned(),
+            }
+        });
+    let prompt = prompt.trim();
+    // Progress tool rows are presentation chrome, not the user's question.
+    let progress = prompt
+        .split_once('{')
+        .filter(|(prefix, _)| prefix.split_whitespace().last() == Some("progress"));
+    let progress_text = progress.and_then(|(_, json)| {
+        serde_json::from_str::<serde_json::Value>(&format!("{{{json}"))
+            .ok()?
+            .get("text")?
+            .as_str()
+            .map(str::to_owned)
+    });
+    let text = if progress.is_some() {
+        progress_text
+            .as_deref()
+            .filter(|text| !text.trim().is_empty())
+            .unwrap_or("awaiting input")
+    } else if prompt.is_empty() {
+        "awaiting input"
+    } else {
+        prompt
+    };
+    (
+        format!("{name}: {text}"),
+        format!("/mobile/session/{session_id}"),
+    )
+}
+
 /// Send a push notification to a list of subscriptions. `sent` counts accepted
 /// push-service requests, not notifications displayed by a phone.
 pub(crate) async fn send_push_batch(
@@ -439,6 +492,73 @@ fn build_push_request(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // Catches custom names being replaced by a machine identity and ordinary questions being lost.
+    #[test]
+    fn session_push_payload_preserves_display_name_and_question() {
+        assert_eq!(
+            session_push_payload(
+                "id",
+                Some("Reviewer"),
+                Some("ego"),
+                Some("/repo"),
+                "Approve deployment?"
+            )
+            .0,
+            "Reviewer: Approve deployment?"
+        );
+        assert_eq!(
+            session_push_payload("id", Some("Reviewer"), None, None, "completed").0,
+            "Reviewer: completed"
+        );
+    }
+
+    // Catches empty/UUID names leaking into fallback and Windows paths losing their repo label.
+    #[test]
+    fn session_push_payload_falls_back_without_uuid() {
+        for name in [None, Some("  "), Some("id")] {
+            assert_eq!(
+                session_push_payload("id", name, Some("ego"), Some(r"C:\repos\mdkb\"), "").0,
+                "ego · mdkb: awaiting input"
+            );
+        }
+        assert_eq!(
+            session_push_payload("id", None, None, None, "").0,
+            "Terminal: awaiting input"
+        );
+    }
+
+    // Catches malformed or empty tool arguments being shown as raw JSON.
+    #[test]
+    fn session_push_payload_suppresses_unreadable_progress() {
+        for prompt in [
+            r#"✓ progress {"text":""}"#,
+            "✓ progress {bad json}",
+            r#"✓ progress {"type":"blocked"}"#,
+        ] {
+            assert_eq!(
+                session_push_payload("id", Some("Reviewer"), None, None, prompt).0,
+                "Reviewer: awaiting input"
+            );
+        }
+    }
+
+    // Catches the observed UUID + raw progress-tool JSON reaching a phone.
+    #[test]
+    fn session_push_payload_hides_uuid_and_progress_json() {
+        let id = "31e5f82e-93e0-425e-94af-09b2f48091a4";
+        let (body, url) = session_push_payload(
+            id,
+            None,
+            Some("ego"),
+            Some("/repo/mdkb"),
+            r#"✓ progress {"type":"blocked","text":"Prompt recall e setup ego"}"#,
+        );
+        assert_eq!(body, "ego · mdkb: Prompt recall e setup ego");
+        assert!(!body.contains(id));
+        assert!(!body.contains('{'));
+        assert_eq!(url, format!("/mobile/session/{id}"));
+    }
 
     #[test]
     fn push_store_crud() {

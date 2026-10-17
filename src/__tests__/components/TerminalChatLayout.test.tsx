@@ -51,7 +51,7 @@ it("copies all marked answer blocks in one turn without merging the next turn", 
 	const copies = getAllByRole("button", { name: "Copy assistant message" });
 	expect(copies).toHaveLength(2);
 	await fireEvent.click(copies[0]);
-	expect(clipboard).toHaveBeenCalledWith("💬 First answer.\n\n💬 Second answer.\n\n💬 Third paragraph.");
+	expect(clipboard).toHaveBeenCalledWith("First answer.\n\nSecond answer.\n\nThird paragraph.");
 });
 
 // Catches: raw Bash commands obscuring descriptions or non-Claude tools borrowing Claude descriptions.
@@ -80,7 +80,7 @@ it("keeps the collapsed tool row while using Claude Bash descriptions and non-Cl
 	];
 	const claude = chat(entries);
 	expect(claude.container.querySelector("summary")?.textContent).toContain(
-		"2 tool callsInspect result · Read: report.md",
+		"2 tool calls ›Inspect result · Read: report.md",
 	);
 	expect(claude.container.querySelector("details")?.open).toBe(false);
 	cleanup();

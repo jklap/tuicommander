@@ -42,7 +42,7 @@ export interface ChoicePrompt {
 	dismiss_key?: string;
 	amend_key?: string;
 	/** How this agent's dialog accepts a selected option. */
-	selection_mode?: "navigate-enter";
+	selection_mode?: "navigate-enter" | "toggle-enter";
 }
 
 /** Single option in a ChoicePrompt. Matches Rust output_parser::ChoiceOption. */
@@ -122,7 +122,7 @@ export function reconcileSessions(prev: SessionInfo[], next: SessionInfo[]): Ses
  *
  * Returns reactive signals for the session list, loading state, and error.
  */
-export function useSessions() {
+export function useSessions(onRecovered?: () => void) {
 	const [sessions, setSessions] = createSignal<SessionInfo[]>([]);
 	const [loading, setLoading] = createSignal(true);
 	const [refreshing, setRefreshing] = createSignal(false);
@@ -145,10 +145,11 @@ export function useSessions() {
 	let nextAttemptAt = 0;
 
 	/** `force` skips the backoff wait: first load, SSE events, manual retry, back online. */
-	async function fetchSessions(force = true) {
+	async function fetchSessions(force = true, retryViews = false) {
 		if (!force && Date.now() < nextAttemptAt) return;
 		try {
 			const result = await rpc<SessionInfo[]>("list_active_sessions");
+			const recovered = error() !== null;
 			for (const session of result) {
 				if (session.state?.agent_state !== "completed") seenCompletions.delete(session.session_id);
 				session.unseen = session.state?.agent_state === "completed" && !seenCompletions.has(session.session_id);
@@ -157,9 +158,10 @@ export function useSessions() {
 			setError(null);
 			setAuthError(false);
 			failures = 0;
+			if (recovered || retryViews) onRecovered?.();
 		} catch (err) {
 			const msg = err instanceof Error ? err.message : String(err);
-			setError(msg);
+			setError(isAuthError(err) ? "Sign in again to reconnect." : "Could not connect to the server.");
 			setAuthError(isAuthError(err));
 			nextAttemptAt = Date.now() + pollDelayMs(failures++);
 			appLogger.warn("network", `Failed to fetch sessions: ${msg}`);
@@ -227,7 +229,7 @@ export function useSessions() {
 	function refresh() {
 		const token = ++refreshToken;
 		setRefreshing(true);
-		fetchSessions().finally(() => {
+		fetchSessions(true, true).finally(() => {
 			if (refreshToken === token) setRefreshing(false);
 		});
 	}

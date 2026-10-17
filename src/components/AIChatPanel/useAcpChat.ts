@@ -109,6 +109,7 @@ export type AcpChatClient = Pick<
 	| "newSession"
 	| "loadSession"
 	| "closeSession"
+	| "deleteSession"
 	| "listSessions"
 	| "prompt"
 	| "cancel"
@@ -457,7 +458,15 @@ export function createAcpChat(
 		return id && session ? { id, session } : null;
 	}
 
+	const pinnedRepo = () => aiChatTabs.pinnedRepo(TABS, sessionId() ?? "");
+	const operatingRepo = () => pinnedRepo() ?? viewedRepo();
 	return {
+		pinnedRepo,
+		operatingRepo,
+		toggleRepoPin(): void {
+			const session = sessionId();
+			if (session) aiChatTabs.pinRepo(TABS, session, pinnedRepo() ? null : viewedRepo());
+		},
 		/** The workspace every session runs in, once ego has been started. */
 		root,
 		/** The repository on screen, sent with each prompt as a hint. */
@@ -549,9 +558,57 @@ export function createAcpChat(
 			}
 		},
 
+		async deleteSession(session: AcpSessionId): Promise<boolean> {
+			const id = connectionId();
+			if (!id || !connection()?.capabilities?.delete) return false;
+			// A custom launch may use another executable/store, so use its owner.
+			const deleted = await guard("deleting the conversation", async () => {
+				const owner =
+					launches()[session] && session !== sessionId()
+						? (await client.openConversation({ sessionId: session })).connection.connectionId
+						: !launches()[session] && binding?.launch
+							? (await connectDefault(await chatRoot())).connectionId
+							: id;
+				await client.deleteSession(owner, session);
+				return true;
+			});
+			if (!deleted) return false;
+			setListedSessions((rows) => rows.filter((row) => row.sessionId !== session));
+			setLaunches((current) => {
+				const next = { ...current };
+				delete next[session];
+				return next;
+			});
+			acpTranscript.clear(session);
+			const wasSelected = sessionId() === session;
+			const next = aiChatTabs.remove(TABS, session);
+			if (binding?.sessionId === session) binding.sessionId = null;
+			if (defaultBinding?.sessionId === session) defaultBinding.sessionId = null;
+			if (wasSelected) {
+				++selection;
+				failedSession = null;
+				setSessionId(null);
+			}
+			const request = selection;
+			await guard("forgetting the deleted conversation", () =>
+				updateAppConfig<{
+					ai_chat_sessions?: Record<string, string>;
+					ai_chat_launches?: Record<string, ChatLaunch>;
+				}>((config) => {
+					for (const [root, saved] of Object.entries(config.ai_chat_sessions ?? {})) {
+						if (saved === session) delete config.ai_chat_sessions![root];
+					}
+					if (config.ai_chat_launches) delete config.ai_chat_launches[session];
+				}),
+			);
+			if (wasSelected && next && request === selection) await selectSession(next);
+			return true;
+		},
+
 		async closeTab(tab: AcpSessionId): Promise<void> {
 			const active = aiChatTabs.close(TABS, tab);
-			if (!active) return;
+			// Closing another tab is not an explicit retry of the refused conversation.
+			if (!active || active === failedSession) return;
 			await selectSession(active);
 		},
 
@@ -575,8 +632,8 @@ export function createAcpChat(
 			const { id, session } = current;
 			await guard("sending the turn", () =>
 				files.length
-					? client.prompt(id, session, text, images, viewedRepo(), files)
-					: client.prompt(id, session, text, images, viewedRepo()),
+					? client.prompt(id, session, text, images, operatingRepo(), files)
+					: client.prompt(id, session, text, images, operatingRepo()),
 			);
 		},
 

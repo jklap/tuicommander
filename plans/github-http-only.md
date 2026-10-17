@@ -1,3 +1,8 @@
+---
+status: in_progress
+started_at: "2026-10-11T08:13:41.781Z"
+updated: "2026-10-11T08:13:41.781Z"
+---
 # Plan: One GitHub path in TUIC, over HTTP
 
 **Created:** 2026-10-11 | **Status:** Draft | **Effort:** L | **Branch:** `docs/gh-http-plan` | **Baseline:** `6ad7c7e90` | **Story:** 1708-a7a5

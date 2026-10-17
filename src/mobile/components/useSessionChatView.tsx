@@ -11,6 +11,8 @@ export function useSessionChatView(props: {
 	sessionExists: () => boolean;
 	subscribeWake: ChatViewWake;
 }) {
+	const [atBottom, setAtBottom] = createSignal(true);
+	let jump: (() => void) | undefined;
 	const [mode, setMode] = createSignal<"cli" | "chat">(modes.get(props.sessionId()) ?? "cli");
 	createEffect(() => setMode(modes.get(props.sessionId()) ?? "cli"));
 	const select = (next: "cli" | "chat") => {
@@ -25,20 +27,17 @@ export function useSessionChatView(props: {
 		}
 	});
 	const active = () => mode() === "chat" && available();
+	const openChat = () => {
+		chatViewStore.clearUnavailable(props.sessionId());
+		select("chat");
+	};
 	const Toggle = () => (
 		<Show when={available()}>
 			<div class={styles.toggle} role="group" aria-label="Terminal view">
 				<button type="button" aria-pressed={!active()} onClick={() => select("cli")}>
 					CLI
 				</button>
-				<button
-					type="button"
-					aria-pressed={active()}
-					onClick={() => {
-						chatViewStore.clearUnavailable(props.sessionId());
-						select("chat");
-					}}
-				>
+				<button type="button" aria-pressed={active()} onClick={openChat}>
 					Chat
 				</button>
 			</div>
@@ -59,6 +58,11 @@ export function useSessionChatView(props: {
 						sessionId={sessionId}
 						terminalAgent="claude"
 						mobile
+						onAtBottomChange={setAtBottom}
+						onRegisterScrollToBottom={(fn) => {
+							jump = fn;
+							setAtBottom(true);
+						}}
 						subscribeWake={props.subscribeWake}
 						onUnavailable={() => select("cli")}
 						hint="Reply below. Switch to CLI for permission prompts or questions missing here."
@@ -67,5 +71,5 @@ export function useSessionChatView(props: {
 			</Show>
 		</>
 	);
-	return { active, Toggle, View };
+	return { active, available, openChat, Toggle, View, atBottom, scrollToBottom: () => jump?.() };
 }

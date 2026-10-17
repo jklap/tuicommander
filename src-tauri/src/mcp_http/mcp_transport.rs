@@ -18,7 +18,6 @@ use super::mcp_transport_ancillary::CONFIRM_TIMEOUT;
 use super::mcp_transport_ancillary::SESSION_HTML_TAB_LIMIT;
 pub(crate) use super::mcp_transport_ancillary::create_daemon_workflow_worktree;
 pub(crate) use super::mcp_transport_ancillary::emit_progress_entry;
-use super::mcp_transport_ancillary::handle_config;
 #[cfg(test)]
 use super::mcp_transport_ancillary::handle_confirm;
 use super::mcp_transport_ancillary::handle_debug_unified;
@@ -58,7 +57,6 @@ use super::mcp_transport_ancillary::worktree_remove_success_response;
 #[cfg(test)]
 use super::mcp_transport_catalogue::AGENT_ACTIONS;
 #[cfg(test)]
-use super::mcp_transport_catalogue::CONFIG_ACTIONS;
 #[cfg(test)]
 use super::mcp_transport_catalogue::DEBUG_ACTIONS;
 #[cfg(test)]
@@ -447,7 +445,7 @@ where
 fn session_action_requires_blocking_pool(action: &str) -> bool {
     matches!(
         action,
-        "create" | "input" | "kill" | "close" | "resize" | "declare_worktree"
+        "create" | "input" | "kill" | "close" | "resize" | "declare_worktree" | "force_retry"
     )
 }
 
@@ -508,6 +506,9 @@ async fn dispatch_mcp_tool_call_with_context(
     mcp_session_id: Option<&str>,
     managed_parent_cwd: Option<&str>,
 ) -> serde_json::Value {
+    if name == "config" {
+        return serde_json::json!({"error":"Unknown tool 'config'"});
+    }
     // Enforce disabled_native_tools on every call path (not just the call_tool meta-tool).
     // Read-guard does not span an await and is released at the end of the `if` expression.
     if state
@@ -579,7 +580,7 @@ async fn dispatch_mcp_tool_call_with_context(
         "session" => {
             let action = args["action"].as_str().unwrap_or("");
             if let Some(remote) = super::remote_mcp_sessions::resolve(state, args) {
-                if action == "submit" && !addr.ip().is_loopback() {
+                if matches!(action, "submit" | "force_retry") && !addr.ip().is_loopback() {
                     return serde_json::json!({"error":"This session action is restricted to localhost connections"});
                 }
                 return match remote {
@@ -614,7 +615,7 @@ async fn dispatch_mcp_tool_call_with_context(
                 // Read-only blocking wait — needs the async runtime for its poll
                 // loop, so it can't live in the sync handle_session.
                 handle_session_wait(state, args).await
-            } else if action == "submit" && !addr.ip().is_loopback() {
+            } else if matches!(action, "submit" | "force_retry") && !addr.ip().is_loopback() {
                 serde_json::json!({
                     "error": "This session action is restricted to localhost connections"
                 })
@@ -625,6 +626,7 @@ async fn dispatch_mcp_tool_call_with_context(
             } else if matches!(
                 action,
                 "create"
+                    | "force_retry"
                     | "input"
                     | "kill"
                     | "close"
@@ -642,7 +644,16 @@ async fn dispatch_mcp_tool_call_with_context(
                 let state = state.clone();
                 let args = args.clone();
                 let sid = mcp_session_id.map(str::to_owned);
-                run_blocking_handler(move || handle_session(&state, &args, sid.as_deref())).await
+                if action == "input" {
+                    crate::pty::run_bounded_pty_input(move || {
+                        Ok(handle_session(&state, &args, sid.as_deref()))
+                    })
+                    .await
+                    .unwrap_or_else(|error| serde_json::json!({"error": error}))
+                } else {
+                    run_blocking_handler(move || handle_session(&state, &args, sid.as_deref()))
+                        .await
+                }
             } else {
                 handle_session(state, args, mcp_session_id)
             }
@@ -737,10 +748,20 @@ async fn dispatch_mcp_tool_call_with_context(
         "plugin_dev_guide" => {
             serde_json::json!({"content": super::plugin_docs::PLUGIN_DOCS})
         }
-        "config" => {
-            let state = state.clone();
-            let args = args.clone();
-            run_blocking_handler(move || handle_config(&state, addr, &args)).await
+        "settings" => {
+            let enabled = state.config.read().settings_mcp_enabled
+                && !state
+                    .config
+                    .read()
+                    .disabled_native_tools
+                    .iter()
+                    .any(|name| name == "settings");
+            let caller = crate::settings::policy::Caller::mcp(
+                addr,
+                mcp_session_id.unwrap_or("headerless").to_owned(),
+                enabled,
+            );
+            crate::settings::api::execute(state, args.clone(), caller).await
         }
         "debug" => handle_debug_unified(state, addr, args),
         // Blocking pool: `speak` builds nothing, but `status` reaps a finished
@@ -757,7 +778,7 @@ async fn dispatch_mcp_tool_call_with_context(
             handle_call_tool(state, addr, args, mcp_session_id, managed_parent_cwd).await
         }
         _ => serde_json::json!({"error": format!(
-            "Unknown tool '{}'. Available: session, agent, task, remote, repo, story, progress, ui, plugin_dev_guide, config, debug, voice, search_tools, get_tool_schema, call_tool", name
+            "Unknown tool '{}'. Available: session, agent, task, remote, repo, story, progress, ui, plugin_dev_guide, settings, debug, voice, search_tools, get_tool_schema, call_tool", name
         )}),
     }
 }

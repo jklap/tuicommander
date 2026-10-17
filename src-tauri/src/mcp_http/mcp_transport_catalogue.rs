@@ -207,9 +207,9 @@ pub(super) fn render_mcp_instructions(
     // A spawned child's suggestion buttons are never shown to anyone.
     let show_suggest = show_suggest && !ctx.spawned_child;
     out.push_str("## TUIC Protocol — Required Output Markers\n\n");
-    out.push_str("Required even under concision rules; omission breaks the UI.\n\n");
+    out.push_str("Required for the UI.\n\n");
     out.push_str(&format!(
-        "- `ack` — exactly once per MCP connection or reconnect, the first assistant message MUST start: `TUICommander v{ver} is connected.` Never repeat it on each conversational turn.\n"
+        "- `ack` — once per MCP connection/reconnect: start your first message with `TUICommander v{ver} is connected.` Never repeat per turn.\n"
     ));
     if show_intent {
         out.push_str("- `intent: <desc> (<title>)` on its own line, at the start of every user task and on each material work-phase change. Describe the work currently in progress in present tense; `<title>` ≤3 words, spaces not hyphens.\n");
@@ -220,7 +220,7 @@ pub(super) fn render_mcp_instructions(
     // Always on: the answers-only view is a per-terminal toggle with no setting
     // to switch the marker off, and `answersTurn.ts` anchors on a row that
     // starts with the marker followed by a space.
-    out.push_str("- `💬 ` — prefix every sentence that directly answers the user's question with `💬 ` at row start or at the start of a list item’s text (marker + space). Exclude status, tool and hook/task notices.\n");
+    out.push_str("- `💬 ` — prefix every sentence that directly answers the user's question at row start or list-item text start (marker + space). Exclude status, tool and hook/task notices.\n");
     out.push('\n');
 
     // ── Capability map ───────────────────────────────────────────────
@@ -424,12 +424,11 @@ pub(super) fn validate_mcp_repo_path(path: &str) -> Result<(), serde_json::Value
     super::validate_path_string(path).map_err(|msg| serde_json::json!({"error": msg}))
 }
 
-pub(super) const SESSION_ACTIONS: &str = "list, create, submit, input, output, resize, rename, keep_open, suspend, close, kill, pause, resume, status, wait, declare_worktree";
+pub(super) const SESSION_ACTIONS: &str = "list, create, submit, force_retry, input, output, resize, rename, keep_open, suspend, close, kill, pause, resume, status, wait, declare_worktree";
 pub(super) const AGENT_ACTIONS: &str = "spawn, register, list_peers, send, inbox, wait";
 pub(super) const REPO_ACTIONS: &str = "list, add, active, status, branch_integrations, branch_integration, worktree_list, worktree_lifecycle, worktree_create, worktree_remove, orphan_cleanup_answer, branch_delete, progress_list, work_item, work_item_act";
 pub(super) const UI_ACTIONS: &str = "tab, toast, confirm, screenshot";
 pub(super) const TASK_ACTIONS: &str = "get, cancel";
-pub(super) const CONFIG_ACTIONS: &str = "get, save, list_prompts, load_prompt, save_prompt";
 pub(super) const DEBUG_ACTIONS: &str = "agent_detection, logs, sessions, invoke_js, help";
 #[cfg(any(feature = "dictation", test))]
 pub(super) const VOICE_ACTIONS: &str = "speak, stop, status";
@@ -502,7 +501,7 @@ pub(super) const NATIVE_TOOL_SUMMARIES: &[(&str, &str)] = &[
         "workflow_run",
         "Start workflow graphs and inspect their execution history.",
     ),
-    ("config", "Read and update application settings."),
+    ("settings", "Settings."),
     ("debug", "Inspect application logs and runtime state."),
     (
         "voice",
@@ -524,11 +523,11 @@ pub(super) fn native_tool_definitions() -> serde_json::Value {
         crate::telegram::tool_definition(),
         {
             "name": "session",
-            "description": "PTY multiplexer (replaces tmux). Create terminals, send input (send-keys), read output (capture-pane), manage lifecycle.\n\nActions:\n- list: All active sessions and states in one call, including local and connected remote sessions. Remote rows carry connection_id and address=connection/session_id. Use for every global overview; never fan out per-session status calls. Returns display_name (assigned name), alias (independent repo-derived short address), tuic_session (the stable identity the tab persists), is_caller, shell_state (PTY activity), and agent_state (starting|working|awaiting_input|idle|completed; completed requires suggest marker). Absent optional fields are omitted, not null — background_work and standby appear only when true.\n\nEvery action that takes session_id accepts the PTY id, tuic_session, alias (e.g. tu-1), a unique short PTY-id prefix, or a unique display name.\n- create: New PTY. Returns {session_id}. Optional: cwd, shell, rows, cols.\n- submit: Submit one non-empty command to a confirmed-idle managed agent and wait internally for a bounded receipt. Use one call; never split text and Enter; never poll after it. Returns submission_id, submitted, write_state, acknowledged, retry_safe, turn_epoch, composer_state (tracked InputLineBuffer, not application state), and acknowledgement or a precise reason. Acknowledgement means child terminal movement after Enter, not semantic application acceptance. Never queues; partial composers, dialogs, busy agents, and older queued commands reject before writing.\n- input: Raw text/key compatibility surface. Send text and/or special_key; ok confirms PTY write only.\n- output: Read terminal output. Returns {data, cursor, scrollback_lines, oldest_offset, exited, exit_code}. Use as an anomaly fallback for a child that failed to send its result, not as the normal orchestration channel. The tail read omits an empty input box and everything below it (status line, HUD); format=raw keeps them. scrollback_lines = total lines in buffer (up to 10000); oldest_offset = first available line number. Patterns: (1) Snapshot: omit since_cursor, default limit=50 gives last 50 lines. (2) Delta read: since_cursor=<previous cursor> returns only new lines. (3) Navigate backwards: from_line=oldest_offset reads from the beginning of the buffer. (4) Arbitrary window: from_line=N, limit=50 reads any 50-line slice. Windowed reads report has_more and next_cursor; follow the continuation note to fetch retained output without rerunning the command. Raw pages use from_byte=oldest_offset then from_byte=next_cursor (source-byte positions). Evicted output cannot be recovered.\n- declare_worktree: Declare an existing linked worktree for this authenticated live caller. Requires worktree_path; rejects foreign sessions and repositories. Persists sidebar placement without changing shell cwd. Caller-bound MCP-only request, available via POST /mcp.\n- status: Session state; absent optional fields are omitted.\n- wait: Block (server-side) until session_id is idle or exited (until=idle|exited), or timeout_ms elapses. One cheap call instead of a status polling loop. Returns {met, timed_out, shell_state?, exit_code?}.\n- resize: Change PTY dimensions.\n- rename: Set the tab's display name. Requires name (non-empty). Sticky by default — protected from later OSC/intent title updates unless is_custom=false.\n- keep_open: Keep a managed child open by disabling idle closure with enabled=true; enabled=false restores automatic idle closure. Requires session_id.\n- suspend: End the tab's PTY and agent to free memory and CPU but keep the tab, restorable like after a TUIC restart; the user resumes it from the tab. Refused while the agent is working, a question awaits an answer, or a command runs. Not auto-standby, which only SIGSTOPs and keeps memory. Requires session_id.\n- close: Graceful shutdown (Ctrl+C, waits).\n- kill: Force SIGKILL (use when close fails).\n- pause: Pause output buffering. resume: Resume.",
+            "description": "PTY multiplexer (replaces tmux). Create terminals, send input (send-keys), read output (capture-pane), manage lifecycle.\n\nActions:\n- list: All active sessions and states in one call, including local and connected remote sessions. Remote rows carry connection_id and address=connection/session_id. Use for every global overview; never fan out per-session status calls. Returns display_name (assigned name), alias (independent repo-derived short address), tuic_session (the stable identity the tab persists), is_caller, shell_state (PTY activity), and agent_state (starting|working|awaiting_input|idle|completed; completed requires suggest marker). Absent optional fields are omitted, not null — background_work and standby appear only when true.\n\nEvery action that takes session_id accepts the PTY id, tuic_session, alias (e.g. tu-1), a unique short PTY-id prefix, or a unique display name.\n- create: New PTY. Returns {session_id}. Optional: cwd, shell, rows, cols.\n- submit: Submit one non-empty command to a confirmed-idle managed agent and wait internally for a bounded receipt. Use one call; never split text and Enter; never poll after it. Returns submission_id, submitted, write_state, acknowledged, retry_safe, turn_epoch, composer_state (tracked InputLineBuffer, not application state), and acknowledgement or a precise reason. Acknowledgement means child terminal movement after Enter, not semantic application acceptance. Never queues; partial composers, dialogs, busy agents, and older queued commands reject before writing.\n- force_retry: Submit /retry once to an ego terminal currently reporting provider recovery. Requires session_id; never queues or retries automatically.\n- input: Raw text/key compatibility surface. Send text and/or special_key; ok confirms PTY write only.\n- output: Read terminal output. Returns {data, cursor, scrollback_lines, oldest_offset, exited, exit_code}. Use as an anomaly fallback for a child that failed to send its result, not as the normal orchestration channel. The tail read omits an empty input box and everything below it (status line, HUD); format=raw keeps them. scrollback_lines = total lines in buffer (up to 10000); oldest_offset = first available line number. Patterns: (1) Snapshot: omit since_cursor, default limit=50 gives last 50 lines. (2) Delta read: since_cursor=<previous cursor> returns only new lines. (3) Navigate backwards: from_line=oldest_offset reads from the beginning of the buffer. (4) Arbitrary window: from_line=N, limit=50 reads any 50-line slice. Windowed reads report has_more and next_cursor; follow the continuation note to fetch retained output without rerunning the command. Raw pages use from_byte=oldest_offset then from_byte=next_cursor (source-byte positions). Evicted output cannot be recovered.\n- declare_worktree: Declare an existing linked worktree for this authenticated live caller. Requires worktree_path; rejects foreign sessions and repositories. Persists sidebar placement without changing shell cwd. Caller-bound MCP-only request, available via POST /mcp.\n- status: Session state; absent optional fields are omitted.\n- wait: Block (server-side) until session_id is idle or exited (until=idle|exited), or timeout_ms elapses. One cheap call instead of a status polling loop. Returns {met, timed_out, shell_state?, exit_code?}.\n- resize: Change PTY dimensions.\n- rename: Set the tab's display name. Requires name (non-empty). Sticky by default — protected from later OSC/intent title updates unless is_custom=false.\n- keep_open: Keep a managed child open by disabling idle closure with enabled=true; enabled=false restores automatic idle closure. Requires session_id.\n- suspend: End the tab's PTY and agent to free memory and CPU but keep the tab, restorable like after a TUIC restart; the user resumes it from the tab. Refused while the agent is working, a question awaits an answer, or a command runs. Not auto-standby, which only SIGSTOPs and keeps memory. Requires session_id.\n- close: Graceful shutdown (Ctrl+C, waits).\n- kill: Force SIGKILL (use when close fails).\n- pause: Pause output buffering. resume: Resume.",
             "inputSchema": { "type": "object", "properties": {
                 "connection_id": { "type": "string", "description": "Configured remote connection qualifier (session list/output/submit; agent list_peers/send). Remote addresses also accept connection/id; local/id addresses the desktop hub." },
-                "action": { "type": "string", "description": "One of: list, create, submit, input, output, status, wait, resize, rename, keep_open, suspend, close, kill, pause, resume, declare_worktree" },
-                "session_id": { "type": "string", "description": "Session address — PTY id, tuic_session, alias, unique short PTY-id prefix, or unique display name. Ambiguous prefixes or names return an error. Required for submit, input, output, status, resize, rename, keep_open, suspend, close, kill, pause, resume, wait" },
+                "action": { "type": "string", "description": "One of: list, create, submit, force_retry, input, output, status, wait, resize, rename, keep_open, suspend, close, kill, pause, resume, declare_worktree" },
+                "session_id": { "type": "string", "description": "Session address — PTY id, tuic_session, alias, unique short PTY-id prefix, or unique display name. Ambiguous prefixes or names return an error. Required for submit, force_retry, input, output, status, resize, rename, keep_open, suspend, close, kill, pause, resume, wait" },
                 "name": { "type": "string", "description": "New tab display name, non-empty (action=rename, required)" },
                 "is_custom": { "type": "boolean", "description": "action=rename, default true. true protects the name from later OSC/intent title updates; false lets them refine it." },
                 "enabled": { "type": "boolean", "description": "Required for action=keep_open: true disables idle close for a managed child; false restores it." },
@@ -701,16 +700,9 @@ pub(super) fn native_tool_definitions() -> serde_json::Value {
             "inputSchema": { "type": "object", "properties": {}, "required": [] }
         },
         {
-            "name": "config",
-            "description": "Read or write app configuration.\n\nActions (pass as 'action' parameter):\n- get: Returns app config (shell, font, theme, etc.). Password hash is stripped.\n- save: Persists configuration. Requires config object. Partial updates OK.\n- list_prompts: Lists saved smart prompts (id, label, pinned — no text).\n- load_prompt: Returns full prompt entry by id (requires 'id' param).\n- save_prompt: Upserts a prompt by id (requires 'id', 'label', 'text'; optional 'pinned'). Localhost only.",
-            "inputSchema": { "type": "object", "properties": {
-                "action": { "type": "string", "description": "One of: get, save, list_prompts, load_prompt, save_prompt" },
-                "config": { "type": "object", "description": "Config fields to save (action=save)" },
-                "id": { "type": "string", "description": "Prompt id (action=load_prompt, save_prompt)" },
-                "label": { "type": "string", "description": "Prompt label (action=save_prompt)" },
-                "text": { "type": "string", "description": "Prompt text (action=save_prompt)" },
-                "pinned": { "type": "boolean", "description": "Pin prompt (action=save_prompt, optional)" }
-            }, "required": ["action"] }
+            "name": "settings",
+            "description": "Describe, read and edit Rust-owned settings. Actions: describe, get, set, reset, patch, perform, refresh. Describe pages are bounded; writes require the authoritative expectedRevision and explicit target. Secrets are write-only. Exposure or execution-authority edits require ui confirm with the backend proposalId, then replay the exact request with approval. Prompts use the prompts store and stable IDs. Disabled by default; only trusted UI can enable access.",
+            "inputSchema": crate::settings::api::request_schema()
         },
         {
             "name": "debug",
@@ -781,7 +773,7 @@ pub(super) fn meta_tool_definitions(state: &Arc<AppState>) -> serde_json::Value 
          without searching for it again.\n\n\
          Domains available: terminal pane sessions (tmux replacement), AI agent orchestration + \
          messaging, repos/GitHub PRs/worktrees, UI tabs + notifications, plugin authoring \
-         reference, app config, diagnostics{upstream_suffix}."
+         reference, typed settings, diagnostics{upstream_suffix}."
     );
 
     serde_json::json!([
@@ -877,11 +869,11 @@ pub(crate) fn native_tool_catalog() -> Vec<serde_json::Value> {
 /// every listing/search path uses the same rules — adding a future config
 /// flag means editing one place instead of chasing duplicated closures.
 pub(super) fn filtered_native_tools(state: &Arc<AppState>) -> Vec<serde_json::Value> {
-    let (disabled, progress_tracking) = {
+    let (disabled, progress_tracking, settings_enabled) = {
         let cfg = state.config.read();
         let disabled: std::collections::HashSet<String> =
             cfg.disabled_native_tools.iter().cloned().collect();
-        (disabled, cfg.progress_tracking)
+        (disabled, cfg.progress_tracking, cfg.settings_mcp_enabled)
     };
     native_tool_definitions()
         .as_array()
@@ -900,7 +892,7 @@ pub(super) fn filtered_native_tools(state: &Arc<AppState>) -> Vec<serde_json::Va
             if !progress_tracking && name == "progress" {
                 return false;
             }
-            !disabled.contains(name)
+            (name != "settings" || settings_enabled) && !disabled.contains(name)
         })
         .collect()
 }
@@ -1101,7 +1093,7 @@ pub(super) fn handle_get_tool_schema_for_session(
 
 /// Handle `call_tool` meta-tool — dispatch a named tool call to either
 /// the native handler or the upstream proxy, preserving `addr` for
-/// localhost-only restrictions (config save, notify confirm).
+/// localhost-only restrictions (settings mutation, notify confirm).
 pub(super) async fn handle_call_tool(
     state: &Arc<AppState>,
     addr: SocketAddr,

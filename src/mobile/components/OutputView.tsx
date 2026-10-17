@@ -1,6 +1,7 @@
 import { createEffect, createMemo, createSignal, For, type JSX, onCleanup, onMount, Show } from "solid-js";
 import { appLogger } from "../../stores/appLogger";
 import { type PtySubscription, subscribePty } from "../../transport";
+import { recordMobileSocketState } from "../resumeTrail";
 import {
 	groupLineBlocks,
 	type LogLine,
@@ -23,6 +24,8 @@ const SCROLL_CHUNK_SIZE = 100;
 const SCROLL_UP_THRESHOLD = 300;
 
 interface OutputViewProps {
+	onAtBottomChange?: (atBottom: boolean) => void;
+	onRegisterScrollToBottom?: (jump: (() => void) | undefined) => void;
 	sessionId: string;
 	/** Hidden Chat output keeps its stream, and follows bottom on CLI re-entry. */
 	visible?: boolean;
@@ -166,6 +169,8 @@ export function OutputView(props: OutputViewProps) {
 			// Output can queue this frame before the user starts scrolling.
 			if (containerEl && props.visible !== false && (force || (!userScrolledUp && !touchActive))) {
 				containerEl.scrollTop = containerEl.scrollHeight;
+				lastScrollTop = containerEl.scrollTop;
+				props.onAtBottomChange?.(true);
 			}
 		});
 	}
@@ -175,6 +180,7 @@ export function OutputView(props: OutputViewProps) {
 		// scrollTop can be fractional while scrollHeight/clientHeight are rounded.
 		// Only tolerate rounding, not an upward gesture inside a near-bottom zone.
 		const atBottom = containerEl.scrollHeight - containerEl.scrollTop - containerEl.clientHeight <= 1;
+		props.onAtBottomChange?.(atBottom);
 		// Only an upward move detaches: the scroll event of our own follow scroll can be
 		// measured after a new chunk grew the content, and must not read as a detach.
 		if (atBottom) userScrolledUp = false;
@@ -185,6 +191,13 @@ export function OutputView(props: OutputViewProps) {
 			fetchOlderLines();
 		}
 	}
+
+	props.onRegisterScrollToBottom?.(() => {
+		userScrolledUp = false;
+		touchActive = false;
+		scrollToBottom(true);
+	});
+	onCleanup(() => props.onRegisterScrollToBottom?.(undefined));
 
 	createEffect(() => {
 		if (props.visible !== false) {
@@ -198,8 +211,14 @@ export function OutputView(props: OutputViewProps) {
 	// pure battery and radio cost. Registered in the component body, not in the
 	// async mount, so the listener has an owner to be released by.
 	createVisibilityGate(
-		() => unsubscribe?.pause(),
-		() => unsubscribe?.resume(),
+		() => {
+			unsubscribe?.pause();
+			if (unsubscribe) recordMobileSocketState(props.sessionId, "paused");
+		},
+		() => {
+			if (unsubscribe) recordMobileSocketState(props.sessionId, "connecting");
+			unsubscribe?.resume();
+		},
 	);
 
 	onMount(async () => {
@@ -210,11 +229,13 @@ export function OutputView(props: OutputViewProps) {
 		const offset = await fetchInitialOutput();
 
 		try {
+			recordMobileSocketState(props.sessionId, "connecting");
 			unsubscribe =
 				(await subscribePty(
 					props.sessionId,
 					() => {}, // unused — onLogLines handles log delivery
 					() => {
+						recordMobileSocketState(props.sessionId, "closed");
 						setLogLines((prev) => [...prev, { spans: [{ text: "--- session exited ---" }] }]);
 						reconcileScreenRows([]);
 					},
@@ -237,14 +258,20 @@ export function OutputView(props: OutputViewProps) {
 						},
 						onStateChange: props.onStateChange,
 						onInputLine: props.onInputLine,
+						onReconnecting: () => recordMobileSocketState(props.sessionId, "reconnecting"),
+						onReconnected: () => recordMobileSocketState(props.sessionId, "open"),
 					},
 				)) ?? null;
 			// The subscription is installed after an awaited fetch. A page hidden
 			// during that window produced no visibilitychange to catch, so without
 			// this the stream would run until the next one — which for a tab
 			// restored in the background may never come.
-			if (document.visibilityState === "hidden") unsubscribe?.pause();
+			if (document.visibilityState === "hidden") {
+				unsubscribe?.pause();
+				recordMobileSocketState(props.sessionId, "paused");
+			} else recordMobileSocketState(props.sessionId, "open");
 		} catch (err) {
+			recordMobileSocketState(props.sessionId, "failed");
 			const msg = err instanceof Error ? err.message : String(err);
 			appLogger.error("terminal", "Failed to subscribe to PTY output", { error: msg });
 			setSubscribeError(msg);
@@ -253,6 +280,7 @@ export function OutputView(props: OutputViewProps) {
 
 	onCleanup(() => {
 		unsubscribe?.();
+		if (unsubscribe) recordMobileSocketState(props.sessionId, "closed");
 		containerEl?.removeEventListener("scroll", handleScroll);
 		containerEl?.removeEventListener("touchstart", handleTouchStart);
 		containerEl?.removeEventListener("touchend", handleTouchEnd);

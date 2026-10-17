@@ -13,7 +13,7 @@ pub struct AudioDevice {
 }
 
 /// Lists available audio input devices.
-pub fn list_input_devices() -> Vec<AudioDevice> {
+pub fn list_input_devices() -> Result<Vec<AudioDevice>, String> {
     let host = cpal::default_host();
     let default_name = host
         .default_input_device()
@@ -33,7 +33,7 @@ pub fn list_input_devices() -> Vec<AudioDevice> {
                 })
                 .collect()
         })
-        .unwrap_or_default()
+        .map_err(|_| "Audio input device enumeration unavailable".to_string())
 }
 
 /// Reject a device that reports a nonsensical channel count.

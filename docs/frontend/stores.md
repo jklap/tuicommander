@@ -454,6 +454,10 @@ selected tab. It mirrors its state to localStorage so a detached WebView can
 restore the same tabs; `useAcpChat` replays their ACP histories after connecting.
 The existing `ai_chat_sessions` app config value remains the last selected
 conversation for older documents and clients.
+`acpStore` replaces only the matching attachment's complete option set on
+`config_option_update`, including an empty set. It applies the published options
+directly, without a snapshot request that could arrive after a confirmed settings
+change. Explicit requests still refresh the authoritative backend snapshot.
 `acpStore` takes `queuedPrompts` from the connection snapshot and replaces it
 on each `promptQueueChanged` event, so desktop and browser views share the
 same FIFO. `acpTranscript` adds a user message on `promptSent`, when the host
@@ -779,3 +783,10 @@ Only then does the main WebView acknowledge `snapshot-now`. A persistence error
 is logged and leaves the acknowledgement pending for the backend timeout.
 
 Tasks notice preferences use `uiStore.tasksViewPreferences`: a default-off policy and per-provider/account/item follow state with comment baselines. Existing detail refreshes send snapshots to Rust through `compare_work_item_comments`; native delivery reuses the PR notice service. No additional store or provider poller is created.
+
+The settings Voice picker combines `speechVoices` (installed) with the language-scoped voice entries in `speechAssets` (downloads); a configured missing catalogue voice remains visible.
+
+`TerminalData.providerRecovery` is an optional transient native-ego recovery
+snapshot. `useAgentPolling.applySessionState` applies it from both lifecycle
+catch-up and push snapshots; omission clears it. It never changes shell busy
+semantics, awaiting state, or turn completion.

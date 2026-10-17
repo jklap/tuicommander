@@ -21,8 +21,8 @@
 //! Nothing here is ours, and all of it was recorded rather than guessed
 //! (`fixtures/edge_stream.json`, recorded from the live service):
 //!
-//! * the handshake wants `Sec-MS-GEC`, a SHA-256 of the clock rounded to five
-//!   minutes and the public client token, plus the browser's `Origin`;
+//! * the handshake accepts `Sec-MS-GEC` v1 (SHA-256 of the five-minute clock
+//!   bucket and public token), plus the browser's `Origin`;
 //! * a request is `speech.config` then `ssml`; the answer is text frames
 //!   (`turn.start`, `response`, `turn.end`) around binary frames;
 //! * a binary frame is a big-endian `u16` header length, the headers, then the
@@ -49,11 +49,13 @@ use super::{Speech, SpeechAudio, SpeechCancel, SpeechError, budget_seconds};
 
 type Result<T> = std::result::Result<T, SpeechError>;
 
-const HOST: &str = "speech.platform.bing.com";
+// Endpoint migration: readest/readest#6722. Live Mac probe on 2026-10-16
+// confirmed the existing v1 GEC also returns HTTP 101 and MP3 on this host.
+const HOST: &str = "api.msedgeservices.com";
 const CLIENT_TOKEN: &str = "6A5AA1D4EAFF4E9FB37E23D68491D6F4";
-const WSS_PATH: &str = "/consumer/speech/synthesize/readaloud/edge/v1";
+const WSS_PATH: &str = "/tts/cognitiveservices/websocket/v1";
 const ORIGIN: &str = "chrome-extension://jdiccldimpdaibmpdkjnbmckianbfold";
-const USER_AGENT: &str = "Mozilla/5.0 (Linux; Android 10; HD1913) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.7499.193 Mobile Safari/537.36 EdgA/143.0.3650.125";
+const USER_AGENT: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36 Edg/143.0.0.0";
 const GEC_VERSION: &str = "1-130.0.2849.68";
 
 /// Where the voice list lives. Fetched by the caller, which already has an
@@ -514,7 +516,7 @@ fn unreachable_service(reason: &dyn std::fmt::Display) -> SpeechError {
 
 fn handshake_request() -> Result<tungstenite::handshake::client::Request> {
     let url = format!(
-        "wss://{HOST}{WSS_PATH}?TrustedClientToken={CLIENT_TOKEN}&ConnectionId={}&Sec-MS-GEC={}&Sec-MS-GEC-Version={GEC_VERSION}",
+        "wss://{HOST}{WSS_PATH}?Ocp-Apim-Subscription-Key={CLIENT_TOKEN}&ConnectionId={}&Sec-MS-GEC={}&Sec-MS-GEC-Version={GEC_VERSION}",
         request_id(),
         sec_ms_gec(SystemTime::now()),
     );
@@ -532,6 +534,19 @@ fn handshake_request() -> Result<tungstenite::handshake::client::Request> {
         header::HeaderValue::from_static(USER_AGENT),
     );
     headers.insert(header::ORIGIN, header::HeaderValue::from_static(ORIGIN));
+    headers.insert(
+        header::ACCEPT_LANGUAGE,
+        header::HeaderValue::from_static("en-US,en;q=0.9"),
+    );
+    headers.insert(
+        header::ACCEPT_ENCODING,
+        header::HeaderValue::from_static("gzip, deflate, br, zstd"),
+    );
+    headers.insert(
+        header::COOKIE,
+        header::HeaderValue::from_str(&format!("muid={};", request_id().to_uppercase()))
+            .expect("hex cookie is a valid header"),
+    );
     Ok(request)
 }
 
@@ -1002,6 +1017,39 @@ mod tests {
     }
 
     #[test]
+    fn edge_handshake_pins_the_current_endpoint_token_version_and_headers() {
+        // Catches: the retired Bing endpoint or TrustedClientToken query key
+        // surviving the October 2026 service migration.
+        let request = handshake_request().unwrap();
+        let uri = request.uri();
+        assert_eq!(uri.host(), Some("api.msedgeservices.com"));
+        assert_eq!(uri.path(), "/tts/cognitiveservices/websocket/v1");
+        let query = uri.query().unwrap();
+        assert!(query.starts_with("Ocp-Apim-Subscription-Key=6A5AA1D4EAFF4E9FB37E23D68491D6F4&"));
+        assert!(!query.contains("TrustedClientToken"));
+        assert!(query.contains("&Sec-MS-GEC-Version=1-130.0.2849.68"));
+        assert_eq!(
+            request.headers()["origin"],
+            "chrome-extension://jdiccldimpdaibmpdkjnbmckianbfold"
+        );
+        assert_eq!(
+            request.headers()["user-agent"],
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36 Edg/143.0.0.0"
+        );
+        assert_eq!(request.headers()["accept-language"], "en-US,en;q=0.9");
+        assert_eq!(
+            request.headers()["accept-encoding"],
+            "gzip, deflate, br, zstd"
+        );
+        assert_eq!(request.headers()["pragma"], "no-cache");
+        assert_eq!(request.headers()["cache-control"], "no-cache");
+        assert_eq!(request.headers()["sec-websocket-version"], "13");
+        let cookie = request.headers()["cookie"].to_str().unwrap();
+        assert!(cookie.starts_with("muid=") && cookie.ends_with(';'));
+        assert_eq!(cookie.len(), 38);
+    }
+
+    #[test]
     fn the_handshake_token_matches_the_reference_implementation() {
         // Reference value computed with the Python `edge-tts` algorithm for
         // 2026-10-01T19:36:20Z. A wrong rounding or epoch makes the service
@@ -1010,6 +1058,23 @@ mod tests {
         assert_eq!(
             sec_ms_gec(at),
             "A95E984BF41D3C7B98C20460112A5DD785722A04FC99D8110F2ED9703A010F73"
+        );
+    }
+
+    #[test]
+    fn edge_v1_gec_keeps_the_bucket_and_changes_at_five_minutes() {
+        // Catches: incompatible v2 hashing or rounding into the next five-minute bucket.
+        assert_eq!(
+            sec_ms_gec(UNIX_EPOCH),
+            "7ECB79D14E3AA576D2D79E6D487A1388156D91E614B1BE11C64226A29BC8DD8C"
+        );
+        assert_eq!(
+            sec_ms_gec(UNIX_EPOCH + Duration::from_secs(1_790_883_599)),
+            sec_ms_gec(UNIX_EPOCH + Duration::from_secs(1_790_883_380))
+        );
+        assert_eq!(
+            sec_ms_gec(UNIX_EPOCH + Duration::from_secs(1_790_883_600)),
+            "84F5F8BF6835CEF219FF5547564321E62F442758FFCFFC389DD69A477E70DD50"
         );
     }
 

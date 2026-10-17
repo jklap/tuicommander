@@ -314,6 +314,7 @@
 /sessions/worktree
 /sessions/x
 /sessions/x/chat-view
+/sessions/x/force-retry
 /sessions/x/foreground
 /sessions/x/has-foreground
 /sessions/x/input-buffer
@@ -350,6 +351,7 @@
 /sessions/x/visible
 /sessions/x/write
 /sessions/x/write-parts
+/settings/action
 /stats
 /stories/action
 /stories/capabilities

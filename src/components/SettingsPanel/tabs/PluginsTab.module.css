@@ -16,7 +16,7 @@
 .docsLink {
   background: none;
   border: none;
-  color: var(--accent);
+  color: var(--link-foreground);
   font-size: var(--font-sm);
   cursor: pointer;
   padding: 0;
@@ -402,3 +402,37 @@
   gap: 8px;
   flex-wrap: wrap;
 }
+
+/* Settings task cards retain wrapping names and named actions at narrow widths. */
+.pluginInfo { min-width: 0; }
+.pluginNameRow, .pluginActionsRow { flex-wrap: wrap; }
+.pluginName, .pluginDescription, .pluginCapabilities { overflow-wrap: anywhere; }
+@media (max-width: 800px) {
+  .pluginHeader, .sectionHeader { align-items: flex-start; gap: 12px; }
+  .pluginActions { align-items: flex-start; }
+}
+
+.sectionHeader { align-items: flex-start; gap: 16px; }
+.installSuggestion > div { display: flex; justify-content: space-between; gap: 16px; align-items: center; padding: 12px 0; border-bottom: 1px solid var(--border); }
+.installSuggestion > div > span:first-child { flex: 1; min-width: 0; }
+.installSuggestion button { min-height: 36px; padding: 8px 12px; border: 1px solid var(--border); border-radius: var(--radius-lg); background: var(--bg-tertiary); color: var(--fg-primary); font: inherit; cursor: pointer; }
+.installSuggestion button:disabled { opacity: .5; cursor: not-allowed; }
+@media (max-width: 600px) { .installSuggestion > div { align-items: stretch; flex-direction: column; } .installSuggestion button { min-height: 44px; } .sectionHeader { flex-direction: row; flex-wrap: wrap; } }
+
+@media (max-width: 800px) { .pluginHeader { flex-direction: column; align-items: stretch; } .pluginActions { width: 100%; } }
+
+.installSuggestion { display: block; padding: 12px 0; border-top: 1px solid var(--border); }
+.installSuggestion > div { display: flex; justify-content: space-between; align-items: center; gap: 16px; }
+.pluginActions details { min-width: 0; font-size: var(--font-sm); }
+.pluginActions summary { cursor: pointer; }
+.pluginActions details[open] { display: flex; flex-direction: column; gap: 8px; }
+
+
+.installSuggestion > div > div:first-child { flex: 1; min-width: 0; }
+.installSuggestion > div > div:last-child { flex: 0 0 auto; }
+.installSuggestion > div > div:last-child > div { display: flex; flex-direction: column; align-items: flex-end; gap: 8px; }
+@media (max-width: 600px) {
+  .installSuggestion > div { align-items: stretch; text-align: left; }
+  .installSuggestion > div > div:last-child > div { align-items: flex-start; }
+}
+.docsLink { margin-bottom: 16px; }

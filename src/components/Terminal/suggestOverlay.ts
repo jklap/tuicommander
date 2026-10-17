@@ -1,3 +1,5 @@
+import intentMarker from "../../../src-tauri/crates/tuic-terminal/src/intent_marker.json";
+
 /** A snapshot of an xterm buffer row — just the parts the overlay cares about. */
 export interface RowSnapshot {
 	text: string;
@@ -13,12 +15,12 @@ export const SUGGEST_ANCHOR_RE = new RegExp(`^[\\s${AGENT_BULLETS}]*suggest:\\s+
 /** Stop condition for the continuation walk: a new `intent:` token at column 0. */
 const INTENT_RE = /^intent:\s+\S/;
 /**
- * Which rows get the intent highlight. Deliberately looser than [`INTENT_RE`]:
- * an agent renders its own intent line behind a bullet (`⏺ intent: …`), and that
- * row must still be tinted. It is NOT a walk stop condition — ending a suggest
+ * Which rows get the intent highlight. The shared Rust/JS anchor grammar also
+ * accepts an agent bullet, horizontal indent or the TUIC ack sentence. It is NOT
+ * a walk stop condition — ending a suggest
  * block on an indented mention would swallow the block's closing bracket.
  */
-export const INTENT_HIGHLIGHT_RE = new RegExp(`^[\\s${AGENT_BULLETS}]*intent:\\s+`);
+export const INTENT_HIGHLIGHT_RE = new RegExp(`${intentMarker.anchor}[\\t ]+`);
 /**
  * The answer marker an agent prefixes to every sentence that directly answers
  * the user (💬). Matched on row text, which carries no escape sequences — bold,
@@ -261,7 +263,17 @@ export function planSuggestOverlay(
 				blocks.push({ row: contRow, kind: "continuation" });
 				parts.push(`c${contRow}`);
 			}
-			if (hiddenRows.length > 0) row = hiddenRows.at(-1)!;
+			const end = hiddenRows.at(-1) ?? row;
+			// Removing a standalone protocol paragraph must not leave both of
+			// its separators adjacent. Keep the leading separator and omit one
+			// trailing blank only when both were recorded around this block.
+			if (getRow(row - 1)?.text.trim() === "" && getRow(end + 1)?.text.trim() === "") {
+				blocks.push({ row: end + 1, kind: "continuation" });
+				parts.push(`c${end + 1}`);
+				row = end + 1;
+			} else {
+				row = end;
+			}
 		} else if (!snapshot.isWrapped && ANSWER_MARKER_RE.test(text)) {
 			// The whole answer, not only its marker row. A wrapped row is never a
 			// line start, so an emoji the wrap happens to land on is not a marker.
@@ -306,15 +318,23 @@ function overlayDiv(top: number, height: number, background: string): HTMLDivEle
 
 /**
  * Replace the contents of `container` with one absolutely positioned strip per
- * answer row: a transparent strip with a solid gutter bar. Marker rows get no strip — they are not painted.
+ * answer row: a transparent strip with a solid gutter bar. Intent rows get a
+ * theme-aware tint; omitted suggest rows get no strip.
  */
 export function paintOverlayBlocks(container: HTMLElement, blocks: readonly OverlayBlock[], cellHeight: number): void {
 	container.textContent = "";
 	for (const block of blocks) {
-		if (block.kind !== "answer" || block.row < 0) continue;
-		const div = overlayDiv(block.row * cellHeight, cellHeight, "transparent");
-		div.style.boxShadow = "inset 3px 0 0 var(--answer-rule)";
-		container.appendChild(div);
+		if (block.row < 0) continue;
+		if (block.kind === "intent") {
+			const div = overlayDiv(block.row * cellHeight, cellHeight, "var(--warning)");
+			div.dataset.terminalMarker = "intent";
+			div.style.opacity = "0.12";
+			container.appendChild(div);
+		} else if (block.kind === "answer") {
+			const div = overlayDiv(block.row * cellHeight, cellHeight, "transparent");
+			div.style.boxShadow = "inset 3px 0 0 var(--answer-rule)";
+			container.appendChild(div);
+		}
 	}
 }
 

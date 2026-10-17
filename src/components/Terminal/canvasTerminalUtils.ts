@@ -455,15 +455,12 @@ export interface HiddenAckThrottle {
 /**
  * Acknowledge frames received while hidden — late, and at most once per interval.
  *
- * A hidden terminal decodes each frame (the bell rides in the header) but paints
- * nothing, so acking per frame would reopen the delivery gate at full rate for a
- * viewport nobody can see. Never acking is worse than it looks: the gate then
- * stays closed until the backend ticker declares the frontend stuck, which costs
- * a warning per output burst and pins the hidden tab to the 500 ms force-reset
- * floor anyway.
+ * Desktop visibility admission suppresses hidden grid delivery. This scheduler
+ * handles frames already queued before hide, and browser grid streams whose
+ * delivery is independent of desktop visibility. Bells use session events.
+ * Acknowledging queued frames on a trailing timer avoids reopening the gate
+ * at full rate while visibility admission is still in flight.
  *
- * One trailing ack per interval gets both: the hidden tab keeps receiving frames
- * at ~1/interval, and the "gate stuck" warning goes back to meaning what it says.
  * Call with {@link HIDDEN_ACK_INTERVAL_MS}, which carries the margin this needs.
  */
 export function createHiddenAckThrottle(ack: () => void, intervalMs: number): HiddenAckThrottle {

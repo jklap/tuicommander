@@ -17,6 +17,18 @@ to use the shared named-pipe transport.
 
 Manages pseudo-terminal sessions for all terminal tabs in the application.
 
+## Bounded input and teardown
+
+Raw desktop, HTTP, WebSocket and MCP input runs on the blocking pool. The caller
+waits at most two seconds, then receives an uncertain-delivery error (WebSocket
+input closes its connection). A kernel write already in progress can still
+complete; do not retry it automatically. Closing the session remains available.
+
+Close never takes the PTY writer mutex or writes Ctrl-C into a potentially full
+terminal. On Unix it signals the owned foreground process group with SIGINT,
+then retains the 100ms grace and 100ms force-kill wait. On Windows it terminates
+the owned child because ConPTY has no portable out-of-band Ctrl-C operation.
+
 ## Identity loss during replacement
 
 A restored tab reuses its saved `tuicSession`. If reconnect falls back to a
@@ -150,6 +162,11 @@ spawn_reader_thread(reader, paused, session_id, app, state)
 7. Serialize parsed events once with `serde_json::to_value` — reused for both Tauri IPC and event bus (avoids double serialization)
 8. Broadcast to WebSocket clients (if any connected)
 9. Assemble the lines of the chunk and match them against the compiled plugin OutputWatchers (`crates/tuic-terminal/src/output_watchers.rs`), then emit `pty-watcher-lines-{session_id}` with the batch — see [Plugin OutputWatcher matching](#plugin-outputwatcher-matching) below. No raw-output Tauri event is emitted any more: the desktop canvas renders from grid frames, and the assembled lines are the only text the WebView needs. (The raw `output` frame of step 8 is unaffected — it is fed from the output ring buffer to raw-mode WebSocket clients.)
+
+Ego's parser cutoff and readiness adapter share the native status/composer
+recognizer. An output insertion can overwrite that pair before ego repaints it;
+no historical submitted prompt or transcript separator substitutes for it.
+This keeps a second soft-wrapped intent in the same existing Intent event path.
 
 The intent path reconstructs soft-wrapped grid rows up to the parser's
 character budget, then reads hard-wrap continuations only above the input-box
@@ -407,6 +424,13 @@ An open Claude Ink choice dialog is retained in the mobile screen payload;
 its highlighted `❯ N. option` row must not act as a composer cutoff. The
 agent-specific choice parser publishes its navigation contract through
 `SessionState.choice_prompt.selection_mode`.
+
+The HTTP and log-WebSocket screen trim also retains an active Claude `/resume`
+modal, including populated and no-match search states. Its title, search field,
+and final search/cancel footer identify the presentation boundary. Search-box
+borders and the selected session are not composer chrome. This exception does
+not change the shared bottom-zone cutoff used by output and state parsers.
+A retained modal above a later ready composer does not disable normal trimming.
 
 ```rust
 impl VtLogBuffer {
@@ -799,6 +823,15 @@ changes between Claude and Grok restarts the view. Fixture:
 
 ### Claude transcript Chat view
 
+Claude `Edit` inputs with string `file_path`, `old_string` and `new_string`
+project to ACP diff content. Old/new excerpts use the redacted 20,000-character
+text budget rather than the 1,000-character raw-input budget. The adapter keeps
+that bounded content with the pending tool ID and includes it again with the
+result, because ACP tool content updates replace the previous content. Missing
+fields and non-Edit calls retain their existing projection. Tool status remains
+authoritative: diff content alone does not mean that the edit succeeded.
+
+
 `chat_view::View::advance` reads complete JSONL rows through `transcript_tail`,
 projects them with `ClaudeAdapter`, and retains a bounded ACP update log. Each
 view retains an open file-identity handle: replacing a JSONL at the same path
@@ -918,8 +951,19 @@ The standby final eligibility check shares the visibility lock with observer
 attach: a client either prevents SIGSTOP or wakes the already parked process.
 The final check also reads current session visibility under that lock, so Show
 invalidates a standby tick selected while the desktop was hidden.
-Disconnect releases only that observer. Showing the desktop restores saved
-visibility and SIGCONTs only terminals that are visible again.
+Disconnect releases only that observer and starts a full standby-timeout grace
+window. HTTP output reads and input also reset remote activity and wake a parked
+session under the same visibility lock. Recent user input blocks standby even if
+the parsed shell idle timestamp is older. These activity clocks do not change the
+agent's semantic busy/idle state. Showing the desktop restores saved visibility
+and SIGCONTs only terminals that are visible again.
+
+Standby only stops a foreground group whose pgid equals the PTY child's PID.
+An agent launched as a separate foreground job under an interactive shell stays
+running: SIGSTOP would let the shell reclaim the terminal, and SIGCONT cannot
+restore the job's foreground ownership. Eligible groups are recorded by exact
+pgid in `standby_sessions`; wake never recomputes the current foreground group.
+A failed SIGCONT retains the record for retry.
 
 
 ### Rust-owned suspended tabs
@@ -946,3 +990,23 @@ The backend checks unattended top-level agent tabs every five seconds. `agents.h
 Hibernation requires an idle agent and a verified resume session in its saved profile. Plain shells and agents without a verifiable resume session stay live. Unread peer mail, pending commands or background work, awaiting input, attached readers, keep-open tabs (whether addressed by their live PTY or durable peer identity) and open automation runs prevent hibernation. Managed children retain their separate idle-close policy. Sleep gaps longer than 30 seconds do not advance the idle clock.
 
 The normal Rust suspension path persists `reason: "idle_hibernate"` before ending the PTY. Opening the tab, submitting input or sending peer mail uses the shared wake path. Storage or resume-verification failures leave the live session intact.
+
+### Desktop visibility and frame timeout recovery
+
+Hidden desktop subscriptions receive no grid frames. The backend retains the authoritative grid and scroll position; showing a viewport requests a full frame. The desktop transport serializes epoch-scoped visibility publications so a delayed hide cannot overwrite a newer show. It requests the show frame only after publishing visibility; the canvas owns that request only for WebSocket transports. Bell events are emitted by the PTY reader through desktop session events and HTTP SSE/WebSocket events, independently of grid serialization. Repeated BEL bytes in one processed chunk coalesce into one session bell. History-base metadata refreshes with the show frame. Browser/PWA grid watchers remain independent, and backend activity/question parsing keeps running.
+
+For a visible desktop, three abandoned frames without real receipt progress pause ordinary delivery until a new receipt or explicit full-frame request. Synthetic abandonment does not count as receipt progress. A frame timeout alone does not prove a frontend heartbeat failure.
+
+Native ego OSC 7770 `ego-recovery` snapshots are validated at the PTY boundary
+and accumulated as `SessionState.provider_recovery`. The existing desktop and
+SSE `session-state-changed` snapshot carries the same object on both transports.
+The parent lifecycle inbox receives entry/exit notices. MCP session `force_retry`,
+desktop `force_retry_provider_recovery_command`, and HTTP `POST /sessions/{id}/force-retry`
+share one backend transaction. It
+requires an ego recovery snapshot and an empty tracked composer, holds the input
+transaction, and uses the normal agent-aware command writer to submit `/retry`
+once (no automatic retry or queue). See output-parser.md for the wire contract.
+
+### Exact soft-wrap text boundaries
+
+Grid text and styled log extraction preserve trailing cells on WRAPLINE rows. Those spaces are source content, not padding. MCP text output concatenates these rows without inserting a separator. Styled HTTP, WebSocket and IPC log rows include `wrapped: boolean`; a finalized row can still continue into the current screen. Only non-wrapped row tails are trimmed.

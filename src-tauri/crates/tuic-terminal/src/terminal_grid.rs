@@ -107,6 +107,7 @@ fn palette_color_for_index(index: usize) -> Option<Rgb> {
 pub enum TermEvent {
     Title(String),
     ResetTitle,
+    Bell,
     ClipboardStore(String),
     PtyWrite(String),
     MouseCursorDirty,
@@ -135,6 +136,10 @@ impl EventListener for TermEventCollector {
         match event {
             Event::Bell => {
                 self.bell.store(true, Ordering::Relaxed);
+                let mut events = self.events.lock();
+                if !events.iter().any(|event| matches!(event, TermEvent::Bell)) {
+                    events.push(TermEvent::Bell);
+                }
             }
             Event::Title(t) => {
                 self.events.lock().push(TermEvent::Title(t));
@@ -549,9 +554,13 @@ fn encode_cell(buf: &mut Vec<u8>, cell: &Cell, colors: &Colors) {
 ///
 /// Alacritty stores zero-width codepoints on the preceding base cell. Every
 /// text extraction path must read the pair together or decomposed Unicode is
-/// silently reduced to its base character.
+/// silently reduced to its base character. Synthetic wide-character spacers
+/// carry layout only and must not contribute text or text length.
 fn push_cell_text(text: &mut String, cell: &Cell) {
-    if cell.flags.contains(Flags::WIDE_CHAR_SPACER) {
+    if cell
+        .flags
+        .intersects(Flags::WIDE_CHAR_SPACER | Flags::LEADING_WIDE_CHAR_SPACER)
+    {
         return;
     }
 
@@ -562,7 +571,10 @@ fn push_cell_text(text: &mut String, cell: &Cell) {
 }
 
 fn cell_text_utf8_len(cell: &Cell) -> usize {
-    if cell.flags.contains(Flags::WIDE_CHAR_SPACER) {
+    if cell
+        .flags
+        .intersects(Flags::WIDE_CHAR_SPACER | Flags::LEADING_WIDE_CHAR_SPACER)
+    {
         return 0;
     }
     let base_len = if cell.c == '\0' { 1 } else { cell.c.len_utf8() };
@@ -576,7 +588,10 @@ fn cell_text_utf8_len(cell: &Cell) -> usize {
 }
 
 fn cell_text_utf16_len(cell: &Cell) -> usize {
-    if cell.flags.contains(Flags::WIDE_CHAR_SPACER) {
+    if cell
+        .flags
+        .intersects(Flags::WIDE_CHAR_SPACER | Flags::LEADING_WIDE_CHAR_SPACER)
+    {
         return 0;
     }
     let base_len = if cell.c == '\0' {
@@ -1877,32 +1892,36 @@ impl TerminalGrid {
             });
         }
 
-        // Trim trailing whitespace-only spans with default attrs
-        while let Some(last) = spans.last() {
-            if last.fg.is_none()
-                && last.bg.is_none()
-                && !last.bold
-                && !last.italic
-                && !last.underline
-                && last.text.trim_end().is_empty()
-            {
-                spans.pop();
-            } else {
-                break;
+        // A wrapped row's final spaces are content, not unused grid padding.
+        // Its continuation is concatenated without a separator by text readers.
+        if !self.row_wrapped(line) {
+            // Trim trailing whitespace-only spans with default attrs
+            while let Some(last) = spans.last() {
+                if last.fg.is_none()
+                    && last.bg.is_none()
+                    && !last.bold
+                    && !last.italic
+                    && !last.underline
+                    && last.text.trim_end().is_empty()
+                {
+                    spans.pop();
+                } else {
+                    break;
+                }
             }
-        }
-        if let Some(last) = spans.last_mut() {
-            let trimmed = last.text.trim_end().to_string();
-            if trimmed.is_empty()
-                && last.fg.is_none()
-                && last.bg.is_none()
-                && !last.bold
-                && !last.italic
-                && !last.underline
-            {
-                spans.pop();
-            } else {
-                last.text = trimmed;
+            if let Some(last) = spans.last_mut() {
+                let trimmed = last.text.trim_end().to_string();
+                if trimmed.is_empty()
+                    && last.fg.is_none()
+                    && last.bg.is_none()
+                    && !last.bold
+                    && !last.italic
+                    && !last.underline
+                {
+                    spans.pop();
+                } else {
+                    last.text = trimmed;
+                }
             }
         }
 
@@ -2512,8 +2531,10 @@ impl TerminalGrid {
                 }
                 push_cell_text(&mut text, cell);
             }
-            let trimmed_len = text.trim_end().len();
-            text.truncate(trimmed_len);
+            if !self.row_wrapped(line) {
+                let trimmed_len = text.trim_end().len();
+                text.truncate(trimmed_len);
+            }
             result.push_str(&text);
 
             if abs_row < r1 {
@@ -2955,8 +2976,10 @@ impl TerminalGrid {
                 }
                 push_cell_text(&mut text, cell);
             }
-            let trimmed_len = text.trim_end().len();
-            text.truncate(trimmed_len);
+            if !self.row_wrapped(line) {
+                let trimmed_len = text.trim_end().len();
+                text.truncate(trimmed_len);
+            }
             rows.push(text);
         }
         rows
@@ -2976,8 +2999,10 @@ impl TerminalGrid {
             }
             push_cell_text(&mut text, cell);
         }
-        let trimmed_len = text.trim_end().len();
-        text.truncate(trimmed_len);
+        if !self.row_wrapped(line) {
+            let trimmed_len = text.trim_end().len();
+            text.truncate(trimmed_len);
+        }
         Some(text)
     }
 
@@ -3159,6 +3184,19 @@ pub struct DamageGeometry {
 
 #[cfg(test)]
 mod tests {
+    /// Catches BEL being held until a grid frame is serialized for a hidden tab.
+    #[test]
+    fn hidden_bell_is_a_session_event_without_frame_serialization() {
+        let mut grid = super::TerminalGrid::new(2, 8, 10);
+        grid.process(b"\x07");
+        assert!(
+            grid.drain_events()
+                .iter()
+                .any(|e| matches!(e, super::TermEvent::Bell))
+        );
+        assert!(grid.drain_events().is_empty());
+    }
+
     use super::*;
 
     // Catches DECALN keeping lost provenance or inheriting the active erase background.
@@ -3429,6 +3467,98 @@ mod tests {
                 "the wire format ships whole rows"
             );
         }
+    }
+
+    /// Catches trimming a real separator at a soft margin and losing wrap metadata.
+    #[test]
+    fn softwrap_1977_preserves_original_spaces_in_text_and_log() {
+        for bytes in [
+            include_bytes!("../../../src/fixtures/agent_prompts/softwrap-spaces-1977-24.tcap")
+                .as_slice(),
+            include_bytes!("../../../src/fixtures/agent_prompts/softwrap-spaces-1977-64.tcap")
+                .as_slice(),
+        ] {
+            let capture = crate::pty_capture::decode_capture(bytes).unwrap();
+            let (rows, cols) = capture.geometry.unwrap();
+            let mut grid = TerminalGrid::new(rows, cols, 100);
+            let mut raw = Vec::new();
+            for record in capture.records {
+                raw.extend_from_slice(&record.data);
+                grid.process(&record.data);
+            }
+            let expected = String::from_utf8(raw).unwrap().replace("\r\n", "\n");
+            let join = |rows: Vec<(String, bool)>| {
+                let mut text = String::new();
+                let mut previous_wrap = true;
+                for (row, wraps) in rows {
+                    if !previous_wrap {
+                        text.push('\n');
+                    }
+                    text.push_str(&row);
+                    previous_wrap = wraps;
+                }
+                text.trim_end_matches('\n').to_owned()
+            };
+            assert_eq!(
+                join(
+                    grid.screen_text_rows()
+                        .into_iter()
+                        .zip(grid.screen_row_wraps())
+                        .collect()
+                ),
+                expected,
+                "MCP screen text at {cols} columns"
+            );
+            let lines = grid.screen_log_lines();
+            assert_eq!(
+                join(
+                    lines
+                        .iter()
+                        .map(|line| (line.text(), line.wrapped))
+                        .collect()
+                ),
+                expected,
+                "mobile log at {cols} columns"
+            );
+            assert_eq!(
+                grid.get_selection_text(0, 0, rows as usize - 1, cols as usize - 1),
+                expected,
+                "copied text must preserve the same spaces"
+            );
+            let serialized = serde_json::to_value(&lines).unwrap();
+            assert!(
+                serialized
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|line| line["wrapped"] == true),
+                "mobile must receive WRAPLINE"
+            );
+            grid.process(b"\r\n1\r\n2\r\n3\r\n4\r\n5\r\n6\r\n7\r\n8");
+            let history = grid.read_scrollback_log_lines(100);
+            assert!(
+                join(
+                    history
+                        .iter()
+                        .map(|line| (line.text(), line.wrapped))
+                        .collect()
+                )
+                .starts_with(&expected),
+                "history must retain the same separators"
+            );
+        }
+    }
+
+    /// Catches dropping a styled whitespace-only span at a soft-wrap boundary.
+    #[test]
+    fn softwrap_1977_keeps_styled_margin_space() {
+        let mut grid = TerminalGrid::new(3, 4, 10);
+        grid.process(b"abc\x1b[31m \x1b[0mdef");
+        let lines = grid.screen_log_lines();
+        assert_eq!(lines[0].text(), "abc ");
+        assert!(lines[0].wrapped);
+        assert!(lines[0].spans.last().unwrap().fg.is_some());
+        assert_eq!(grid.get_logical_line(0).1, "abc def");
     }
 
     /// The premise under F23: alacritty reports narrow column bounds when only a
@@ -5635,6 +5765,34 @@ mod tests {
         assert_eq!(grid.get_logical_line(0), (0, expected_row.to_string()));
         assert_eq!(grid.get_selection_text(0, 0, 0, 5), expected_row);
         assert_eq!(grid.prompt_input_text().as_deref(), Some("cafe\u{0301}"));
+    }
+
+    /// Catches inventing a space before a wide glyph that wraps at the margin.
+    #[test]
+    fn softwrap_1977_does_not_copy_wide_glyph_padding_as_content() {
+        let mut grid = TerminalGrid::new(3, 4, 10);
+        grid.process("abc界x".as_bytes());
+
+        assert_eq!(
+            grid.get_selection_text(0, 0, 1, 3),
+            "abc界x",
+            "copy must omit the synthetic leading-wide-character spacer"
+        );
+        let rows = grid.screen_text_rows();
+        let wraps = grid.screen_row_wraps();
+        let mut screen = String::new();
+        let mut previous_wrapped = true;
+        for (row, wrapped) in rows.into_iter().zip(wraps) {
+            if !previous_wrapped {
+                screen.push('\n');
+            }
+            screen.push_str(&row);
+            previous_wrapped = wrapped;
+        }
+        assert_eq!(screen.trim_end_matches('\n'), "abc界x");
+        let log = grid.screen_log_lines();
+        assert_eq!(log[0].text(), "abc");
+        assert_eq!(log[1].text(), "界x");
     }
 
     #[test]

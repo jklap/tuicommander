@@ -165,13 +165,13 @@ describe("DictationSettings – Model Selector", () => {
 
 	it("renders a row for each model", () => {
 		const { container } = render(() => <DictationSettings />);
-		const rows = container.querySelectorAll(".modelRow");
+		const rows = container.querySelectorAll("[data-whisper-model]");
 		expect(rows.length).toBe(2);
 	});
 
 	it("shows display name and size hint for each model", () => {
 		const { container } = render(() => <DictationSettings />);
-		const rows = container.querySelectorAll(".modelRow");
+		const rows = container.querySelectorAll("[data-whisper-model]");
 
 		expect(rows[0].textContent).toContain("Small");
 		expect(rows[0].textContent).toContain("488");
@@ -181,24 +181,24 @@ describe("DictationSettings – Model Selector", () => {
 
 	it("shows download button for not-downloaded models", () => {
 		const { container } = render(() => <DictationSettings />);
-		const rows = container.querySelectorAll(".modelRow");
-		const downloadBtn = rows[0].querySelector(".modelDownload");
+		const rows = container.querySelectorAll("[data-whisper-model]");
+		const downloadBtn = rows[0].querySelector('button[title="Download model"]');
 		expect(downloadBtn).not.toBeNull();
 		expect(downloadBtn!.textContent).toContain("Download");
 	});
 
 	it("shows delete button for downloaded models", () => {
 		const { container } = render(() => <DictationSettings />);
-		const rows = container.querySelectorAll(".modelRow");
-		const deleteBtn = rows[1].querySelector(".modelDelete");
+		const rows = container.querySelectorAll("[data-whisper-model]");
+		const deleteBtn = rows[1].querySelector('button[title="Delete model"]');
 		expect(deleteBtn).not.toBeNull();
 	});
 
 	it("marks the selected model as active", () => {
 		const { container } = render(() => <DictationSettings />);
-		const rows = container.querySelectorAll(".modelRow");
-		expect(rows[1].classList.contains("active")).toBe(true);
-		expect(rows[0].classList.contains("active")).toBe(false);
+		const rows = container.querySelectorAll("[data-whisper-model]");
+		expect(rows[1].textContent).toContain("Active");
+		expect(rows[0].textContent).not.toContain("Active");
 	});
 
 	it("clicking a downloaded model calls setModel", () => {
@@ -215,8 +215,8 @@ describe("DictationSettings – Model Selector", () => {
 		];
 
 		const { container } = render(() => <DictationSettings />);
-		const rows = container.querySelectorAll(".modelRow");
-		const selectBtn = rows[0].querySelector(".modelSelect");
+		const rows = container.querySelectorAll("[data-whisper-model]");
+		const selectBtn = rows[0].querySelector('button[title="Use model"]');
 		expect(selectBtn).not.toBeNull();
 		fireEvent.click(selectBtn!);
 		expect(mockStore.setModel).toHaveBeenCalledWith("small");
@@ -224,36 +224,36 @@ describe("DictationSettings – Model Selector", () => {
 
 	it("download button calls downloadModel with model name", () => {
 		const { container } = render(() => <DictationSettings />);
-		const rows = container.querySelectorAll(".modelRow");
-		const downloadBtn = rows[0].querySelector(".modelDownload");
+		const rows = container.querySelectorAll("[data-whisper-model]");
+		const downloadBtn = rows[0].querySelector('button[title="Download model"]');
 		fireEvent.click(downloadBtn!);
 		expect(mockStore.downloadModel).toHaveBeenCalledWith("small");
 	});
 
 	it("delete button calls deleteModel with model name", () => {
 		const { container } = render(() => <DictationSettings />);
-		const rows = container.querySelectorAll(".modelRow");
-		const deleteBtn = rows[1].querySelector(".modelDelete");
+		const rows = container.querySelectorAll("[data-whisper-model]");
+		const deleteBtn = rows[1].querySelector('button[title="Delete model"]');
 		fireEvent.click(deleteBtn!);
 		expect(mockStore.deleteModel).toHaveBeenCalledWith("large-v3-turbo");
 	});
 
 	it("does not allow selecting a not-downloaded model", () => {
 		const { container } = render(() => <DictationSettings />);
-		const rows = container.querySelectorAll(".modelRow");
+		const rows = container.querySelectorAll("[data-whisper-model]");
 		// Not-downloaded model should not have a select button
-		const selectBtn = rows[0].querySelector(".modelSelect");
+		const selectBtn = rows[0].querySelector('button[title="Use model"]');
 		expect(selectBtn).toBeNull();
 	});
 
 	it("shows status badge for each model", () => {
 		const { container } = render(() => <DictationSettings />);
-		const rows = container.querySelectorAll(".modelRow");
+		const rows = container.querySelectorAll("[data-whisper-model]");
 
-		const badge0 = rows[0].querySelector(".modelBadge");
+		const badge0 = rows[0].querySelector('[data-testid="status-badge"]');
 		expect(badge0).not.toBeNull();
 
-		const badge1 = rows[1].querySelector(".modelBadge");
+		const badge1 = rows[1].querySelector('[data-testid="status-badge"]');
 		expect(badge1).not.toBeNull();
 		expect(badge1!.textContent).toContain("Downloaded");
 	});
@@ -459,7 +459,7 @@ describe("DictationSettings – Spoken replies", () => {
 
 	/** The speech rows, which follow the Whisper rows in the same markup. */
 	const speechRows = (container: HTMLElement) =>
-		Array.from(container.querySelectorAll(".modelRow")).slice(mockStore.state.models.length);
+		Array.from(container.querySelectorAll("[data-speech-downloads] .modelRow"));
 
 	beforeEach(() => {
 		vi.clearAllMocks();
@@ -530,7 +530,8 @@ describe("DictationSettings – Voice library", () => {
 	const slider = (container: HTMLElement, label: string) =>
 		Array.from(container.querySelectorAll("label"))
 			.find((el) => el.textContent === label)
-			?.parentElement?.querySelector('input[type="range"]') as HTMLInputElement;
+			?.closest(".settingRow, .group")
+			?.querySelector('input[type="range"]') as HTMLInputElement;
 	const voiceSelect = (container: HTMLElement) =>
 		Array.from(container.querySelectorAll("select")).find((el) =>
 			Array.from(el.options).some((o) => o.textContent === "Default for this language"),
@@ -615,13 +616,30 @@ describe("DictationSettings – Voice library", () => {
 		expect(await findByText("the voice file is over the 64 MB limit")).toBeDefined();
 	});
 
-	it("offers only voices that can speak now in the voice picker", () => {
+	it("keeps a missing configured catalogue voice selected instead of an empty picker", () => {
+		// Catches: speech_voice not among installed-only options blanks the native select.
+		mockStore.state.speechVoice = "bill_boerst";
+		mockStore.state.speechAssets.push(voiceAsset("bill_boerst", "it", "absent"));
+		mockStore.state.speechVoices = [{ id: "giovanni", source: "default" }];
 		const { container } = render(() => <DictationSettings />);
-		const values = Array.from(voiceSelect(container).options).map((o) => o.value);
-		expect(values).toEqual(["", "giovanni", "jean", "my_voice"]);
+		const select = voiceSelect(container);
+		expect(select.value).toBe("bill_boerst");
+		expect(select.selectedOptions[0].textContent).toContain("Not Downloaded");
+		const values = Array.from(select.options).map((o) => o.value);
+		expect(values).toEqual(["", "giovanni", "jean", "alba", "marco", "bill_boerst"]);
+		expect(values).not.toContain("lola");
+		const row = select.closest('[class*="settingRow"]')!;
+		fireEvent.click(button(row, "Download")!);
+		expect(mockStore.downloadSpeechAsset).toHaveBeenCalledWith("voice-it-bill_boerst");
 	});
 
-	it("offers no voice in the picker while the language itself is not downloaded", () => {
+	it("offers installed and downloadable voices in the voice picker", () => {
+		const { container } = render(() => <DictationSettings />);
+		const values = Array.from(voiceSelect(container).options).map((o) => o.value);
+		expect(values).toEqual(["", "giovanni", "jean", "my_voice", "alba", "marco"]);
+	});
+
+	it("offers catalogue downloads but no shipped voice while the language is absent", () => {
 		// No voice speaks without the language's model, so the shipped voice
 		// the catalogue names must not stand in for an empty answer.
 		mockStore.state.speechAssets[0] = {
@@ -636,7 +654,7 @@ describe("DictationSettings – Voice library", () => {
 		mockStore.state.speechVoices = [];
 		const { container } = render(() => <DictationSettings />);
 		const values = Array.from(voiceSelect(container).options).map((o) => o.value);
-		expect(values).toEqual([""]);
+		expect(values).toEqual(["", "jean", "alba", "marco"]);
 	});
 
 	it("keeps the Downloadable voices collapsed behind a disclosure that shows how many there are", () => {
@@ -773,6 +791,7 @@ describe("DictationSettings – layout", () => {
 		expect(headings).toEqual([
 			"Dictation",
 			"Speech recognition",
+			"Speech assets",
 			"Auto-Corrections",
 			"Hands-free conversation",
 			"Spoken replies",
@@ -795,16 +814,11 @@ describe("DictationSettings – layout", () => {
 			},
 		];
 		const owner = sectionOf(render(() => <DictationSettings />).container);
-		for (const label of [
-			"Input device",
-			"Whisper Model",
-			"Language",
-			"Voice tuning",
-			"Level gate",
-			"Speech confidence gate",
-		]) {
+		for (const label of ["Input device", "Language", "Level gate", "Speech confidence gate"]) {
 			expect(owner[label]).toBe("Speech recognition");
 		}
+		expect(owner["Whisper Model"]).toBe("Speech assets");
+		expect(owner["Voice tuning"]).toBe("Speech assets");
 		expect(owner.Voice).toBe("Spoken replies");
 	});
 
@@ -825,8 +839,9 @@ describe("DictationSettings – layout", () => {
 
 	it("turns the hands-free earcons off from their own toggle", () => {
 		const { container } = render(() => <DictationSettings />);
-		const group = Array.from(container.querySelectorAll("label")).find((l) => l.textContent === "Earcons")
-			?.parentElement as HTMLElement;
+		const group = Array.from(container.querySelectorAll("label"))
+			.find((l) => l.textContent === "Earcons")
+			?.closest(".settingRow, .group") as HTMLElement;
 		const toggle = group.querySelector('input[type="checkbox"]') as HTMLInputElement;
 		expect(toggle.checked).toBe(true);
 		fireEvent.change(toggle, { target: { checked: false } });
@@ -835,8 +850,9 @@ describe("DictationSettings – layout", () => {
 
 	it("suggests “computer” as the activation phrase", () => {
 		const { container } = render(() => <DictationSettings />);
-		const group = Array.from(container.querySelectorAll("label")).find((l) => l.textContent === "Activation phrase")
-			?.parentElement as HTMLElement;
+		const group = Array.from(container.querySelectorAll("label"))
+			.find((l) => l.textContent === "Activation phrase")
+			?.closest(".settingRow, .group") as HTMLElement;
 		expect((group.querySelector('input[type="text"]') as HTMLInputElement).placeholder).toBe("computer");
 		expect(group.textContent).toContain("Try “computer”");
 	});
@@ -982,7 +998,7 @@ describe("DictationSettings – Edge engine", () => {
 	const labelled = (container: HTMLElement, text: string) =>
 		Array.from(container.querySelectorAll("label")).find((el) => el.textContent === text);
 	const voiceSelect = (container: HTMLElement) =>
-		labelled(container, "Voice")?.parentElement?.querySelector("select") as HTMLSelectElement;
+		labelled(container, "Voice")?.closest(".settingRow, .group")?.querySelector("select") as HTMLSelectElement;
 	const listenButton = (container: HTMLElement) =>
 		Array.from(container.querySelectorAll("button")).find((b) => b.textContent?.trim() === "Listen");
 
@@ -1082,7 +1098,9 @@ describe("DictationSettings – Edge engine", () => {
 	it("switches engine from the Expert selector", () => {
 		uiStore.setSettingsExpertMode(true);
 		const { container } = render(() => <DictationSettings />);
-		const select = labelled(container, "Speech engine")?.parentElement?.querySelector("select") as HTMLSelectElement;
+		const select = labelled(container, "Speech engine")
+			?.closest(".settingRow, .group")
+			?.querySelector("select") as HTMLSelectElement;
 		fireEvent.change(select, { target: { value: "pocket" } });
 		expect(mockStore.setSpeechEngine).toHaveBeenCalledWith("pocket");
 	});

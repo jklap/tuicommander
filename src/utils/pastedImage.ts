@@ -29,7 +29,12 @@ function isImageFileName(e: ClipboardEvent): boolean {
 export function isImagePaste(e: ClipboardEvent): boolean {
 	const items = e.clipboardData?.items;
 	if (!items) return false;
-	if (Array.from(items).some((item) => item.type === "text/plain") && !isImageFileName(e)) return false;
+	if (
+		Array.from(items).some((item) => item.type === "text/plain") &&
+		e.clipboardData?.getData?.("text/plain") !== "" &&
+		!isImageFileName(e)
+	)
+		return false;
 	return Array.from(items).some((item) => item.type.startsWith("image/"));
 }
 

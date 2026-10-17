@@ -54,10 +54,37 @@ impl Runtime {
         Some(&registration.peer)
     }
 
+    pub(super) fn recipient_peer(&self) -> Option<String> {
+        if let Some(peer) = self.registered_peer() {
+            return Some(peer.to_owned());
+        }
+        let peers = {
+            let config = self.state.config.read();
+            config
+                .ai_chat_peer_ids
+                .values()
+                .cloned()
+                .chain(
+                    config
+                        .ai_chat_launches
+                        .values()
+                        .map(|launch| launch.peer_id.clone()),
+                )
+                .filter(|peer| self.state.peer_agents.contains_key(peer))
+                .collect::<Vec<_>>()
+        };
+        self.state.acp.latest_live_peer(&peers)
+    }
+
     pub(super) fn clear_registration(&mut self) {
         self.registration = None;
         super::settings::registration_status(&self.outbound.paths, None);
         self.pending.clear();
+        for request in &mut self.requests {
+            if request.completed.is_none() {
+                request.failed = true;
+            }
+        }
         self.outbound.active = None;
         self.callbacks.clear();
     }

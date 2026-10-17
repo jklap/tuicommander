@@ -17,6 +17,7 @@ import { handleOpenUrl } from "../../utils/openUrl";
 import { isImagePaste } from "../../utils/pastedImage";
 import { isPerfDebug } from "../../utils/perfDebug";
 import { markPerf, noteFrameRequest } from "../../utils/perfTrace";
+import { stripAnswerMarkers } from "../../utils/stripAnswerMarkers";
 import { applyPinchFontDelta } from "../../utils/terminalZoom";
 import { ContextMenu, createContextMenu } from "../ContextMenu/ContextMenu";
 import { AnswersPanel } from "./AnswersPanel";
@@ -48,6 +49,7 @@ import {
 	hoverSignature,
 	logicalCellToStringOffset,
 	logicalStringSpanToCells,
+	readProjectedSelectionText,
 	rowStringSpanToCells,
 	underlinedText,
 	underlinedTextAt,
@@ -341,7 +343,7 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 	const pendingDirtyRows = new Set<number>();
 	// When true, next paint must redraw everything (scroll, resize, clear)
 	let fullRepaintNeeded = true;
-	let hidden = false;
+	let hidden = true;
 	let lastHistorySize = -1;
 	let lastHistoryBase = -1;
 	let awaitingFullFrame = false;
@@ -1037,7 +1039,7 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 		}
 		const base = frame.historyBase + frame.historySize - frame.displayOffset;
 		const wrappedAbove = (i: number) => (i > 0 ? rowMap.get(i - 1) : rowCache.get(base + i - 1))?.wrapped ?? false;
-		lastMarkerPlan = planMarkers(lastResizeRows || 24, (i) => {
+		lastMarkerPlan = planMarkers(frame.screenRows || lastResizeRows || 24, (i) => {
 			const row = i >= 0 ? rowMap.get(i) : rowCache.get(base + i);
 			return row ? { text: rowToText(row), isWrapped: wrappedAbove(i) } : null;
 		});
@@ -1546,13 +1548,9 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 		// on decode/paint), then decode (cheap) which keeps rowMap + currentFrame alive
 		// for the overlay (cursor/selection/links/search/scrollbar) and input semantics.
 		//
-		// A hidden terminal acks late instead of per frame. That is the whole of the
-		// flow control this observer promises: a background tab is display:none and
-		// never unmounted, so Rust keeps a producer running for it, and acking at
-		// once reopens the gate at full rate for a frame nobody can see. The trailing
-		// ack drops it to ~2 frames/s while still clearing the gate itself — staying
-		// silent would leave that to the ticker's stuck-frontend path, which is a
-		// warning per output burst for a tab that is merely in the background.
+		// Desktop visibility admission stops grid delivery while hidden. A frame
+		// already queued before hide can still arrive; acknowledge it on the
+		// trailing timer. Browser sockets keep their independent frame stream.
 		framesReceived++;
 		if (hidden) hiddenAck.schedule();
 		else ackFrame();
@@ -1583,9 +1581,7 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 			return;
 		}
 
-		// Decoded even while hidden: the bell rides in the frame header and a
-		// background tab is exactly where it needs to reach the user.
-		if (frame.bell) props.onBell?.();
+		// Bells are delivered by the backend session event, independently of frames.
 		// Everything below paints, scans links or fills the scroll cache for a
 		// viewport that is not on screen.
 		if (hidden) return;
@@ -2394,6 +2390,7 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 			transport.onStreamExhausted?.((maxAttempts) => {
 				showStreamError(new Error(`Reconnect failed after ${maxAttempts} attempts`));
 			});
+			await transport.onEvent("bell", () => props.onBell?.());
 			await transport.onEvent("cwd", (payload) => {
 				const { cwd } = payload as { cwd: string };
 				terminalsStore.update(props.terminalId, { cwd });
@@ -2456,6 +2453,7 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 				const isVisible = latestIntersectionVisibility(entries);
 				if (isVisible && hidden) {
 					hidden = false;
+					transport?.setVisible?.(true);
 					awaitingFullFrame = false;
 					// Back to full rate: clear the gate now instead of waiting out the
 					// hidden interval, so the frame requested below is not queued behind it.
@@ -2473,25 +2471,29 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 					// naturally discarded without a blank flash.
 					remeasure();
 					if (focused()) startBlink();
-					// If remeasure saw 0x0 (layout not yet computed after
-					// display:none → display:block), retry after a frame.
-					const rect = containerRef.getBoundingClientRect();
-					if (rect.width <= 0 || rect.height <= 0) {
-						requestAnimationFrame(() => {
-							remeasure();
-							noteFrameRequest();
-							invokeRef?.("terminal_request_frame", { sessionId: props.sessionId }).catch(
-								ipcErr("terminal_request_frame"),
-							);
-						});
-					} else {
+					// Tauri publishes visibility before requesting its authoritative frame.
+					// WS has no visibility publication, so this component owns its request.
+					const requestShowFrame = () => {
+						if (transport?.setVisible) return;
 						noteFrameRequest();
 						invokeRef?.("terminal_request_frame", { sessionId: props.sessionId }).catch(
 							ipcErr("terminal_request_frame"),
 						);
+					};
+					// Retry layout after display:none → display:block even when the
+					// transport owns the frame request.
+					const rect = containerRef.getBoundingClientRect();
+					if (rect.width <= 0 || rect.height <= 0) {
+						requestAnimationFrame(() => {
+							remeasure();
+							requestShowFrame();
+						});
+					} else {
+						requestShowFrame();
 					}
 				} else if (!isVisible && !hidden) {
 					hidden = true;
+					transport?.setVisible?.(false);
 					stopBlink();
 					// Shrink to free the backing store while hidden.
 					canvasRef.width = 1;
@@ -3386,13 +3388,12 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 				transport.unsubscribe();
 				return;
 			}
-			// Paint the current grid now. The browser-mode WS subscribe (unlike the
-			// Tauri event channel) does not replay the current frame, so an idle
-			// session with no pending output would render nothing and leave the
-			// canvas black until the first interaction. Forcing a full frame here is
-			// idempotent on desktop and fixes the black-on-load in browser mode.
-			noteFrameRequest();
-			invokeRef?.("terminal_request_frame", { sessionId: props.sessionId }).catch(ipcErr("terminal_request_frame"));
+			// WS needs an initial frame even for an idle session. Desktop visibility
+			// publication already owns its authoritative frame request.
+			if (!transport.setVisible) {
+				noteFrameRequest();
+				invokeRef?.("terminal_request_frame", { sessionId: props.sessionId }).catch(ipcErr("terminal_request_frame"));
+			}
 		} catch (e) {
 			appLogger.error("terminal", "Failed to subscribe to terminal grid channel", {
 				sessionId: props.sessionId,
@@ -3408,7 +3409,7 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 		props.onRef?.({
 			wheel: handleWheel,
 			focus: () => keyInputRef.focus({ preventScroll: true }),
-			getSelectionText: () => selection.cachedText,
+			getSelectionText: () => stripAnswerMarkers(selection.cachedText),
 			refresh: () => {
 				rowMap.clear();
 				clearDetectedLinks();
@@ -3548,24 +3549,55 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 						endRow !== null &&
 						historyBase !== undefined
 					) {
-						const text = (await invokeRef("terminal_get_selection_text", {
-							sessionId: props.sessionId,
-							startRow,
-							startCol: selection.start.col,
-							endRow,
-							endCol: selection.end.col,
-							historyBase,
-						})) as string;
-						// Legacy/empty response fallback; an eviction rejection throws and is
-						// deliberately handled without a local or cached copy below.
-						return text || getLocalSelectionText(selection, selectionAbsRowToViewport, rowMap);
+						// Read recorded cell rows rather than filtering copied prose: only
+						// the marker projection knows which physical rows are omitted.
+						const start = { ...selection.start };
+						const end = { ...selection.end };
+						const first = Math.min(start.row, end.row);
+						const last = Math.max(start.row, end.row);
+						const viewportTop =
+							historyBase + currentFrame!.historySize - (overlayScrollOffset ?? projectedDisplayOffset);
+						let copyRows = new Map<number, DecodedRow>();
+						for (let index = viewportTop - MARKER_LOOKBACK_ROWS; index < viewportTop; index++) {
+							const row = rowCache.get(index);
+							if (row) copyRows.set(index, row);
+						}
+						for (const [index, row] of rowMap) copyRows.set(viewportTop + index, row);
+						if (first < viewportTop || last >= viewportTop + currentFrame!.screenRows) {
+							const from = Math.max(historyBase, first - MARKER_LOOKBACK_ROWS);
+							const range = await fetchStyledRange(from, last - from + 1 + MARKER_LOOKBACK_ROWS);
+							if (
+								!range ||
+								!range.rows.some(({ abs }) => abs === first) ||
+								!range.rows.some(({ abs }) => abs === last)
+							) {
+								throw new Error("selection rows are no longer retained");
+							}
+							copyRows = new Map(range.rows.map(({ abs, row }) => [abs, row]));
+						}
+						const text = await readProjectedSelectionText(
+							start,
+							end,
+							copyRows,
+							async (start, end) =>
+								(await invokeRef!("terminal_get_selection_text", {
+									sessionId: props.sessionId,
+									startRow: start.row - historyBase,
+									startCol: start.col,
+									endRow: end.row - historyBase,
+									endCol: end.col,
+									historyBase,
+								})) as string,
+						);
+						// An all-hidden range is intentionally empty; never restore raw rows.
+						return text;
 					}
 					return selection.cachedText || getLocalSelectionText(selection, selectionAbsRowToViewport, rowMap);
 				},
 				async (text) => {
 					selection.cachedText = text;
 					selection.localSnapshot = getLocalSelectionText(selection, selectionAbsRowToViewport, rowMap);
-					await writeClipboard(text);
+					await writeClipboard(stripAnswerMarkers(text));
 				},
 			);
 			if (result.kind === "copied") {

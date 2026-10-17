@@ -206,6 +206,6 @@ describe("uiStore.resetLayout() — batch() coalescing", () => {
 
 		// Verify values are actually reset to defaults
 		expect(store.state.sidebarWidth).toBe(300);
-		expect(store.state.settingsNavWidth).toBe(180);
+		expect(store.state.settingsNavWidth).toBe(232);
 	});
 });

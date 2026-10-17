@@ -239,6 +239,8 @@ pub enum AppEvent {
     /// Terminal title set (or reset to empty) through OSC 0/2.
     #[serde(rename = "pty-title")]
     PtyTitle { session_id: String, title: String },
+    #[serde(rename = "pty-bell")]
+    PtyBell { session_id: String },
     /// "This session produced output." Payload-free on purpose: the only
     /// consumers are a last-seen timestamp and an unread flag, neither of which
     /// needs a byte of the output itself. Throttled at the producer — see
@@ -559,6 +561,7 @@ impl AppEvent {
             | AppEvent::PtyExit { session_id }
             | AppEvent::PtyActivity { session_id }
             | AppEvent::PtyTitle { session_id, .. }
+            | AppEvent::PtyBell { session_id }
             | AppEvent::PtyOsc133 { session_id, .. }
             | AppEvent::PtyCwd { session_id, .. }
             | AppEvent::PtyDescriptionChanged { session_id, .. }
@@ -589,6 +592,8 @@ fn is_zero(v: &u32) -> bool {
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub(crate) struct SessionState {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub provider_recovery: Option<crate::output_parser::ProviderRecovery>,
     /// Validated native hook identity; never a discovery heuristic.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub codex_binding: Option<crate::codex_binding::CodexBinding>,
@@ -861,7 +866,8 @@ impl SessionState {
 /// Used by WS dedup to avoid sending identical state frames.
 impl PartialEq for SessionState {
     fn eq(&self, other: &Self) -> bool {
-        self.awaiting_input == other.awaiting_input
+        self.provider_recovery == other.provider_recovery
+            && self.awaiting_input == other.awaiting_input
             && self.question_text == other.question_text
             && self.question_confident == other.question_confident
             && self.rate_limited == other.rate_limited
@@ -1609,7 +1615,12 @@ struct UrgentNotice {
     first_through: u64,
     through: u64,
     written: bool,
+    reserved_at: std::time::Instant,
 }
+
+// Two 6s confirmation windows and split writes fit inside this lease. A stalled
+// writer must not suppress later notices forever; the mailbox remains durable.
+const URGENT_NOTICE_LEASE: Duration = Duration::from_secs(30);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum OrchestratorDeliveryAssignment {
@@ -1789,6 +1800,8 @@ pub(crate) const MONITORING_GIT_CONCURRENCY: usize = 8;
 /// Every field is constructible without arguments, so the group carries its own
 /// `Default` and `AppState::new` names it once instead of seven times.
 pub(crate) struct GitHubState {
+    pub(crate) login_epoch: std::sync::atomic::AtomicU64,
+    pub(crate) login_commit: tokio::sync::Mutex<()>,
     /// GitHub API token — updated on fallback when a 401 triggers candidate rotation
     pub(crate) token: parking_lot::RwLock<Option<String>>,
     /// Where the current GitHub token came from (env, OAuth keyring, gh CLI)
@@ -1815,6 +1828,8 @@ pub(crate) struct GitHubState {
 impl Default for GitHubState {
     fn default() -> Self {
         Self {
+            login_epoch: std::sync::atomic::AtomicU64::new(0),
+            login_commit: tokio::sync::Mutex::new(()),
             token: parking_lot::RwLock::new(None),
             token_source: parking_lot::RwLock::new(Default::default()),
             disconnected: std::sync::atomic::AtomicBool::new(false),
@@ -1880,6 +1895,7 @@ pub(crate) struct DesktopGridChannel {
     pub(crate) channel: tauri::ipc::Channel<tauri::ipc::Response>,
     pub(crate) webview_label: String,
     pub(crate) epoch: u64,
+    pub(crate) visible: AtomicBool,
 }
 
 /// The rendering half of [`AppState`] (#678-9a75): one VT grid per session,
@@ -2058,9 +2074,9 @@ pub struct SessionMaps {
     /// frontend on tab focus changes. Read by the watcher engine to evaluate
     /// the Unseen trigger (fires only when the terminal tab is not visible).
     pub(crate) session_visibility: DashMap<String, bool>,
-    /// Sessions currently in standby (SIGSTOP'd). session_id → epoch ms when stopped.
+    /// Sessions currently in standby (SIGSTOP'd). session_id → exact stopped pgid.
     #[cfg(unix)]
-    pub(crate) standby_sessions: DashMap<String, u64>,
+    pub(crate) standby_sessions: DashMap<String, i32>,
     /// Per-session marker tallies, so "the agents are ignoring the markers" can be
     /// answered with a number instead of by grepping scrollback — which counts any
     /// mention of the word and is capped by buffer size (#4421).
@@ -2069,6 +2085,7 @@ pub struct SessionMaps {
 
 /// Global state for managing PTY sessions and worktrees
 pub struct AppState {
+    pub(crate) telegram_recent: Arc<parking_lot::Mutex<crate::telegram::recent::Recent>>,
     pub(crate) workflow_runtime: crate::workflows::WorkflowRuntime,
     pub(crate) automation_runtime: crate::automations::runtime::AutomationRuntime,
     pub(crate) secrets: crate::secrets::SecretStore,
@@ -2348,6 +2365,7 @@ pub struct AppState {
     /// able to unblock an agent that a native desktop dialog would have pinned to
     /// whoever is sitting at the machine.
     pub(crate) settings_policy: Arc<crate::settings::policy::Policy>,
+    pub(crate) settings_api: tokio::sync::OnceCell<crate::settings::api::Settings>,
     pub(crate) confirm_responses: DashMap<String, tokio::sync::oneshot::Sender<bool>>,
     /// App-wide process-tree snapshot shared by agent lifecycle polling.
     pub(crate) process_snapshot_cache: crate::pty::ProcessSnapshotCache,
@@ -2838,6 +2856,11 @@ impl AppState {
         {
             return UrgentNoticeReservation::AlreadyRead;
         }
+        if gate.urgent_notices.get(sender).is_some_and(|notice| {
+            !notice.written && notice.reserved_at.elapsed() >= URGENT_NOTICE_LEASE
+        }) {
+            gate.urgent_notices.remove(sender);
+        }
         match gate.urgent_notices.get_mut(sender) {
             Some(notice) => {
                 notice.through = notice.through.max(through);
@@ -2854,6 +2877,7 @@ impl AppState {
                         first_through: through,
                         through,
                         written: false,
+                        reserved_at: std::time::Instant::now(),
                     },
                 );
                 UrgentNoticeReservation::Reserved
@@ -3524,7 +3548,7 @@ impl AppState {
             .expect("monitoring_git_sem is never closed")
     }
 
-    pub fn new(
+    pub(crate) fn new(
         data_dir: PathBuf,
         worktrees_dir: PathBuf,
         config: crate::config::AppConfig,
@@ -3542,6 +3566,7 @@ impl AppState {
             tunnel_audit.clone(),
         ));
         Self {
+            telegram_recent: Default::default(),
             workflow_runtime: Default::default(),
             automation_runtime: Default::default(),
             secrets: crate::secrets::SecretStore::default(),
@@ -3635,6 +3660,7 @@ impl AppState {
             suspend_lock: Mutex::new(()),
             hibernated_peers: dashmap::DashSet::new(),
             settings_policy: Arc::new(crate::settings::policy::Policy::default()),
+            settings_api: tokio::sync::OnceCell::new(),
             confirm_responses: DashMap::new(),
             process_snapshot_cache: crate::pty::ProcessSnapshotCache::default(),
             hot_repo_paths: parking_lot::RwLock::new(std::collections::HashSet::new()),
@@ -4750,9 +4776,29 @@ impl AppState {
         });
     }
 
-    /// Send a push notification to all mobile subscribers, deep-linking a session.
-    fn send_mobile_push(state: &Arc<AppState>, session_id: &str, body: &str) {
-        Self::send_mobile_push_url(state, format!("/mobile/session/{session_id}"), body);
+    /// Send a push with a readable label while retaining the PTY navigation id.
+    fn send_mobile_push(state: &Arc<AppState>, session_id: &str, prompt: &str) {
+        let identity = state.session_maps.sessions.get(session_id).map(|session| {
+            let session = session.lock();
+            (
+                session.display_name.clone(),
+                session.initial_cwd.clone().or_else(|| session.cwd.clone()),
+            )
+        });
+        let agent_type = state
+            .session_maps
+            .session_states
+            .get(session_id)
+            .and_then(|session| session.agent_type.clone());
+        let (name, cwd) = identity.unwrap_or_default();
+        let (body, url) = crate::push::session_push_payload(
+            session_id,
+            name.as_deref(),
+            agent_type.as_deref(),
+            cwd.as_deref(),
+            prompt,
+        );
+        Self::send_mobile_push_url(state, url, &body);
     }
 
     /// Send a push notification to all mobile subscribers at an arbitrary deep link.
@@ -4834,7 +4880,7 @@ impl AppState {
             // answers the different question "are bytes flowing right now", which
             // is true throughout a `tail -f` that produces no semantic event at
             // all. Folding the two would silently redefine the mobile column.
-            AppEvent::PtyActivity { .. } | AppEvent::PtyTitle { .. } => {}
+            AppEvent::PtyActivity { .. } | AppEvent::PtyTitle { .. } | AppEvent::PtyBell { .. } => {}
             // Shell-integration markers and the OSC 7 cwd are terminal-rendering
             // signals, not session state. The cwd that state cares about is
             // written straight onto the `sessions` entry at the emit site; this
@@ -4852,6 +4898,7 @@ impl AppState {
                 // Wait metadata for a session that just parked, routed to the
                 // spawning orchestrator's inbox outside the lock below.
                 let mut parked_wait: Option<(String, bool, &'static str)> = None;
+                let mut recovery_notice = None;
 
                 // Ranked awaiting evidence (#744-138c): resolved through the
                 // session's SilenceState BEFORE the session_states entry is
@@ -4947,6 +4994,20 @@ impl AppState {
                     });
                 s.last_activity_ms = now_ms;
                 match event_type {
+                    "provider-recovery" => {
+                        let recovery = parsed.get("recovery").filter(|v| !v.is_null())
+                            .and_then(|v| serde_json::from_value(v.clone()).ok());
+                        if s.provider_recovery != recovery {
+                            if s.provider_recovery.is_none() || recovery.is_none() {
+                                recovery_notice = Some(serde_json::json!({
+                                    "type": "state_change", "session_id": session_id,
+                                    "state": if recovery.is_some() { "recovering" } else { "recovery-ended" },
+                                    "provider_recovery": recovery,
+                                }));
+                            }
+                            s.provider_recovery = recovery;
+                        }
+                    }
                     "question" if epoch_matches => {
                         let new_confident = parsed
                             .get("confident")
@@ -5205,6 +5266,9 @@ impl AppState {
                 // Route the parked prompt to the spawning orchestrator, outside the
                 // session_states entry lock: delivery reaches into the PARENT's
                 // SilenceState and re-entering this shard would deadlock.
+                if let Some(notice) = recovery_notice {
+                    crate::pty::push_state_change_to_parent(state, session_id, notice);
+                }
                 if let Some((prompt, confident, source)) = parked_wait {
                     crate::pty::push_state_change_to_parent(
                         state,
@@ -5222,20 +5286,13 @@ impl AppState {
 
                 // Spawn push notification outside the DashMap lock
                 if let Some((sid, prompt)) = push_data {
-                    let session_name = state
-                        .session_maps.sessions
-                        .get(&sid)
-                        .and_then(|s| s.value().lock().display_name.clone())
-                        .unwrap_or_else(|| sid.clone());
-                    let body = if prompt.is_empty() {
-                        format!("{session_name}: awaiting input")
-                    } else {
-                        format!("{session_name}: {prompt}")
-                    };
-                    Self::send_mobile_push(state, &sid, &body);
+                    Self::send_mobile_push(state, &sid, &prompt);
                 }
             }
             AppEvent::PtyExit { session_id } => {
+                if let Some(mut session) = state.session_maps.session_states.get_mut(session_id) {
+                    session.provider_recovery = None;
+                }
                 crate::codex_binding::revoke(state, session_id);
                 let push_ready = {
                     let config = state.config.read();
@@ -5276,16 +5333,7 @@ impl AppState {
                     }
                 }
                 if should_push {
-                    let session_name = state
-                        .session_maps.sessions
-                        .get(session_id)
-                        .and_then(|s| s.value().lock().display_name.clone())
-                        .unwrap_or_else(|| session_id.clone());
-                    Self::send_mobile_push(
-                        state,
-                        session_id,
-                        &format!("{session_name}: completed"),
-                    );
+                    Self::send_mobile_push(state, session_id, "completed");
                 }
             }
             // Global events don't affect per-session state
@@ -6008,6 +6056,44 @@ mod tests {
         );
         assert!(!state.agent_inbox_evictions.contains_key("peer"));
         assert!(!state.agent_inbox_evictions.contains_key("other"));
+    }
+
+    /// Catches: a lost urgent-notice writer suppresses every later urgent notice forever.
+    #[test]
+    fn urgent_notice_in_flight_expires_without_settling_its_replacement() {
+        let state = tests_support::make_test_app_state();
+        let recipient = "urgent-expiry";
+        let first = state.push_agent_inbox(recipient, make_msg("first"));
+        assert_eq!(
+            state.reserve_urgent_notice(recipient, "sender", first),
+            UrgentNoticeReservation::Reserved
+        );
+        let second = state.push_agent_inbox(recipient, make_msg("second"));
+        assert_eq!(
+            state.reserve_urgent_notice(recipient, "sender", second),
+            UrgentNoticeReservation::InFlight
+        );
+        // The lease is 30s, longer than both 6s submission confirmation windows.
+        // Use the public clock here so the regression also runs on pre-fix code.
+        std::thread::sleep(Duration::from_secs(31));
+        let third = state.push_agent_inbox(recipient, make_msg("third"));
+        assert_eq!(
+            state.reserve_urgent_notice(recipient, "sender", third),
+            UrgentNoticeReservation::Reserved,
+            "an abandoned writer must not suppress future urgent notices"
+        );
+        state.finish_urgent_notice(recipient, "sender", first, true);
+        let fourth = state.push_agent_inbox(recipient, make_msg("fourth"));
+        assert_eq!(
+            state.reserve_urgent_notice(recipient, "sender", fourth),
+            UrgentNoticeReservation::InFlight,
+            "a late old writer must not mark the replacement as written"
+        );
+        state.finish_urgent_notice(recipient, "sender", third, true);
+        assert_eq!(
+            state.reserve_urgent_notice(recipient, "sender", fourth),
+            UrgentNoticeReservation::Written
+        );
     }
 
     #[test]
@@ -8640,6 +8726,42 @@ mod tests {
             "slow path should return Cow::Owned"
         );
         assert_eq!(&*out, "beforeafter");
+    }
+
+    /// Catches: recovery entry/exit being invisible to the parent, or duplicate snapshots flooding it.
+    #[test]
+    fn provider_recovery_accumulates_and_notifies_parent_on_edges() {
+        let state = fresh_state();
+        state
+            .session_maps
+            .session_parent
+            .insert("s1".into(), "recovery-parent".into());
+        state
+            .agent_inbox
+            .entry("recovery-parent".into())
+            .or_default();
+        let event = make_parsed(
+            "provider-recovery",
+            serde_json::json!({"recovery": {
+                "phase": "waiting", "next_attempt_ms": 1792100000000_u64, "attempt": 3
+            }}),
+        );
+        let snapshot = apply(&state, &event);
+        assert_eq!(snapshot.provider_recovery.as_ref().unwrap().attempt, 3);
+        assert!(!snapshot.awaiting_input);
+        apply(&state, &event);
+        let notices = parent_state_changes(&state, "recovery-parent");
+        assert_eq!(notices.len(), 1);
+        assert_eq!(notices[0]["state"], "recovering");
+        assert_eq!(notices[0]["provider_recovery"]["attempt"], 3);
+        let cleared = apply(
+            &state,
+            &make_parsed("provider-recovery", serde_json::json!({"recovery": null})),
+        );
+        assert!(cleared.provider_recovery.is_none());
+        assert_ne!(snapshot, cleared);
+        let notices = parent_state_changes(&state, "recovery-parent");
+        assert_eq!(notices.last().unwrap()["state"], "recovery-ended");
     }
 
     // Helpers for session-state accumulator tests

@@ -1,5 +1,6 @@
 import { render, waitFor } from "@solidjs/testing-library";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { VisibleIntersectionObserver } from "../helpers/visibleIntersectionObserver";
 
 /**
  * Round 3: the context menu of a hover-only link opens from the hover. A left press on an underlined path while the app reports the mouse (Claude
@@ -157,13 +158,7 @@ describe("CanvasTerminal link press, critic 1336 round 3", () => {
 				disconnect() {}
 			},
 		);
-		vi.stubGlobal(
-			"IntersectionObserver",
-			class {
-				observe() {}
-				disconnect() {}
-			},
-		);
+		vi.stubGlobal("IntersectionObserver", VisibleIntersectionObserver);
 
 		const view = render(() => (
 			<CanvasTerminal sessionId="link-1336r3" terminalId="link-1336r3" onOpenFilePath={onOpen} />

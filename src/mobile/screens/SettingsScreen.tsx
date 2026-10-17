@@ -1,5 +1,4 @@
-import { createSignal, onMount, Show } from "solid-js";
-import { TelegramTab } from "../../components/SettingsPanel/tabs/TelegramTab";
+import { createEffect, createSignal, onMount, Show } from "solid-js";
 import { Select } from "../../components/ui/Select";
 import { t } from "../../i18n";
 import { appLogger } from "../../stores/appLogger";
@@ -14,6 +13,7 @@ import styles from "./SettingsScreen.module.css";
 const SOUND_KEY = "tuic-mobile-sounds";
 
 interface SettingsScreenProps {
+	recoveryRevision?: number;
 	isConnected: boolean;
 }
 
@@ -33,7 +33,6 @@ export function SettingsScreen(props: SettingsScreenProps) {
 		() => "",
 		() => props.isConnected,
 	);
-	const [telegramOpen, setTelegramOpen] = createSignal(false);
 	const [soundEnabled, setSoundEnabled] = createSignal(localStorage.getItem(SOUND_KEY) !== "false");
 	const [keepAwake, setKeepAwake] = createSignal(localStorage.getItem(KEEP_AWAKE_KEY) !== "false");
 	const [serverUrl, setServerUrl] = createSignal("");
@@ -48,6 +47,10 @@ export function SettingsScreen(props: SettingsScreenProps) {
 	onMount(() => {
 		setServerUrl(window.location.origin);
 		void detectPushState().then(setPushState);
+	});
+	createEffect(() => {
+		props.recoveryRevision;
+		setThemeError(null);
 		void loadMobileTheme()
 			.then(setTheme)
 			.catch((error: unknown) => {
@@ -374,20 +377,6 @@ export function SettingsScreen(props: SettingsScreenProps) {
 						<span class={styles.toggleThumb} />
 					</button>
 				</div>
-			</section>
-
-			<section class={styles.section}>
-				<button
-					class={styles.select}
-					disabled={!props.isConnected}
-					onClick={() => setTelegramOpen(!telegramOpen())}
-					aria-expanded={telegramOpen()}
-				>
-					Telegram setup
-				</button>
-				<Show when={telegramOpen()}>
-					<TelegramTab />
-				</Show>
 			</section>
 
 			<section class={styles.section}>
