@@ -643,7 +643,7 @@ An open Settings page refreshes after a durable MCP settings write. Unsaved fiel
 
 ## All settings (Expert)
 
-The **Application → All settings (Expert)** page provides typed scalar and string-list editors from the Rust catalogue. Select a setting, bind any stable record keys, and select a registered repository or existing Ego profile when required. The inspector edits existing records; use the dedicated domain page to create records, manage credentials or edit structured pane/forward/root data. It does not expose an opaque JSON editor.
+The **Application → All settings (Expert)** page provides typed scalar and string-list editors from the Rust catalogue. Search results update the inspector even when this page is already open. You can also select a setting manually. Bind any stable record keys, and select a registered repository or existing Ego profile when required. The inspector edits existing records; use the dedicated domain page to create records, manage credentials or edit structured pane/forward/root data. It does not expose an opaque JSON editor.
 
 Reads show owner state and a revision. Save changes only that field with its read revision. A remote update keeps a dirty draft and its old revision, so a conflicting save cannot silently overwrite the new state. **Discard draft and reload** explicitly abandons that draft. Exposure/execution edits first return a proposal; **Ask for confirmation** uses the existing human dialog. If persistence succeeded but runtime application failed, or the transport lost the outcome, the inspector disables writes until you reload authoritative state. Read back before retrying.
 

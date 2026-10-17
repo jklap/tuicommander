@@ -1,4 +1,5 @@
 import { cleanup, fireEvent, render, waitFor } from "@solidjs/testing-library";
+import { createSignal } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const { invoke, readers } = vi.hoisted(() => ({
@@ -19,7 +20,7 @@ vi.mock("../../../services/settingsRefresh", () => ({
 
 import { settingsCatalogue } from "../../../generated/settingsCatalogue";
 import { hasCatalogueEditor } from "../../../services/settingsCatalogue";
-import { CatalogueFieldEditor } from "../AllSettingsTab";
+import { AllSettingsTab, CatalogueFieldEditor } from "../AllSettingsTab";
 import { SettingSelect } from "../SettingFields";
 
 afterEach(cleanup);
@@ -145,4 +146,20 @@ describe("catalogue owner writes", () => {
 		);
 		expect([...view.container.querySelectorAll("option")].map((option) => option.value)).toEqual(allowed);
 	});
+});
+
+// Catches: a second catalogue search result leaving the mounted inspector on the previous owner field.
+it("follows_second_search_selection_without_leaving_the_inspector", async () => {
+	const first = settingsCatalogue.fields["app.shell"];
+	const second = settingsCatalogue.fields["app.theme"];
+	invoke.mockImplementation((_command, { request }) => Promise.resolve(snapshot(request.paths[0], "")));
+	const [selection, select] = createSignal(first.id);
+	const view = render(() => <AllSettingsTab initialSetting={selection()} />);
+	await waitFor(() => expect(view.container.querySelector(`[data-setting-id="${first.id}"]`)).not.toBeNull());
+	select(second.id);
+	await waitFor(() => expect(view.container.querySelector(`[data-setting-id="${second.id}"]`)).not.toBeNull());
+	expect(view.container.querySelector(`[data-setting-id="${first.id}"]`)).toBeNull();
+	const selector = view.container.querySelector("select[data-non-setting]")!;
+	fireEvent.change(selector, { target: { value: first.id } });
+	await waitFor(() => expect(view.container.querySelector(`[data-setting-id="${first.id}"]`)).not.toBeNull());
 });

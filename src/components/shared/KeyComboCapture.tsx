@@ -127,12 +127,18 @@ export const KeyComboCapture: Component<KeyComboCaptureProps> = (props) => {
 			<Show
 				when={capturing()}
 				fallback={
-					<button class={s.display} onClick={startCapture} title="Click to change shortcut">
+					<button
+						data-setting-id={props.settingId}
+						class={s.display}
+						onClick={startCapture}
+						title="Click to change shortcut"
+					>
 						{displayLabel()}
 					</button>
 				}
 			>
 				<input
+					data-setting-id={props.settingId}
 					class={s.input}
 					placeholder={props.placeholder ?? "Press a key combination..."}
 					onKeyDown={handleKeyDown}

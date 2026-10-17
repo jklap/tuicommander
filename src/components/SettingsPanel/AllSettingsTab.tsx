@@ -1,4 +1,4 @@
-import { type Component, createMemo, createSignal, For, onCleanup, Show } from "solid-js";
+import { type Component, createEffect, createMemo, createSignal, For, onCleanup, Show } from "solid-js";
 import { settingsCatalogue } from "../../generated/settingsCatalogue";
 import { invoke } from "../../invoke";
 import { hasCatalogueEditor, type SettingId, settingHint, settingLabel } from "../../services/settingsCatalogue";
@@ -295,6 +295,13 @@ export const AllSettingsTab: Component<{ initialSetting?: string }> = (props) =>
 		fields.find((field) => field.id === props.initialSetting)?.id ?? fields[0].id,
 	);
 	const [keys, setKeys] = createSignal<Record<number, string>>({});
+	createEffect(() => {
+		const requested = fields.find((field) => field.id === props.initialSetting);
+		if (requested) {
+			setSelected(requested.id);
+			setKeys({});
+		}
+	});
 	const [repository, setRepository] = createSignal("");
 	const [profile, setProfile] = createSignal("");
 	const field = () => fields.find((field) => field.id === selected()) ?? fields[0];
