@@ -18379,6 +18379,78 @@ mod tests {
         );
     }
 
+    /// A recipient that auto-standby parked is SIGSTOPped, so a notice typed into it would sit unread
+    /// in the PTY forever. `send` must wake it first.
+    /// Catches: peer mail to a parked agent being "delivered" into a stopped process.
+    #[cfg(unix)]
+    #[test]
+    fn mcp_send_wakes_a_parked_claude_recipient_so_it_reads_the_notice() {
+        let state = test_state();
+        register_peer(&state, TEST_UUID_A, "sender", "mcp-sender");
+        register_peer(&state, TEST_UUID_B, "recipient", "mcp-recipient");
+        state.mcp.sessions.insert(
+            "mcp-recipient".to_string(),
+            crate::state::McpSessionMeta {
+                last_activity: std::time::Instant::now(),
+                is_claude_code: true,
+                requires_meta_tools: false,
+                has_sse_stream: true,
+                sse_generation: 0,
+                repo_path: None,
+                agent_type: None,
+            },
+        );
+        let (channel, _receiver) = tokio::sync::broadcast::channel(4);
+        state
+            .session_maps
+            .messaging_channels
+            .insert("mcp-recipient".to_string(), channel);
+        let submitted_output =
+            install_completed_agent_submission_probe(&state, TEST_UUID_B, "claude");
+        state
+            .session_maps
+            .session_states
+            .get_mut(TEST_UUID_B)
+            .unwrap()
+            .suggested_actions = None;
+        state
+            .session_maps
+            .silence_states
+            .get(TEST_UUID_B)
+            .unwrap()
+            .lock()
+            .reset_suggest_memory();
+        assert_eq!(
+            crate::pty::standby_session(&state, TEST_UUID_B),
+            Ok(true),
+            "the recipient must really be parked before the mail arrives"
+        );
+
+        let sent = handle_messaging(
+            &state,
+            &serde_json::json!({"action": "send", "to": TEST_UUID_B, "message": "mail for a parked agent"}),
+            Some("mcp-sender"),
+        );
+
+        assert_eq!(sent["delivery_path"], "wake_notification_and_inbox");
+        assert!(
+            !state
+                .session_maps
+                .standby_sessions
+                .contains_key(TEST_UUID_B),
+            "send left the recipient parked"
+        );
+        // The probe prints SUBMITTED only once it actually READS the line — a stopped process never
+        // would, so this fails (times out) if the recipient was not really continued.
+        let output = submitted_output
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .expect("the woken recipient never read the notice");
+        assert!(
+            output.contains(&format!("SUBMITTED:{}", crate::pty::PEER_MAIL_WAKE)),
+            "{output:?}"
+        );
+    }
+
     /// A draft in Claude's composer must keep peer mail out of the PTY even
     /// when the shell is idle and a descendant is still running.
     /// Catches: injecting a notice into a partial draft or diverting its mail
