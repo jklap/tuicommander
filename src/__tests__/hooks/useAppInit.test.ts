@@ -1019,7 +1019,7 @@ describe("initApp", () => {
 		repositoriesStore.setWorkspace("/repo", "main", { worktreePath: "/repo" });
 		repositoriesStore.setWorkspace("/repo", "embedded", { worktreePath: "/repo/packages/app/" });
 		repositoriesStore.add({ path: "/repo/packages/app", displayName: "Nested" });
-		repositoriesStore.setWorkspace("/repo/packages/app", "main", { worktreePath: null });
+		repositoriesStore.setWorkspace("/repo/packages/app", "main", { worktreePath: "/repo/packages/app" });
 		repositoriesStore.setActiveWorkspace("/repo/packages/app", "main");
 
 		const deps = createMockDeps({

@@ -4,6 +4,7 @@ import { listen } from "@tauri-apps/api/event";
 import { createBranchSelectionCoordinator } from "../../hooks/git/createBranchSelectionCoordinator";
 import { useWorktreeSwitchPrompt } from "../../hooks/useWorktreeSwitchPrompt";
 import { activityStore } from "../../stores/activityStore";
+import { paneLayoutStore } from "../../stores/paneLayout";
 import { repositoriesStore } from "../../stores/repositories";
 import { reconcileTerminalOwnership } from "../../stores/terminalOwnership";
 import { terminalsStore } from "../../stores/terminals";
@@ -16,6 +17,7 @@ const WORKTREE = "/Gits/critic-placement__wt/feature";
 describe("worktree placement lifecycle regressions", () => {
 	beforeEach(() => {
 		vi.clearAllMocks();
+		paneLayoutStore.reset();
 		for (const id of terminalsStore.getIds()) terminalsStore.remove(id);
 		for (const path of repositoriesStore.getPaths()) repositoriesStore.remove(path);
 		repositoriesStore._testSetHydrated(true);
@@ -26,6 +28,7 @@ describe("worktree placement lifecycle regressions", () => {
 	});
 
 	afterEach(() => {
+		paneLayoutStore._testCancelPendingSave();
 		repositoriesStore._testCancelPendingSave();
 		activityStore._testCancelPendingSave();
 		terminalsStore._testCancelPendingTimers();
@@ -111,6 +114,74 @@ describe("worktree placement lifecycle regressions", () => {
 			reconcileTerminalOwnership();
 			expect(repositoriesStore.findOwnerForTerminal(id)?.workspaceId).toBe("main");
 			expect(terminalsStore.get(id)?.cwd).toBe(REPO);
+			// Catches: reconciliation moves the tab to main, but feature still activates it outside its tab strip.
+			expect(repositoriesStore.getActive()?.activeWorkspaceId).toBe("feature");
+			const visibleIds = repositoriesStore.getActive()?.workspaces.feature.terminals ?? [];
+			expect(terminalsStore.state.activeId).not.toBe(id);
+			expect(visibleIds).toEqual([]);
+			expect(terminalsStore.state.activeId).toBeNull();
 		});
 	});
+
+	// Catches: filtering rehomed IDs shifts positional layout mappings or leaves foreign panes active.
+	it.each([
+		{ name: "mixed owners", cwds: [REPO, WORKTREE], hadTerminals: true, expectedCwd: WORKTREE, keepsLayout: false },
+		{ name: "first-use workspace", cwds: [REPO], hadTerminals: false, expectedCwd: WORKTREE, keepsLayout: false },
+		{
+			name: "unchanged ownership",
+			cwds: [WORKTREE, WORKTREE],
+			hadTerminals: true,
+			expectedCwd: WORKTREE,
+			keepsLayout: true,
+		},
+	])(
+		"keeps active tabs and disk panes in the selected workspace: $name",
+		async ({ cwds, hadTerminals, expectedCwd, keepsLayout }) => {
+			await testInScopeAsync(async () => {
+				repositoriesStore.setWorkspace(REPO, "feature", {
+					hadTerminals,
+					savedTerminals: cwds.map((cwd, index) => ({
+						name: `saved-${index}`,
+						cwd,
+						fontSize: 14,
+						agentType: "codex",
+						suspended: true,
+					})),
+				});
+				const oldIds = cwds.map((_, index) => `old-${index}`);
+				mockInvoke.mockImplementation(async (command) =>
+					command === "load_pane_layout"
+						? {
+								root: { type: "leaf", id: "g1" },
+								groups: {
+									g1: { id: "g1", tabs: oldIds.map((id) => ({ id, type: "terminal" })), activeTabId: oldIds[0] },
+								},
+								activeGroupId: "g1",
+							}
+						: undefined,
+				);
+				await paneLayoutStore.loadFromDisk();
+				await createBranchSelectionCoordinator({
+					repo: { getDiffStats: async () => ({ additions: 0, deletions: 0 }) },
+					pty: { canSpawn: async () => true },
+					setStatusInfo: () => {},
+					getDefaultFontSize: () => 14,
+				}).handleBranchSelectInner(REPO, "feature");
+				await new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve())));
+				expect(repositoriesStore.getActive()?.activeWorkspaceId).toBe("feature");
+				const visibleIds = repositoriesStore.getActive()?.workspaces.feature.terminals ?? [];
+				expect(visibleIds).toContain(terminalsStore.state.activeId);
+				expect(terminalsStore.getActive()?.cwd).toBe(expectedCwd);
+				const paneIds = paneLayoutStore.getTerminalTabIds();
+				if (keepsLayout) expect(paneIds).toEqual(visibleIds);
+				else expect(paneIds).toEqual([]);
+				for (const id of paneIds) expect(visibleIds).toContain(id);
+				for (const id of terminalsStore.getIds()) {
+					expect(repositoriesStore.findOwnerForTerminal(id)?.workspaceId).toBe(
+						terminalsStore.get(id)?.cwd === REPO ? "main" : "feature",
+					);
+				}
+			});
+		},
+	);
 });
