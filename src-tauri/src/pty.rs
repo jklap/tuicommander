@@ -14642,110 +14642,212 @@ pub(crate) fn spawn_standby_checker(state: Arc<AppState>) {
         let mut interval = tokio::time::interval(Duration::from_secs(30));
         loop {
             interval.tick().await;
-            let timeout_min = state.config.read().standby_timeout_minutes;
-            if timeout_min == 0 {
-                // Standby disabled: wake any sessions still parked (SIGSTOP'd)
-                // from a previous non-zero timeout. Otherwise their stopped
-                // badge persists until the user manually focuses each tab
-                // (to-test.md:236, story 095).
-                wake_all_standby(&state);
-                continue;
-            }
-            let timeout_ms = u64::from(timeout_min) * 60_000;
             let now_ms = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap_or_default()
                 .as_millis() as u64;
-
-            let not_visible = state.sessions_not_visible();
-            let vis_count = not_visible.len();
-            let sessions_count = state.session_maps.sessions.len();
-            tracing::trace!(
-                vis_count,
-                sessions_count,
-                timeout_min,
-                "Standby checker tick"
-            );
-
-            for session_id in &not_visible {
-                if state
-                    .session_maps
-                    .standby_sessions
-                    .contains_key(session_id.as_str())
-                {
-                    continue;
-                }
-
-                let shell_raw = state
-                    .session_maps
-                    .shell_states
-                    .get(session_id.as_str())
-                    .map(|a| a.load(Ordering::Acquire));
-                let is_idle = shell_raw == Some(SHELL_IDLE);
-                if !is_idle {
-                    continue;
-                }
-
-                // For agents with a verified ready-screen adapter, a silence-only
-                // idle is not strong enough to SIGSTOP the process group. Require
-                // explicit Stop/OSC or a stable ready screen. Legacy agents that
-                // lack an adapter retain their prior timeout behavior.
-                let is_agent = state
-                    .session_maps
-                    .session_states
-                    .get(session_id.as_str())
-                    .map(|s| s.agent_type.is_some())
-                    .unwrap_or(false);
-                if is_agent && !idle_is_confirmed(&state, session_id.as_str()) {
-                    tracing::trace!(
-                        session_id = session_id.as_str(),
-                        "Standby skipped: agent idle is heuristic-only"
-                    );
-                    continue;
-                }
-                if background_activity_blocks_standby(&state, session_id.as_str()) {
-                    tracing::trace!(
-                        session_id = session_id.as_str(),
-                        "Standby skipped: background work or probe pending"
-                    );
-                    continue;
-                }
-
-                let idle_since = state
-                    .session_maps
-                    .shell_state_since_ms
-                    .get(session_id.as_str())
-                    .map(|a| a.load(Ordering::Acquire))
-                    .unwrap_or(now_ms);
-                let idle_ms = now_ms.saturating_sub(idle_since);
-                if idle_ms < timeout_ms {
-                    continue;
-                }
-
-                let settled = state
-                    .session_maps
-                    .silence_states
-                    .get(session_id.as_str())
-                    .map(|e| e.lock().startup_settled)
-                    .unwrap_or(false);
-                if !settled {
-                    continue;
-                }
-
-                tracing::debug!(
-                    session_id = session_id.as_str(),
-                    idle_ms,
-                    "Standby: all conditions met, stopping"
-                );
-                if let Err(e) = standby_session(&state, session_id) {
-                    tracing::warn!(session_id, error = %e, "Standby failed");
-                }
-            }
+            standby_tick(&state, now_ms);
         }
     });
 }
 
-/// SIGSTOP the entire process group of a session.
+/// One pass of the standby checker, with the clock passed in so the whole decision can be driven
+/// end to end in a test. Prunes orphan visibility entries, wakes everything when standby is
+/// disabled, and otherwise parks every session that is hidden, settled, confirmed idle, free of
+/// background work and has been idle for the configured timeout.
+#[cfg(unix)]
+fn standby_tick(state: &AppState, now_ms: u64) {
+    // Runs whether or not standby is enabled: the entries it removes belong to ids that
+    // never named a session, so they would otherwise accumulate for the process lifetime.
+    let pruned = state.prune_orphan_session_visibility();
+    if pruned > 0 {
+        tracing::debug!(pruned, "Pruned session_visibility entries with no session");
+    }
+    let timeout_min = state.config.read().standby_timeout_minutes;
+    if timeout_min == 0 {
+        // Standby disabled: wake any sessions still parked (SIGSTOP'd)
+        // from a previous non-zero timeout. Otherwise their stopped
+        // badge persists until the user manually focuses each tab
+        // (to-test.md:236, story 095).
+        wake_all_standby(state);
+        return;
+    }
+    let timeout_ms = u64::from(timeout_min) * 60_000;
+    let not_visible = state.sessions_not_visible();
+    let vis_count = not_visible.len();
+    let sessions_count = state.session_maps.sessions.len();
+    tracing::trace!(
+        vis_count,
+        sessions_count,
+        timeout_min,
+        "Standby checker tick"
+    );
+
+    for session_id in &not_visible {
+        if state
+            .session_maps
+            .standby_sessions
+            .contains_key(session_id.as_str())
+        {
+            continue;
+        }
+
+        let shell_raw = state
+            .session_maps
+            .shell_states
+            .get(session_id.as_str())
+            .map(|a| a.load(Ordering::Acquire));
+        let is_idle = shell_raw == Some(SHELL_IDLE);
+        if !is_idle {
+            continue;
+        }
+
+        // For agents with a verified ready-screen adapter, a silence-only
+        // idle is not strong enough to SIGSTOP the process group. Require
+        // explicit Stop/OSC or a stable ready screen. Legacy agents that
+        // lack an adapter retain their prior timeout behavior.
+        let is_agent = state
+            .session_maps
+            .session_states
+            .get(session_id.as_str())
+            .map(|s| s.agent_type.is_some())
+            .unwrap_or(false);
+        if is_agent && !idle_is_confirmed(state, session_id.as_str()) {
+            tracing::trace!(
+                session_id = session_id.as_str(),
+                "Standby skipped: agent idle is heuristic-only"
+            );
+            continue;
+        }
+        if background_activity_blocks_standby(state, session_id.as_str()) {
+            tracing::trace!(
+                session_id = session_id.as_str(),
+                "Standby skipped: background work or probe pending"
+            );
+            continue;
+        }
+
+        let idle_since = state
+            .session_maps
+            .shell_state_since_ms
+            .get(session_id.as_str())
+            .map(|a| a.load(Ordering::Acquire))
+            .unwrap_or(now_ms);
+        let idle_ms = now_ms.saturating_sub(idle_since);
+        if idle_ms < timeout_ms {
+            continue;
+        }
+
+        let settled = state
+            .session_maps
+            .silence_states
+            .get(session_id.as_str())
+            .map(|e| e.lock().startup_settled)
+            .unwrap_or(false);
+        if !settled {
+            continue;
+        }
+
+        tracing::debug!(
+            session_id = session_id.as_str(),
+            idle_ms,
+            "Standby: all conditions met, stopping"
+        );
+        if let Err(e) = standby_session(state, session_id) {
+            tracing::warn!(session_id, error = %e, "Standby failed");
+        }
+    }
+}
+
+/// The process groups standby must stop and continue together.
+///
+/// Stopping only the foreground group looks like it freezes a session, but the shell is still the
+/// foreground job's parent: an interactive shell with job control is told its child stopped, prints
+/// `suspended`, and takes the terminal back. An agent (Claude) that was in the foreground is then a
+/// background job, so the tab shows a bare prompt where the agent was, and a later SIGCONT leaves the
+/// agent reading the terminal as a background process (it errors out or stops again) — it looks
+/// killed. Freezing the shell with it leaves nothing to react, so the agent stays the foreground job.
+#[cfg(unix)]
+struct StandbyGroups {
+    /// The terminal's foreground group: the agent or command, or the shell itself when idle.
+    foreground: libc::pid_t,
+    /// The PTY shell's own group, when it is a different group from `foreground`.
+    shell: Option<libc::pid_t>,
+}
+
+#[cfg(unix)]
+fn standby_groups(session: &PtySession) -> Result<StandbyGroups, String> {
+    let foreground = session
+        .master
+        .process_group_leader()
+        .ok_or_else(|| "No process group leader".to_string())?;
+    let own_group = unsafe { libc::getpgid(0) };
+    let shell = session
+        ._child
+        .process_id()
+        .map(|pid| unsafe { libc::getpgid(pid as libc::pid_t) })
+        // `getpgid` is -1 on error (the shell is gone). Never the init group, our own, or the
+        // foreground group again.
+        .filter(|&pgid| pgid > 1 && pgid != foreground && pgid != own_group);
+    Ok(StandbyGroups { foreground, shell })
+}
+
+/// Sends a signal to a whole process group. Injectable so the ORDER of the signals — which is the
+/// point of stopping two groups — can be asserted without racing real processes.
+#[cfg(unix)]
+type SignalGroup<'a> = &'a mut dyn FnMut(libc::pid_t, libc::c_int) -> std::io::Result<()>;
+
+#[cfg(unix)]
+fn kill_group(pgid: libc::pid_t, signal: libc::c_int) -> std::io::Result<()> {
+    if unsafe { libc::kill(-pgid, signal) } == 0 {
+        Ok(())
+    } else {
+        Err(std::io::Error::last_os_error())
+    }
+}
+
+/// SIGSTOP `groups`: the shell's group FIRST so it cannot react to its child stopping, then the
+/// foreground group. If the second stop fails the shell is continued again, so a failure never
+/// leaves the shell frozen on its own with nothing parked.
+#[cfg(unix)]
+fn stop_groups(groups: &StandbyGroups) -> Result<(), String> {
+    stop_groups_with(groups, &mut kill_group)
+}
+
+#[cfg(unix)]
+fn stop_groups_with(groups: &StandbyGroups, signal: SignalGroup) -> Result<(), String> {
+    if let Some(shell) = groups.shell {
+        signal(shell, libc::SIGSTOP).map_err(|e| format!("SIGSTOP (shell) failed: {e}"))?;
+    }
+    if let Err(err) = signal(groups.foreground, libc::SIGSTOP) {
+        if let Some(shell) = groups.shell {
+            let _ = signal(shell, libc::SIGCONT);
+        }
+        return Err(format!("SIGSTOP failed: {err}"));
+    }
+    Ok(())
+}
+
+/// SIGCONT `groups`: the foreground group FIRST, then the shell — a shell that wakes while its
+/// child is still stopped would see the stop and take the terminal back. The shell is continued even
+/// when the foreground group could not be, so a failure here never leaves it frozen.
+#[cfg(unix)]
+fn continue_groups(groups: &StandbyGroups) -> Result<(), String> {
+    continue_groups_with(groups, &mut kill_group)
+}
+
+#[cfg(unix)]
+fn continue_groups_with(groups: &StandbyGroups, signal: SignalGroup) -> Result<(), String> {
+    let foreground =
+        signal(groups.foreground, libc::SIGCONT).map_err(|e| format!("SIGCONT failed: {e}"));
+    if let Some(shell) = groups.shell {
+        let _ = signal(shell, libc::SIGCONT);
+    }
+    foreground
+}
+
+/// SIGSTOP a session: the foreground group and, when it differs, the shell's group (see
+/// [`StandbyGroups`]). The shell is stopped FIRST so it cannot react to its child stopping.
 /// Returns Ok(true) if stopped, Ok(false) if already in standby or session gone.
 #[cfg(unix)]
 pub(crate) fn standby_session(state: &AppState, session_id: &str) -> Result<bool, String> {
@@ -14764,28 +14866,20 @@ pub(crate) fn standby_session(state: &AppState, session_id: &str) -> Result<bool
     if background_activity_blocks_standby_with_silence(state, session_id, Some(&_lifecycle_guard)) {
         return Ok(false);
     }
-    let pgid = {
+    let groups = {
         let entry = state
             .session_maps
             .sessions
             .get(session_id)
             .ok_or_else(|| format!("Session not found: {session_id}"))?;
         let session = entry.value().lock();
-        session
-            .master
-            .process_group_leader()
-            .ok_or_else(|| "No process group leader".to_string())?
+        standby_groups(&session)?
     };
+    let pgid = groups.foreground;
     if pgid <= 1 || pgid == unsafe { libc::getpgid(0) } {
         return Err(format!("Unsafe pgid {pgid} — refusing SIGSTOP"));
     }
-    let ret = unsafe { libc::kill(-pgid, libc::SIGSTOP) };
-    if ret != 0 {
-        return Err(format!(
-            "SIGSTOP failed: {}",
-            std::io::Error::last_os_error()
-        ));
-    }
+    stop_groups(&groups)?;
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
@@ -14810,28 +14904,100 @@ pub(crate) fn wake_session(state: &AppState, session_id: &str) -> Result<bool, S
     {
         return Ok(false);
     }
-    let pgid = {
+    let groups = {
         let entry = state
             .session_maps
             .sessions
             .get(session_id)
             .ok_or_else(|| format!("Session not found: {session_id}"))?;
         let session = entry.value().lock();
-        session
-            .master
-            .process_group_leader()
-            .ok_or_else(|| "No process group leader".to_string())?
+        standby_groups(&session)?
     };
-    let ret = unsafe { libc::kill(-pgid, libc::SIGCONT) };
-    if ret != 0 {
-        return Err(format!(
-            "SIGCONT failed: {}",
-            std::io::Error::last_os_error()
-        ));
-    }
+    let pgid = groups.foreground;
+    continue_groups(&groups)?;
     tracing::info!(session_id, pgid, "Session woken from standby (SIGCONT)");
     emit_standby_event(state, session_id, false);
     Ok(true)
+}
+
+/// What `wake_on_focus` found.
+#[cfg(unix)]
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum FocusWake {
+    /// The session was parked and is running again.
+    Woken,
+    /// The session exists but was not parked — the common case.
+    NotParked,
+    /// No session has this id. `wake_session` reports this exactly like `NotParked`, which is how a
+    /// client sending a terminal-store id ("term-6") instead of a PTY session id went unnoticed:
+    /// the wake silently never happened.
+    UnknownSession,
+    /// The session was parked but could not be continued.
+    Failed(String),
+}
+
+/// Wake a session because a viewer just brought it into view (`set_session_visible` with
+/// `visible: true`), shared by the IPC command and the HTTP route so the two cannot drift.
+///
+/// An id that names no session is logged as a warning: it is always a caller bug, and
+/// `wake_session` alone cannot tell it apart from a session that simply is not parked.
+#[cfg(unix)]
+pub(crate) fn wake_on_focus(state: &AppState, session_id: &str) -> FocusWake {
+    if !state.session_maps.sessions.contains_key(session_id) {
+        // A stale parked entry for a vanished session is still consumed, as `wake_session` does.
+        state.session_maps.standby_sessions.remove(session_id);
+        tracing::warn!(
+            session_id,
+            "set_session_visible for a session that does not exist — the caller probably sent a \
+             terminal id instead of a PTY session id, so nothing was woken"
+        );
+        return FocusWake::UnknownSession;
+    }
+    match wake_session(state, session_id) {
+        Ok(true) => FocusWake::Woken,
+        Ok(false) => FocusWake::NotParked,
+        Err(e) => {
+            tracing::warn!(session_id, error = %e, "Wake on focus failed");
+            FocusWake::Failed(e)
+        }
+    }
+}
+
+/// Record that a viewer can (or can no longer) see a session, and wake it if it was parked.
+///
+/// The one implementation behind `set_session_visible` on both transports. An id that names no
+/// session is a caller bug (typically a terminal-store id like "term-6" where a PTY session id
+/// belongs): it is warned about and NOT recorded, because teardown only reaps the entries of ids
+/// that were real sessions, so a recorded bogus id would live for the whole process. Hiding an
+/// unknown id is a harmless no-op and stays silent.
+pub(crate) fn apply_session_visibility(
+    state: &AppState,
+    session_id: &str,
+    viewer_id: &str,
+    visible: bool,
+    wake: bool,
+) {
+    if visible && !state.session_maps.sessions.contains_key(session_id) {
+        // A stale parked entry for a vanished session is still consumed on a waking call, as
+        // `wake_session` does; a keep-alive (`wake: false`) leaves it alone.
+        #[cfg(unix)]
+        if wake {
+            state.session_maps.standby_sessions.remove(session_id);
+        }
+        tracing::warn!(
+            session_id,
+            "set_session_visible for a session that does not exist — the caller probably sent a \
+             terminal id instead of a PTY session id; nothing was recorded or woken"
+        );
+        return;
+    }
+    state.set_session_visible(session_id, viewer_id, visible);
+    #[cfg(unix)]
+    if visible && wake {
+        wake_on_focus(state, session_id);
+    }
+    #[cfg(not(unix))]
+    let _ = wake;
 }
 
 /// Wake every session currently in standby. Used when the user disables standby

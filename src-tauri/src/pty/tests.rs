@@ -22368,6 +22368,1134 @@ fn wake_session_errors_and_consumes_entry_when_session_missing() {
     );
 }
 
+// ── wake_on_focus ───────────────────────────────────────────────
+
+#[cfg(unix)]
+#[test]
+fn wake_on_focus_reports_an_unknown_session_and_still_consumes_a_stale_parked_entry() {
+    let state = crate::state::tests_support::make_test_app_state();
+    state
+        .session_maps
+        .standby_sessions
+        .insert("vanished".to_string(), 0);
+
+    assert_eq!(wake_on_focus(&state, "vanished"), FocusWake::UnknownSession);
+    assert!(
+        !state.session_maps.standby_sessions.contains_key("vanished"),
+        "a parked entry for a session that no longer exists is dropped, as wake_session does"
+    );
+    assert_eq!(
+        wake_on_focus(&state, "never-existed"),
+        FocusWake::UnknownSession
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn wake_on_focus_on_a_live_session_that_is_not_parked_is_a_quiet_no_op() {
+    let state = crate::state::tests_support::make_test_app_state();
+    spawn_real_pty_session(&state, "live", 24, 80);
+
+    assert_eq!(wake_on_focus(&state, "live"), FocusWake::NotParked);
+}
+
+#[cfg(unix)]
+#[test]
+fn wake_on_focus_wakes_a_parked_live_session_by_its_pty_session_id() {
+    let state = crate::state::tests_support::make_test_app_state();
+    spawn_real_pty_session(&state, "pty-uuid", 24, 80);
+    assert_eq!(standby_session(&state, "pty-uuid"), Ok(true));
+    assert!(state.session_maps.standby_sessions.contains_key("pty-uuid"));
+
+    assert_eq!(wake_on_focus(&state, "pty-uuid"), FocusWake::Woken);
+    assert!(!state.session_maps.standby_sessions.contains_key("pty-uuid"));
+}
+
+/// The regression behind tabs that never woke on click: the frontend sent the terminal-store id
+/// ("term-6") where the backend wants the PTY session id, and the backend answered exactly as it
+/// does for a session that is not parked — so the session stayed SIGSTOP'd with no trace.
+#[cfg(unix)]
+#[test]
+fn wake_on_focus_with_a_terminal_id_leaves_the_real_session_parked_and_says_so() {
+    let state = crate::state::tests_support::make_test_app_state();
+    spawn_real_pty_session(&state, "pty-uuid", 24, 80);
+    assert_eq!(standby_session(&state, "pty-uuid"), Ok(true));
+
+    assert_eq!(wake_on_focus(&state, "term-6"), FocusWake::UnknownSession);
+    assert!(
+        state.session_maps.standby_sessions.contains_key("pty-uuid"),
+        "the parked session is untouched — and the caller is told the id was wrong"
+    );
+
+    // Leave nothing SIGSTOP'd behind.
+    assert_eq!(wake_on_focus(&state, "pty-uuid"), FocusWake::Woken);
+}
+
+// ── standby must not hand the terminal back to the shell ────────
+
+#[cfg(unix)]
+fn foreground_group_of(state: &crate::state::AppState, sid: &str) -> Option<i32> {
+    let entry = state.session_maps.sessions.get(sid)?;
+    entry.lock().master.process_group_leader()
+}
+
+/// Polls for `wait_ms` and reports whether the terminal's foreground group EVER left `expected`:
+/// the shell reclaims the terminal asynchronously, a moment after it sees its child stop.
+#[cfg(unix)]
+fn foreground_group_stays(
+    state: &crate::state::AppState,
+    sid: &str,
+    expected: i32,
+    wait_ms: u64,
+) -> bool {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_millis(wait_ms);
+    while std::time::Instant::now() < deadline {
+        if foreground_group_of(state, sid) != Some(expected) {
+            return false;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    true
+}
+
+/// A real interactive, job-control bash in a PTY with `sleep 300` running as its foreground job —
+/// the shape of an agent under a user's shell. (`ForegroundIdentityProbe` cannot stand in: its
+/// `bash -c` parent never takes the terminal back from a stopped child.)
+#[cfg(unix)]
+struct InteractiveJob {
+    sid: &'static str,
+    shell_pid: i32,
+    job_group: i32,
+    shell_stopped: std::cell::Cell<bool>,
+}
+
+#[cfg(unix)]
+impl InteractiveJob {
+    fn start(state: &Arc<crate::state::AppState>, sid: &'static str) -> Self {
+        use std::io::Write;
+        let pair = native_pty_system()
+            .openpty(PtySize {
+                rows: 24,
+                cols: 80,
+                pixel_width: 0,
+                pixel_height: 0,
+            })
+            .expect("openpty");
+        let mut cmd = CommandBuilder::new("/bin/bash");
+        cmd.args(["--noprofile", "--norc", "-i"]);
+        cmd.env("PS1", "$ ");
+        let child = pair
+            .slave
+            .spawn_command(cmd)
+            .expect("spawn interactive bash");
+        let shell_pid = child.process_id().expect("shell pid") as i32;
+        let master = pair.master;
+        let mut writer = master.take_writer().expect("writer");
+        // Drain the shell's output so it can never block on a full PTY buffer.
+        let mut reader = master.try_clone_reader().expect("reader");
+        std::thread::spawn(move || {
+            let mut buf = [0u8; 4096];
+            while matches!(reader.read(&mut buf), Ok(n) if n > 0) {}
+        });
+        state.session_maps.sessions.insert(
+            sid.to_string(),
+            Mutex::new(PtySession {
+                writer: Arc::new(Mutex::new(Box::new(std::io::sink()))),
+                master,
+                _child: child,
+                paused: Arc::new(AtomicBool::new(false)),
+                worktree: None,
+                cwd: None,
+                display_name: None,
+                display_name_is_custom: false,
+                display_name_from_spawn: false,
+                is_remote: false,
+                shell: "/bin/bash".to_string(),
+            }),
+        );
+        // Start the job the way a user starts an agent, then wait until it owns the terminal.
+        writer.write_all(b"sleep 300\n").unwrap();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        let job_group = loop {
+            match foreground_group_of(state, sid) {
+                Some(group) if group != shell_pid => break group,
+                _ => {}
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the foreground job never took the terminal"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        };
+        Self {
+            sid,
+            shell_pid,
+            job_group,
+            shell_stopped: std::cell::Cell::new(false),
+        }
+    }
+
+    /// Whether the shell process is stopped now (it is this process's child, so its stop/continue
+    /// events can be read; each is reported once, hence the remembered state).
+    fn shell_is_stopped(&self) -> bool {
+        std::thread::sleep(std::time::Duration::from_millis(150));
+        loop {
+            let mut status = 0;
+            let reaped = unsafe {
+                libc::waitpid(
+                    self.shell_pid,
+                    &mut status,
+                    libc::WUNTRACED | libc::WCONTINUED | libc::WNOHANG,
+                )
+            };
+            if reaped != self.shell_pid {
+                return self.shell_stopped.get();
+            }
+            if libc::WIFSTOPPED(status) {
+                self.shell_stopped.set(true);
+            } else if libc::WIFCONTINUED(status) {
+                self.shell_stopped.set(false);
+            }
+        }
+    }
+
+    /// The job must still own the terminal for 700 ms, so a shell that reclaims it asynchronously
+    /// is caught.
+    fn still_foreground(&self, state: &crate::state::AppState) -> bool {
+        foreground_group_stays(state, self.sid, self.job_group, 700)
+    }
+
+    /// Leave nothing running or stopped behind, pass or fail: the job, then the shell itself, which
+    /// is killed and reaped so the PTY reader thread sees EOF and exits.
+    fn cleanup(&self, state: &crate::state::AppState) {
+        unsafe {
+            libc::kill(-self.job_group, libc::SIGKILL);
+            libc::kill(-self.shell_pid, libc::SIGCONT);
+        }
+        if let Some((_, session)) = state.session_maps.sessions.remove(self.sid) {
+            let mut session = session.into_inner();
+            let _ = session._child.kill();
+            let _ = session._child.wait();
+        }
+    }
+}
+
+/// Run `body`, then always clean the job up — even when an assertion inside it panics.
+#[cfg(unix)]
+fn with_interactive_job(
+    sid: &'static str,
+    body: impl FnOnce(&Arc<crate::state::AppState>, &InteractiveJob),
+) {
+    let state = Arc::new(crate::state::tests_support::make_test_app_state());
+    let job = InteractiveJob::start(&state, sid);
+    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| body(&state, &job)));
+    job.cleanup(&state);
+    if let Err(panic) = outcome {
+        std::panic::resume_unwind(panic);
+    }
+}
+
+/// An agent runs as a foreground job under an INTERACTIVE, job-control shell. SIGSTOP on its group
+/// alone makes the shell (still its parent) report `suspended` and take the terminal back, so the
+/// tab shows a bare prompt where the agent was and a later SIGCONT resumes it as a background job —
+/// it looks killed. Standby therefore stops the shell with it and wakes the agent first, so the agent
+/// is still the foreground job after both.
+#[cfg(unix)]
+#[test]
+fn standby_and_wake_keep_a_foreground_job_in_the_foreground_under_an_interactive_shell() {
+    with_interactive_job("standby-fg-job", |state, job| {
+        assert_eq!(standby_session(state, job.sid), Ok(true));
+        assert!(
+            job.still_foreground(state),
+            "the shell took the terminal back from the stopped job"
+        );
+        assert!(
+            job.shell_is_stopped(),
+            "the shell must be parked with its job"
+        );
+        assert_eq!(wake_session(state, job.sid), Ok(true));
+        assert!(
+            job.still_foreground(state),
+            "the job was left as a background process after waking"
+        );
+        assert!(
+            !job.shell_is_stopped(),
+            "the shell was left frozen after waking"
+        );
+    });
+}
+
+/// The user-facing path: clicking a parked tab (`set_session_visible` → `wake_on_focus`).
+#[cfg(unix)]
+#[test]
+fn focusing_a_parked_tab_keeps_its_foreground_job_in_the_foreground() {
+    with_interactive_job("standby-focus-job", |state, job| {
+        assert_eq!(standby_session(state, job.sid), Ok(true));
+
+        apply_session_visibility(state, job.sid, "viewer", true, true);
+
+        assert!(!state.session_maps.standby_sessions.contains_key(job.sid));
+        assert!(
+            job.still_foreground(state),
+            "waking by focus left the job as a background process"
+        );
+        assert!(
+            !job.shell_is_stopped(),
+            "waking by focus left the shell frozen"
+        );
+    });
+}
+
+/// Setting the standby timeout to 0 wakes every parked session; that bulk path must not strand a
+/// foreground agent either.
+#[cfg(unix)]
+#[test]
+fn wake_all_standby_keeps_a_parked_foreground_job_in_the_foreground() {
+    with_interactive_job("standby-wake-all-job", |state, job| {
+        assert_eq!(standby_session(state, job.sid), Ok(true));
+
+        assert_eq!(wake_all_standby(state), 1);
+
+        assert!(
+            job.still_foreground(state),
+            "wake-all left the job as a background process"
+        );
+        assert!(!job.shell_is_stopped(), "wake-all left the shell frozen");
+    });
+}
+
+#[cfg(unix)]
+#[test]
+fn standby_groups_names_the_shell_group_only_when_it_is_not_the_foreground() {
+    // An idle shell: the foreground group IS the shell's group, so one signal covers it.
+    let state = crate::state::tests_support::make_test_app_state();
+    spawn_real_pty_session(&state, "idle-prompt", 24, 80);
+    let idle = {
+        let entry = state.session_maps.sessions.get("idle-prompt").unwrap();
+        standby_groups(&entry.lock()).unwrap()
+    };
+    assert_eq!(idle.shell, None);
+
+    // A job under the shell: both groups, and they differ.
+    with_interactive_job("standby-groups-job", |state, job| {
+        let entry = state.session_maps.sessions.get(job.sid).unwrap();
+        let groups = standby_groups(&entry.lock()).unwrap();
+        assert_eq!(groups.foreground, job.job_group);
+        assert_eq!(groups.shell, Some(job.shell_pid));
+    });
+}
+
+#[cfg(unix)]
+#[test]
+fn standby_session_refuses_an_unknown_session_and_a_second_park() {
+    let state = crate::state::tests_support::make_test_app_state();
+    assert!(
+        standby_session(&state, "nope")
+            .unwrap_err()
+            .contains("Session not found")
+    );
+
+    spawn_real_pty_session(&state, "once", 24, 80);
+    assert_eq!(standby_session(&state, "once"), Ok(true));
+    assert_eq!(
+        standby_session(&state, "once"),
+        Ok(false),
+        "an already-parked session is not signalled twice"
+    );
+    assert_eq!(wake_session(&state, "once"), Ok(true));
+}
+
+/// A real child in its own process group, with a settled view of whether it is stopped.
+#[cfg(unix)]
+struct SleepGroup {
+    child: std::process::Child,
+    stopped: std::cell::Cell<bool>,
+}
+
+#[cfg(unix)]
+impl SleepGroup {
+    fn new() -> Self {
+        use std::os::unix::process::CommandExt;
+        Self {
+            child: std::process::Command::new("/bin/sleep")
+                .arg("300")
+                // Never inherit the test runner's pipes: a child outliving the test would hold them.
+                .stdin(std::process::Stdio::null())
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .process_group(0)
+                .spawn()
+                .expect("spawn sleep"),
+            stopped: std::cell::Cell::new(false),
+        }
+    }
+
+    fn pgid(&self) -> i32 {
+        self.child.id() as i32
+    }
+
+    /// Whether the group's leader is stopped now. The kernel reports each stop/continue ONCE, so
+    /// this replays every event queued since the last call on top of the remembered state —
+    /// calling it twice must not forget a stop it already saw.
+    fn is_stopped(&self) -> bool {
+        std::thread::sleep(std::time::Duration::from_millis(150));
+        loop {
+            let mut status = 0;
+            let reaped = unsafe {
+                libc::waitpid(
+                    self.pgid(),
+                    &mut status,
+                    libc::WUNTRACED | libc::WCONTINUED | libc::WNOHANG,
+                )
+            };
+            if reaped != self.pgid() {
+                return self.stopped.get();
+            }
+            if libc::WIFSTOPPED(status) {
+                self.stopped.set(true);
+            } else if libc::WIFCONTINUED(status) {
+                self.stopped.set(false);
+            }
+        }
+    }
+}
+
+#[cfg(unix)]
+impl Drop for SleepGroup {
+    fn drop(&mut self) {
+        unsafe {
+            libc::kill(-self.pgid(), libc::SIGKILL);
+            libc::kill(-self.pgid(), libc::SIGCONT);
+        }
+        let _ = self.child.wait();
+    }
+}
+
+/// A process-group id nothing is using: a child that has already been reaped.
+#[cfg(unix)]
+fn dead_group_id() -> i32 {
+    let mut child = std::process::Command::new("/usr/bin/true")
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .expect("spawn true");
+    let pid = child.id() as i32;
+    child.wait().unwrap();
+    pid
+}
+
+#[cfg(unix)]
+#[test]
+fn stop_and_continue_groups_signal_both_groups() {
+    let (shell, job) = (SleepGroup::new(), SleepGroup::new());
+    let groups = StandbyGroups {
+        foreground: job.pgid(),
+        shell: Some(shell.pgid()),
+    };
+
+    stop_groups(&groups).unwrap();
+    assert!(
+        shell.is_stopped() && job.is_stopped(),
+        "both groups must be stopped"
+    );
+
+    continue_groups(&groups).unwrap();
+    assert!(
+        !shell.is_stopped() && !job.is_stopped(),
+        "both groups must be running again"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn stop_and_continue_groups_leave_other_groups_alone_when_there_is_no_separate_shell() {
+    let (bystander, only) = (SleepGroup::new(), SleepGroup::new());
+    let groups = StandbyGroups {
+        foreground: only.pgid(),
+        shell: None,
+    };
+
+    stop_groups(&groups).unwrap();
+    assert!(only.is_stopped());
+    assert!(
+        !bystander.is_stopped(),
+        "an unrelated group must not be touched"
+    );
+
+    continue_groups(&groups).unwrap();
+    assert!(!only.is_stopped());
+}
+
+/// If the foreground stop fails after the shell was stopped, the shell must not stay frozen: nothing
+/// would be parked yet, and the tab would hang with no way to wake it.
+/// Records every signal instead of sending it, optionally failing one group.
+#[cfg(unix)]
+fn recording_signal(
+    log: &std::cell::RefCell<Vec<(i32, i32)>>,
+    fail_on: Option<(i32, i32)>,
+) -> impl FnMut(i32, i32) -> std::io::Result<()> + '_ {
+    move |pgid, signal| {
+        log.borrow_mut().push((pgid, signal));
+        if fail_on == Some((pgid, signal)) {
+            Err(std::io::Error::from_raw_os_error(libc::ESRCH))
+        } else {
+            Ok(())
+        }
+    }
+}
+
+/// The order is the whole point and cannot be observed reliably through real processes (the shell
+/// would have to run in the microseconds between two signals): stop the shell first so it cannot
+/// react to its child stopping, wake the foreground group first so the shell never sees it stopped.
+#[cfg(unix)]
+#[test]
+fn groups_are_stopped_shell_first_and_woken_foreground_first() {
+    let groups = StandbyGroups {
+        foreground: 200,
+        shell: Some(100),
+    };
+
+    let log = std::cell::RefCell::new(Vec::new());
+    stop_groups_with(&groups, &mut recording_signal(&log, None)).unwrap();
+    assert_eq!(*log.borrow(), [(100, libc::SIGSTOP), (200, libc::SIGSTOP)]);
+
+    let log = std::cell::RefCell::new(Vec::new());
+    continue_groups_with(&groups, &mut recording_signal(&log, None)).unwrap();
+    assert_eq!(*log.borrow(), [(200, libc::SIGCONT), (100, libc::SIGCONT)]);
+}
+
+#[cfg(unix)]
+#[test]
+fn a_session_with_one_group_is_signalled_once() {
+    let groups = StandbyGroups {
+        foreground: 200,
+        shell: None,
+    };
+    let log = std::cell::RefCell::new(Vec::new());
+    stop_groups_with(&groups, &mut recording_signal(&log, None)).unwrap();
+    continue_groups_with(&groups, &mut recording_signal(&log, None)).unwrap();
+    assert_eq!(*log.borrow(), [(200, libc::SIGSTOP), (200, libc::SIGCONT)]);
+}
+
+#[cfg(unix)]
+#[test]
+fn a_failed_foreground_stop_continues_the_shell_again_and_a_failed_continue_still_wakes_it() {
+    let groups = StandbyGroups {
+        foreground: 200,
+        shell: Some(100),
+    };
+
+    let log = std::cell::RefCell::new(Vec::new());
+    let err = stop_groups_with(
+        &groups,
+        &mut recording_signal(&log, Some((200, libc::SIGSTOP))),
+    )
+    .unwrap_err();
+    assert!(err.contains("SIGSTOP failed"), "{err}");
+    assert_eq!(
+        *log.borrow(),
+        [
+            (100, libc::SIGSTOP),
+            (200, libc::SIGSTOP),
+            (100, libc::SIGCONT)
+        ],
+        "the shell is rolled back, not left frozen"
+    );
+
+    let log = std::cell::RefCell::new(Vec::new());
+    let err = continue_groups_with(
+        &groups,
+        &mut recording_signal(&log, Some((200, libc::SIGCONT))),
+    )
+    .unwrap_err();
+    assert!(err.contains("SIGCONT failed"), "{err}");
+    assert_eq!(
+        *log.borrow(),
+        [(200, libc::SIGCONT), (100, libc::SIGCONT)],
+        "the shell is still woken when the foreground continue fails"
+    );
+
+    let log = std::cell::RefCell::new(Vec::new());
+    let err = stop_groups_with(
+        &groups,
+        &mut recording_signal(&log, Some((100, libc::SIGSTOP))),
+    )
+    .unwrap_err();
+    assert!(err.contains("(shell)"), "{err}");
+    assert_eq!(
+        *log.borrow(),
+        [(100, libc::SIGSTOP)],
+        "nothing else is stopped when the shell cannot be"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn a_failed_foreground_stop_rolls_the_shell_back() {
+    let shell = SleepGroup::new();
+    let groups = StandbyGroups {
+        foreground: dead_group_id(),
+        shell: Some(shell.pgid()),
+    };
+
+    let err = stop_groups(&groups).unwrap_err();
+
+    assert!(err.contains("SIGSTOP failed"), "{err}");
+    assert!(
+        !shell.is_stopped(),
+        "the shell was left frozen after the rollback"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn a_failed_shell_stop_stops_nothing_and_reports_it() {
+    let job = SleepGroup::new();
+    let groups = StandbyGroups {
+        foreground: job.pgid(),
+        shell: Some(dead_group_id()),
+    };
+
+    let err = stop_groups(&groups).unwrap_err();
+
+    assert!(err.contains("(shell)"), "{err}");
+    assert!(
+        !job.is_stopped(),
+        "the foreground group must not be stopped without its shell"
+    );
+}
+
+/// A foreground group that vanished while parked must not strand the shell: it is continued anyway
+/// and the failure is still reported.
+#[cfg(unix)]
+#[test]
+fn a_failed_foreground_continue_still_wakes_the_shell() {
+    let shell = SleepGroup::new();
+    unsafe { libc::kill(-shell.pgid(), libc::SIGSTOP) };
+    assert!(shell.is_stopped());
+    let groups = StandbyGroups {
+        foreground: dead_group_id(),
+        shell: Some(shell.pgid()),
+    };
+
+    let err = continue_groups(&groups).unwrap_err();
+
+    assert!(err.contains("SIGCONT failed"), "{err}");
+    assert!(!shell.is_stopped(), "the shell was left frozen");
+}
+
+// ── the standby checker, end to end ─────────────────────────────
+
+/// A clock for `standby_tick`, far from zero so "idle for N ms" is a plain subtraction.
+#[cfg(unix)]
+const TICK_NOW_MS: u64 = 10_000_000_000;
+#[cfg(unix)]
+const FIVE_MINUTES_MS: u64 = 5 * 60_000;
+
+/// Give an existing session every property the checker demands before it parks one — hidden,
+/// settled, an idle shell, idle for `idle_for_ms` — and set the timeout to 5 minutes. Each test then
+/// breaks exactly one of them.
+#[cfg(unix)]
+fn make_parkable(state: &crate::state::AppState, sid: &str, now_ms: u64, idle_for_ms: u64) {
+    use std::sync::atomic::{AtomicU8, AtomicU64};
+    state
+        .session_maps
+        .shell_states
+        .insert(sid.to_string(), AtomicU8::new(SHELL_IDLE));
+    state
+        .session_maps
+        .shell_state_since_ms
+        .insert(sid.to_string(), AtomicU64::new(now_ms - idle_for_ms));
+    let mut silence = SilenceState::new();
+    silence.startup_settled = true;
+    state
+        .session_maps
+        .silence_states
+        .insert(sid.to_string(), Arc::new(Mutex::new(silence)));
+    // Hidden: a viewer asserted it, then withdrew. A session nobody ever reported on counts as
+    // visible, so this step is what makes it a candidate.
+    state.set_session_visible(sid, "viewer", true);
+    state.set_session_visible(sid, "viewer", false);
+    state.config.write().standby_timeout_minutes = 5;
+}
+
+#[cfg(unix)]
+fn is_parked(state: &crate::state::AppState, sid: &str) -> bool {
+    state.session_maps.standby_sessions.contains_key(sid)
+}
+
+/// A live, plain-shell session that `standby_tick` WILL park unless the test breaks a condition.
+#[cfg(unix)]
+fn parkable_state(sid: &str) -> crate::state::AppState {
+    let state = crate::state::tests_support::make_test_app_state();
+    spawn_real_pty_session(&state, sid, 24, 80);
+    make_parkable(&state, sid, TICK_NOW_MS, FIVE_MINUTES_MS);
+    state
+}
+
+#[cfg(unix)]
+#[test]
+fn the_checker_parks_a_hidden_settled_idle_session_once_it_has_been_idle_for_the_timeout() {
+    let state = parkable_state("eligible");
+
+    standby_tick(&state, TICK_NOW_MS);
+
+    assert!(is_parked(&state, "eligible"));
+    wake_all_standby(&state);
+}
+
+#[cfg(unix)]
+#[test]
+fn the_checker_waits_for_the_full_timeout() {
+    let state = parkable_state("almost");
+    make_parkable(&state, "almost", TICK_NOW_MS, FIVE_MINUTES_MS - 1);
+
+    standby_tick(&state, TICK_NOW_MS);
+
+    assert!(
+        !is_parked(&state, "almost"),
+        "one millisecond short of the timeout"
+    );
+    standby_tick(&state, TICK_NOW_MS + 1);
+    assert!(
+        is_parked(&state, "almost"),
+        "and parked the moment it is reached"
+    );
+    wake_all_standby(&state);
+}
+
+#[cfg(unix)]
+#[test]
+fn the_checker_never_parks_a_session_someone_is_looking_at() {
+    let state = parkable_state("watched");
+    state.set_session_visible("watched", "viewer", true);
+
+    standby_tick(&state, TICK_NOW_MS);
+
+    assert!(!is_parked(&state, "watched"));
+}
+
+#[cfg(unix)]
+#[test]
+fn the_checker_skips_a_session_whose_shell_is_not_idle() {
+    let state = parkable_state("busy");
+    state
+        .session_maps
+        .shell_states
+        .get("busy")
+        .unwrap()
+        .store(SHELL_BUSY, Ordering::Release);
+
+    standby_tick(&state, TICK_NOW_MS);
+
+    assert!(!is_parked(&state, "busy"));
+}
+
+#[cfg(unix)]
+#[test]
+fn the_checker_skips_a_session_that_has_not_finished_starting_up() {
+    let state = parkable_state("starting");
+    state
+        .session_maps
+        .silence_states
+        .get("starting")
+        .unwrap()
+        .lock()
+        .startup_settled = false;
+
+    standby_tick(&state, TICK_NOW_MS);
+
+    assert!(!is_parked(&state, "starting"));
+}
+
+#[cfg(unix)]
+#[test]
+fn the_checker_does_not_park_an_agent_whose_idle_is_only_a_silence_guess() {
+    let state = parkable_state("claude-guess");
+    state.session_maps.session_states.insert(
+        "claude-guess".to_string(),
+        crate::state::SessionState {
+            agent_type: Some("claude".to_string()),
+            ..Default::default()
+        },
+    );
+
+    standby_tick(&state, TICK_NOW_MS);
+    assert!(
+        !is_parked(&state, "claude-guess"),
+        "a working agent that went quiet must not be SIGSTOPped"
+    );
+
+    // The same agent once idle is CONFIRMED (a Stop hook, or a stable ready screen) is parked.
+    state
+        .session_maps
+        .silence_states
+        .get("claude-guess")
+        .unwrap()
+        .lock()
+        .confirm_idle();
+    standby_tick(&state, TICK_NOW_MS);
+    assert!(is_parked(&state, "claude-guess"));
+    wake_all_standby(&state);
+}
+
+#[cfg(unix)]
+#[test]
+fn the_checker_does_not_park_a_session_with_background_work() {
+    let state = parkable_state("bg");
+    state.session_maps.session_states.insert(
+        "bg".to_string(),
+        crate::state::SessionState {
+            agent_type: Some("codex".to_string()),
+            background_work: true,
+            ..Default::default()
+        },
+    );
+    state
+        .session_maps
+        .silence_states
+        .get("bg")
+        .unwrap()
+        .lock()
+        .confirm_idle();
+
+    standby_tick(&state, TICK_NOW_MS);
+
+    assert!(!is_parked(&state, "bg"));
+}
+
+#[cfg(unix)]
+#[test]
+fn the_checker_does_not_signal_a_session_that_is_already_parked() {
+    let state = parkable_state("twice");
+    standby_tick(&state, TICK_NOW_MS);
+    let parked_at = *state.session_maps.standby_sessions.get("twice").unwrap();
+
+    standby_tick(&state, TICK_NOW_MS + 60_000);
+
+    assert_eq!(
+        *state.session_maps.standby_sessions.get("twice").unwrap(),
+        parked_at,
+        "a second tick must not re-park (re-stamp) an already parked session"
+    );
+    wake_all_standby(&state);
+}
+
+#[cfg(unix)]
+#[test]
+fn the_checker_parks_only_the_eligible_sessions_among_several() {
+    let state = parkable_state("a-idle");
+    spawn_real_pty_session(&state, "b-busy", 24, 80);
+    make_parkable(&state, "b-busy", TICK_NOW_MS, FIVE_MINUTES_MS);
+    state
+        .session_maps
+        .shell_states
+        .get("b-busy")
+        .unwrap()
+        .store(SHELL_BUSY, Ordering::Release);
+    spawn_real_pty_session(&state, "c-watched", 24, 80);
+    make_parkable(&state, "c-watched", TICK_NOW_MS, FIVE_MINUTES_MS);
+    state.set_session_visible("c-watched", "viewer", true);
+
+    standby_tick(&state, TICK_NOW_MS);
+
+    assert!(is_parked(&state, "a-idle"));
+    assert!(!is_parked(&state, "b-busy"));
+    assert!(!is_parked(&state, "c-watched"));
+    wake_all_standby(&state);
+}
+
+#[cfg(unix)]
+#[test]
+fn a_timeout_of_zero_disables_standby_and_wakes_whatever_is_parked() {
+    let state = parkable_state("was-parked");
+    standby_tick(&state, TICK_NOW_MS);
+    assert!(is_parked(&state, "was-parked"));
+    spawn_real_pty_session(&state, "would-park", 24, 80);
+    make_parkable(&state, "would-park", TICK_NOW_MS, FIVE_MINUTES_MS);
+    state.config.write().standby_timeout_minutes = 0;
+
+    standby_tick(&state, TICK_NOW_MS);
+
+    assert!(
+        !is_parked(&state, "was-parked"),
+        "disabling standby wakes what was parked"
+    );
+    assert!(
+        !is_parked(&state, "would-park"),
+        "and nothing new is parked"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn every_tick_prunes_visibility_entries_that_name_no_session_even_with_standby_disabled() {
+    let state = parkable_state("real");
+    state.session_maps.session_visibility.insert(
+        "term-6".to_string(),
+        std::collections::HashMap::from([("viewer".to_string(), 0)]),
+    );
+    state.config.write().standby_timeout_minutes = 0;
+
+    standby_tick(&state, TICK_NOW_MS);
+
+    assert!(!state.session_maps.session_visibility.contains_key("term-6"));
+    assert!(state.session_maps.session_visibility.contains_key("real"));
+}
+
+/// The whole story for a Claude-style tab: the checker parks it, it stays the foreground job (the
+/// shell must not take the terminal back), and focusing the tab brings it back running.
+#[cfg(unix)]
+#[test]
+fn the_checker_parks_a_foreground_job_without_the_shell_reclaiming_the_terminal_and_focus_wakes_it()
+{
+    with_interactive_job("checker-fg-job", |state, job| {
+        make_parkable(state, job.sid, TICK_NOW_MS, FIVE_MINUTES_MS);
+
+        standby_tick(state, TICK_NOW_MS);
+
+        assert!(is_parked(state, job.sid));
+        assert!(
+            job.still_foreground(state),
+            "the checker left the shell holding the terminal"
+        );
+        assert!(job.shell_is_stopped());
+
+        apply_session_visibility(state, job.sid, "viewer", true, true);
+
+        assert!(!is_parked(state, job.sid));
+        assert!(job.still_foreground(state));
+        assert!(!job.shell_is_stopped(), "focus left the shell frozen");
+    });
+}
+
+/// The real timer loop, not just one tick: it must run `standby_tick` on its own. The first tick of
+/// a tokio interval is immediate, so the session parks without waiting 30 seconds.
+#[cfg(unix)]
+#[tokio::test]
+async fn the_spawned_checker_loop_parks_an_eligible_session_by_itself() {
+    let state = Arc::new(crate::state::tests_support::make_test_app_state());
+    spawn_real_pty_session(&state, "looped", 24, 80);
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_millis() as u64;
+    make_parkable(&state, "looped", now_ms, FIVE_MINUTES_MS + 60_000);
+
+    spawn_standby_checker(state.clone());
+
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while !is_parked(&state, "looped") {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the checker loop never parked an eligible session"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    wake_all_standby(&state);
+}
+
+// ── callers that wake a parked session ──────────────────────────
+
+/// `resume_pty` is the frontend's flow-control "buffer drained" call; it also wakes a session that
+/// auto-standby parked, so output can flow again.
+#[cfg(unix)]
+#[test]
+fn resume_pty_clears_the_flow_control_pause_and_reports_an_unknown_session() {
+    let state = crate::state::tests_support::make_test_app_state();
+    assert!(
+        resume_pty_core(&state, "nope")
+            .unwrap_err()
+            .contains("Session not found")
+    );
+
+    spawn_real_pty_session(&state, "flow", 24, 80);
+    let paused = state
+        .session_maps
+        .sessions
+        .get("flow")
+        .unwrap()
+        .lock()
+        .paused
+        .clone();
+    paused.store(true, Ordering::Relaxed);
+
+    resume_pty_core(&state, "flow").unwrap();
+
+    assert!(
+        !paused.load(Ordering::Relaxed),
+        "the reader must be released"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn resume_pty_wakes_a_parked_foreground_job_and_leaves_it_in_the_foreground() {
+    with_interactive_job("resume-pty-job", |state, job| {
+        assert_eq!(standby_session(state, job.sid), Ok(true));
+
+        resume_pty_core(state, job.sid).unwrap();
+
+        assert!(!state.session_maps.standby_sessions.contains_key(job.sid));
+        assert!(
+            job.still_foreground(state),
+            "resume left the job as a background process"
+        );
+        assert!(!job.shell_is_stopped(), "resume left the shell frozen");
+    });
+}
+
+/// A parent agent waiting on its children gets a lifecycle wake typed into its terminal. If auto-standby
+/// had parked it, the wake must un-park it first, or the notice sits unread in a stopped process.
+#[cfg(unix)]
+#[test]
+fn an_orchestrator_mail_wake_unparks_a_parked_parent() {
+    let state = crate::state::tests_support::make_test_app_state();
+    let parent_id = "parent-parked-for-mail";
+    agent_session(&state, parent_id, SHELL_IDLE);
+    let bytes = insert_recording_session(&state, parent_id);
+    state.orchestrator_peers.insert(parent_id.to_string());
+    state.agent_inbox.insert(
+        parent_id.to_string(),
+        std::collections::VecDeque::from([crate::state::AgentMessage {
+            id: "peer-result".to_string(),
+            from_tuic_session: "child".to_string(),
+            from_name: "worker".to_string(),
+            content: "child result".to_string(),
+            timestamp: 1,
+            delivered_via_channel: false,
+        }]),
+    );
+    assert_eq!(standby_session(&state, parent_id), Ok(true));
+
+    route_registered_orchestrator_mail(&state, parent_id, "peer-result", 1);
+
+    assert!(
+        !state.session_maps.standby_sessions.contains_key(parent_id),
+        "the mail wake left the parent parked"
+    );
+    assert!(
+        !bytes.lock().unwrap().is_empty(),
+        "and the wake itself was typed into its terminal"
+    );
+}
+
+// ── apply_session_visibility / prune_orphan_session_visibility ──
+
+/// Teardown only reaps `session_visibility` entries of ids that WERE sessions, so an id that never
+/// named one (the frontend used to send "term-6") would stay in the map for the whole process.
+#[test]
+fn apply_session_visibility_does_not_record_an_id_that_names_no_session() {
+    let state = crate::state::tests_support::make_test_app_state();
+
+    apply_session_visibility(&state, "term-6", "viewer", true, true);
+    apply_session_visibility(&state, "term-6", "viewer", true, false);
+    apply_session_visibility(&state, "term-6", "viewer", false, true);
+
+    assert!(
+        !state.session_maps.session_visibility.contains_key("term-6"),
+        "a bogus id must not leave an entry behind"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn apply_session_visibility_records_and_clears_a_live_session() {
+    let state = crate::state::tests_support::make_test_app_state();
+    spawn_real_pty_session(&state, "pty-uuid", 24, 80);
+
+    apply_session_visibility(&state, "pty-uuid", "viewer", true, true);
+    assert!(state.is_session_visible("pty-uuid"));
+    assert!(
+        state
+            .session_maps
+            .session_visibility
+            .contains_key("pty-uuid")
+    );
+
+    apply_session_visibility(&state, "pty-uuid", "viewer", false, true);
+    assert!(
+        !state.is_session_visible("pty-uuid"),
+        "hiding drops this viewer's assertion"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn apply_session_visibility_wakes_a_parked_live_session_but_not_on_a_keep_alive() {
+    let state = crate::state::tests_support::make_test_app_state();
+    spawn_real_pty_session(&state, "pty-uuid", 24, 80);
+    assert_eq!(standby_session(&state, "pty-uuid"), Ok(true));
+
+    apply_session_visibility(&state, "pty-uuid", "viewer", true, false);
+    assert!(
+        state.session_maps.standby_sessions.contains_key("pty-uuid"),
+        "a keep-alive must never SIGCONT a parked session"
+    );
+
+    apply_session_visibility(&state, "pty-uuid", "viewer", true, true);
+    assert!(
+        !state.session_maps.standby_sessions.contains_key("pty-uuid"),
+        "a real focus wakes it"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn apply_session_visibility_for_an_unknown_id_consumes_a_stale_parked_entry_only_when_waking() {
+    let state = crate::state::tests_support::make_test_app_state();
+    state
+        .session_maps
+        .standby_sessions
+        .insert("vanished".to_string(), 0);
+
+    apply_session_visibility(&state, "vanished", "viewer", true, false);
+    assert!(
+        state.session_maps.standby_sessions.contains_key("vanished"),
+        "a keep-alive leaves the entry alone"
+    );
+
+    apply_session_visibility(&state, "vanished", "viewer", true, true);
+    assert!(!state.session_maps.standby_sessions.contains_key("vanished"));
+}
+
+#[cfg(unix)]
+#[test]
+fn prune_orphan_session_visibility_drops_ids_with_no_session_and_keeps_live_ones() {
+    let state = crate::state::tests_support::make_test_app_state();
+    spawn_real_pty_session(&state, "pty-uuid", 24, 80);
+    apply_session_visibility(&state, "pty-uuid", "viewer", true, false);
+    // What the old frontend left behind: ids that never named a session.
+    for bogus in ["term-6", "term-11"] {
+        state.session_maps.session_visibility.insert(
+            bogus.to_string(),
+            std::collections::HashMap::from([("viewer".to_string(), 0)]),
+        );
+    }
+
+    assert_eq!(state.prune_orphan_session_visibility(), 2);
+
+    assert!(
+        state
+            .session_maps
+            .session_visibility
+            .contains_key("pty-uuid")
+    );
+    assert!(!state.session_maps.session_visibility.contains_key("term-6"));
+    assert!(
+        !state
+            .session_maps
+            .session_visibility
+            .contains_key("term-11")
+    );
+    assert_eq!(
+        state.prune_orphan_session_visibility(),
+        0,
+        "a second pass finds nothing"
+    );
+}
+
 // ── process-stats helpers ───────────────────────────────────────
 
 #[cfg(not(windows))]
