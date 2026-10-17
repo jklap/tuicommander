@@ -24,3 +24,8 @@ The fixture contains two snapshots with distinct headers: the root session
 compaction successor (lineage and checkpoint). The consumer must reset before
 feeding the successor. Repeated root exports are deduplicated by session-local
 sequence. Completed answers are rendered once; preview deltas are omitted.
+
+The live exact-bound terminal check, incremental SSE evidence and desktop/mobile
+PDF rasters are recorded in `docs/backend/ego-chat-verification.md` at the
+repository root. That check uses the same real 532 executable and published
+format; it does not replace or modify this recorded fixture.
