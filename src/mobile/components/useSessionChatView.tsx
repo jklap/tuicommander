@@ -11,6 +11,8 @@ export function useSessionChatView(props: {
 	sessionExists: () => boolean;
 	subscribeWake: ChatViewWake;
 }) {
+	const [atBottom, setAtBottom] = createSignal(true);
+	let jump: (() => void) | undefined;
 	const [mode, setMode] = createSignal<"cli" | "chat">(modes.get(props.sessionId()) ?? "cli");
 	createEffect(() => setMode(modes.get(props.sessionId()) ?? "cli"));
 	const select = (next: "cli" | "chat") => {
@@ -59,6 +61,11 @@ export function useSessionChatView(props: {
 						sessionId={sessionId}
 						terminalAgent="claude"
 						mobile
+						onAtBottomChange={setAtBottom}
+						onRegisterScrollToBottom={(fn) => {
+							jump = fn;
+							setAtBottom(true);
+						}}
 						subscribeWake={props.subscribeWake}
 						onUnavailable={() => select("cli")}
 						hint="Reply below. Switch to CLI for permission prompts or questions missing here."
@@ -67,5 +74,5 @@ export function useSessionChatView(props: {
 			</Show>
 		</>
 	);
-	return { active, Toggle, View };
+	return { active, Toggle, View, atBottom, scrollToBottom: () => jump?.() };
 }

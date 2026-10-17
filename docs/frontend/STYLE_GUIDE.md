@@ -602,12 +602,13 @@ The mobile PWA has its own standalone stylesheet at `src/mobile/mobile.css`, **c
 - Border radius scale (`--radius-sm` through `--radius-full`, excluding `--radius-xs`)
 - Shadow tokens (`--shadow-popup`, `--shadow-dropdown`)
 - ANSI terminal palette
+- Session Chat semantic prompt/answer colors and the font size scale, imported from `src/styles/chat-tokens.css` by both stylesheet entrypoints
 
 ### What differs
 | Property | Desktop (`global.css`) | Mobile (`mobile.css`) |
 |----------|----------------------|----------------------|
 | Font mono stack | JetBrains Mono, Fira Code, Hack, Cascadia, ... | SF Mono, Menlo, Consolas, DejaVu, ... |
-| Font size scale | `--font-3xs` through `--font-3xl` (8–24px) | Not defined — components use explicit `px` values |
+| Font size scale | `--font-3xs` through `--font-3xl` (8–24px) | Same shared scale; native inputs retain 16px text |
 | Layout variables | `--sidebar-width`, `--toolbar-height`, `--tab-bar-height`, `--status-height` | Not used — mobile uses flex-based layout |
 | User select | Disabled (`none`) | Enabled (`text`) |
 | Theme variables | `--activity`, `--merged`, `--unseen` | Not present (mobile has no terminal activity tracking yet) |

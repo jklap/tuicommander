@@ -1,3 +1,5 @@
+@import "./styles/chat-tokens.css";
+
 /* TUICommander — Global Styles */
 
 /*
@@ -210,11 +212,6 @@
   --fg-muted: #9aa1a9;
   --accent: #59a8dd;
   --accent-hover: #7abde5;
-  /* The user's question in the terminal grid and the chat view; the answer keeps its green. */
-  --prompt-tint: color-mix(in srgb, var(--accent) 16%, transparent);
-  --prompt-bar: var(--accent);
-  /* Shared answer indicator: preserve the dark rule; Paper uses its darker success green. */
-  --answer-rule: rgba(94,190,140,0.9);
   --activity: #59a8dd;  /* semantic: always blue, not overridden by themes */
   --border: #3e3e42;
   --success: #4ade80;
@@ -252,18 +249,6 @@
   --radius-xl: 8px;
   --radius-pill: 12px;
   --radius-full: 50%;
-
-  /* Font size scale */
-  --font-3xs: 8px;
-  --font-2xs: 10px;
-  --font-xs: 11px;
-  --font-sm: 12px;
-  --font-md: 13px;
-  --font-base: 14px;
-  --font-lg: 15px;
-  --font-xl: 17px;
-  --font-2xl: 20px;
-  --font-3xl: 24px;
 
   /* List-row rhythm — shared by every tree/list panel (sidebar branches, file
      browser, …). These panels sit side by side and previously each invented its
@@ -344,7 +329,6 @@ html {
   --attention: #895003;
   --changes: #805900;
   --merged: #7540b0;
-  --answer-rule: var(--success);
   --diff-del: var(--error);
   --repo-text-shade: 40%;
 }
