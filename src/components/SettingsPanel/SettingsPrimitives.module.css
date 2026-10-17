@@ -30,6 +30,6 @@
 .cardActions { margin-top: 12px; justify-content: flex-end; }
 
 .cardHeading { display: flex; align-items: baseline; gap: 6px; margin-bottom: 8px; min-width: 0; }
-.cardHeading h3 { margin: 0; }
+.card .cardHeading h3 { margin: 0; font-size: 15px; }
 
 .status > .actions { margin-left: auto; justify-content: flex-end; }

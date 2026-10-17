@@ -17,8 +17,25 @@ async function ev(expression){const r=await send('Runtime.evaluate',{expression,
 await send('Emulation.setEmulatedMedia',{features:[{name:'prefers-reduced-motion',value:'reduce'}]});await send('Page.enable');await send('Runtime.enable');await send('Fetch.enable',{patterns:[{urlPattern:'*'}]});
 const tabs=process.env.VISUAL_PAGES?process.env.VISUAL_PAGES.split(','):test==='settings_text_contrast_on_themed_surfaces'?['general','terminal','keyboard-shortcuts','ai-chat','plugins','repo:/workspace/fixture-project']:test==='settings_agent_initials_contrast'?['agents']:test==='settings_appearance_legend_light_text_contrast'?['appearance']:test==='settings_help_badges_share_label_line'?['general','notifications','github','agents','repo:/workspace/fixture-project']:['general','appearance','notifications','terminal','keyboard-shortcuts','github','agents','ai-chat','dictation','smart-prompts','mcp','remote-access','remote-machines','telegram','plugins','repo:/workspace/fixture-project'];
 const results=[];
-for(const width of [1400,390])for(const theme of ['dark','light'])for(const entry of [...tabs.map(tab=>({tab,state:'ready'})),{tab:'plugin:fixture',state:'ready'},{tab:'plugin:fixture',state:'loading'},{tab:'plugin:fixture',state:'error'},{tab:'plugin:fixture',state:'stale'},{tab:'ai-chat',state:'nested'},{tab:'general',state:'launcher-editor'},...['general','ai-chat','repo:/workspace/fixture-project'].map(tab=>({tab,state:'long-text'}))]){const {tab,state}=entry;errors=[];network=[];await send('Emulation.setDeviceMetricsOverride',{width,height:width===1400?900:844,deviceScaleFactor:1,mobile:false});await send('Page.navigate',{url:`http://127.0.0.1:15391/scripts/settings-visual/index.html?theme=${theme}&tab=${encodeURIComponent(tab)}&state=${state}`});await new Promise(r=>setTimeout(r,700));
-for(let ready=0;ready<100;ready++){if(await ev("!!document.querySelector('[data-settings-content]')"))break;await new Promise(r=>setTimeout(r,100));}
+for(const width of [1400,390])for(const theme of ['dark','light'])for(const entry of [...tabs.map(tab=>({tab,state:'ready'})),{tab:'plugin:fixture',state:'ready'},{tab:'plugin:fixture',state:'loading'},{tab:'plugin:fixture',state:'error'},{tab:'plugin:fixture',state:'stale'},{tab:'ai-chat',state:'nested'},{tab:'general',state:'launcher-editor'},...['general','ai-chat','repo:/workspace/fixture-project'].map(tab=>({tab,state:'long-text'}))]){const {tab,state}=entry;errors=[];network=[];await send('Emulation.setDeviceMetricsOverride',{width,height:width===1400?900:844,deviceScaleFactor:1,mobile:false});const url=`http://127.0.0.1:15391/scripts/settings-visual/index.html?theme=${theme}&tab=${encodeURIComponent(tab)}&state=${state}`;
+await send('Page.navigate',{url});
+let settled=false;
+for(let ready=0;ready<100;ready++){
+ try{settled=await ev(`location.href===${JSON.stringify(url)}&&document.readyState==='complete'&&!!document.querySelector('[data-settings-content] header')&&document.documentElement.dataset.theme===${JSON.stringify(theme==='light'?'vscode-light':'commander')}&&getComputedStyle(document.body).color===${JSON.stringify(theme==='light'?'rgb(51, 51, 51)':'rgb(212, 212, 212)')}`);}catch{settled=false;}
+ if(settled)break;await new Promise(r=>setTimeout(r,100));
+}
+if(!settled)throw new Error('Requested Settings document/theme did not settle: '+url);
+await ev(`document.fonts.ready.then(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))))`);
+// Inherited text may still be black on the first mounted frame while Vite installs styles.
+// Read the actual targets, not just root tokens, before accepting the document.
+let textSettled=false;
+for(let ready=0;ready<100;ready++){
+ textSettled=await ev(`(()=>{const c=document.querySelector('[data-settings-content]');const foreground=getComputedStyle(document.body).color;const h=c.querySelector('header h2');const badges=[...c.querySelectorAll('[data-testid=status-badge]')];return getComputedStyle(h).color===foreground&&badges.every(e=>getComputedStyle(e).color!=='rgb(0, 0, 0)');})()`);
+ if(textSettled)break;await new Promise(r=>setTimeout(r,100));
+}
+if(!textSettled)throw new Error('Settings text theme did not settle: '+url);
+await ev(`new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))`);
+
 
 if(state==='long-text')await ev(`(()=>{const c=document.querySelector('[data-settings-content]');const label=c.querySelector('label');label?.append(' — Long translated configuration label that must wrap without overlapping its help badge or control');const input=[...c.querySelectorAll('input')].find(e=>e.type==='text');if(input)input.value='/workspace/long-repository-name/long-profile-name/long-configuration-value';})()`);
 if(state==='nested')await ev(`(()=>{[...document.querySelectorAll('button')].find(e=>e.textContent==='Add folder')?.click();})()`);
@@ -30,7 +47,7 @@ if(state==='stale'){
  await send('Input.dispatchKeyEvent',{type:'keyUp',key:'Tab',code:'Tab',windowsVirtualKeyCode:9});
  await new Promise(r=>setTimeout(r,150));
 }
-let metrics;try{metrics=await ev(`(()=>{const content=document.querySelector('[data-settings-content]');return {title:document.title,text:document.body.innerText,content:content?{clientWidth:content.clientWidth,scrollWidth:content.scrollWidth,clientHeight:content.clientHeight,scrollHeight:content.scrollHeight}:null,calls:window.auditCalls}})()`);}catch(e){metrics={evaluationError:e.message};}
+let metrics;try{metrics=await ev(`(()=>{const content=document.querySelector('[data-settings-content]');return {title:document.title,text:document.body.innerText,content:content?{clientWidth:content.clientWidth,scrollWidth:content.scrollWidth,clientHeight:content.clientHeight,scrollHeight:content.scrollHeight}:null,calls:window.auditCalls,theme:{name:document.documentElement.dataset.theme,foreground:getComputedStyle(document.body).color,heading:getComputedStyle(content.querySelector('h2')).color,updateBadge:[...content.querySelectorAll('[data-testid=status-badge]')].filter(e=>e.textContent==='Update status').map(e=>getComputedStyle(e).color)}}})()`);}catch(e){metrics={evaluationError:e.message};}
 const name=tab.split(':')[0]+'-'+theme+'-'+width+'-'+state;const png=[];
 if(metrics.content){const count=Math.ceil(metrics.content.scrollHeight/Math.max(metrics.content.clientHeight-40,1));for(let i=0;i<count;i++){await ev(`document.querySelector('[data-settings-content]').scrollTop=${i*(metrics.content.clientHeight-40)}`);await new Promise(r=>setTimeout(r,40));const p=dir+'png/'+name+'-'+i+'.png';const shot=await send('Page.captureScreenshot',{format:'png'});await writeFile(p,Buffer.from(shot.data,'base64'));png.push(p);}}
 else{const p=dir+'png/'+name+'-error.png';await writeFile(p,Buffer.from((await send('Page.captureScreenshot',{format:'png'})).data,'base64'));png.push(p);}

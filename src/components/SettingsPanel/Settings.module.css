@@ -1568,7 +1568,7 @@
 .content a { color: var(--link-foreground); }
 
 /* Keep contextual help with its label in stacked, row and grid fields. */
-.helpLabel { display: flex; align-items: baseline; min-width: 0; }
+.helpLabel { display: block; min-width: 0; }
 .group .helpLabel { margin-bottom: 6px; }
-.helpLabel > label { min-width: 0; margin-bottom: 0; }
+.helpLabel > label { display: inline; min-width: 0; margin-bottom: 0; }
 .helpLabel > .infoBadge { flex-shrink: 0; }

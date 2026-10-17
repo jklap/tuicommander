@@ -6,7 +6,7 @@
  const byText = (selector,text) => [...content.querySelectorAll(selector)].find(e=>e.textContent.trim()===text);
  for (const pair of content.querySelectorAll('[class*="helpLabel"], [class*="cardHeading"]')) {
   const label=pair.querySelector('label,h3'), badge=pair.querySelector('[role="button"]');
-  if(label&&badge){const a=rect(label),b=rect(badge);check('badge beside '+label.textContent,b.x>=a.right-1&&b.y<a.bottom&&b.bottom>a.y,{label:a,badge:b});}
+  if(label&&badge){const range=document.createRange();range.selectNodeContents(label);const lines=[...range.getClientRects()].filter(r=>r.width);const a=lines.at(-1)??rect(label),b=rect(badge);check('badge beside '+label.textContent,b.x>=a.right-1&&b.x-a.right<=12&&b.y<a.bottom&&b.bottom>a.y,{label:rect(label),lastLine:{x:a.x,y:a.y,right:a.right,bottom:a.bottom},badge:b});}
  }
  for(const row of content.querySelectorAll('[class*="settingRow"]')) {
   if(!row.className.split(' ').some(n=>n.match(/(?:^|_)settingRow(?:_|$)/)))continue;
@@ -18,6 +18,12 @@
   const toggle=control.querySelector('input[type=checkbox]');if(toggle&&!buttons.length)check('right aligned switch '+label.textContent,Math.abs(rect(toggle).right-r.right)<=2,{row:r,toggle:rect(toggle)});
   if(buttons.length){const right=Math.max(...buttons.map(e=>rect(e).right));check('right aligned action '+label.textContent,Math.abs(right-r.right)<=2,{row:r,control:b,buttonRight:right});}
  }
+ const sidebarColor=byText('label','Sidebar Color');
+ if(sidebarColor){const row=sidebarColor.closest('[class*="settingRow_"]');check('sidebar color uses shared row',!!row,{label:rect(sidebarColor)});}
+ const breadcrumb=content.querySelector('[class*="breadcrumb"]'),header=content.querySelector('header');
+ if(breadcrumb&&header)check('consistent breadcrumb to header gap',Math.abs(rect(header).y-rect(breadcrumb).bottom-12)<=1,{breadcrumb:rect(breadcrumb),header:rect(header)});
+ const upstream=byText('h3','Upstream MCP Servers');
+ if(upstream){const card=upstream.closest('section'),row=card.parentElement.previousElementSibling;check('upstream card separated from connection row',rect(card).y-rect(row).bottom>=16,{card:rect(card),row:rect(row)});check('shared card heading size',getComputedStyle(upstream).fontSize==='15px',{size:getComputedStyle(upstream).fontSize});}
  const autoFetch=byText('label','Auto-Fetch Interval');
  if(autoFetch){const control=document.getElementById(autoFetch.htmlFor);if(control){const a=rect(autoFetch),b=rect(control);check('repository label before select',innerWidth>600?a.x<b.x&&a.y<=b.bottom:a.bottom<=b.y,{label:a,control:b});}}
  const select=document.querySelector('select[aria-label="Settings page"]');
@@ -30,5 +36,5 @@
  if(local){const general=byText('h3','General');check('local tools precede general',rect(local).y<rect(general).y,{tools:rect(local),general:rect(general)});}
  const status=[...content.querySelectorAll('[role=status]')].find(e=>e.textContent.includes('Update status'));if(local&&status){const button=status.querySelector('button');check('update banner precedes local tools',rect(status).bottom<=rect(local).y,{status:rect(status),tools:rect(local)});if(button)check('update action on the right',Math.abs(rect(button).right-(rect(status).right-16))<=2,{status:rect(status),button:rect(button)});}
  check('no horizontal overflow',content.scrollWidth===content.clientWidth,{clientWidth:content.clientWidth,scrollWidth:content.scrollWidth});
- return {checks, header:rect(content.querySelector('header')), content:rect(content), text:content.innerText};
+ return {checks, shortcuts:[...content.querySelectorAll('td kbd')].map(e=>({text:e.textContent,key:rect(e),cell:rect(e.closest('td')),actions:[...e.parentElement.children].filter(c=>c!==e).map(c=>({tag:c.tagName,text:c.textContent,box:rect(c)}))})), header:rect(content.querySelector('header')), content:rect(content), text:content.innerText};
 })()

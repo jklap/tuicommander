@@ -15,7 +15,7 @@ export function SettingPageHeader(props: {
 	breadcrumb?: string;
 }) {
 	return (
-		<>
+		<div>
 			<Show when={props.breadcrumb}>
 				<div class={s.breadcrumb}>{props.breadcrumb}</div>
 			</Show>
@@ -35,7 +35,7 @@ export function SettingPageHeader(props: {
 					{props.actions}
 				</div>
 			</header>
-		</>
+		</div>
 	);
 }
 
