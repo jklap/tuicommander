@@ -1,7 +1,7 @@
 import perimeter from '../../src/__tests__/fixtures/ego-perimeter/effective-default.json';
 export const isTauri=()=>true;
 export const owningConnectionFor=()=>undefined;
-export const buildHttpUrl=(p:string)=>'http://127.0.0.1:15387/blocked'+p;
+export const buildHttpUrl=(p:string)=>'http://127.0.0.1:15391/blocked'+p;
 export class HttpRpcError extends Error {}
 export const listen=async()=>()=>{};
 export const subscribeEvents=async()=>()=>{};
@@ -12,6 +12,10 @@ export const appLogger={info(){},warn(){},error(){},debug(){}};
 export const calls:string[]=[];
 const config={shell:null,font_family:'monospace',font_size:13,theme:'commander',mcp_server_enabled:true,disabled_native_tools:[],collapse_tools:false,services:{server:{enabled:false,port:9876,ipv6_enabled:false},auth:{username:'',password_hash:'',session_token_duration_secs:86400,lan_auth_bypass:false},relay:{enabled:false,url:'',session_id:''}}};
 export async function invoke(cmd:string,args?:any):Promise<any>{calls.push(cmd);switch(cmd){
+case 'plugin_settings_action': return pluginAction(args);
+case 'list_discovered_ssh_hosts': return {hosts:[],hashed_count:0};
+case 'list_ssh_agent_keys': return {keys:[],agent_type:'fixture'};
+case 'list_remote_connections': case 'remote_connection_statuses': return [];
 case 'load_config':return structuredClone(config);
 case 'get_config_defaults':return {};
 case 'get_home_directory':return '/workspace';
@@ -40,3 +44,19 @@ case 'load_agents_config':return {agents:{},hibernate_idle_minutes:60,hibernate_
 default:return undefined;
 }}
 export const rpc=invoke;
+
+// Explicit, isolated visual scenarios. These are synthetic UI fixtures, not live service evidence.
+export const scenario = new URLSearchParams(location.search).get('state') ?? 'ready';
+export const pluginField = {id:'plugins.fixture.endpoint',path:'/endpoint',label:'endpoint',schema:{type:'string',title:'Server endpoint'},operations:['get','set','reset'],sensitivity:'public',order:0,default:'https://example.test'};
+export const pluginManifest = {id:'fixture',name:'Fixture integration',version:'1.0.0',minAppVersion:'1.0.0',description:'Isolated visual fixture',main:'main.js',capabilities:[],settings:{schema:{type:'object',additionalProperties:false,properties:{endpoint:{type:'string',title:'Server endpoint','x-setting':{sensitivity:'public',apply:'live',effect:'Endpoint changes',operations:['get','set','reset'],confirmationClass:'ordinary'}}}},defaults:{endpoint:'https://example.test'}}};
+let revision = 0;
+async function pluginAction(args:any) {
+ if(args.action.action==='describe') return {fields:{[pluginField.id]:pluginField},collections:[],gaps:[],exclusions:[]};
+ if(args.action.action==='get') {
+  if(scenario==='loading') return new Promise(()=>{});
+  if(scenario==='error') throw new Error('Isolated visual read failure');
+  return {revision:`r${++revision}`,values:{'/endpoint':{effective:revision>1?'https://latest.example.test':'https://example.test',source:'stored'}}};
+ }
+ if(scenario==='stale') throw new Error('Isolated visual revision conflict');
+ return {effects:[],restart:[]};
+}

@@ -42,13 +42,17 @@ export function SettingPageHeader(props: {
 export function SectionCard(props: {
 	title: string;
 	description?: string;
+	help?: JSX.Element;
 	actions?: JSX.Element;
 	children: JSX.Element;
 }) {
 	const id = createUniqueId();
 	return (
 		<section class={s.card} aria-labelledby={id}>
-			<h3 id={id}>{props.title}</h3>
+			<div class={s.cardHeading}>
+				<h3 id={id}>{props.title}</h3>
+				{props.help}
+			</div>
 			<Show when={props.description}>
 				<p class={s.description}>{props.description}</p>
 			</Show>
@@ -94,6 +98,8 @@ export function StatusSummary(props: {
 	tone?: "success" | "warning" | "error";
 	source: string;
 	freshness?: string;
+	details?: JSX.Element;
+	actions?: JSX.Element;
 	children?: JSX.Element;
 }) {
 	return (
@@ -104,8 +110,12 @@ export function StatusSummary(props: {
 					{props.source}
 					<Show when={props.freshness}> · {props.freshness}</Show>
 				</p>
+				{props.details}
 			</div>
 			{props.children}
+			<Show when={props.actions}>
+				<div class={s.actions}>{props.actions}</div>
+			</Show>
 		</div>
 	);
 }

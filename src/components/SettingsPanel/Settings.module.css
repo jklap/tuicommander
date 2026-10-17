@@ -233,6 +233,7 @@
   min-width: 0;
   min-height: 0;
   overflow-y: auto;
+  scrollbar-gutter: stable;
   padding: 24px 32px;
 }
 
@@ -1494,7 +1495,10 @@
 .settingRowText { flex: 1; min-width: 0; }
 .settingRowText label { font-size: 13px; font-weight: 600; color: var(--fg-primary); }
 .settingRowText .hint { color: var(--fg-secondary); margin-bottom: 0; }
-.settingRowControl { flex: 0 1 260px; min-width: 0; max-width: 48%; }
+.settingRowControl { flex: 0 1 260px; min-width: 0; max-width: 48%; display: flex; flex-direction: column; align-items: flex-end; gap: 8px; }
+.settingRowControl > div:not(.settingRowValue) { width: 100%; display: flex; flex-wrap: wrap; justify-content: flex-end; align-items: center; gap: 8px; }
+.settingRowControl > div > [data-form-control] { width: 100%; }
+.settingRowControl > div > .hint { margin: 0; text-align: right; }
 .settingRowControl > [data-form-control] { width: 100%; }
 .fieldError { margin: 4px 0 0; color: var(--error); font-size: 12px; line-height: 1.5; }
 @media (max-width: 800px) {
@@ -1555,7 +1559,7 @@
 @media (pointer: coarse) { .infoBadge { width: 44px; height: 44px; } }
 .infoBadge:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 
-.settingRowWithActions { display: flex; align-items: center; gap: 8px; }
+.settingRowWithActions { display: flex; flex-direction: row; align-items: center; gap: 8px; }
 .settingRowValue { flex: 1; min-width: 0; }
 .settingRowValue > [data-form-control] { width: 100%; }
 .settingRowWithActions > button { flex-shrink: 0; }

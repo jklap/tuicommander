@@ -164,3 +164,25 @@ describe("Application Settings restyle contracts", () => {
 		expect(view.getByRole("option", { name: "Appearance" })).toBeInTheDocument();
 	});
 });
+
+// Catches: asynchronously populated repository options leave the compact picker on General.
+it("selects the active repository when its navigation option arrives", () => {
+	const [tabs, setTabs] = createSignal([{ key: "general", label: "General" }]);
+	const view = render(() => (
+		<SettingsShell
+			visible
+			title="Settings"
+			onClose={() => {}}
+			activeTab="repo:/fixture"
+			onTabChange={() => {}}
+			tabs={tabs()}
+		>
+			<p>Repository</p>
+		</SettingsShell>
+	));
+	setTabs([
+		{ key: "general", label: "General" },
+		{ key: "repo:/fixture", label: "Fixture repository" },
+	]);
+	expect(view.getByRole("combobox", { name: "Settings page" })).toHaveValue("repo:/fixture");
+});

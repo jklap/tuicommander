@@ -28,3 +28,8 @@
 .pageTitle { display: flex; align-items: center; gap: 8px; }
 .pageTitle > svg { width: 20px; height: 20px; flex-shrink: 0; }
 .cardActions { margin-top: 12px; justify-content: flex-end; }
+
+.cardHeading { display: flex; align-items: baseline; gap: 6px; margin-bottom: 8px; min-width: 0; }
+.cardHeading h3 { margin: 0; }
+
+.status > .actions { margin-left: auto; justify-content: flex-end; }
