@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+- Use Start/Stop voice call labels in the phone More menu, consistent with the tablet header (#1979-89e1, #1981-0caf).
+
 - Distinguish mobile two-way voice calls with a handset icon; composer dictation keeps its microphone (#1979-89e1).
 
 - Show readable session names and progress text in mobile push notifications; session links remain unchanged (#1978-9cfe).
