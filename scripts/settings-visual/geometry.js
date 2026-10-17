@@ -19,11 +19,21 @@
   if(buttons.length){const right=Math.max(...buttons.map(e=>rect(e).right));check('right aligned action '+label.textContent,Math.abs(right-r.right)<=2,{row:r,control:b,buttonRight:right});}
  }
  const sidebarColor=byText('label','Sidebar Color');
- if(sidebarColor){const row=sidebarColor.closest('[class*="settingRow_"]');check('sidebar color uses shared row',!!row,{label:rect(sidebarColor)});}
+ if(sidebarColor){const row=sidebarColor.closest('[class*="settingRow_"]');check('sidebar color uses shared row',!!row,{label:rect(sidebarColor)});
+  const picker=row.querySelector('[class*="groupColorPicker"]'),swatches=[...picker.children].map(rect);
+  check('sidebar color targets stay round without flex shrink',swatches.every(b=>Math.abs(b.width-b.height)<=1&&b.width>=24),{swatches});
+  check('sidebar color group uses available control width',Math.abs(rect(picker).width-rect(row).width)<=1||innerWidth>800,{picker:rect(picker),row:rect(row)});
+  const last=swatches.at(-1);check('clear color target wraps with other swatches',swatches.filter(b=>Math.abs(b.y-last.y)<=1).length>=2,{swatches});
+ }
+
  const breadcrumb=content.querySelector('[class*="breadcrumb"]'),header=content.querySelector('header');
  if(breadcrumb&&header)check('consistent breadcrumb to header gap',Math.abs(rect(header).y-rect(breadcrumb).bottom-12)<=1,{breadcrumb:rect(breadcrumb),header:rect(header)});
  const upstream=byText('h3','Upstream MCP Servers');
- if(upstream){const card=upstream.closest('section'),row=card.parentElement.previousElementSibling;check('upstream card separated from connection row',rect(card).y-rect(row).bottom>=16,{card:rect(card),row:rect(row)});check('shared card heading size',getComputedStyle(upstream).fontSize==='15px',{size:getComputedStyle(upstream).fontSize});}
+ if(upstream){const card=upstream.closest('section'),row=card.parentElement.previousElementSibling;
+  const add=card.querySelector('button[title="Add upstream server"]'),description=[...card.querySelectorAll('p')].find(e=>e.textContent.includes('Proxy external MCP servers through TUIC.'));
+  const a=rect(add),d=rect(description);
+  check('upstream add action reserves description gap',a.bottom+8<=d.y||d.bottom+8<=a.y||a.right+8<=d.x||d.right+8<=a.x,{action:a,description:d});
+check('upstream card separated from connection row',rect(card).y-rect(row).bottom>=16,{card:rect(card),row:rect(row)});check('shared card heading size',getComputedStyle(upstream).fontSize==='15px',{size:getComputedStyle(upstream).fontSize});}
  const autoFetch=byText('label','Auto-Fetch Interval');
  if(autoFetch){const control=document.getElementById(autoFetch.htmlFor);if(control){const a=rect(autoFetch),b=rect(control);check('repository label before select',innerWidth>600?a.x<b.x&&a.y<=b.bottom:a.bottom<=b.y,{label:a,control:b});}}
  const select=document.querySelector('select[aria-label="Settings page"]');

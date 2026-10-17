@@ -43,6 +43,7 @@ export function SectionCard(props: {
 	title: string;
 	description?: string;
 	help?: JSX.Element;
+	headingActions?: JSX.Element;
 	actions?: JSX.Element;
 	children: JSX.Element;
 }) {
@@ -52,6 +53,9 @@ export function SectionCard(props: {
 			<div class={s.cardHeading}>
 				<h3 id={id}>{props.title}</h3>
 				{props.help}
+				<Show when={props.headingActions}>
+					<div class={`${s.actions} ${s.headingActions}`}>{props.headingActions}</div>
+				</Show>
 			</div>
 			<Show when={props.description}>
 				<p class={s.description}>{props.description}</p>

@@ -634,10 +634,12 @@
 .groupColorPicker {
   display: flex;
   gap: 6px;
+  flex-wrap: wrap;
   margin-top: 8px;
 }
 
 .colorSwatch {
+  flex-shrink: 0;
   width: 24px;
   height: 24px;
   border-radius: 50%;
@@ -1504,7 +1506,7 @@
 @media (max-width: 800px) {
   .content { padding: 20px; }
   .settingRow { flex-direction: column; align-items: stretch; gap: 8px; }
-  .settingRowControl { flex-basis: auto; max-width: 100%; }
+  .settingRowControl { flex-basis: auto; width: 100%; max-width: 100%; }
 }
 @media (max-width: 600px) {
   .panel { width: calc(100vw - 24px); }
@@ -1512,6 +1514,7 @@
   .nav { width: 100% !important; max-height: 180px; border-right: 0; border-bottom: 1px solid var(--border); }
   .navItem, .close, .footerDone, .footerReset, .content button { min-height: 44px; }
   .content { padding: 16px; }
+  .colorSwatch { width: 44px; height: 44px; }
 }
 
 .compactNav { display: none; }

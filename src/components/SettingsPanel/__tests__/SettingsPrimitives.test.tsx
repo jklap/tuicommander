@@ -116,3 +116,17 @@ it("keeps status details separate from legacy and named actions", () => {
 	expect(detail.parentElement).not.toContainElement(view.getByRole("button", { name: "Check now" }));
 	expect(detail.parentElement).not.toContainElement(view.getByRole("button", { name: "Existing action" }));
 });
+
+// Catches: absolutely positioned card actions overlap the description on compact screens.
+it("keeps heading actions in the shared heading layout before the description", () => {
+	const view = render(() => (
+		<SectionCard title="Upstreams" description="Proxy external servers" headingActions={<button>Add server</button>}>
+			<p>Existing content</p>
+		</SectionCard>
+	));
+	const heading = view.getByRole("heading", { name: "Upstreams" });
+	const action = view.getByRole("button", { name: "Add server" });
+	expect(heading.parentElement).toContainElement(action);
+	expect(heading.parentElement?.nextElementSibling).toBe(view.getByText("Proxy external servers"));
+	expect(view.getByRole("region", { name: "Upstreams" })).toBeTruthy();
+});

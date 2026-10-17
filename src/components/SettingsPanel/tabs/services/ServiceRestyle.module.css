@@ -4,6 +4,3 @@
 @media (max-width: 800px) { .page input, .page select { max-width: 100%; } }
 
 .upstreams { margin-top: 16px; }
-.upstreams > section { position: relative; }
-.cardActions { position: absolute; right: 16px; top: 12px; }
-.upstreams h3 { padding-right: 44px; }
