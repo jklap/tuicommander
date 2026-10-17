@@ -284,7 +284,7 @@ impl Runtime {
                 .await?;
             return Ok(json!({"accepted":false}));
         };
-        mail.recipient = peer.into();
+        mail.recipient = peer;
         // Subscribe before delivery: ACP may wake as soon as the mail is stored.
         let recipient = super::streaming::Recipient::capture(&self.state, &mail.recipient);
         let result = super::native::offer(&self.state, &self.adapter_sid, &mail).await;
