@@ -313,6 +313,30 @@ describe("SettingsPanel", () => {
 		expect(h3!.textContent).toBe("Repository");
 	});
 
+	// Catches: closing the repository help scope before RepoScriptsTab hides every approved script explanation.
+	it("keeps repository script help inside the real SettingsPanel page scope", () => {
+		const view = render(() => (
+			<SettingsPanel visible={true} onClose={() => {}} context={{ kind: "repo", repoPath: "/repo/alpha" }} />
+		));
+		for (const [label, guidance] of [
+			["Dev Server URL", "An unsuitable selection changes the displayed behavior"],
+			["Setup Script", "Use it for repository-specific setup."],
+			["Run Script", "Set it for a repeatable development command."],
+			["Archive Script", "Use it when cleanup is required before removal."],
+		]) {
+			const badge = view.getByRole("button", { name: `Explain ${label}` });
+			fireEvent.click(badge);
+			const tip = document.getElementById(badge.getAttribute("aria-describedby")!);
+			expect(tip?.textContent).toContain(guidance);
+			expect(tip?.getAttribute("data-visible")).toBe("true");
+			fireEvent.keyDown(document, { key: "Escape" });
+			expect(tip?.getAttribute("data-visible")).toBeNull();
+		}
+		expect((view.getByLabelText("Setup Script") as HTMLTextAreaElement).value).toBe("");
+		expect((view.getByLabelText("Run Script") as HTMLTextAreaElement).value).toBe("");
+		expect((view.getByLabelText("Archive Script") as HTMLTextAreaElement).value).toBe("");
+	});
+
 	it("shows Reset to Defaults button only when repo nav item is active", () => {
 		const { container } = render(() => <SettingsPanel visible={true} onClose={() => {}} />);
 		// Global context → no Reset button
