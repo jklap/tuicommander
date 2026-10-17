@@ -15,6 +15,7 @@ import type { BranchPrStatus, GitHubIssue, IssueFilterMode } from "../../types";
 import { cx } from "../../utils";
 import { onClickKeyDown } from "../../utils/a11y";
 import { writeClipboard } from "../../utils/clipboard";
+import { closeBranchTerminalPtys } from "../../utils/closeBranchTerminals";
 import { handleOpenUrl } from "../../utils/openUrl";
 import { IssueDetailContent } from "../IssueDetailPopover/IssueDetailContent";
 import {
@@ -105,21 +106,6 @@ export const GitHubPanel: Component<{
 		return repo?.activeWorkspaceId === ctx.baseBranch;
 	};
 
-	/** Called by `executeCleanup`, which passes the workspace id it was given. */
-	const closeTerminalsForBranch = async (repoPath: string, workspaceId: string) => {
-		const repo = repositoriesStore.get(repoPath);
-		const branch = repo?.workspaces[workspaceId];
-		if (branch) {
-			for (const termId of branch.terminals) {
-				try {
-					await invoke("close_pty", { sessionId: termId, cleanupWorktree: false });
-				} catch (err) {
-					appLogger.warn("git", `close_pty failed for terminal ${termId}`, err);
-				}
-			}
-		}
-	};
-
 	const handleCleanupExecute = async (steps: CleanupStep[], options?: { unstash?: boolean }) => {
 		const ctx = cleanupCtx();
 		if (!ctx) return;
@@ -137,7 +123,7 @@ export const GitHubPanel: Component<{
 			branchName: ctx.branchName,
 			baseBranch: ctx.baseBranch,
 			steps: steps.map((st) => ({ id: st.id, checked: st.checked })),
-			closeTerminalsForBranch,
+			closeTerminalsForBranch: closeBranchTerminalPtys,
 			unstash: options?.unstash,
 			onStepStart: (id) => {
 				setCleanupStepStatuses((prev) => ({ ...prev, [id]: "running" }));

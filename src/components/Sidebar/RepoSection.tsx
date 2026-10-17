@@ -272,6 +272,9 @@ function lifecycleTooltip(status: LifecycleStatus, part?: "dirty" | "commit"): s
 	return `${lost > 0 ? "" : "Clean working tree; "}${commitState}; ${removal}`;
 }
 
+/** Module-level so it is not shadowed by the `t` term accessor inside `BranchTabList`'s rows. */
+const standbyLabel = () => t("sidebar.standby", "Standby (paused)");
+
 const AGENT_STATE_LABEL = {
 	working: () => t("sidebar.agentWorking", "Working"),
 	idle: () => t("sidebar.agentIdle", "Idle"),
@@ -465,7 +468,25 @@ export const BranchTabList: Component<{ terminalIds: string[]; repoPath: string 
 									<SubAgentIcon parent={parent()} class={s.branchSubAgentTag} iconClass={s.branchSubAgentIcon} />
 								)}
 							</Show>
-							<span class={s.branchAgentTime}>{compactActivityAge(t().lastActivityAt, clock())}</span>
+							{/* A parked (SIGSTOP'd) tab has no running activity to age — a counting "2m" would read
+							    as a live idle time — so the pause mark takes the age's place, as the tab bar's does. */}
+							<Show
+								when={t().standby}
+								fallback={<span class={s.branchAgentTime}>{compactActivityAge(t().lastActivityAt, clock())}</span>}
+							>
+								<span
+									class={cx(s.branchAgentTime, s.branchStandbyMark)}
+									role="img"
+									aria-label={standbyLabel()}
+									data-tooltip={standbyLabel()}
+									data-tooltip-pos="bottom"
+								>
+									<svg viewBox="0 0 8 10" width="8" height="10" fill="currentColor" aria-hidden="true">
+										<rect x="0" y="0" width="3" height="10" />
+										<rect x="5" y="0" width="3" height="10" />
+									</svg>
+								</span>
+							</Show>
 							{/* Rich: what the agent is doing, in words, under the tab title. */}
 							<Show when={rich() ? agentRow(t()) : null}>
 								{(facts) => (
