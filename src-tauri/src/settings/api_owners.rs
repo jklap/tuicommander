@@ -12,6 +12,9 @@ pub enum OwnerAction {
     Connections {
         operation: crate::settings::remote::ConnectionCredentialAction,
     },
+    Circleci {
+        operation: crate::settings::circleci::CircleCiAction,
+    },
     Telegram {
         operation: crate::settings::telegram::TelegramAction,
     },
@@ -44,6 +47,9 @@ impl Settings {
                 tokio::task::spawn_blocking(move || owner.perform(operation))
                     .await
                     .map_err(|_| Error::new("connections", "store_failed"))?
+            }
+            OwnerAction::Circleci { operation } => {
+                crate::settings::circleci::perform(operation).await
             }
             OwnerAction::Telegram { operation } => {
                 crate::settings::telegram::TelegramOwnerSettings::default()
