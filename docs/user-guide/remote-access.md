@@ -151,6 +151,7 @@ and [WebKit's open support issue](https://bugs.webkit.org/show_bug.cgi?id=194593
 The question is encrypted to the phone's Web Push subscription. It does not
 pass through TUICommander's content-blind cloud relay. TUICommander sends at
 most one question or completion push per session every 30 seconds.
+Session notices use the session display name, or the agent and repository when no name is set. Progress notices show the progress message, not the tool arguments.
 Notifications from different sessions remain separate. A newer notification
 for one session can replace its earlier one; tapping either remaining session
 notification opens that session.

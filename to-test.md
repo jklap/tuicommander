@@ -1,3 +1,10 @@
+## Mobile voice handset (1979-89e1)
+
+- [ ] [VISUAL] After the Mac unlocks, capture the mobile session header in Commander dark and Paper light. Include the idle handset, armed handset, and unchanged composer dictation microphone. Confirm the handset is readable at phone and iPad sizes. The screen was locked during implementation; no visual capture is claimed.
+
+## Readable mobile pushes (1978-9cfe) — Rust restart required
+
+- [ ] After Boss restarts `make dev` or installs `make build`, receive an awaiting/progress push from a named session and an unnamed agent session. Confirm readable names and progress text, no UUID/tool JSON in the displayed body, and that tapping opens the correct session. No live desktop restart or phone push was performed by this peer.
 ## Soft-wrap text reconstruction (1977-063c) — Rust restart required
 
 - [ ] After Boss manually restarts `make dev` or installs `make build`, compare mobile CLI output and MCP session text with raw output for `unrestricted filesystem access` at 24 columns and a mid-word wrap at 64 columns. Confirm spaces, copied selection, ego question labels and explicit hard line breaks. At four columns, `abc界x` must copy and read as `abc界x`, without a space before `界`. The live desktop was not restarted by this peer.

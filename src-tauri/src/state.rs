@@ -4776,9 +4776,29 @@ impl AppState {
         });
     }
 
-    /// Send a push notification to all mobile subscribers, deep-linking a session.
-    fn send_mobile_push(state: &Arc<AppState>, session_id: &str, body: &str) {
-        Self::send_mobile_push_url(state, format!("/mobile/session/{session_id}"), body);
+    /// Send a push with a readable label while retaining the PTY navigation id.
+    fn send_mobile_push(state: &Arc<AppState>, session_id: &str, prompt: &str) {
+        let identity = state.session_maps.sessions.get(session_id).map(|session| {
+            let session = session.lock();
+            (
+                session.display_name.clone(),
+                session.initial_cwd.clone().or_else(|| session.cwd.clone()),
+            )
+        });
+        let agent_type = state
+            .session_maps
+            .session_states
+            .get(session_id)
+            .and_then(|session| session.agent_type.clone());
+        let (name, cwd) = identity.unwrap_or_default();
+        let (body, url) = crate::push::session_push_payload(
+            session_id,
+            name.as_deref(),
+            agent_type.as_deref(),
+            cwd.as_deref(),
+            prompt,
+        );
+        Self::send_mobile_push_url(state, url, &body);
     }
 
     /// Send a push notification to all mobile subscribers at an arbitrary deep link.
@@ -5266,17 +5286,7 @@ impl AppState {
 
                 // Spawn push notification outside the DashMap lock
                 if let Some((sid, prompt)) = push_data {
-                    let session_name = state
-                        .session_maps.sessions
-                        .get(&sid)
-                        .and_then(|s| s.value().lock().display_name.clone())
-                        .unwrap_or_else(|| sid.clone());
-                    let body = if prompt.is_empty() {
-                        format!("{session_name}: awaiting input")
-                    } else {
-                        format!("{session_name}: {prompt}")
-                    };
-                    Self::send_mobile_push(state, &sid, &body);
+                    Self::send_mobile_push(state, &sid, &prompt);
                 }
             }
             AppEvent::PtyExit { session_id } => {
@@ -5323,16 +5333,7 @@ impl AppState {
                     }
                 }
                 if should_push {
-                    let session_name = state
-                        .session_maps.sessions
-                        .get(session_id)
-                        .and_then(|s| s.value().lock().display_name.clone())
-                        .unwrap_or_else(|| session_id.clone());
-                    Self::send_mobile_push(
-                        state,
-                        session_id,
-                        &format!("{session_name}: completed"),
-                    );
+                    Self::send_mobile_push(state, session_id, "completed");
                 }
             }
             // Global events don't affect per-session state

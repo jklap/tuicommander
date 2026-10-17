@@ -6,6 +6,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+- Distinguish mobile two-way voice calls with a handset icon; composer dictation keeps its microphone (#1979-89e1).
+
+- Show readable session names and progress text in mobile push notifications; session links remain unchanged (#1978-9cfe).
 - Show structured file edits as old/new blocks with aligned tabs and horizontal scrolling in Chat; add a phone CLI shortcut to read edits without unmounting the terminal (#1982-ee68).
 
 - Give phone session names more header space by moving voice and tasks into More; keep CLI/Chat direct and tablet controls unchanged (#1981-0caf).
