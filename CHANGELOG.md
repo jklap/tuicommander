@@ -10,6 +10,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Keep the selected workspace's active tab and pane layout consistent when saved tabs are restored to another workspace by cwd (#1999-95b0).
 ### Added
 
+- Add an opt-in bounded terminal frame-workload recorder, rotated capture files and grid-paint replay timing for future WebView stall evidence; this does not replace the missing real-stall replay (#1638-c94c).
+
 - Live Settings refresh after MCP writes, with value-free change generations, dirty-edit preservation and reconnect recovery (#1788-2163).
 - Do not restore ego question badges or notification sounds from answered selectors retained above a newer composer (#1997-eb30).
 

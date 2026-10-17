@@ -1212,3 +1212,7 @@ Typed `set_token` and `clear_token` actions share the existing token owner acros
 MCP, IPC and HTTP. Readback reports stored presence only (`set`, `unset`,
 `unavailable`), never a secret. Git & GitHub keeps its effective-source status;
 removing a stored token leaves environment and CircleCI CLI fallbacks unchanged.
+
+## Frame workload evidence (#1638-c94c)
+
+Implemented: opt-in, perfDebug-gated global bounded frame bytes and paint snapshots, rotated instance-local captures, manual debug dump and production grid-paint replay timing. The synthetic smoke fixture checks harness wiring only. Original captured-stall heartbeat/input/backend RED and same-workload GREEN remain open. See docs/backend/stall-journal.md for bounds and privacy.
