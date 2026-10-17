@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+- Show structured file edits as old/new blocks with aligned tabs and horizontal scrolling in Chat; add a phone CLI shortcut to read edits without unmounting the terminal (#1982-ee68).
+
+- Give phone session names more header space by moving voice and tasks into More; keep CLI/Chat direct and tablet controls unchanged (#1981-0caf).
+
 - Document the integrated Settings restyle and cover lazy catalogue search, scoped plugin reads, empty catalogues, retired section links and close/reopen boundaries (#1945-a78d).
 
 - Settings: replace tunnel forwards as one validated atomic list and complete typed settings owner dispatch.
