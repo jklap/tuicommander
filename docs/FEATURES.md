@@ -3177,3 +3177,7 @@ Terminal text fidelity: soft-wrap rows preserve original spaces in session text,
 ### Settings MCP live refresh
 
 Durable settings-facade writes publish a value-free process-local generation to desktop and SSE clients. Open settings consumers reread affected sections without saving; dirty edits survive, stale reads are discarded, and reconnect refetches snapshots. Vault-only credential writes and persisted apply failures also invalidate readers. Remote notices remain scoped to their owning connection.
+
+### Catalogue-backed Settings inspection
+
+Settings includes a typed All settings expert inspector with explicit owner/path binding, revision-checked single-field edits, dirty-draft preservation and human confirmation recovery. Native controls expose catalogue identities, shared enums use owner metadata and search includes inspector descriptors. General exposes index-memory, attachment-size and WebView-unload resource limits. Per-ID ledgers document separate domain/legacy/read-only controls; CircleCI/corrections ownership and transient PR-filter persistence remain follow-ups.

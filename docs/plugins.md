@@ -926,7 +926,7 @@ A plugin may only register one dashboard — calling `registerDashboard` a secon
 
 #### host.registerCommand(options) -> Disposable
 
-Register a plugin command that users can bind to a keyboard shortcut. The command appears in *Settings → Keyboard Shortcuts* under a dedicated "Plugin Commands" section and can be rebound by the user. The action name is auto-namespaced as `plugin:<pluginId>:<id>`.
+Register a plugin command that users can bind to a keyboard shortcut. The command appears in *Settings → Keyboard Shortcuts* under a dedicated "Plugin Commands" section and can be rebound by the user. The action name is auto-namespaced as `plugin:<pluginId>:<id>`. The active frontend publishes these IDs to the Rust keybinding choices owner; unload removes them from later refreshes. This runtime publication never saves shortcut overrides.
 
 ```typescript
 host.registerCommand({

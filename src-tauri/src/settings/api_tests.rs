@@ -404,3 +404,47 @@ async fn rejected_and_noop_settings_edits_publish_nothing() {
     assert_eq!(unchanged["persisted"], false, "{unchanged}");
     assert!(events.try_recv().is_err());
 }
+
+// Catches: registered plugin shortcuts staying unavailable, or unloaded shortcuts remaining selectable.
+#[tokio::test]
+async fn frontend_plugin_actions_reach_keybinding_owner_choices() {
+    let (_dir, _guard, state) = super::accounts_tests::isolated();
+    let refresh = json!({"action":"refresh","target":{"kind":"instance"},"store":"keybindings",
+        "paths":["/bindings/terminal-copy/action"]});
+    let mut events = state.event_bus.subscribe();
+    let publish = api::execute(
+        &state,
+        json!({"action":"publish_plugin_keybinding_actions",
+        "actions":["plugin:fixture:run"]}),
+        Caller::native(),
+    )
+    .await;
+    assert_eq!(publish["persisted"], false, "{publish}");
+    let choices = api::execute(&state, refresh.clone(), Caller::native()).await;
+    let values = choices["choices"]["/bindings/terminal-copy/action"]["values"]
+        .as_array()
+        .expect("available owner actions");
+    assert!(values.contains(&json!("plugin:fixture:run")), "{choices}");
+    assert!(
+        values.contains(&json!(super::keybindings::actions()[0])),
+        "{choices}"
+    );
+    let clear = api::execute(
+        &state,
+        json!({"action":"publish_plugin_keybinding_actions","actions":[]}),
+        Caller::native(),
+    )
+    .await;
+    assert_eq!(clear["applied"], true);
+    let removed = api::execute(&state, refresh, Caller::native()).await;
+    assert!(
+        !removed["choices"]["/bindings/terminal-copy/action"]["values"]
+            .as_array()
+            .unwrap()
+            .contains(&json!("plugin:fixture:run"))
+    );
+    assert!(
+        events.try_recv().is_err(),
+        "runtime registrations must not look like durable settings edits"
+    );
+}

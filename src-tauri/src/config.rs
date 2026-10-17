@@ -1146,10 +1146,10 @@ pub(crate) struct AppConfig {
     #[serde(default = "default_true")]
     #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates block folding enabled for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
     pub(crate) block_folding_enabled: bool,
-    /// Content index pre-warm strategy: "active_and_switch" (default), "active_only", "all_sequential"
+    /// Content index pre-warm strategy; "disabled" suppresses background rebuilds.
     #[serde(default = "default_index_strategy")]
     #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates index strategy for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
-    #[schemars(extend("enum" = ["active_and_switch","active_only","all_sequential"]))]
+    #[schemars(extend("enum" = ["active_and_switch","active_only","all_sequential","disabled"]))]
     pub(crate) index_strategy: String,
     /// Total heap the BM25 content indices may hold, in MB, before the least
     /// recently used are dropped (`content_index::enforce_memory_budget`).

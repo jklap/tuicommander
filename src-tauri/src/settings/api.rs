@@ -21,6 +21,7 @@ pub enum Action {
     Transaction(Request),
     Perform(Perform),
     Refresh(Refresh),
+    Frontend(Frontend),
 }
 
 #[derive(Deserialize, JsonSchema)]
@@ -53,6 +54,13 @@ pub enum Perform {
 #[serde(tag = "action", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Refresh {
     Refresh { store: String },
+}
+
+/// Runtime UI registrations contain identifiers only, never callbacks or launch commands.
+#[derive(Deserialize, JsonSchema)]
+#[serde(tag = "action", rename_all = "snake_case", deny_unknown_fields)]
+pub enum Frontend {
+    PublishPluginKeybindingActions { actions: Vec<String> },
 }
 
 pub fn request_schema() -> Value {
@@ -121,7 +129,9 @@ impl Settings {
         let ego = Arc::new(super::ego::EgoSettingsStore::new(state.clone())?);
         registry.register(Service::new(catalogue.clone(), ego.clone()))?;
         register!(super::registration::RegistrationStore::default());
-        register!(super::ui_owners::UiSettingsStore::keybindings());
+        register!(super::ui_owners::UiSettingsStore::keybindings_with_actions(
+            state.plugin_keybinding_actions.clone()
+        ));
         register!(super::ui_owners::UiSettingsStore::pane_layout());
         register!(super::upstreams::UpstreamsSettingsStore::new(
             state.mcp.upstream_registry.clone(),
@@ -291,6 +301,25 @@ impl Settings {
                     self.registry.execute_as(request, caller, approval).await?
                 };
                 serde_json::to_value(reply).map_err(|_| Error::new("settings", "store_failed"))
+            }
+            Action::Frontend(Frontend::PublishPluginKeybindingActions { actions }) => {
+                if actions.len() > 4096
+                    || actions.iter().any(|action| {
+                        action.len() > 256
+                            || !action.starts_with("plugin:")
+                            || action.split(':').count() != 3
+                            || action
+                                .split(':')
+                                .any(|part| part.is_empty() || part.chars().any(char::is_control))
+                    })
+                {
+                    return Err(Error::new("keybindings", "out_of_range"));
+                }
+                let mut actions = actions;
+                actions.sort();
+                actions.dedup();
+                *state.plugin_keybinding_actions.write() = Some(actions);
+                Ok(json!({"persisted":false,"applied":true}))
             }
             Action::Refresh(Refresh::Refresh { store }) => {
                 if store != "ego" {

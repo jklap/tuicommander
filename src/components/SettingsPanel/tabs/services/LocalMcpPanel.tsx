@@ -116,6 +116,7 @@ export const LocalMcpPanel: Component = () => {
 
 				<div class={s.group}>
 					<button
+						data-non-setting="Show the bridge integration instructions; not a preference"
 						class={s.mcpDisclosure}
 						onClick={() => {
 							const opening = !bridgeInfoOpen();
@@ -142,6 +143,7 @@ export const LocalMcpPanel: Component = () => {
 							<div class={s.mcpSnippetWrap}>
 								<pre class={s.mcpSnippetPre}>{bridgeInfo()!.config_snippet}</pre>
 								<button
+									data-non-setting="Copy the existing MCP bridge integration snippet"
 									class={s.mcpSnippetCopy}
 									onClick={() => {
 										writeClipboard(bridgeInfo()!.config_snippet)
@@ -168,6 +170,7 @@ export const LocalMcpPanel: Component = () => {
 					>
 						{(id, descriptionId) => (
 							<input
+								data-setting-id="app.collapse_tools"
 								id={id}
 								aria-describedby={descriptionId()}
 								class={s.rowSwitch}
@@ -202,6 +205,7 @@ export const LocalMcpPanel: Component = () => {
 								<SettingRow label={tool.name} hint={tool.summary} help={tool.description}>
 									{(id, descriptionId) => (
 										<input
+											data-setting-id="app.disabled_native_tools"
 											id={id}
 											aria-describedby={descriptionId()}
 											class={s.rowSwitch}

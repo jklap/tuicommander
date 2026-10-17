@@ -136,6 +136,8 @@ it("plugin_tab_write_goes_through_settings_service — catches a second settings
 		),
 	);
 	const input = view.container.querySelector("[data-settings-content] input[type=text]")!;
+	// Catches a runtime descriptor rendered under a different identity than its write path.
+	expect(input.getAttribute("data-setting-id")).toBe(field.id);
 	fireEvent.input(input, { target: { value: "https://changed.test" } });
 	fireEvent.blur(input);
 	await waitFor(() =>

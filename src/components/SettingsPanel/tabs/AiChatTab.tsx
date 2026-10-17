@@ -198,6 +198,7 @@ export const AiChatTab: Component<{
 								{(id, descriptionId) => (
 									<div class={layout.modelControls}>
 										<Select
+											data-setting-id="ego.model"
 											id={id}
 											aria-describedby={descriptionId()}
 											disabled={busy()}
@@ -225,6 +226,7 @@ export const AiChatTab: Component<{
 											</For>
 										</Select>
 										<button
+											data-non-setting="Explicit configured-Ego provider discovery; never runs during describe"
 											class={s.testBtn}
 											disabled={busy()}
 											onClick={() => void attempt(() => client().providers(true))}
@@ -247,7 +249,12 @@ export const AiChatTab: Component<{
 						)}
 					>
 						{() => (
-							<button class={s.testBtn} disabled={busy()} onClick={() => void attempt(() => client().providers(true))}>
+							<button
+								data-non-setting="Explicit configured-Ego provider discovery; never runs during describe"
+								class={s.testBtn}
+								disabled={busy()}
+								onClick={() => void attempt(() => client().providers(true))}
+							>
 								{t("providers.refresh", "Refresh from providers")}
 							</button>
 						)}
@@ -271,6 +278,7 @@ export const AiChatTab: Component<{
 										badges={<CredentialBadge credential={provider.credential} />}
 										actions={
 											<button
+												data-non-setting="Open the configured Ego interactive login; the human handles authentication"
 												class={s.testBtn}
 												aria-label={`${t("providers.login", "Login")} to ${provider.name}`}
 												onClick={() => login(provider.name)}

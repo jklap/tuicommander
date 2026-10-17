@@ -2318,13 +2318,14 @@ export const settingsCatalogue = {
       "helpKey": "settings.catalogue.app.index_strategy.help",
       "label": "index strategy",
       "schema": {
-        "description": "Content index pre-warm strategy: \"active_and_switch\" (default), \"active_only\", \"all_sequential\"",
+        "description": "Content index pre-warm strategy; \"disabled\" suppresses background rebuilds.",
         "type": "string",
         "default": "active_and_switch",
         "enum": [
           "active_and_switch",
           "active_only",
-          "all_sequential"
+          "all_sequential",
+          "disabled"
         ]
       },
       "nullable": false,
@@ -2337,7 +2338,8 @@ export const settingsCatalogue = {
         "values": [
           "active_and_switch",
           "active_only",
-          "all_sequential"
+          "all_sequential",
+          "disabled"
         ]
       },
       "sensitivity": "public",
@@ -4839,7 +4841,7 @@ export const settingsCatalogue = {
         "resolver": "keybinding_actions",
         "availability": {
           "status": "unavailable",
-          "reason": "frontend-registered plugin actions; bound in Step 9 UI parity"
+          "reason": "no frontend has published its registered plugin actions"
         },
         "values": null
       },

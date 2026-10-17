@@ -18,6 +18,8 @@ export interface SettingListProps extends SettingFieldProps {
 
 export const SettingList: Component<SettingListProps> = (props) => (
 	<SettingField
+		settingId={props.settingId}
+		data-setting-id={props["data-setting-id"]}
 		label={props.label}
 		hint={props.hint}
 		row={props.row}
@@ -35,6 +37,7 @@ export const SettingList: Component<SettingListProps> = (props) => (
 									<label class={s.cell}>
 										<span>{column.label}</span>
 										<Input
+											data-setting-id={props.settingId ?? props["data-setting-id"]}
 											type="text"
 											value={props.rows[index()]?.values[column.id] ?? ""}
 											placeholder={column.placeholder}
@@ -54,6 +57,7 @@ export const SettingList: Component<SettingListProps> = (props) => (
 								)}
 							</For>
 							<button
+								data-setting-id={props.settingId ?? props["data-setting-id"]}
 								type="button"
 								class={s.button}
 								disabled={props.disabled}
@@ -68,6 +72,7 @@ export const SettingList: Component<SettingListProps> = (props) => (
 				<Show when={props.onAdd}>
 					{(add) => (
 						<button
+							data-setting-id={props.settingId ?? props["data-setting-id"]}
 							type="button"
 							class={s.button}
 							disabled={props.disabled}

@@ -10,6 +10,12 @@ const mod = isMacOS() ? "Cmd" : "Ctrl";
 
 export const TIPS: Tip[] = [
 	{
+		feature: "All settings inspector",
+		description:
+			"Open Settings → All settings (Expert) for typed catalogue fields without a dedicated page. Select the owner and existing record key, then read before saving. Credentials stay in their domain workflows.",
+		shortcut: null,
+	},
+	{
 		feature: "Mobile latest output",
 		description:
 			"When you scroll back in mobile CLI or Chat output, tap the down-arrow above Send to return to the latest output without sending a terminal key.",

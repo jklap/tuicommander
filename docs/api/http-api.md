@@ -3275,3 +3275,7 @@ Rows returned by session `format=log` output and the `format=log|text` WebSocket
 ### Settings change stream
 
 `GET /events` publishes `settings-changed` with `{section: string, generation: number, persisted: boolean, applied: boolean}` after a durable settings-facade write. A persisted apply failure also emits a hint, with `applied: false`; its structured error carries the same generation. A refusal or failed persistence emits no hint. Successful reads expose the current generation, while owner `revision` remains the compare-and-swap token. The counter is process-local and resets after restart: clients must refetch their active settings snapshots after SSE connect, reconnect or `lagged`, not compare generations across process lifetimes. Values and credentials are never included in the event.
+
+### Frontend shortcut metadata publication
+
+`POST /settings/action` and IPC `settings_action` accept `{action:"publish_plugin_keybinding_actions",actions:["plugin:pluginId:commandId"]}`. IDs are validated and bounded; the newest frontend publication replaces the process-local set. This is runtime metadata, not configuration persistence. It returns persisted=false/applied=true and does not emit settings-changed. Existing host-issued caller guards apply. Explicit keybinding choice refresh reads this set with built-in actions.
