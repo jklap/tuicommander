@@ -7,6 +7,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 - Add desktop and mobile terminal Chat view for exact-bound ego sessions through the documented local transcript v1 export, with tool cards, goal continuation notices and compaction resets (#1969-ac9b).
+- Place the mobile jump-to-bottom control beside Send, outside the key bar so it cannot cover arrow keys (#1988-0233).
+
+- Preserve full mobile CLI startup, permission and selection dialogs in initial HTTP and live log-WebSocket screens (#1987-606c).
 - Wake standby shells before desktop raw input, even when tab visibility did not change again; reuse the remote input wake path (#1986-1236).
 
 - Clear stale mobile agent and question controls from fresh session snapshots after agent exit, restoring CLI and shell input even when the output socket pauses (#1985-45bd).

@@ -3,6 +3,7 @@ import { cleanup, fireEvent, render, waitFor } from "@solidjs/testing-library";
 import { createSignal } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { Transcript } from "../../components/AIChatPanel/Transcript";
+import { CommandInput } from "../components/CommandInput";
 import { OutputView } from "../components/OutputView";
 import { TerminalKeybar } from "../components/TerminalKeybar";
 
@@ -50,7 +51,13 @@ async function setup(mode: "CLI" | "Chat") {
 					onRegisterScrollToBottom={register}
 				/>
 			)}
-			<TerminalKeybar sessionId="owned" showScrollToBottom={!atBottom()} onScrollToBottom={() => jump?.()} />
+			<TerminalKeybar sessionId="owned" />
+			<CommandInput
+				sessionId="owned"
+				sessionExists={false}
+				showScrollToBottom={!atBottom()}
+				onScrollToBottom={() => jump?.()}
+			/>
 		</>
 	));
 	const viewport = (
