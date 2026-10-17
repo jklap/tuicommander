@@ -232,6 +232,10 @@ function getBranchTabsAvailable(branch: WorkspaceState): boolean {
 
 type LifecycleStatus = NonNullable<WorkspaceState["lifecycleStatus"]>;
 
+function unknownLifecycleLabel(status: LifecycleStatus | undefined): string {
+	return status?.error?.startsWith("Cannot resolve default branch:") ? "No base branch" : "Unknown";
+}
+
 const UNMERGED_TOOLTIP = "Branch has commits not merged into the default branch. Merge before deleting the branch.";
 
 /**
@@ -1104,7 +1108,7 @@ export const BranchItem: Component<{
 						{(status) => {
 							const lostFiles = () => status().dirtyFiles ?? 0;
 							const label = () => {
-								if (status().commitStatus === "unknown") return "Unknown";
+								if (status().commitStatus === "unknown") return unknownLifecycleLabel(status());
 								// Uncommitted files outrank the commit verdict, which reads commits
 								// only: "Merged" over them claims nothing would be lost while removal
 								// discards every one. The count earns a chip only when the stats chip
@@ -1294,7 +1298,7 @@ export const BranchItem: Component<{
 												data-tooltip-pos="bottom"
 											>
 												{state() === "unknown"
-													? t("sidebar.unknown", "Unknown")
+													? unknownLifecycleLabel(lifecycle())
 													: state() === "merged"
 														? t("sidebar.merged", "Merged")
 														: t("sidebar.stale", "Stale")}

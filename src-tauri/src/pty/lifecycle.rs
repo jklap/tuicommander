@@ -3969,7 +3969,7 @@ pub(crate) fn spawn_standby_checker(state: Arc<AppState>) {
     });
 }
 
-/// SIGSTOP the entire process group of a session.
+/// SIGSTOP a session only when its PTY child owns the foreground process group.
 /// Returns Ok(true) if stopped, Ok(false) if already in standby or session gone.
 #[cfg(unix)]
 pub(crate) fn standby_session(state: &AppState, session_id: &str) -> Result<bool, String> {
@@ -3977,6 +3977,7 @@ pub(crate) fn standby_session(state: &AppState, session_id: &str) -> Result<bool
     // invalidate a checker tick selected before the session became visible.
     let visibility = state.background_visibility.lock();
     if visibility.watched(state, session_id)
+        || visibility.recently_active(state, session_id)
         || state
             .session_maps
             .session_visibility
@@ -3986,6 +3987,19 @@ pub(crate) fn standby_session(state: &AppState, session_id: &str) -> Result<bool
         return Ok(false);
     }
     if state.session_maps.standby_sessions.contains_key(session_id) {
+        return Ok(false);
+    }
+    let timeout_ms = u64::from(state.config.read().standby_timeout_minutes) * 60_000;
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64;
+    if state
+        .session_maps
+        .last_input_ms
+        .get(session_id)
+        .is_some_and(|last| now_ms.saturating_sub(last.load(Ordering::Relaxed)) < timeout_ms)
+    {
         return Ok(false);
     }
     // Serialize the final eligibility check with background-work updates. This
@@ -4007,10 +4021,17 @@ pub(crate) fn standby_session(state: &AppState, session_id: &str) -> Result<bool
             .get(session_id)
             .ok_or_else(|| format!("Session not found: {session_id}"))?;
         let session = entry.value().lock();
-        session
+        let pgid = session
             .master
             .process_group_leader()
-            .ok_or_else(|| "No process group leader".to_string())?
+            .ok_or_else(|| "No process group leader".to_string())?;
+        // A job-control shell reclaims the terminal when its foreground job
+        // stops. Only that shell can foreground the job again; SIGCONT alone
+        // cannot restore its terminal ownership. Leave shell-managed jobs live.
+        if session._child.process_id().map(|pid| pid as i32) != Some(pgid) {
+            return Ok(false);
+        }
+        pgid
     };
     if pgid <= 1 || pgid == unsafe { libc::getpgid(0) } {
         return Err(format!("Unsafe pgid {pgid} — refusing SIGSTOP"));
@@ -4022,14 +4043,10 @@ pub(crate) fn standby_session(state: &AppState, session_id: &str) -> Result<bool
             std::io::Error::last_os_error()
         ));
     }
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_millis() as u64;
     state
         .session_maps
         .standby_sessions
-        .insert(session_id.to_string(), now);
+        .insert(session_id.to_string(), pgid);
     tracing::info!(session_id, pgid, "Session entered standby (SIGSTOP)");
     emit_standby_event(state, session_id, true);
     Ok(true)
@@ -4038,32 +4055,23 @@ pub(crate) fn standby_session(state: &AppState, session_id: &str) -> Result<bool
 /// SIGCONT a session in standby. Returns Ok(true) if woken, Ok(false) if not in standby.
 #[cfg(unix)]
 pub(crate) fn wake_session(state: &AppState, session_id: &str) -> Result<bool, String> {
-    if state
-        .session_maps
-        .standby_sessions
-        .remove(session_id)
-        .is_none()
-    {
+    let Some((_, pgid)) = state.session_maps.standby_sessions.remove(session_id) else {
         return Ok(false);
-    }
-    let pgid = {
-        let entry = state
-            .session_maps
-            .sessions
-            .get(session_id)
-            .ok_or_else(|| format!("Session not found: {session_id}"))?;
-        let session = entry.value().lock();
-        session
-            .master
-            .process_group_leader()
-            .ok_or_else(|| "No process group leader".to_string())?
     };
+    if !state.session_maps.sessions.contains_key(session_id) {
+        return Err(format!("Session not found: {session_id}"));
+    }
+    if pgid <= 1 || pgid == unsafe { libc::getpgid(0) } {
+        return Err(format!("Unsafe pgid {pgid} — refusing SIGCONT"));
+    }
     let ret = unsafe { libc::kill(-pgid, libc::SIGCONT) };
     if ret != 0 {
-        return Err(format!(
-            "SIGCONT failed: {}",
-            std::io::Error::last_os_error()
-        ));
+        let error = std::io::Error::last_os_error();
+        state
+            .session_maps
+            .standby_sessions
+            .insert(session_id.to_string(), pgid);
+        return Err(format!("SIGCONT failed: {}", error));
     }
     tracing::info!(session_id, pgid, "Session woken from standby (SIGCONT)");
     emit_standby_event(state, session_id, false);
