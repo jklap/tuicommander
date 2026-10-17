@@ -224,6 +224,63 @@ mod tests {
         assert_eq!(reply["persisted"], false);
     }
 
+    // Catches: an expired device authorization being polled/persisted as a new login,
+    // or terminal retries retaining the private device credential.
+    #[tokio::test]
+    async fn provider_authorization_deadline_cannot_authenticate_or_persist() {
+        use super::super::{GithubAction, GithubSettings};
+        let (_dir, _guard, state) = crate::settings::accounts_tests::isolated();
+        let owner = GithubSettings::new(state.clone());
+        let before = owner.read().await.unwrap();
+        let token = state.github.token.read().clone();
+        let mut events = state.event_bus.subscribe();
+        for status_first in [false, true] {
+            let id = if status_first {
+                "status-first"
+            } else {
+                "complete-first"
+            };
+            let now = Instant::now();
+            // TUIC-owned deadline state, not a fabricated provider HTTP response.
+            // Both polling and authorization have reached their deadline: expiry must win.
+            owner.login.flows.lock().insert(
+                id.into(),
+                Arc::new(tokio::sync::Mutex::new(Flow {
+                    code: "expired-device-private-canary".into(),
+                    epoch: state
+                        .github
+                        .login_epoch
+                        .load(std::sync::atomic::Ordering::SeqCst),
+                    additional: false,
+                    expires: now,
+                    next_poll: now,
+                    interval: Duration::from_secs(5),
+                    status: "pending",
+                })),
+            );
+            if status_first {
+                let status = owner
+                    .perform(GithubAction::CloudLoginStatus { flow_id: id.into() })
+                    .await
+                    .unwrap();
+                assert_eq!(status["status"], "expired");
+            }
+            for _ in 0..2 {
+                let reply = owner
+                    .perform(GithubAction::CompleteCloudLogin { flow_id: id.into() })
+                    .await
+                    .unwrap();
+                assert_eq!(reply["status"], "expired", "{reply}");
+                assert_eq!(reply["persisted"], false);
+                assert!(!reply.to_string().contains("expired-device-private-canary"));
+            }
+            assert!(owner.login.flow(id).unwrap().lock().await.code.is_empty());
+        }
+        assert_eq!(owner.read().await.unwrap(), before);
+        assert_eq!(*state.github.token.read(), token);
+        assert!(events.try_recv().is_err());
+    }
+
     // Catches: polling expired or completed flows again, or ignoring the owner's poll interval.
     #[tokio::test]
     async fn terminal_flows_and_poll_interval_do_not_exchange_device_credentials() {

@@ -142,3 +142,31 @@ refusal/expiry/conflict/apply-failure integration criteria are unverified.
 See [Settings](../user-guide/settings.md), [HTTP API](../api/http-api.md), and
 [configuration ownership](config.md) for the corresponding user and transport
 surfaces.
+
+### Focused recovery contracts
+
+The startup regression tests resolve operation constants from the described
+owner schema before calling GitHub metadata workflows and the configured Ego
+login workflow. GitHub account IDs come from `list_accounts`; Ego model reads
+use the published field descriptor. The Ego replay refuses authentication and
+therefore proves configured launch and recovery, not a successful provider login.
+
+`provider_authorization_deadline_cannot_authenticate_or_persist` covers the
+GitHub device authorization deadline in TUIC-owned flow state, including status
+before completion and repeated completion. It verifies unchanged account and
+runtime credential state and disposal of the private device code. This is not
+an expired provider HTTP response fixture, a real authentication attempt, or an
+Ego host-handle expiry test.
+
+`persisted_apply_failure_publishes_unapplied_generation` covers the facade's
+persisted-but-unapplied result. Recovery reads the durable value and new owner
+revision, checks the persisted file, and emits no second mutation event. These
+contracts passed coordinator-owned targeted Linux validation at `b4ace7721`:
+33 tests covered startup workflows, the device deadline, provenance and account/
+Ego consumers; a separate `--no-default-features` run passed both
+`startup_uses_only_published_schema` and the persisted-apply-failure test.
+
+These results validate the isolated contracts, not complete live onboarding.
+Step 10 remains open for human-assisted GitHub/Ego authentication and recorded
+provider-expiry evidence. No successful authentication, external expired-token
+response, or native desktop validation is inferred from these runs.
