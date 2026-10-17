@@ -105,7 +105,7 @@ const ToolActivity: Component<{
 		return `${seconds.toFixed(1)}s`;
 	};
 	return (
-		<details class={s.toolActivity} open={status() === "Failed"}>
+		<details class={s.toolActivity}>
 			<summary class={s.toolActivitySummary}>
 				<span
 					class={cx(
@@ -144,7 +144,7 @@ const ToolActivity: Component<{
 			<div class={s.toolActivityCalls}>
 				<For each={props.calls()}>
 					{(call) => (
-						<details class={s.toolActivityCall} open={call.status === "failed"}>
+						<details class={s.toolActivityCall}>
 							<summary class={s.toolActivityCallSummary}>
 								{/* Keyed on status so a settled call gets a fresh element: WebKit does not
 								    restyle a closed <details>, so swapping the class there left the
