@@ -18,7 +18,7 @@ import { useSessionChatView } from "../components/useSessionChatView";
 
 import { getAgentCommands } from "../config/agentCommands";
 import { useMobileVoice } from "../useMobileVoice";
-import type { SessionInfo } from "../useSessions";
+import type { SessionInfo, SessionState } from "../useSessions";
 import { formatRetryCountdown } from "../utils/formatRetryCountdown";
 import { isKnownAgentType } from "../utils/sessionKind";
 import { useDebouncedStatus } from "../utils/useDebouncedStatus";
@@ -66,16 +66,16 @@ function VoiceCallIcon() {
 }
 
 export function SessionDetailScreen(props: SessionDetailScreenProps) {
-	// Merge polled state with real-time WebSocket state pushes.
-	// WS state arrives instantly; poll state arrives every 3s as fallback.
-	const [wsState, setWsState] = createSignal<Record<string, unknown> | null>(null);
-	const sessionState = () => {
-		const ws = wsState();
-		const poll = props.session.state;
-		if (!ws) return poll;
-		// WS state is authoritative when present; poll state fills gaps on reconnect.
-		return { ...poll, ...ws } as typeof poll;
-	};
+	// Both transports send complete snapshots, with cleared optional fields omitted.
+	// Replace rather than merge, and let a fresh poll recover a paused/stale socket.
+	const [sessionState, setSessionState] = createSignal(props.session.state);
+	createEffect(() => {
+		const snapshot = props.session.state;
+		setSessionState((current) => {
+			if (snapshot && current && snapshot.last_activity_ms < current.last_activity_ms) return current;
+			return snapshot;
+		});
+	});
 	const status = useDebouncedStatus(() => ({ ...props.session, state: sessionState() }));
 	const [moreOpen, setMoreOpen] = createSignal(false);
 	const [headerPanel, setHeaderPanel] = createSignal<SessionHeaderPanel | null>(null);
@@ -501,7 +501,7 @@ export function SessionDetailScreen(props: SessionDetailScreenProps) {
 					}}
 					sessionId={props.session.session_id}
 					onOpenFileLink={props.onOpenFileLink}
-					onStateChange={setWsState}
+					onStateChange={(state) => setSessionState(state as unknown as SessionState)}
 					onInputLine={setPtyInputLine}
 					searchQuery={searchQuery()}
 				/>
