@@ -40,7 +40,12 @@ every page at once, so you do not have to know which page owns the one you want.
 Each result shows the setting name and the `Page › Section` trail it lives under;
 selecting one opens that page and scrolls to the field.
 
-Three limits are deliberate:
+Search reads the settings catalogue without opening every page or running their
+service probes. Plugin search uses the loaded plugin's described fields; values
+are read only when you open its editor. Reopening Settings clears the previous
+query so a requested page or section is visible.
+
+The following search rules are deliberate:
 
 - **Repository pages are not searched.** A repository page belongs to one specific
   repository, and a global box has no way to know which one you mean.
@@ -534,6 +539,10 @@ Use **Follow task** in an item detail to follow comments locally; use **Unfollow
 
 GitHub provides a full normal-comment count, so an increase is detected even beyond the first page. Jira and GitLab provide paged comment entries: newly observed comments notify when their creation time is newer than the prior baseline, or when a previously unseen comment ID shares its latest timestamp. Unloaded pages, unseen review sources and items that are not refreshed cannot produce a notice. Editing a comment or loading older history does not notify. No Linear provider is shipped, so it is not covered.
 
+## Settings MCP access (#1787-4778)
+
+Enable the settings native tool under MCP to permit an agent to describe and edit settings. It is disabled by default, even if the removed config tool was enabled. Secrets are write-only. Changes to external access or the trusted executable require the existing confirmation dialog. The owner inventory is complete. Use explicit target/store/paths for owner reads and dynamic-choice describe/refresh. Typed workflows select their store and operation; credentials remain write-only. Future unresolved owner gaps block edits.
+
 
 Agent model settings support typed model edits without starting a CLI. Explicit
 choice refresh probes only the addressed Claude run config with `--help`, using
@@ -554,6 +563,30 @@ An empty device list means enumeration succeeded with no devices. If the audio b
 ### Shared layout
 
 Settings uses one bounded, responsive shell across pages, with independently scrolling navigation and content. The panel is at most 1136px wide and retains its size when you select another page. Saved navigation width remains in use. Shared presentation components support consistent cards, label/control rows, source-aware status, empty states and scoped destructive actions as pages adopt the approved restyle. Save behavior and configuration ownership do not change.
+
+### Scope and operation states
+
+The page header identifies the setting owner. Repository edits remain tied to
+the selected repository; Agents uses its machine selector; plugin pages name
+the plugin that supplies their fields. A page change does not transfer settings
+between these owners. **Done** closes Settings; it is not a global Apply action.
+
+Loading, empty results and failed reads are different states. A plugin catalogue
+with no fields adds no page. While plugin values load, the editor shows a local
+loading message and keeps navigation and Done available. A failed read shows an
+alert inside the editor. Rejected writes reload the latest revision rather than
+reuse stale values for the next edit. Unloading a plugin removes its editor even
+if a read is still pending.
+
+Status words describe the reported state, not inferred connectivity. Saved
+credentials do not prove live access, and ego's unchecked sandbox status is not
+proof of OS enforcement. Use the page's existing Refresh or recovery action;
+opening Settings does not authorize extra network or sandbox probes.
+
+Section links open the requested page and scroll after it mounts. Older
+`services` links open MCP, and `developer-tools` links open General. A missing
+section does not redirect to an unrelated control. Closing Settings cancels a
+pending section scroll.
 
 ### Task-based settings presentation
 

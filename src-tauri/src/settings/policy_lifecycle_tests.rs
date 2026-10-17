@@ -170,7 +170,7 @@ async fn approval_cannot_cross_connection_with_identical_content() {
         .proposal_id
         .unwrap();
     assert_eq!(
-        answer(state, caller, id.clone(), true).await["confirmed"],
+        answer(state.clone(), caller, id.clone(), true).await["confirmed"],
         json!(true)
     );
     let other = Caller::http("owner-two".into(), true);

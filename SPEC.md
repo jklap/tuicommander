@@ -1116,6 +1116,10 @@ The normal Rust suspension path persists `reason: "idle_hibernate"` before endin
 
 GitHub Work B8: registered accounts bind core B6 review threads and B7 actions through account-scoped PluginHost methods. The Rust adapter enforces net:http, on-disk GitHub provider consent and matching account/PR identity, then uses existing core policy. Projects move/clear coverage uses recorded public reads and documented mutation contracts; live writes and desktop verification remain pending.
 
+## Settings transport cutover (#1787-4778)
+
+MCP settings, POST /settings/action and IPC settings_action share generated Rust requests and owner dispatch. Config has no MCP compatibility alias. The complete owner inventory permits transactions. Typed workflows cover GitHub, Ego provider auth, upstream credentials, connection credentials, Telegram and available voice assets. Owner choice refresh uses explicit target/store/paths; describe remains cache-only. Live frontend refresh remains separate dependent work.
+
 ## Settings choice discovery (#1908-c327)
 
 Internal owner requests now support cached dynamic-choice describe and explicit refresh, scoped by target and revision. Notification output devices reuse the UI enumeration owner and preserve unavailable versus successful empty results. General settings transport publication remains separate.
@@ -1143,7 +1147,7 @@ Internal voice settings refresh resolves devices, model state, installed voices 
 
 ### Settings restyle foundation (1936-0caa)
 
-The approved 2026-10-16 Settings restyle starts with a stable 1136px maximum shell and shared presentation-only vocabulary. Existing lazy mounting, persisted navigation width, configuration sources and save boundaries remain unchanged. Individual page adoption is separate work.
+The approved 2026-10-16 Settings restyle uses a stable 1136px maximum shell and shared presentation-only vocabulary across Application, Workspace, AI, Integrations, loaded plugin pages and repository pages. Existing lazy mounting, persisted navigation width, configuration sources and save boundaries remain unchanged. Search uses static and loaded-plugin catalogues without mounting all pages; expert results reveal the requested control without changing the persisted Expert preference. Section links wait for the selected page to mount and retain retired-tab mappings. Plugin loading/read failures stay inside the editor, and unloaded plugins cannot retain editors or search entries. S10 adds integrated boundary coverage and documentation; Commander/Paper visual comparison remains a separate capture gate.
 
 ### Terminal ego provider recovery
 

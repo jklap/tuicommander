@@ -5196,6 +5196,95 @@ async fn design_mode_meta_discovery_is_scoped_to_the_armed_session() {
     assert_eq!(schema["error"], "Design Mode not armed for this session");
 }
 
+// Catches: generated settings requests cannot reach the published dispatcher.
+#[tokio::test]
+async fn published_request_executes() {
+    let state = test_state();
+    state.config.write().settings_mcp_enabled = true;
+    state.config.write().disabled_native_tools.clear();
+    let reply = handle_mcp_tool_call(
+        &state,
+        "127.0.0.1:12345".parse().unwrap(),
+        "settings",
+        &serde_json::json!({"action":"describe","limit":1}),
+        None,
+    )
+    .await;
+    assert!(reply["fields"].is_array(), "{reply}");
+}
+
+// Catches: the collapsed call_tool path bypasses disabled settings access.
+#[tokio::test]
+async fn disabled_meta_call_denied() {
+    let state = test_state();
+    state.config.write().disabled_native_tools = vec!["settings".into()];
+    let reply = handle_mcp_tool_call(
+        &state,
+        "127.0.0.1:12345".parse().unwrap(),
+        "call_tool",
+        &serde_json::json!({"tool_name":"settings","arguments":{"action":"describe"}}),
+        None,
+    )
+    .await;
+    assert!(reply.to_string().contains("disabled"), "{reply}");
+}
+
+// Catches: the removed config action survives as a compatibility path.
+#[tokio::test]
+async fn old_config_unknown() {
+    let state = test_state();
+    state.config.write().disabled_native_tools.clear();
+    let reply = handle_mcp_tool_call(
+        &state,
+        "127.0.0.1:12345".parse().unwrap(),
+        "config",
+        &serde_json::json!({"action":"get"}),
+        None,
+    )
+    .await;
+    assert!(
+        reply["error"]
+            .as_str()
+            .is_some_and(|error| error.contains("Unknown tool")),
+        "{reply}"
+    );
+}
+
+// Catches: authenticated HTTP and IPC describe using different request wrappers or catalogues.
+#[tokio::test]
+async fn settings_http_and_native_describe_agree() {
+    use axum::{body::Body, http::Request};
+    use tower::ServiceExt;
+    let state = test_state();
+    let request = serde_json::json!({"action":"describe","store":"prompts","limit":1});
+    let expected = crate::settings::api::execute(
+        &state,
+        request.clone(),
+        crate::settings::policy::Caller::native(),
+    )
+    .await;
+    let app = crate::mcp_http::build_router(state, false, true);
+    let response = app
+        .oneshot(
+            Request::post("/settings/action")
+                .header("content-type", "application/json")
+                .extension(axum::extract::ConnectInfo(
+                    "127.0.0.1:12345".parse::<std::net::SocketAddr>().unwrap(),
+                ))
+                .body(Body::from(request.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), axum::http::StatusCode::OK);
+    let bytes = axum::body::to_bytes(response.into_body(), 1_000_000)
+        .await
+        .unwrap();
+    let actual: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(actual, expected);
+    assert!(actual["fields"].is_array());
+}
+
 /// Catches: force retry writing to a non-ego tab or sending more than one submitting Enter.
 #[cfg(unix)]
 #[test]
@@ -5246,4 +5335,194 @@ fn provider_recovery_force_retry_targets_only_recovering_ego() {
     assert_eq!(result["submitted"], true, "{result}");
     let written = bytes.lock().unwrap();
     assert_eq!(written.as_slice(), b"\x15/retry\r");
+}
+
+// Catches: published settings mutations and readback selecting different owner state by transport.
+#[tokio::test]
+async fn settings_mcp_patch_http_and_native_read_agree() {
+    use axum::{body::Body, http::Request};
+    use tower::ServiceExt;
+    let dir = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+    let _guard = crate::config::set_config_dir_override(dir.path().to_path_buf());
+    let state = test_state();
+    state.config.write().settings_mcp_enabled = true;
+    state.config.write().disabled_native_tools.clear();
+    let read = serde_json::json!({"action":"get","target":{"kind":"machine"},"store":"notifications","paths":["/volume"]});
+    let before = crate::settings::api::execute(
+        &state,
+        read.clone(),
+        crate::settings::policy::Caller::native(),
+    )
+    .await;
+    let patch = serde_json::json!({"action":"patch","target":{"kind":"machine"},"store":"notifications",
+        "expectedRevision":before["revision"],"operations":[{"op":"set","path":"/volume","value":0.25}]});
+    let result = handle_mcp_tool_call(
+        &state,
+        "127.0.0.1:12345".parse().unwrap(),
+        "settings",
+        &patch,
+        None,
+    )
+    .await;
+    assert_eq!(result["persisted"], true, "{result}");
+    let native = crate::settings::api::execute(
+        &state,
+        read.clone(),
+        crate::settings::policy::Caller::native(),
+    )
+    .await;
+    assert_eq!(native["values"]["/volume"]["stored"], 0.25, "{native}");
+    let mcp = handle_mcp_tool_call(
+        &state,
+        "127.0.0.1:12345".parse().unwrap(),
+        "settings",
+        &read,
+        None,
+    )
+    .await;
+    assert_eq!(mcp, native);
+    let app = crate::mcp_http::build_router(state, false, true);
+    let response = app
+        .oneshot(
+            Request::post("/settings/action")
+                .header("content-type", "application/json")
+                .extension(axum::extract::ConnectInfo(
+                    "127.0.0.1:12345".parse::<std::net::SocketAddr>().unwrap(),
+                ))
+                .body(Body::from(read.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), axum::http::StatusCode::OK);
+    let bytes = axum::body::to_bytes(response.into_body(), 1_000_000)
+        .await
+        .unwrap();
+    let http: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(http, native);
+}
+
+async fn settings_transport_request(
+    state: &Arc<AppState>,
+    request: serde_json::Value,
+    http_port: Option<u16>,
+) -> serde_json::Value {
+    use axum::{body::Body, http::Request};
+    use tower::ServiceExt;
+    let Some(port) = http_port else {
+        return crate::settings::api::execute(
+            state,
+            request,
+            crate::settings::policy::Caller::native(),
+        )
+        .await;
+    };
+    let app = crate::mcp_http::build_router(state.clone(), false, true);
+    let response = app
+        .oneshot(
+            Request::post("/settings/action")
+                .header("content-type", "application/json")
+                .extension(axum::extract::ConnectInfo(std::net::SocketAddr::from((
+                    [127, 0, 0, 1],
+                    port,
+                ))))
+                .body(Body::from(request.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), axum::http::StatusCode::OK);
+    let bytes = axum::body::to_bytes(response.into_body(), 1_000_000)
+        .await
+        .unwrap();
+    serde_json::from_slice(&bytes).unwrap()
+}
+
+async fn gated_settings_transport_roundtrip(http: bool, approved: bool, changed_replay: bool) {
+    let dir = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+    let _guard = crate::config::set_config_dir_override(dir.path().to_path_buf());
+    let state = test_state();
+    let port = http.then_some(12345);
+    let read = serde_json::json!({"action":"get","target":{"kind":"machine"},
+        "store":"app","paths":["/services/auth/username"]});
+    let before = settings_transport_request(&state, read.clone(), port).await;
+    let patch = serde_json::json!({"action":"patch","target":{"kind":"machine"},"store":"app",
+        "expectedRevision":before["revision"],"operations":[{"op":"set",
+        "path":"/services/auth/username","value":"approved-transport-user"}]});
+    let proposal = settings_transport_request(&state, patch.clone(), port).await;
+    assert_eq!(
+        proposal["error"]["code"], "confirmation_required",
+        "{proposal}"
+    );
+    let mut confirmed = patch.clone();
+    confirmed["approval"] = proposal["error"]["proposalId"].clone();
+    confirmed["confirm"] = serde_json::json!(true);
+    if changed_replay {
+        confirmed["operations"][0]["value"] = serde_json::json!("unapproved-transport-user");
+    }
+    let mut events = state.event_bus.subscribe();
+    let host = state.clone();
+    let mut operation = tokio::spawn(async move {
+        settings_transport_request(&host, confirmed, http.then_some(23456)).await
+    });
+    loop {
+        let event = tokio::select! {
+            event = events.recv() => event.unwrap(),
+            result = &mut operation => panic!("gated edit ended before human confirmation: {:?}", result.unwrap()),
+        };
+        if let crate::state::AppEvent::McpConfirm { request_id, .. } = event {
+            assert_eq!(
+                settings_transport_request(&state, read.clone(), port).await,
+                before
+            );
+            crate::mcp_http::resolve_mcp_confirm(&state, &request_id, approved);
+            break;
+        }
+    }
+    let result = operation.await.unwrap();
+    if !approved || changed_replay {
+        assert_eq!(result["error"]["code"], "confirmation_denied", "{result}");
+        assert_eq!(settings_transport_request(&state, read, port).await, before);
+        return;
+    }
+    assert_eq!(result["persisted"], true, "{result}");
+    let after = settings_transport_request(&state, read, port).await;
+    assert_eq!(
+        after["values"]["/services/auth/username"]["stored"],
+        "approved-transport-user"
+    );
+    let mut replay = patch;
+    replay["approval"] = proposal["error"]["proposalId"].clone();
+    assert_eq!(
+        settings_transport_request(&state, replay, port).await["error"]["code"],
+        "confirmation_denied"
+    );
+}
+
+// Catches: gated HTTP edits cannot complete or bind approval to an ephemeral TCP source port.
+#[tokio::test]
+async fn settings_gated_http_edit_confirms_and_persists() {
+    gated_settings_transport_roundtrip(true, true, false).await;
+}
+
+// Catches: the native settings facade cannot complete gated edits through the human channel.
+#[tokio::test]
+async fn settings_gated_native_edit_confirms_and_persists() {
+    gated_settings_transport_roundtrip(false, true, false).await;
+}
+
+// Catches: a declined human response still persisting an HTTP or native settings edit.
+#[tokio::test]
+async fn settings_gated_declined_edit_does_not_persist() {
+    for http in [true, false] {
+        gated_settings_transport_roundtrip(http, false, false).await;
+    }
+}
+
+// Catches: confirming the original preview authorizing a different HTTP or native edit.
+#[tokio::test]
+async fn settings_gated_changed_replay_does_not_persist() {
+    for http in [true, false] {
+        gated_settings_transport_roundtrip(http, true, true).await;
+    }
 }

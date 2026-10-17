@@ -1435,6 +1435,11 @@ async fn wait_for_tunnel(state: &Arc<AppState>, tunnel_id: &str) -> Result<(), S
 /// configured, and the reason `disconnect` on an unknown id used to conjure one
 /// and announce it.
 pub(crate) fn teardown(state: &Arc<AppState>, id: &str) {
+    retire_runtime(state, id);
+}
+
+/// Return the retirement generation so a credential reconnect cannot undo a later disconnect.
+fn retire_runtime(state: &Arc<AppState>, id: &str) -> (u64, bool) {
     // The bump and the removal are one critical section, under the same mutex
     // `claim_and_supervise` holds across its generation read and its insert.
     // Separately they interleave: a supervisor that read its generation before
@@ -1445,17 +1450,40 @@ pub(crate) fn teardown(state: &Arc<AppState>, id: &str) {
     // with no entry in the map yet, and retiring its generation is the only
     // thing that stops it. Bumping only when an entry exists would miss exactly
     // the task that is about to create one.
-    let removed = {
+    let (generation, removed) = {
         let _lifecycle = state.remote.lifecycle();
         state.remote.retire_generation(id);
-        state.remote.entries.remove(id)
+        (state.remote.generation(id), state.remote.entries.remove(id))
     };
     // Outside the lock: nothing in `dispose` decides whether an entry exists,
     // and it aborts tasks, stops a tunnel and publishes.
     let Some((_, entry)) = removed else {
-        return;
+        return (generation, false);
     };
     dispose(state, id, entry);
+    (generation, true)
+}
+
+/// Retire only the credential's runtime. Reconnect an active connection through
+/// the normal claimed attempt; a disconnected connection stays disconnected.
+/// Claim synchronously so a later Disconnect can retire the queued attempt.
+pub(crate) fn credentials_changed(state: &Arc<AppState>, id: &str) {
+    let (generation, active) = retire_runtime(state, id);
+    if !active {
+        return;
+    }
+    let Ok(connection) = load_connection(state, id) else {
+        return;
+    };
+    let Some(connecting) = claim_and_supervise(state, id, generation) else {
+        return;
+    };
+    let state = state.clone();
+    let id = id.to_owned();
+    tokio::spawn(async move {
+        // The attempt publishes its own safe status/error and obeys generation retirement.
+        let _ = attempt(&state, &id, connection, connecting, generation).await;
+    });
 }
 
 /// Delete-specific teardown: clear local runtime state immediately, then make
@@ -1866,6 +1894,22 @@ mod tests {
     use super::*;
     use axum::http::StatusCode;
     use std::future::Future;
+
+    // Catches: a queued credential reconnect undoing a later explicit Disconnect.
+    #[tokio::test]
+    async fn credential_reconnect_cannot_revive_retired_generation() {
+        let state = test_state();
+        state.remote.force_connected_for_test(
+            "fixture",
+            "http://not-contacted.invalid",
+            Some("old"),
+        );
+        let (generation, active) = retire_runtime(&state, "fixture");
+        assert!(active);
+        teardown(&state, "fixture");
+        assert!(claim_and_supervise(&state, "fixture", generation).is_none());
+        assert!(state.remote.snapshot().is_empty());
+    }
 
     // Catches: a chunk boundary inside the daemon's "Untrusted Host" response
     // misdirects the user to permissions instead of the rejected host name.

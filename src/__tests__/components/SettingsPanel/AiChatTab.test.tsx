@@ -1,5 +1,6 @@
 import { cleanup, fireEvent, render, screen } from "@solidjs/testing-library";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { appLogger } from "../../../stores/appLogger";
 import { cleanupToasts } from "../../helpers/toasts";
 import "../../mocks/tauri";
 
@@ -413,7 +414,22 @@ describe("AiChatTab — no ego executable control", () => {
 	});
 });
 
-afterEach(() => {
+beforeEach(() => {
+	vi.spyOn(appLogger, "error").mockImplementation(() => {});
+});
+
+afterEach(async () => {
 	cleanup();
 	cleanupToasts();
+	await Promise.resolve();
+	// Provider transport-failure cases and the omitted perimeter/activity
+	// responses have known diagnostics. Do not let an unrelated error pass.
+	for (const [, message] of vi.mocked(appLogger.error).mock.calls) {
+		expect([
+			"ego command failed without an ego error",
+			"ego perimeter request failed",
+			"Failed to save activity",
+		]).toContain(message);
+	}
+	vi.mocked(appLogger.error).mockRestore();
 });

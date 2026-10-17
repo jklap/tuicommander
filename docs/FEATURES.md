@@ -3117,6 +3117,10 @@ Hibernation requires an idle agent and a verified resume session in its saved pr
 
 The normal Rust suspension path persists `reason: "idle_hibernate"` before ending the PTY. Opening the tab, submitting input or sending peer mail uses the shared wake path. Storage or resume-verification failures leave the live session intact.
 
+## Settings transport cutover (#1787-4778)
+
+The generated settings contract replaces the legacy MCP config tool and also serves HTTP and IPC. Trusted UI opt-in is independent of legacy config enablement. The resolved inventory enables owner transactions and typed workflows, including connection credential reconciliation scoped to one runtime. The inventory gate remains enforced for future additions.
+
 Mobile outage recovery: one connection banner offers immediate retry, automatic session recovery refreshes failed view loads, and retained mobile views preserve drafts without desktop restart advice (#1930-f4c2).
 
 Settings owner validation covers typed shortcut records and bounded pane geometry. Geometry references existing groups; runtime tab membership and focus are not configurable settings (#1914-cdf6).
@@ -3145,7 +3149,7 @@ AI Chat can pin repository context per conversation. A separate composer control
 
 ### Settings layout foundation
 
-Settings shares a responsive shell (1136px maximum, 80vh height) and reusable theme-aware cards, rows, status summaries and scoped action presentation. Existing settings behavior is unchanged; page-by-page adoption follows separately.
+Settings shares a responsive shell (1136px maximum, 80vh height) and reusable theme-aware cards, rows, status summaries and scoped action presentation across global, plugin and repository pages. Catalogue search preserves lazy page loading and reveals expert matches without changing Expert Mode. Section links retain their page mappings; plugin loading, read failures and unloads remain local to their scoped editors. Existing settings ownership and save behavior are unchanged.
 
 Pocket spoken replies keep a missing selected voice visible and downloadable; while its download is absent, a ready bundle speaks with its own language default.
 

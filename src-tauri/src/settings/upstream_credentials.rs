@@ -41,10 +41,6 @@ pub struct UpstreamCredentials {
     state: Arc<AppState>,
 }
 impl UpstreamCredentials {
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "constructed by settings transport wiring")
-    )]
     pub(crate) fn new(state: Arc<AppState>) -> Self {
         Self { state }
     }
