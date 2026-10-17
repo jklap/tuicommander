@@ -4833,3 +4833,44 @@ async fn mobile_waiting_reply_preserves_composer_safety_guards() {
         }
     }
 }
+
+/// Catches losing a separator in the actual MCP screen and finalized-history reads.
+#[test]
+fn softwrap_1977_session_output_preserves_recorded_spaces() {
+    let state = test_state();
+    let sid = "softwrap-1977".to_string();
+    let capture = crate::pty_capture::decode_capture(include_bytes!(
+        "../fixtures/agent_prompts/softwrap-spaces-1977-24.tcap"
+    ))
+    .unwrap();
+    let (rows, cols) = capture.geometry.unwrap();
+    let mut vt = crate::state::VtLogBuffer::new(rows, cols, 100);
+    let mut raw = Vec::new();
+    for record in capture.records {
+        raw.extend_from_slice(&record.data);
+        vt.process(&record.data);
+    }
+    let expected = String::from_utf8(raw).unwrap().replace("\r\n", "\n");
+    state
+        .grid
+        .vt_log_buffers
+        .insert(sid.clone(), parking_lot::Mutex::new(vt));
+    for scroll in [false, true] {
+        if scroll {
+            state
+                .grid
+                .vt_log_buffers
+                .get(&sid)
+                .unwrap()
+                .lock()
+                .process(b"\r\n1\r\n2\r\n3\r\n4\r\n5\r\n6\r\n7\r\n8");
+        }
+        let response = handle_session(
+            &state,
+            &serde_json::json!({"action": "output", "session_id": sid}),
+            None,
+        );
+        let data = response["data"].as_str().expect("MCP text output");
+        assert!(data.starts_with(&expected), "scroll={scroll}: {data:?}");
+    }
+}

@@ -298,15 +298,19 @@ export function CommandInput(props: CommandInputProps) {
 	});
 
 	function requestInputKey(key: ComposerInputKey) {
-		if (atomicReply() || props.sessionExists === false) return;
-		const request =
-			key === "Tab"
+		if (props.sessionExists === false) return;
+		const data = key === "Tab" ? "\t" : key === "ArrowUp" ? "\x1b[A" : "\x1b[B";
+		// A waiting agent can own a picker without a parsed choice_prompt. Keep
+		// navigation in the PTY, not in the free-text answer or shell history.
+		const request = atomicReply()
+			? null
+			: key === "Tab"
 				? (syncedText ?? restoredPartial).length > 0
 					? { kind: "completion" as const, armed: true }
 					: null
 				: { kind: "history" as const, armed: false };
 		inputRequest = request;
-		void writePty(key === "Tab" ? "\t" : key === "ArrowUp" ? "\x1b[A" : "\x1b[B").then(
+		void writePty(data).then(
 			() => {
 				if (request && inputRequest === request) {
 					// DEFERRED (2026-10-10): input_line has no causal request ID.

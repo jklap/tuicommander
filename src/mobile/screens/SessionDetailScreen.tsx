@@ -270,9 +270,9 @@ export function SessionDetailScreen(props: SessionDetailScreenProps) {
 				<Show when={voice.available()}>
 					<button
 						type="button"
-						class={styles.headerAction}
+						class={`${styles.headerAction} ${styles.secondaryAction}`}
 						classList={{ [styles.voiceActive]: voice.armed() }}
-						aria-label={voice.armed() ? "Stop voice conversation" : "Start voice conversation"}
+						aria-label={voice.armed() ? "Stop voice call" : "Start voice call"}
 						aria-pressed={voice.armed()}
 						disabled={browserDictating()}
 						onClick={() => void voice.toggle()}
@@ -287,14 +287,13 @@ export function SessionDetailScreen(props: SessionDetailScreenProps) {
 							stroke-linecap="round"
 							aria-hidden="true"
 						>
-							<rect x="9" y="3" width="6" height="11" rx="3" />
-							<path d="M5 11a7 7 0 0 0 14 0M12 18v3" />
+							<path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72c.13.96.36 1.9.69 2.79a2 2 0 0 1-.45 2.11L8.09 9.89a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45c.89.33 1.83.56 2.79.69A2 2 0 0 1 22 16.92z" />
 						</svg>
 					</button>
 				</Show>
 				<button
 					type="button"
-					class={styles.headerAction}
+					class={`${styles.headerAction} ${styles.secondaryAction}`}
 					aria-label={`Session tasks, ${sessionState()?.active_sub_tasks ?? 0} active`}
 					onClick={() => setHeaderPanel("tasks")}
 				>
@@ -354,6 +353,31 @@ export function SessionDetailScreen(props: SessionDetailScreenProps) {
 			</header>
 			<Show when={moreOpen()}>
 				<div class={styles.overflow}>
+					<Show when={voice.available()}>
+						<button
+							type="button"
+							class={styles.phoneAction}
+							aria-pressed={voice.armed()}
+							disabled={browserDictating()}
+							onClick={() => {
+								setMoreOpen(false);
+								void voice.toggle();
+							}}
+						>
+							{voice.armed() ? "Stop voice conversation" : "Start voice conversation"}
+						</button>
+					</Show>
+					<button
+						type="button"
+						class={styles.phoneAction}
+						aria-label={`Tasks, ${sessionState()?.active_sub_tasks ?? 0} active`}
+						onClick={() => {
+							setMoreOpen(false);
+							setHeaderPanel("tasks");
+						}}
+					>
+						Tasks <span>{sessionState()?.active_sub_tasks ?? 0}</span>
+					</button>
 					<button
 						type="button"
 						onClick={() => {
@@ -454,6 +478,11 @@ export function SessionDetailScreen(props: SessionDetailScreenProps) {
 				</div>
 			</Show>
 
+			<Show when={chat.available() && !chat.active()}>
+				<button type="button" class={styles.diffReadingAction} onClick={chat.openChat}>
+					Read file edits in Chat
+				</button>
+			</Show>
 			<div class={styles.outputArea}>
 				<chat.View />
 				<OutputView

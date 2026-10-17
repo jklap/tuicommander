@@ -202,6 +202,13 @@
   --bg-highlight: #37373d;
   --fg-primary: #cccccc;
   --fg-secondary: #a0a0a0;
+  /* Settings copy must remain readable on elevated and highlighted surfaces. */
+  --success-marker: var(--success);
+  --settings-on-accent: var(--text-on-accent);
+  --identity-on-light: #000000;
+  --identity-on-dark: #ffffff;
+  --settings-foreground: color-mix(in srgb, var(--fg-primary) 30%, var(--fg-secondary));
+  --link-foreground: color-mix(in srgb, var(--accent) 85%, var(--fg-primary));
   --fg-muted: #9aa1a9;
   --accent: #59a8dd;
   --accent-hover: #7abde5;
@@ -213,7 +220,8 @@
   --error: #ef4444;
   --changes: #d29922;
   --urgent: #ffd700;
-  --merged: #a371f7;
+  --merged: #ae83ff;
+  --text-on-merged: #000000;
   --unseen: #c084fc;
   /* Deleted-line counts. Lighter than --error so a negative diff does not read
      as an alarm, and legible at 10px (#ef4444 on --bg-tertiary is 3.65:1). */
@@ -317,6 +325,12 @@ html {
    colors are picked against a dark UI; shade them for repo names on white
    (getRepoTextColor). */
 [data-theme="vscode-light"] {
+  /* These semantic tokens also label branch/PR markers, not just swatches. */
+  --success-marker: #176f30;
+  --attention: #895003;
+  --changes: #805900;
+  --merged: #7540b0;
+  --text-on-merged: #ffffff;
   --diff-del: var(--error);
   --repo-text-shade: 40%;
 }
@@ -487,3 +501,6 @@ button:focus-visible {
   /* Touch devices have no hover — never show the bubble. */
   [data-tooltip]:hover::after { opacity: 0; }
 }
+
+/* Commander action fills need dark normal-sized copy, not white. */
+[data-theme="commander"] { --settings-on-accent: #000000; }

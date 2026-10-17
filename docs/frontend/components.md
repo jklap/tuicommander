@@ -222,6 +222,9 @@ session mounted and opens `FilesScreen` with the entry’s original checkout roo
 scrolled up or touching the output, it retains the loaded rows instead of
 evicting the content being read. Older-history pages extend that reading window.
 The next log update after following resumes restores the 500-line tail.
+The backend preserves the full Claude `/resume` modal in both the initial HTTP
+screen and log-WebSocket frames, including session rows and no-match results;
+the mobile view does not reconstruct the picker from transcript text.
 
 Terminal ego single-choice questions use the header question action to toggle the existing `ChoicePromptOverlay`. Full titles and option labels wrap within its scrollable overlay. Opening is explicit; the terminal keeps its full height. The composer uses the backend navigation selection mode and its existing in-flight guard to submit only once.
 
@@ -284,6 +287,9 @@ a queued agent message can look like prompt input. A Tab request from the
 composer or keybar accepts one strict extension of a nonempty local draft.
 Explicit keybar Up/Down accepts one history replacement after its PTY write is
 acknowledged, including an empty line, and updates the edit delta baseline.
+When a managed agent awaits an answer without parsed choices, keybar Tab and
+Up/Down still go to the PTY so an open picker can navigate. These keys do not
+import history into the local answer draft.
 Typing, sending, Escape, or a failed write cancels the request. A history response
 arriving before the HTTP acknowledgement is dropped, causing a missed recall.
 Because snapshots have no causal request ID, an unrelated delayed snapshot after
@@ -775,6 +781,8 @@ The dev-only `fields/preview.html` mounts the actual controls for visual checks.
 The Precheck section includes a default-off stdout context checkbox. It edits
 `precheck.inject_output` through the existing store and shared save API, without
 changing prompt text. Disabling and re-enabling the precheck resets the flag.
+
+The mobile session header uses a handset icon and Start/Stop voice call labels for the two-way voice control. The composer dictation button keeps its microphone icon.
 
 ### Mobile composer browser dictation
 

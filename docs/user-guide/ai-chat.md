@@ -310,10 +310,15 @@ Repository names in linked worktree contexts use the registered parent repositor
 
 ## Telegram replies
 
-Ask ego to call `telegram register` from this conversation after Telegram is
-configured in Settings. Registration is voluntary and lasts only while its MCP
-identity remains live. No PTY is needed. Incoming allowlisted phone text arrives
-through the normal peer inbox and TUIC wakes an idle conversation.
+After Telegram is configured in Settings, allowlisted phone text reaches the
+latest-connected live AI Chat agent when no agent has explicitly registered.
+With several live chats, connection order determines the fallback, not the
+selected tab. An agent can call `telegram register` to take over the channel;
+that registration has priority until it ends or another agent replaces it.
+Registration lasts only while its MCP identity remains live. No PTY is needed.
+Incoming phone text arrives through the normal peer inbox and TUIC wakes an idle
+conversation. The no-agent reply appears only when neither a registered agent
+nor a live AI Chat agent is available.
 
 The phone shows a receipt reaction, then a working reaction once the mail is
 read and a new turn starts. Assistant message chunks stream into the ephemeral

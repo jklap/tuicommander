@@ -788,6 +788,7 @@ Some frontend-only stores persist to localStorage:
 - [x] The conversation holds one language end to end — Whisper's detection picks the voice and the model is asked to answer in it
 - [x] Barge-in — WebRTC AEC3 (`echo.rs`) keeps our own reply out of the segmenter; the user talking stops playback and opens the next turn (measured: 200 ms stop latency — hush waits for `min_speech_ms` of speech so residual echo cannot stop a reply — 0 false triggers)
 - [x] Download progress and utterance state are pushed on `/events` as well as to the desktop window, from one serialized payload per event; utterance transitions come from the render thread that performs them, through an observer port, so `finished` and `interrupted` reach a client that never polls
+- [x] Mobile session headers distinguish the two-way voice call with a handset icon and call labels; composer dictation keeps its microphone (#1979-89e1).
 - [x] A browser tab is its own microphone and speaker over one WebSocket (`dictation/browser.rs`), so a remote client holds a whole conversation on its own hardware. Neither owner falls back to the other's devices, a client that vanishes disarms on the same path as a dead local device, and the frontend half stays transport only — segmentation, the activation phrase and the hold-back all remain in Rust
 
 ### Completed (P2)
@@ -847,7 +848,7 @@ excluded from this protocol and local mail survives hub loss.
 
 ## Telegram channel implementation status (#1438-79b4)
 
-The headless daemon provides native Telegram mail, correlated drafts, exact final replies, done/blocked notices and opaque callbacks. Any MCP-bound TUIC agent opts in with `telegram register`; one volatile registration replaces the previous agent with one mail notice. Registration ends on MCP session end, PTY close or agent exit while its shell remains. No configured agent UUID is required. Allowed inbound without an agent replies "No agent is listening. Ask an agent in TUICommander to register for Telegram." and drops; strangers stay silent. Only the cursor persists, so restart may lose unread mail and requires registration again. Single-destination sends and private token/allowlist authorization remain. See [Telegram channel](docs/design/telegram-channel.md). Live mint deployment remains pending.
+The headless daemon provides native Telegram mail, correlated drafts, exact final replies, done/blocked notices and opaque callbacks. Any MCP-bound TUIC agent opts in with `telegram register`; one volatile registration replaces the previous agent with one mail notice. Registration ends on MCP session end, PTY close or agent exit while its shell remains. No configured agent UUID is required. Without explicit registration, allowed inbound reaches the latest-connected live AI Chat peer; connection order, not selected tab, resolves multiple live chats. Explicit registration always wins. Allowed inbound with neither kind of agent replies "No agent is listening. Ask an agent in TUICommander to register for Telegram." and drops; strangers stay silent. Only the cursor persists, so restart may lose unread mail and requires registration again. Single-destination sends and private token/allowlist authorization remain. See [Telegram channel](docs/design/telegram-channel.md). Live mint deployment remains pending.
 
 Workflow safety: pinned checks own process trees and stop on timeout, run cancellation, and shutdown. Operator decisions and workflow policy mutations require host Human authority (desktop IPC or credential-authenticated HTTP). Workflow plan Done requires current integration evidence for every approved story; stale canonical refs reopen its derived state until recertification.
 
@@ -1098,6 +1099,13 @@ GitHub provides a full normal-comment count, so an increase is detected even bey
 Shared wake (B6, #1807-4f1f): `session_wake::ensure_live` serializes durable resume with suspension. Tab open, submit and peer mail use this path; input waits in the existing ready-window queue. Failed creation retains the durable tab. IPC `resume_session` maps to `POST /sessions/wake`; MCP list/status expose retained sessions as `hibernated`.
 
 ## Mobile Claude terminal Chat view
+
+Phone sessions offer a direct **Read file edits in Chat** action while CLI is
+active. The terminal stays mounted. Chat edit tool disclosures render bounded
+old/new blocks, preserve tabs with four-space tab stops and scroll long lines
+horizontally. Claude Edit projection retains diff content through tool completion;
+failed calls remain labelled failed, not represented as applied edits.
+
 
 Claude PTY sessions offer CLI / Chat in the existing mobile header. The shared
 `TerminalChatTranscript` owns rendering, visibility-paused keepalive and backend

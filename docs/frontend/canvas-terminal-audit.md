@@ -335,3 +335,7 @@ Native terminal ego provider recovery is carried in the backend session snapshot
 not inferred from canvas rows. Tab/status-bar presentation uses that snapshot;
 canvas rendering and input routing remain unchanged. Force retry uses the normal
 agent-aware command submission helper.
+
+### Soft-wrap text fidelity
+
+Backend selection and logical-row extraction retain real spaces at soft-wrap margins. Mobile CLI log rendering uses serialized `wrapped` boundaries rather than word-length guesses when metadata is present. Older daemon rows without this field retain the existing prose reflow fallback. This changes extracted text, not canvas layout or styling.

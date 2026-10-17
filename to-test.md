@@ -2,6 +2,20 @@
 
 - [ ] After Boss manually restarts `make dev` or installs `make build`, answer an ego free-text question from the phone, both with its card open and with the ordinary composer. Type an answer before opening the card, then open it and Send; confirm the complete answer reaches the agent and it continues. In a fresh ego session, confirm the card shows only the question, not the startup banner or shortcut help. Use a recognized picker to select an option, then verify a typed prose reply to that picker explains the selection requirement and keeps the draft. No live desktop was restarted.
 - [ ] [VISUAL] After the Mac unlocks, capture the mobile free-text question, picker selection and refused-answer toast at phone width. Supplied incident screenshots were read; no new screenshots were taken while the screen was locked. No CSS or layout change is part of this fix.
+## Mobile voice handset (1979-89e1)
+
+- [ ] [VISUAL] After the Mac unlocks, capture the mobile session header in Commander dark and Paper light. Include the idle handset, armed handset, and unchanged composer dictation microphone. Confirm the handset is readable at phone and iPad sizes. The screen was locked during implementation; no visual capture is claimed.
+
+## Readable mobile pushes (1978-9cfe) — Rust restart required
+
+- [ ] After Boss restarts `make dev` or installs `make build`, receive an awaiting/progress push from a named session and an unnamed agent session. Confirm readable names and progress text, no UUID/tool JSON in the displayed body, and that tapping opens the correct session. No live desktop restart or phone push was performed by this peer.
+## Soft-wrap text reconstruction (1977-063c) — Rust restart required
+
+- [ ] After Boss manually restarts `make dev` or installs `make build`, compare mobile CLI output and MCP session text with raw output for `unrestricted filesystem access` at 24 columns and a mid-word wrap at 64 columns. Confirm spaces, copied selection, ego question labels and explicit hard line breaks. At four columns, `abc界x` must copy and read as `abc界x`, without a space before `界`. The live desktop was not restarted by this peer.
+## Mobile Claude pickers (1971-5834 / 1972-128e) — Rust restart required
+
+- [ ] After Boss manually restarts `make dev` or installs `make build`, open a throwaway Claude terminal in the mobile CLI view. Verify `/resume` shows its session rows and search results, then use key-bar Up/Down and Enter to resume one. The awaiting AskUserQuestion arrows must move selection without changing a local answer draft. The isolated headless regression and capture evidence do not load the Rust fix into the running desktop app.
+- [ ] Capture mobile screenshots of the populated `/resume` list and a moved AskUserQuestion selection after macOS is unlocked. The coordinator authorized skipping these captures while the screen was locked; no screenshot was claimed.
 
 ## Settings restyle integration (1945-a78d)
 
@@ -2403,3 +2417,10 @@ Needs an iPhone (iOS 16.4+, 18.4+ preferred), the desktop TUICommander running a
 
 - [ ] After Boss manually restarts `make dev` or installs `make build`, open ego single-choice, multiple-choice, and free-text questions from a narrow mobile terminal. Confirm **Input** and the header question action for each. Multiple-choice taps must toggle without submitting until **Submit answers**; free-text must show its full question above the reply composer. The current running backend cannot load this Rust change through hot reload.
 - [ ] Capture a 360×800 screenshot of each recorded ego question card after the screenshot environment is available. The 1973 agent verified DOM layout from actual Rust replay snapshots, but agent-browser reported a locked macOS screen and timed out; bundled headless Chrome also timed out, including an `about:blank` probe. This is not a completed visual check.
+
+## Telegram AI Chat fallback (#1983-1b47)
+
+- [ ] After Boss restarts the Rust backend (`make dev` or a release rebuild), send an allowed Telegram message with AI Chat connected and no explicit Telegram registration. Check receipt, delivery to ego and its final reply on the phone. Connect two chats: the latest-connected chat is the fallback, not the selected tab. Connect the second chat while the first is answering phone mail: the first reply must still arrive, and later mail must reach the second chat. Register another agent: it must retain ownership. With neither registration nor a connected AI Chat, check the no-agent instruction. This needs Boss's restart; Rust does not hot-reload.
+- [ ] [VISUAL] #1981-0caf: Capture the session header at 390 px, 430 px, and 834 px in Commander and Paper. Confirm COORDINATOR is readable, CLI/Chat stays direct, phone voice/tasks are in More, and tablet controls stay direct. The local headless capture timed out before producing images; the Mac screen was locked.
+
+- [ ] [VISUAL] #1982-ee68: After the backend rebuild, capture the same tab-separated Claude Edit in Chat at 390 px in Commander and Paper. Expand tool activity and its edit; confirm full-width old/new backgrounds, aligned columns and horizontal scrolling. From phone CLI tap Read file edits in Chat, then CLI; verify terminal history and draft remain intact, with CLI following the latest output. Includes Rust projection changes, so Boss must restart make dev or rebuild release when ready; no Rust hot reload.

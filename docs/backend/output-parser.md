@@ -682,3 +682,7 @@ It is delivered in original OSC order, including clears in the same chunk.
 `SessionState.provider_recovery` is the durable per-session presentation value;
 repeat snapshots do not generate additional parent entry notices. The existing
 session-state stream carries updates to desktop and browser consumers.
+
+### Ego selector row boundaries
+
+Before parsing an ego question, the PTY reader concatenates rows linked by the grid WRAPLINE flag. It preserves original spaces and adds none inside words. Hard line breaks still separate the title, numbered options and footer. Footer recognition remains in the ego parser; it does not infer prose boundaries from row length.

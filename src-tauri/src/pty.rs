@@ -1806,6 +1806,7 @@ impl ChunkProcessor {
         // the buffer out of `self` keeps the later `&mut self` uses (parser,
         // dedup markers) borrow-checkable; it is put back at the end.
         let mut screen_buf = std::mem::take(&mut self.screen_buf);
+        let mut ego_question_rows = None;
         let mut unexpected_alt_screen = false;
         let mut startup_alt_screen = false;
         let mut choice_changed_rows = Vec::new();
@@ -1951,6 +1952,18 @@ impl ChunkProcessor {
                 }
                 None => false,
             };
+            // Ego selectors are terminal-soft-wrapped, not prose paragraphs.
+            // Join from grid metadata before the parser loses the boundary.
+            if screen_present && agent_type.as_deref() == Some("ego") {
+                ego_question_rows = Some(
+                    crate::redaction::join_wrapped_rows(
+                        screen_buf.iter().zip(vt.screen_row_wraps()),
+                    )
+                    .split('\n')
+                    .map(str::to_owned)
+                    .collect::<Vec<_>>(),
+                );
+            }
             let cursor_row = vt.cursor_point().0;
             let logical_prefix = vt.logical_prefix_at_cursor();
             let physical_prefix = vt.physical_prefix_at_cursor();
@@ -2704,7 +2717,9 @@ impl ChunkProcessor {
                 crate::output_parser::parse_claude_ask_user_question(screen)
                     .or_else(|| crate::output_parser::parse_choice_prompt(screen))
             } else if agent_type.as_deref() == Some("ego") {
-                crate::output_parser::parse_ego_question(screen)
+                crate::output_parser::parse_ego_question(
+                    ego_question_rows.as_deref().unwrap_or(screen),
+                )
             } else {
                 crate::output_parser::parse_choice_prompt(screen)
             };

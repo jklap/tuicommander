@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import {
 	groupLineBlocks,
@@ -9,6 +10,7 @@ import {
 	logColorToCss,
 	normalizeLogLine,
 	reflowDisplayLines,
+	sameLine,
 	spanStyle,
 } from "../utils/logLine";
 
@@ -450,5 +452,44 @@ describe("line derivation cache", () => {
 		expect(lineText(line)).toBe("● ready");
 		normalizeLogLine(line);
 		expect(lineText(line)).toBe("●︎ ready");
+	});
+});
+
+// Catches adding a space inside a word or stripping a real margin separator.
+describe("softwrap_1977", () => {
+	it("uses recorded terminal wrap boundaries without guessing whitespace", () => {
+		for (const cols of [24, 64]) {
+			const capture = readFileSync(`src-tauri/src/fixtures/agent_prompts/softwrap-spaces-1977-${cols}.tcap`);
+			let raw = "";
+			for (let offset = 13; offset < capture.length; ) {
+				const length = capture.readUInt32LE(offset + 9);
+				raw += capture.subarray(offset + 13, offset + 13 + length).toString();
+				offset += 13 + length;
+			}
+			// These controlled ASCII recordings have no cursor controls or wide cells.
+			const lines: LogLine[] = raw.split("\r\n").flatMap((logical) => {
+				const rows: LogLine[] = [];
+				for (let start = 0; start < logical.length; start += cols) {
+					rows.push({
+						spans: [{ text: logical.slice(start, start + cols) }],
+						cols,
+						wrapped: start + cols < logical.length,
+					});
+				}
+				return rows;
+			});
+			expect(reflowDisplayLines(lines).map(lineText).join("\n")).toBe(raw.replaceAll("\r\n", "\n"));
+		}
+	});
+	it("invalidates a retained screen row when only its wrap boundary changes", () => {
+		const spans = [{ text: "same visible cells" }];
+		expect(sameLine({ spans, cols: 64, wrapped: true }, { spans, cols: 64, wrapped: false })).toBe(false);
+	});
+	it("keeps explicit hard breaks even when the old prose heuristic would join", () => {
+		const lines = [
+			{ spans: [{ text: "a".repeat(64) }], cols: 64, wrapped: false },
+			{ spans: [{ text: "second paragraph" }], cols: 64, wrapped: false },
+		];
+		expect(reflowDisplayLines(lines)).toEqual(lines);
 	});
 });
