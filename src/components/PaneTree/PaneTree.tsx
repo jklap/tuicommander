@@ -1,6 +1,5 @@
 import { type Component, createMemo, createSignal, For, lazy, Match, Show, Suspense, Switch } from "solid-js";
 import { initMouseDrag } from "../../hooks/useMouseDrag";
-import { invoke } from "../../invoke";
 import { diffTabsStore, isSessionReviewTab } from "../../stores/diffTabs";
 import { findPaneGroupAtPoint } from "../../stores/dragDrop";
 import { editorTabsStore } from "../../stores/editorTabs";
@@ -249,12 +248,6 @@ const PaneGroupView: Component<{
 				{
 					label: isGlobal ? "Remove from Global Workspace" : "Promote to Global Workspace",
 					action: () => globalWorkspaceStore.togglePromote(id),
-				},
-				{
-					label: "Toggle AI Suggestions",
-					action: () => {
-						invoke("toggle_ai_suggestions", { sessionId: id });
-					},
 				},
 			);
 		}
