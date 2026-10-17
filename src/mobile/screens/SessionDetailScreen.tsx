@@ -161,7 +161,7 @@ export function SessionDetailScreen(props: SessionDetailScreenProps) {
 	const egoQuestionWaiting = () =>
 		sessionState()?.agent_type === "ego" &&
 		sessionState()?.awaiting_input &&
-		!!sessionState()?.choice_prompt &&
+		(!!sessionState()?.choice_prompt || (!!sessionState()?.question_confident && !!sessionState()?.question_text)) &&
 		props.sessionExists;
 	const codexQuestionWaiting = () =>
 		sessionState()?.agent_type === "codex" &&
@@ -501,6 +501,7 @@ export function SessionDetailScreen(props: SessionDetailScreenProps) {
 				agentType={sessionState()?.agent_type ?? null}
 				slashItems={sessionState()?.slash_menu_items}
 				choicePrompt={agentType() === "ego" && !egoQuestionOpen() ? undefined : sessionState()?.choice_prompt}
+				questionText={egoQuestionOpen() && !sessionState()?.choice_prompt ? sessionState()?.question_text : undefined}
 				codexQuestionOpen={codexQuestionOpen()}
 				onRegisterInsertText={(fn) => {
 					insertComposerText = fn;

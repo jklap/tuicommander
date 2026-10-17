@@ -72,3 +72,20 @@ it("answers every tab of a Claude multi-question form, Submit included", async (
 	fireEvent.click(buttonFor(container, "Submit answers"));
 	await waitFor(() => expect(writes).toEqual(["\r"]));
 });
+
+// Catches: sending "10" to ego toggles option 1 instead of option 10,
+// because its raw selector binds single digits only.
+it("navigates and toggles ego options beyond the single-digit shortcuts", async () => {
+	const prompt: ChoicePrompt = {
+		...form(
+			"Which checks?",
+			Array.from({ length: 10 }, (_, i) => `[ ] Check ${i + 1}`),
+		),
+		selection_mode: "toggle-enter",
+	};
+	prompt.options = prompt.options.map((option, index) => ({ ...option, highlighted: index === 8 }));
+	const { container } = render(() => <CommandInput sessionId="disposable" agentType="ego" choicePrompt={prompt} />);
+	fireEvent.click(buttonFor(container, "Check 10"));
+	await waitFor(() => expect(writes).toEqual(["\x1b[B", " "]));
+	expect(writes).not.toContain("\r");
+});

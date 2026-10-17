@@ -1,4 +1,4 @@
-pub use crate::ego_question::parse_ego_question;
+pub use crate::ego_question::{parse_ego_free_text_question, parse_ego_question};
 use serde::Serialize;
 
 fn expand_tilde(path: &str) -> String {
@@ -225,6 +225,7 @@ pub struct ChoicePromptPayload {
 #[serde(rename_all = "kebab-case")]
 pub enum ChoiceSelectionMode {
     NavigateEnter,
+    ToggleEnter,
 }
 
 /// A single option in a numbered choice dialog (edit-confirm, bash-confirm, etc.).

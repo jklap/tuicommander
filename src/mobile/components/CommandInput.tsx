@@ -30,6 +30,8 @@ interface CommandInputProps {
 	slashItems?: SlashMenuItem[];
 	/** Active numbered choice dialog parsed from agent output. */
 	choicePrompt?: ChoicePrompt;
+	/** Native free-text question, opened explicitly by the user. */
+	questionText?: string;
 	/** The Codex question panel has been opened with Alt+Up in this view. */
 	codexQuestionOpen?: boolean;
 	/** Managed agent waiting for a free-text answer. */
@@ -439,6 +441,20 @@ export function CommandInput(props: CommandInputProps) {
 			const selectedIndex = options.findIndex((option) => option.highlighted);
 			const choiceIndex = options.findIndex((option) => option.key === key);
 			const label = options[choiceIndex]?.label;
+			if (props.choicePrompt?.selection_mode === "toggle-enter") {
+				if (key !== "\r" && Number(key) > 9) {
+					// Ego binds individual digits, not multi-digit option numbers.
+					const steps = choiceIndex - Math.max(selectedIndex, 0);
+					const arrow = steps < 0 ? "\x1b[A" : "\x1b[B";
+					for (let i = 0; i < Math.abs(steps); i++) await sendPtyKey(write, arrow);
+					await sendPtyKey(write, " ");
+				} else {
+					await sendPtyKey(write, key);
+				}
+				// Only a changed backend checkmark re-arms toggles. This also
+				// keeps the next navigation based on the acknowledged cursor.
+				return;
+			}
 			if (props.choicePrompt?.selection_mode === "navigate-enter") {
 				const steps = choiceIndex - Math.max(selectedIndex, 0);
 				const arrow = steps < 0 ? "\x1b[A" : "\x1b[B";
@@ -476,8 +492,13 @@ export function CommandInput(props: CommandInputProps) {
 					</div>
 				)}
 			</Show>
+			<Show when={props.questionText && !showChoicePrompt()}>
+				<div class={styles.question} role="status">
+					{props.questionText}
+				</div>
+			</Show>
 			<Show when={showChoicePrompt()}>
-				<ChoicePromptOverlay prompt={props.choicePrompt!} onSelect={handleChoiceSelect} />
+				<ChoicePromptOverlay prompt={props.choicePrompt!} disabled={choiceSending()} onSelect={handleChoiceSelect} />
 			</Show>
 			<Show when={showDropup() && !showChoicePrompt()}>
 				<SlashMenuOverlay
