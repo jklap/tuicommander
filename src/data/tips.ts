@@ -10,6 +10,12 @@ const mod = isMacOS() ? "Cmd" : "Ctrl";
 
 export const TIPS: Tip[] = [
 	{
+		feature: "AI Chat table actions",
+		description:
+			"Use Markdown to inspect a table's exact source, Copy as Markdown to copy it, or Open as document to read it outside the conversation.",
+		shortcut: null,
+	},
+	{
 		feature: "Hands-free conversation shortcut",
 		description: `Press ${mod}+Alt+V to start or stop hands-free on the active terminal when dictation is enabled. Customize the chord in Keyboard Shortcuts.`,
 		shortcut: `${mod}+Alt+V`,
@@ -22,7 +28,7 @@ export const TIPS: Tip[] = [
 	{
 		feature: "Delete AI Chat conversations",
 		description:
-			"Open Conversations in AI Chat and use a row’s trash button to permanently delete its history after confirming the name.",
+			"Open ⋯ → Delete conversation… in AI Chat and use a row’s trash button to permanently delete its history after confirming the name.",
 
 		shortcut: null,
 	},
@@ -179,7 +185,7 @@ export const TIPS: Tip[] = [
 	{
 		feature: "Conversation Launch Options",
 		description:
-			"Use the options button beside AI Chat's + to give one conversation its own ego profile, workspace and executable.",
+			"Use ⋯ → New conversation with options in AI Chat to give one conversation its own ego profile, workspace and executable.",
 		shortcut: null,
 	},
 	{

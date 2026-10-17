@@ -413,19 +413,26 @@ async fn outbound_conflict_does_not_latch_later_sends() {
 // instead of the authoritative snapshot derived from foreground/shell state.
 #[cfg(unix)]
 #[tokio::test]
-async fn begin_uses_derived_agent_lifecycle_and_retires_when_turn_completes() {
+async fn begin_uses_derived_agent_lifecycle_and_finish_survives_completion() {
     use crate::telegram::tool::Input;
     let (_dir, paths) = setup();
-    let server = FakeServer::start(vec![(StatusCode::OK, json!({"ok":true,"result":true}))]).await;
+    let server = FakeServer::start(vec![
+        (StatusCode::OK, json!({"ok":true,"result":true})),
+        (StatusCode::OK, json!({"ok":true,"result":{"message_id":7}})),
+    ])
+    .await;
     let mut runtime = runtime(paths, server.address).await;
     crate::state::tests_support::insert_dummy_session(&runtime.state, PEER);
     crate::test_support::agent_session(&runtime.state, PEER, crate::pty::SHELL_BUSY);
     runtime
-        .track(crate::telegram::mail::PendingMail {
-            id: "request".into(),
-            recipient: PEER.into(),
-            content: json!({"chat_id":"1111111"}).to_string(),
-        })
+        .track(
+            crate::telegram::mail::PendingMail {
+                id: "request".into(),
+                recipient: PEER.into(),
+                content: json!({"chat_id":"1111111"}).to_string(),
+            },
+            super::streaming::Recipient::capture(&runtime.state, PEER),
+        )
         .unwrap();
     let begun = runtime
         .tool(
@@ -465,13 +472,13 @@ async fn begin_uses_derived_agent_lifecycle_and_retires_when_turn_completes() {
                 "target-mcp",
                 Input::Finish {
                     request_id: "request".into(),
-                    text: "too late".into()
+                    text: "late but delivered".into()
                 }
             )
             .await
-            .is_err()
+            .is_ok()
     );
-    assert_eq!(server.requests().len(), 1);
+    assert_eq!(server.requests().len(), 2);
     let (_, session) = runtime.state.session_maps.sessions.remove(PEER).unwrap();
     let _ = session.lock()._child.kill();
 }

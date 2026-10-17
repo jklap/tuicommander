@@ -53,7 +53,6 @@
 /api/plugins/x/fs/write-base64
 /api/plugins/x/github
 /api/plugins/x/http
-/api/plugins/x/http/cancel
 /api/plugins/x/pty/output
 /api/plugins/x/readme
 /api/plugins/x/register

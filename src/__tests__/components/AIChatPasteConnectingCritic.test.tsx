@@ -23,6 +23,7 @@ it("does not lose a second paste when capabilities arrive before the initial ses
 		sessionId,
 		busy: () => false,
 		queuedPrompts: () => [],
+		configOptions: () => [],
 		capabilities: () => (connected ? { promptImage: true } : null),
 		ensureStarted: () => starting,
 	} as unknown as AcpChat;

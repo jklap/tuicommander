@@ -1615,7 +1615,12 @@ struct UrgentNotice {
     first_through: u64,
     through: u64,
     written: bool,
+    reserved_at: std::time::Instant,
 }
+
+// Two 6s confirmation windows and split writes fit inside this lease. A stalled
+// writer must not suppress later notices forever; the mailbox remains durable.
+const URGENT_NOTICE_LEASE: Duration = Duration::from_secs(30);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum OrchestratorDeliveryAssignment {
@@ -2065,9 +2070,9 @@ pub struct SessionMaps {
     /// frontend on tab focus changes. Read by the watcher engine to evaluate
     /// the Unseen trigger (fires only when the terminal tab is not visible).
     pub(crate) session_visibility: DashMap<String, bool>,
-    /// Sessions currently in standby (SIGSTOP'd). session_id → epoch ms when stopped.
+    /// Sessions currently in standby (SIGSTOP'd). session_id → exact stopped pgid.
     #[cfg(unix)]
-    pub(crate) standby_sessions: DashMap<String, u64>,
+    pub(crate) standby_sessions: DashMap<String, i32>,
     /// Per-session marker tallies, so "the agents are ignoring the markers" can be
     /// answered with a number instead of by grepping scrollback — which counts any
     /// mention of the word and is capped by buffer size (#4421).
@@ -2230,7 +2235,6 @@ pub struct AppState {
     /// Populated by the frontend via `register_loaded_plugin` on plugin load.
     /// Used by Rust plugin commands to enforce capability checks server-side.
     pub(crate) loaded_plugins: DashMap<String, Vec<String>>,
-    pub(crate) plugin_http_requests: crate::plugin_http::HttpRequests,
     pub(crate) plugin_settings: crate::settings::plugins::PluginSettings,
     /// Compiled plugin OutputWatcher patterns, one set per connected frontend,
     /// pushed via `set_plugin_output_watchers`. The PTY reader assembles lines
@@ -2847,6 +2851,11 @@ impl AppState {
         {
             return UrgentNoticeReservation::AlreadyRead;
         }
+        if gate.urgent_notices.get(sender).is_some_and(|notice| {
+            !notice.written && notice.reserved_at.elapsed() >= URGENT_NOTICE_LEASE
+        }) {
+            gate.urgent_notices.remove(sender);
+        }
         match gate.urgent_notices.get_mut(sender) {
             Some(notice) => {
                 notice.through = notice.through.max(through);
@@ -2863,6 +2872,7 @@ impl AppState {
                         first_through: through,
                         through,
                         written: false,
+                        reserved_at: std::time::Instant::now(),
                     },
                 );
                 UrgentNoticeReservation::Reserved
@@ -3606,7 +3616,6 @@ impl AppState {
             index_build_sem: Arc::new(tokio::sync::Semaphore::new(1)),
             monitoring_git_sem: Arc::new(tokio::sync::Semaphore::new(MONITORING_GIT_CONCURRENCY)),
             loaded_plugins: DashMap::new(),
-            plugin_http_requests: Default::default(),
             plugin_settings: Default::default(),
             plugin_output_watchers: parking_lot::RwLock::new(Default::default()),
             relay: RelayState::new(),
@@ -6040,6 +6049,44 @@ mod tests {
         );
         assert!(!state.agent_inbox_evictions.contains_key("peer"));
         assert!(!state.agent_inbox_evictions.contains_key("other"));
+    }
+
+    /// Catches: a lost urgent-notice writer suppresses every later urgent notice forever.
+    #[test]
+    fn urgent_notice_in_flight_expires_without_settling_its_replacement() {
+        let state = tests_support::make_test_app_state();
+        let recipient = "urgent-expiry";
+        let first = state.push_agent_inbox(recipient, make_msg("first"));
+        assert_eq!(
+            state.reserve_urgent_notice(recipient, "sender", first),
+            UrgentNoticeReservation::Reserved
+        );
+        let second = state.push_agent_inbox(recipient, make_msg("second"));
+        assert_eq!(
+            state.reserve_urgent_notice(recipient, "sender", second),
+            UrgentNoticeReservation::InFlight
+        );
+        // The lease is 30s, longer than both 6s submission confirmation windows.
+        // Use the public clock here so the regression also runs on pre-fix code.
+        std::thread::sleep(Duration::from_secs(31));
+        let third = state.push_agent_inbox(recipient, make_msg("third"));
+        assert_eq!(
+            state.reserve_urgent_notice(recipient, "sender", third),
+            UrgentNoticeReservation::Reserved,
+            "an abandoned writer must not suppress future urgent notices"
+        );
+        state.finish_urgent_notice(recipient, "sender", first, true);
+        let fourth = state.push_agent_inbox(recipient, make_msg("fourth"));
+        assert_eq!(
+            state.reserve_urgent_notice(recipient, "sender", fourth),
+            UrgentNoticeReservation::InFlight,
+            "a late old writer must not mark the replacement as written"
+        );
+        state.finish_urgent_notice(recipient, "sender", third, true);
+        assert_eq!(
+            state.reserve_urgent_notice(recipient, "sender", fourth),
+            UrgentNoticeReservation::Written
+        );
     }
 
     #[test]

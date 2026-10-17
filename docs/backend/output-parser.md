@@ -257,7 +257,15 @@ ParsedEvent::Intent {
 }
 ```
 
-Detected as a plain-prefix token at the start of a row: `intent: <text> (<title>)`, optionally behind an agent bullet glyph or the wrap indent.
+Detected as a plain-prefix token at the start of a row: `intent: <text> (<title>)`, optionally behind an agent bullet glyph or the wrap indent. The intent anchor grammar is stored in
+`crates/tuic-terminal/src/intent_marker.json` and consumed by both Rust capture
+and the frontend tint classifier. All agent types use this grammar.
+
+Ego chrome is bounded by its native status-row/composer pair, shared with the
+ready-screen adapter. A historical submitted `> prompt` or transcript separator
+is not a live composer. When a soft-wrapped response temporarily overwrites the
+old composer before its repaint, the response remains eligible for parsing;
+the next intent updates both session state and the tab-title event.
 
 AI Chat receives ACP markdown chunks in both desktop and browser mode, without
 terminal rows or wrap metadata. `protocolText.ts` interprets the joined answer
@@ -608,6 +616,20 @@ from the authoritative backend `agent_type`, not from a title heuristic.
 ### History-anchored viewport scrolling
 
 Viewport scroll requests do not alter parsed output. History-anchored scrolling resolves the requested all-time row after output processing, under the same VT lock; capped history clamps an evicted anchor to the oldest retained row.
+
+### ego empty-composer recovery (1957)
+
+ego PTY sessions have a recorded native screen adapter. An empty column-zero
+`>` composer directly below the model/context/trust status row is Ready. The
+native rotating `Working` row reports activity. Retained or wrapped text,
+modal rows, and unrecognized layouts do not prove readiness.
+
+An ordinary uncertain injection is not replayed. For ego only, a fresh empty
+composer repaint after uncertainty was recorded can clear the latch after the
+normal 1.5-second stable-screen confirmation. A pre-write cached screen cannot
+clear it. The foreground/background-work probe remains a separate idle gate.
+Once idle, the existing queue flush can deliver the next queued command or BG
+wake. Other agents retain their existing uncertain-write recovery contracts.
 
 ### ego terminal questions
 

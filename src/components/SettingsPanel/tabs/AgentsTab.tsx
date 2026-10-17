@@ -55,6 +55,7 @@ import {
 import { AgentIcon } from "../../ui/AgentIcon";
 import { Input } from "../../ui/Input";
 import { Select } from "../../ui/Select";
+import { ContextualHelp } from "../ContextualHelp";
 import { ExpertSetting } from "../ExpertSetting";
 import { MachineSelector } from "../MachineSelector";
 import { SettingToggle } from "../SettingFields";
@@ -1559,6 +1560,7 @@ const EgoPermissionsSection: Component = () => {
 		>
 			<div class={a.permissionRows}>
 				<label for="ego-permission-mode">Permissions</label>
+				<ContextualHelp label="Permissions" />
 				<Select
 					id="ego-permission-mode"
 					class={a.formInput}
@@ -1577,6 +1579,7 @@ const EgoPermissionsSection: Component = () => {
 					<option value="yolo">Full access (yolo)</option>
 				</Select>
 				<label for="ego-permission-sandbox">Filesystem sandbox</label>
+				<ContextualHelp label="Filesystem sandbox" />
 				<Select
 					id="ego-permission-sandbox"
 					class={a.formInput}
@@ -1607,6 +1610,7 @@ const HibernationSection: Component = () => {
 			<ExpertSetting configKey="agents.hibernate_idle_minutes" value={store.state.hibernate_idle_minutes}>
 				<div class={a.fieldRow}>
 					<label for="hibernate-minutes">{t("settings.agents.hibernateMinutes", "Hibernate idle agents after")}</label>
+					<ContextualHelp label={t("settings.agents.hibernateMinutes", "Hibernate idle agents after")} />
 					<Input
 						id="hibernate-minutes"
 						class={a.formInput}
@@ -1623,6 +1627,7 @@ const HibernationSection: Component = () => {
 			<ExpertSetting configKey="agents.hibernate_scope" value={store.state.hibernate_scope}>
 				<div class={a.fieldRow}>
 					<label for="hibernate-scope">{t("settings.agents.hibernateScope", "Hibernate scope")}</label>
+					<ContextualHelp label={t("settings.agents.hibernateScope", "Hibernate scope")} />
 					<Select
 						id="hibernate-scope"
 						class={a.formInput}

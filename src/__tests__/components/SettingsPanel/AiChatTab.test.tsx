@@ -400,12 +400,13 @@ describe("AiChatTab — interactive login", () => {
 // Chat page keeps only what ego itself stores: the default model and the
 // providers. GeneralTabTools.test.tsx proves the picker's new home.
 describe("AiChatTab — no ego executable control", () => {
-	it("renders no AI Chat heading and no ego executable control", async () => {
+	it("keeps executable configuration in General while naming the AI Chat page", async () => {
 		const client = fakeClient();
 		const { container } = render(() => <AiChatTab client={client} />);
 
 		const headings = Array.from(container.querySelectorAll("h3")).map((h) => h.childNodes[0]?.textContent?.trim());
-		expect(headings).toContain("Default Model");
+		expect(headings).toContain("Agent and model");
+		expect(screen.getByRole("heading", { name: "AI Chat", level: 2 })).toBeTruthy();
 		expect(headings).not.toContain("AI Chat");
 		expect(screen.queryByRole("button", { name: "Select…" })).toBeNull();
 		expect(screen.queryByText("ego executable")).toBeNull();

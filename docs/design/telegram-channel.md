@@ -1,6 +1,6 @@
 # Telegram channel for TUICommander
 
-**Story:** 1438-79b4. **Updated:** 2026-10-04. **Branch:** feat/w3-telegram.
+**Stories:** 1438-79b4, 1959-162a. **Updated:** 2026-10-16.
 Offline implementation is available; live mint deployment remains pending.
 
 ## Consumer contract and registration
@@ -10,8 +10,8 @@ comes from its authenticated MCP session, never an argument or configured target
 One agent is registered at a time. A new registration replaces the previous agent
 and sends it one native TUIC mail: "Your Telegram registration was replaced by
 another agent." Repeated registration by the same agent sends no notice.
-Replacement retires pending correlation, active drafts and current button handles;
-old requests and choices do not migrate to the new agent.
+Replacement retires the active draft and current button handles. Open requests
+receive one stopped notice; their correlation does not move to the new agent.
 
 `telegram {"action":"unregister"}` releases the caller's own registration.
 Another agent cannot unregister the current owner. Registration ends when its MCP
@@ -31,7 +31,8 @@ and advances the cursor. Non-allowlisted chats stay silently dropped.
 
 ## Placement and native state
 
-The Rust `telegram` module starts explicitly in `run_remote`, never desktop boot.
+The desktop and headless daemon start the same Rust `telegram` supervisor;
+the existing process-held polling lock selects one owner.
 One sequential inbound poller and one outbound runtime share a command channel.
 Registration, native text handoff, callback handling and tool actions are serialized
 by that runtime. Inbound parsing does not select an agent; delivery resolves the
@@ -54,32 +55,63 @@ there are no target peer, token, chat selector, approval or idempotency argument
 | --- | --- |
 | `register` | No extra input; registers the caller and returns `registered:true`. |
 | `unregister` | No extra input; releases its registration and returns `registered:false`. |
-| `begin` | `request_id` from inbound mail; requires its pending request and current working/awaiting-input turn; returns `draft_id`. |
-| `activity` | `request_id`, `text`; reports concise safe activity for that live turn. |
-| `finish` | `request_id`, `text`; sends the exact final reply and returns known `message_ids`. |
+| `begin` | Optional `request_id` from inbound mail; returns the existing or new `draft_id`, including for AI Chat without a PTY. |
+| `activity` | `request_id`, `text`; updates the active request with a concise unapproved preview. |
+| `finish` | `request_id`, `text`; sends the exact final reply even after draft retirement and returns known `message_ids`. Completed requests return the same IDs. |
 | `send` | `text`, optional rows of `{label,data}` buttons; returns known `message_ids`. |
 
 Only the registered agent may begin/activity/finish/send. Others receive
-`telegram_not_registered: call telegram register first`. The agent must call begin
-when it accepts phone mail, activity at material tool boundaries and finish with
-its complete authored reply. No raw PTY text, tool arguments or hidden reasoning
+`telegram_not_registered: call telegram register first`. Receipt and working
+acknowledgements are TUIC-driven; begin and activity are optional. A PTY agent
+calls finish with its complete authored reply. No raw PTY text, tool arguments or hidden reasoning
 is streamed. Tool arguments cannot register a different agent.
 
 ## Drafts, outbound delivery and callbacks
 
-Begin binds request, caller, PTY and turn epoch. An empty Thinking draft starts
-immediately; nonempty activity carries an unapproved preview label. Activity
-coalesces at two seconds and unchanged drafts refresh at twenty seconds. Idle,
-completed or replaced turns retire unfinished drafts without inventing a reply.
-Finalization retires refresh before persistent sends. Plain-text chunks preserve
-exact UTF-8 text under a conservative 4096 UTF-16-unit ceiling.
+An accepted message receives a 👀 reaction on the user's message. With a
+registered recipient, TUIC also creates a native `sendMessageDraft` bubble.
+With no agent, only the receipt reaction and existing registration instruction
+are sent, not a draft. Request identity binds to the peer and recipient, not a
+turn epoch. A broadcast lag preserves the request and draft.
 
-Send and authored done/blocked notices use the first numeric ID in the current
-allowlist as the single outbound destination; several allowlisted chats may send
-inbound text. Reply drafts and finals use the request's originating chat.
-Notifications require a committed `ProgressRecorded` event for the registered
-agent's current live PTY. Intent supplies activity, never a final reply. Event-bus
-lag retires active drafts and reports degraded delivery, without journal replay.
+A second acknowledgement, 👨‍💻, requires the native inbox read cursor to pass
+the delivered message and a recipient turn to start after delivery. A previously
+running turn is not evidence that the new message was read. Waiting changes the
+reaction to 🤔. Success sets 👍; failure sets 👎 and sends one safe notice.
+System status text is Italian and has no approval label. Agent-written previews,
+including streamed ACP text, keep `Preview — not approved.`. These reversible
+presentation choices are centralized in the Telegram module.
+
+The oldest open request owns the chat's one draft; additional open requests
+appear as a queued count. After ten minutes without the second acknowledgement,
+one persistent queued notice replaces the draft. Later work restarts it. An idle
+read request with no reply produces one notice after sixty seconds from the
+observed Read. Exit, registration loss and ACP failure produce one stopped notice.
+Late finish still sends after a notice. All request state is bounded and in memory.
+
+PTY agents stream safe intent/activity, never raw terminal output. AI Chat uses
+a separate reader on the real ACP journal so Bot API I/O cannot stall chunk
+collection. Only assistant message chunks enter the preview, never thought or
+tool chunks. The first unclaimed post-delivery turn is associated after inbox
+Read. If that turn was started by TUIC's peer-mail wake and settles without
+finish, its exact accumulated assistant text becomes the final answer. An
+unrelated user turn never auto-publishes. The reader retains up to eight turns
+and 256 KiB of answer text per request; overflow or a journal gap fails visibly
+rather than publishing an incomplete answer. Completion aborts its reader.
+
+Activity coalesces at two seconds and unchanged drafts refresh at twenty
+seconds. Finalization retires refresh before persistent sends. Plain-text chunks
+preserve exact UTF-8 text under a conservative 4096 UTF-16-unit ceiling. Draft
+text uses the bounded tail while preserving the preview label. Native drafts
+expire within Telegram's documented thirty-second TTL after a crash.
+
+Send and proactive authored done/blocked notices use the first numeric ID in the
+current allowlist. Request drafts and finals use the originating chat. A bound
+PTY's progress done can complete its working open request; progress and finish
+share completion correlation and do not send a second final for that turn.
+Intent is activity, not a final reply. No text is invented from terminal state.
+Stage transitions in Recent messages record only safe stage names, not content;
+per-token draft refreshes do not fill the ring.
 
 Each outbound operation waits at least one second and rechecks the allowlist
 before its API call. A 429 delays subsequent operations; a long delay returns a
@@ -102,7 +134,8 @@ A `stopped_message_generation` update must name the current allowlisted private
 chat and draft. The runtime consumes the draft before attempting interruption;
 duplicate, stale, wrong-chat and replaced-turn updates cannot write Escape.
 
-`begin` arms an in-memory ownership token under the PTY writer mutex. Every
+A working PTY request arms an in-memory ownership token under the PTY writer
+mutex (manual begin retains the same fence). Every
 native user-input path retires that token under the same mutex before its first
 byte, including split text/Enter and managed submissions. This fences Stop even
 when the replacement writer has not yet applied input bookkeeping. Terminal
@@ -112,6 +145,11 @@ interrupt request, not proof that the agent stopped. It does not enter the line
 editor, where a bare escape would corrupt the replacement input. No lifecycle
 lock is held while the native writer runs, so captured writers can process output
 synchronously. No retries or replacement-turn recovery are introduced.
+
+Queued Stop withdraws only that request. AI Chat Stop passes the captured
+connection, session and turn identity to the ACP actor; the actor checks the
+expected turn atomically before cancellation, so a delayed Stop cannot cancel
+a replacement turn.
 
 [Telegram draft and Stop schema](https://core.telegram.org/bots/api#sendmessagedraft).
 
@@ -172,7 +210,7 @@ instance, token store or real Telegram account is used for offline validation.
 
 ### Settings setup (1515-cb81)
 
-Settings now writes the same private token/config/allowlist files. Both a one-use six-character ten-minute code and an explicitly typed private-chat ID can authorize a chat. The code lives in private `pairing.json` so desktop and daemon share it; bare `/start` stays ignored. An explicitly empty allowlist supports initial pairing without permitting outbound work. The adapter supervisor responds to local setup changes without taking a second poller lock; desktop and `tuic-remote` both start the same supervisor at boot. The first process to acquire the existing polling lock owns the adapter; the standby leaves shared status and registration untouched and retries the lock once per second, so it can take over after the owner exits. Disabled or stopped supervisors reject MCP requests instead of leaving them queued. Status includes the polling process identity and expires after sixty seconds. Settings identifies the owner relative to the serving process and enables pairing only while connected. Status exposes safe categories, timestamps and the registered agent name, never token or message text. The volatile MCP registration is published through the same private status file; enablement writes no target UUID. This section supersedes hand-written setup and multi-destination selection language in §5; 1438 uses one outbound destination and no phone Stop.
+Settings now writes the same private token/config/allowlist files. Both a one-use six-character ten-minute code and an explicitly typed private-chat ID can authorize a chat. The code lives in private `pairing.json` so desktop and daemon share it; bare `/start` returns the fixed Link chat instruction. An explicitly empty allowlist supports initial pairing without permitting outbound work. The adapter supervisor responds to local setup changes without taking a second poller lock; desktop and `tuic-remote` both start the same supervisor at boot. The first process to acquire the existing polling lock owns the adapter; the standby leaves shared status and registration untouched and retries the lock once per second, so it can take over after the owner exits. Disabled or stopped supervisors reject MCP requests instead of leaving them queued. Status includes the polling process identity and expires after sixty seconds. Settings identifies the owner relative to the serving process and enables pairing only while connected. Status exposes safe categories, timestamps and the registered agent name, never token or message text. The volatile MCP registration is published through the same private status file; enablement writes no target UUID. The deployment uses one proactive outbound destination; correlated replies use their originating chat.
 
 ### Pairing feedback
 

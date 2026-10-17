@@ -17,7 +17,8 @@ const { mockDetachPanel, mockReattachPanel, mockClosePanel } = vi.hoisted(() => 
 	mockClosePanel: vi.fn().mockResolvedValue(undefined),
 }));
 
-const { mockWriteClipboard, mockOpenFile, mockOpenUrl } = vi.hoisted(() => ({
+const { mockWriteClipboard, mockOpenFile, mockOpenUrl, mockAddVirtual } = vi.hoisted(() => ({
+	mockAddVirtual: vi.fn(),
 	mockWriteClipboard: vi.fn().mockResolvedValue(undefined),
 	mockOpenFile: vi.fn(),
 	mockOpenUrl: vi.fn(),
@@ -26,6 +27,8 @@ const { mockSetFolderRoot, mockShowFileBrowser } = vi.hoisted(() => ({
 	mockSetFolderRoot: vi.fn(),
 	mockShowFileBrowser: vi.fn(),
 }));
+
+vi.mock("../../stores/mdTabs", () => ({ mdTabsStore: { addVirtual: mockAddVirtual } }));
 
 vi.mock("../../utils/clipboard", () => ({ writeClipboard: mockWriteClipboard }));
 vi.mock("../../utils/filePreview", () => ({ openTerminalFilePath: mockOpenFile }));
@@ -997,7 +1000,7 @@ describe("AIChatPanel: parallel tabs", () => {
 			container.querySelector(`button[data-chat-session="${SECOND_SESSION}"]`)?.getAttribute("aria-selected"),
 		).toBe("true");
 		expect(container.textContent).toContain("Saved second answer");
-		expect(container.textContent).toContain("Model: Opus");
+		expect(container.textContent).toContain("Opus");
 		expect(client.connect).toHaveBeenCalledTimes(1);
 		expect(client.loadSession).toHaveBeenCalledWith(CONNECTION, SECOND_SESSION, CHAT_ROOT);
 		expect(client.newSession).not.toHaveBeenCalled();
@@ -1016,7 +1019,7 @@ describe("AIChatPanel: parallel tabs", () => {
 	}
 
 	// Catches: an unattached saved tab looks idle and hides its model row during connect.
-	it("shows connecting and pending model controls until a saved tab attaches", async () => {
+	it("shows connecting until a saved tab attaches, then its model below the input", async () => {
 		restoreTabs();
 		let finish!: () => void;
 		client.loadSession.mockImplementation(
@@ -1030,14 +1033,14 @@ describe("AIChatPanel: parallel tabs", () => {
 		selectTab(container, SECOND_SESSION);
 		await settle();
 		expect(container.textContent).toContain("Connecting conversation…");
-		expect(container.textContent).toContain("Model: pending · Mode: pending");
+		expect(container.querySelector("textarea")).toBeNull();
 		expect(
 			container.querySelector(`button[data-chat-session="${SECOND_SESSION}"]`)?.getAttribute("aria-selected"),
 		).toBe("true");
 		acpStore.applySnapshot(snapshot({ attachments: [attachment({ sessionId: SECOND_SESSION })] }));
 		finish();
 		await settle();
-		expect(container.textContent).toContain("Model: Opus");
+		expect(container.textContent).toContain("Opus");
 		expect(container.textContent).not.toContain("Connecting conversation…");
 	});
 
@@ -1085,7 +1088,7 @@ describe("AIChatPanel: parallel tabs", () => {
 		[...container.querySelectorAll("button")].find((button) => button.textContent === "Retry")?.click();
 		await settle();
 		expect(container.textContent).toContain("Recovered second answer");
-		expect(container.textContent).toContain("Model: Opus");
+		expect(container.textContent).toContain("Opus");
 		expect(client.loadSession.mock.calls.map((call) => call[1])).toEqual([SECOND_SESSION, SECOND_SESSION]);
 		expect(client.connect).toHaveBeenCalledTimes(1);
 		expect(client.reconnect).not.toHaveBeenCalled();
@@ -1167,7 +1170,7 @@ describe("AIChatPanel: parallel tabs", () => {
 		selectTab(container, SECOND_SESSION);
 		await settle();
 		expect(container.textContent).toContain("Existing live answer");
-		expect(container.textContent).toContain("Model: Opus");
+		expect(container.textContent).toContain("Opus");
 		expect(client.loadSession).not.toHaveBeenCalled();
 	});
 
@@ -1262,7 +1265,7 @@ describe("AIChatPanel: parallel tabs", () => {
 		});
 		await settle();
 		expect(container.querySelector('[aria-label="Session settings"]')).not.toBeNull();
-		expect(container.textContent).toContain("Mode: default");
+		expect(container.textContent).toContain("default");
 		expect(container.textContent).not.toContain("Model: pending");
 		expect(acpStore.attachment(CONNECTION, SECOND_SESSION)?.configOptions).toEqual([MODEL_OPTION]);
 		expect(client.prompt).not.toHaveBeenCalled();
@@ -1286,9 +1289,9 @@ describe("AIChatPanel: parallel tabs", () => {
 	])("keeps model and mode pending until options arrive, starting with $configOptions", async ({ configOptions }) => {
 		const { container } = await renderPanel();
 		acpStore.applySnapshot(snapshot({ attachments: [attachment({ configOptions })] }));
-		expect(container.textContent).toContain("Model: pending · Mode: pending");
+		expect(container.textContent).toContain(configOptions.length ? "high" : "Model: pending · Mode: pending");
 		acpStore.applySnapshot(snapshot({ attachments: [attachment()] }));
-		expect(container.textContent).toContain("Model: Opus");
+		expect(container.textContent).toContain("Opus");
 		expect(container.textContent).not.toContain("Model: pending");
 		expect(container.querySelector('[aria-label="Session settings"]')).not.toBeNull();
 	});
@@ -1325,7 +1328,7 @@ describe("AIChatPanel: parallel tabs", () => {
 		await settle();
 		refuse();
 		await settle();
-		expect(container.textContent).toContain("Model: Opus");
+		expect(container.textContent).toContain("Opus");
 		expect(container.textContent).not.toContain("Previous custom tab failed");
 	});
 
@@ -1570,12 +1573,8 @@ describe("AIChatPanel: parallel tabs", () => {
 		tab.dispatchEvent(new MouseEvent("auxclick", { button: 1, bubbles: true, cancelable: true }));
 		await settle();
 		expect(container.querySelector(`[data-chat-session="${SECOND_SESSION}"]`)).toBeNull();
-		expect(container.querySelector(`[data-chat-session="${SESSION}"]`)?.getAttribute("aria-selected")).toBe("true");
-		const last = container.querySelector(`[data-chat-session="${SESSION}"]`)!;
-		last.dispatchEvent(new MouseEvent("auxclick", { button: 1, bubbles: true }));
-		last.dispatchEvent(new MouseEvent("auxclick", { button: 2, bubbles: true }));
-		await settle();
-		expect(container.querySelectorAll("[data-chat-session]")).toHaveLength(1);
+		expect((container.querySelector('select[aria-label="Conversation"]') as HTMLSelectElement).value).toBe(SESSION);
+		expect(container.querySelector('[role="tablist"]')).toBeNull();
 	});
 
 	it("Escape stops from composer and transcript without clearing drafts — catches missing Escape stop", async () => {
@@ -2523,7 +2522,7 @@ describe("AIChatPanel: durable conversations", () => {
 		await settle();
 
 		expect(container.querySelector('select[title="Conversation"]')?.textContent).toContain("Review architecture");
-		expect(container.querySelector('[class*="headerLeft"]')?.textContent).toContain("Review architecture");
+		expect(container.querySelector('[class*="tidyHeader"]')?.textContent).toContain("Review architecture");
 	});
 
 	it("renders context occupancy and cost from one ACP usage update", async () => {
@@ -2805,13 +2804,13 @@ describe("AIChatPanel: tool activity", () => {
 		for (let id = 1; id <= 7; id += 1) tool(id);
 		await settle();
 
-		const summaries = [...container.querySelectorAll("summary")].filter((summary) =>
-			summary.textContent?.includes("7 tool calls"),
+		const summaries = [...container.querySelectorAll("summary[class*=toolActivitySummary]")].filter((summary) =>
+			summary.textContent?.includes("7 reads"),
 		);
 		expect(summaries).toHaveLength(1);
 		expect(summaries[0].textContent).toContain("Inspect file 1");
 		expect(summaries[0].textContent).toContain("Inspect file 2");
-		expect(summaries[0].textContent).toMatch(/\d+(?:\.\d+)?s/);
+		expect(summaries[0].textContent).not.toMatch(/s observed/);
 		expect((summaries[0].parentElement as HTMLDetailsElement).open).toBe(false);
 	});
 
@@ -2822,7 +2821,7 @@ describe("AIChatPanel: tool activity", () => {
 		await settle();
 
 		const activity = [...container.querySelectorAll("details")].find((details) =>
-			details.querySelector("summary")?.textContent?.includes("tool call"),
+			details.querySelector("summary")?.textContent?.includes("read"),
 		);
 		expect(activity).toBeDefined();
 		expect(activity?.open).toBe(false);
@@ -2843,8 +2842,8 @@ describe("AIChatPanel: tool activity", () => {
 		tool(2, "failed");
 		await settle();
 
-		const summary = [...container.querySelectorAll("summary")].find((element) =>
-			element.textContent?.includes("2 tool calls"),
+		const summary = [...container.querySelectorAll("summary[class*=toolActivitySummary]")].find((element) =>
+			element.textContent?.includes("2 reads"),
 		);
 		expect(summary?.textContent).toContain("Failed");
 	});
@@ -2875,7 +2874,7 @@ describe("AIChatPanel: tool activity", () => {
 		await settle();
 
 		const activity = [...container.querySelectorAll("details")].find((details) =>
-			details.querySelector("summary")?.textContent?.includes("tool call"),
+			details.querySelector("summary")?.textContent?.includes("read"),
 		);
 		expect(activity?.open).toBe(false);
 		expect(container.textContent).toContain("Write file");
@@ -2903,12 +2902,12 @@ describe("AIChatPanel: tool activity", () => {
 		tool(3);
 		await settle();
 
-		const summaries = [...container.querySelectorAll("summary")].filter((summary) =>
-			summary.textContent?.includes("tool call"),
+		const summaries = [...container.querySelectorAll("summary[class*=toolActivitySummary]")].filter((summary) =>
+			summary.textContent?.includes("read"),
 		);
 		expect(summaries).toHaveLength(2);
-		expect(summaries[0].textContent).toContain("2 tool calls");
-		expect(summaries[1].textContent).toContain("1 tool call");
+		expect(summaries[0].textContent).toContain("2 reads");
+		expect(summaries[1].textContent).toContain("1 read");
 	});
 
 	it("updates the collapsed line when an existing call later fails", async () => {
@@ -2922,8 +2921,8 @@ describe("AIChatPanel: tool activity", () => {
 		});
 		await settle();
 
-		const summary = [...container.querySelectorAll("summary")].find((element) =>
-			element.textContent?.includes("1 tool call"),
+		const summary = [...container.querySelectorAll("summary[class*=toolActivitySummary]")].find((element) =>
+			element.textContent?.includes("1 read"),
 		);
 		expect(summary?.textContent).toContain("Failed");
 	});
@@ -2987,7 +2986,7 @@ describe("AIChatPanel: tool activity", () => {
 		}
 	});
 
-	it("extends observed duration when a later call joins an already completed activity", async () => {
+	it("keeps history untimed when a later call joins completed activity", async () => {
 		const realNow = performance.now.bind(performance);
 		const now = vi.spyOn(performance, "now");
 		let elapsed = 0;
@@ -3001,10 +3000,10 @@ describe("AIChatPanel: tool activity", () => {
 			tool(2);
 			await settle();
 
-			const summary = [...container.querySelectorAll("summary")].find((element) =>
-				element.textContent?.includes("2 tool calls"),
+			const summary = [...container.querySelectorAll("summary[class*=toolActivitySummary]")].find((element) =>
+				element.textContent?.includes("2 reads"),
 			);
-			expect(summary?.textContent).toMatch(/2\.5s observed|2\.6s observed/);
+			expect(summary?.textContent).not.toMatch(/s observed/);
 		} finally {
 			now.mockRestore();
 		}
@@ -3357,7 +3356,7 @@ describe("AIChatPanel: the session's own knobs", () => {
 		await settle();
 		acpStore.applySnapshot(snapshot({ attachments: [attachment({ configOptions: [grouped] })] }));
 		await settle();
-		expect(container.querySelector(".controlBar")?.textContent).toContain("Mode: Automatic");
+		expect(container.querySelector(".composerMeta")?.textContent).toContain("Automatic");
 		(container.querySelector('button[aria-label="Session settings"]') as HTMLButtonElement).click();
 		const picker = container.querySelector('select[aria-label="Mode"]') as HTMLSelectElement;
 		expect(picker.querySelector("optgroup")?.label).toBe("Behavior");
@@ -3397,12 +3396,12 @@ describe("AIChatPanel: the session's own knobs", () => {
 		picker.dispatchEvent(new Event("change", { bubbles: true }));
 		await settle();
 		expect(client.setConfigOption).toHaveBeenCalledWith(CONNECTION, SESSION, "model", { value: "sonnet" });
-		expect(container.querySelector(".controlBar")?.textContent).toContain("Opus");
+		expect(container.querySelector(".composerMeta")?.textContent).toContain("Opus");
 		acpStore.applySnapshot(
 			snapshot({ attachments: [attachment({ configOptions: [{ ...MODEL_OPTION, currentValue: "sonnet" }] })] }),
 		);
 		await settle();
-		expect(container.querySelector(".controlBar")?.textContent).toContain("Sonnet");
+		expect(container.querySelector(".composerMeta")?.textContent).toContain("Sonnet");
 	});
 
 	// Catches: a rejected choice appears accepted and its error is lost.
@@ -3476,50 +3475,36 @@ describe("AIChatPanel: fork", () => {
 
 describe("AIChatPanel: pause, resume and compact", () => {
 	// Catches: text controls wrapping below a long model summary or icons losing accessible names.
-	it("keeps named icon controls on one row beside a short model summary", async () => {
-		const style = document.createElement("style");
-		style.textContent = readFileSync(
-			resolve(process.cwd(), "src/components/AIChatPanel/AIChatPanel.module.css"),
-			"utf8",
+	it("keeps former icon actions labelled inside the overflow menu — catches lost or unnamed menu actions", async () => {
+		supportsDelete = true;
+		client.listSessions.mockResolvedValue({
+			sessions: [{ sessionId: SESSION, cwd: CHAT_ROOT, title: "Current chat" }],
+			nextCursor: null,
+		});
+		const { container } = await renderPanel();
+		acpStore.applySnapshot(snapshot({ attachments: [attachment({ state: "prompting" })] }));
+		await settle();
+		const menu = container.querySelector<HTMLDetailsElement>(".actionsMenu")!;
+		expect(menu.open).toBe(false);
+		expect(menu.querySelector(":scope > summary svg")).not.toBeNull();
+		expect(container.querySelector('button[aria-label="New chat tab"] svg')).not.toBeNull();
+		expect(container.querySelector(".conversationLabel span + svg")).not.toBeNull();
+		menu.querySelector<HTMLElement>(":scope > summary")!.click();
+		expect(menu.open).toBe(true);
+		expect(menu.querySelectorAll(".menuSeparator")).toHaveLength(3);
+		expect(menu.querySelector(".actionsMenuItems > button")?.textContent).toContain("New conversation");
+		expect(menu.querySelector(".actionsMenuItems > .conversationList > summary")?.textContent).toBe(
+			"Delete conversation…",
 		);
-		document.head.append(style);
-		try {
-			const { container } = await renderPanel();
-			await settle();
-			acpStore.applySnapshot(
-				snapshot({
-					attachments: [
-						attachment({
-							state: "prompting",
-							configOptions: [
-								{
-									...MODEL_OPTION,
-									currentValue: "openai-codex/gpt-6-sol",
-									options: [{ value: "openai-codex/gpt-6-sol", name: "openai-codex/gpt-6-sol" }],
-								},
-							],
-						}),
-					],
-				}),
-			);
-			await settle();
-			const bar = container.querySelector<HTMLElement>(".controlBar")!;
-			expect(bar.querySelector(".sessionSettingsSummary")?.textContent).toBe("Model: gpt-6-sol");
-			expect(getComputedStyle(bar).flexWrap).toBe("nowrap");
-			for (const label of ["Pause the turn", "Compact the conversation"]) {
-				const button = bar.querySelector<HTMLButtonElement>(`button[aria-label="${label}"]`)!;
-				expect(button.title).toBe(label);
-				expect(button.querySelector("svg")).not.toBeNull();
-				expect(button.textContent?.trim()).toBe("");
-			}
-			acpStore.applySnapshot(snapshot({ attachments: [attachment({ state: "paused" })] }));
-			await settle();
-			const resume = bar.querySelector<HTMLButtonElement>('button[aria-label="Resume the turn"]')!;
-			expect(resume.title).toBe("Resume the turn");
-			expect(resume.querySelector("svg")).not.toBeNull();
-		} finally {
-			style.remove();
+		for (const label of ["Session settings", "Pause the turn", "Compact the conversation"]) {
+			const button = menu.querySelector<HTMLButtonElement>(`button[aria-label="${label}"]`)!;
+			expect(button.textContent).toContain(label === "Compact the conversation" ? "Compact context" : label);
 		}
+		acpStore.applySnapshot(snapshot({ attachments: [attachment({ state: "paused" })] }));
+		await settle();
+		expect(menu.querySelector('button[aria-label="Resume the turn"]')?.textContent).toContain("Resume the turn");
+		menu.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+		expect(menu.open).toBe(false);
 	});
 
 	it("pauses a running turn and resumes a held one", async () => {
@@ -3895,6 +3880,7 @@ it("renders inherited replay above a boundary and child turns below", async () =
 describe("AIChatPanel: lineage picker", () => {
 	// Catches: refreshSessions resorting the backend tree or discarding its indentation/deleted rows.
 	it("keeps two-level ancestry and a disabled deleted parent in the picker", async () => {
+		client.newSession.mockResolvedValueOnce("grandchild");
 		client.listSessions.mockResolvedValue({
 			sessions: [
 				{
@@ -4084,6 +4070,7 @@ describe("AIChatPanel: new chat after saved-tab selection", () => {
 describe("AIChatPanel: new chat during cold saved connection", () => {
 	// Catches New chat waiting for an older saved replay and aborting when that replay fails.
 	it("opens a usable new chat when the saved connection was still pending at the click", async () => {
+		aiChatTabs.add("global", SESSION);
 		aiChatTabs.add("global", SECOND_SESSION);
 		let finishConnect!: () => void;
 		const waiting = new Promise<void>((resolve) => {
@@ -4617,4 +4604,78 @@ describe("AIChatPanel: delete conversation", () => {
 		await settle();
 		expect(container.querySelector('button[aria-label="Delete Delete this chat"]')).toBeNull();
 	});
+});
+
+// Catches: replayed completed calls being timed from the panel mount (1958).
+it("does not invent observed execution time for loaded chat history", async () => {
+	const { container } = await renderPanel();
+	feed({
+		kind: "sessionUpdate",
+		update: {
+			sessionUpdate: "tool_call",
+			toolCallId: "history-read",
+			title: "Read history",
+			kind: "read",
+			status: "completed",
+		},
+	});
+	await settle();
+	expect(container.querySelector("summary[class*=toolActivitySummary]")?.textContent).not.toMatch(/\d+\.\d+s observed/);
+});
+
+// Catches: the only tab retaining an unnecessary chrome row.
+it("shows the tab strip only for multiple open tabs", async () => {
+	const { container } = await renderPanel();
+	expect(container.querySelector('[role="tablist"]')).toBeNull();
+	client.newSession.mockImplementation(async () => {
+		acpStore.applySnapshot(snapshot({ attachments: [attachment(), attachment({ sessionId: SECOND_SESSION })] }));
+		return SECOND_SESSION;
+	});
+	container.querySelector<HTMLButtonElement>('button[aria-label="New chat tab"]')!.click();
+	await settle();
+	expect(container.querySelectorAll('[role="tab"]')).toHaveLength(2);
+});
+
+// Catches: table documents opening in the detached WebView instead of the main document area.
+it("routes detached table documents to the main window with exact source", async () => {
+	window.history.replaceState(null, "", "/?mode=panel&panel=ai-chat");
+	const { container } = await renderPanel();
+	const source = "| A | B |\n| --- | --- |\n| first | second |";
+	feed({
+		kind: "sessionUpdate",
+		update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: source } },
+	});
+	await settle();
+	[...container.querySelectorAll<HTMLButtonElement>("button")]
+		.find((button) => button.textContent === "Open as document")!
+		.click();
+	await settle();
+	expect(emitTo).toHaveBeenCalledWith("main", "panel-action", {
+		panelId: "ai-chat",
+		action: "open-table",
+		data: { source },
+	});
+	expect(mockAddVirtual).not.toHaveBeenCalled();
+	aiChatPanelAdapter.handleAction?.("open-table", { source });
+	expect(mockAddVirtual).toHaveBeenCalledWith("AI Chat table", expect.stringContaining("aichat-table:"));
+});
+
+// Catches: tidy header dropping inline close or detached window actions.
+it("closes the inline panel from its header", () => {
+	const close = vi.fn();
+	const { container } = render(() => <AIChatPanel visible repoPath={ROOT} onClose={close} />);
+	container.querySelector<HTMLButtonElement>('button[title="Close"]')!.click();
+	expect(close).toHaveBeenCalledOnce();
+});
+it("reattaches the detached panel from its header", async () => {
+	window.history.replaceState(null, "", "/?mode=panel&panel=ai-chat");
+	const { container } = await renderPanel();
+	container.querySelector<HTMLButtonElement>('button[title="Bring back to main window"]')!.click();
+	expect(mockReattachPanel).toHaveBeenCalledWith("ai-chat");
+});
+it("closes the detached window from its header", async () => {
+	window.history.replaceState(null, "", "/?mode=panel&panel=ai-chat");
+	const { container } = await renderPanel();
+	container.querySelector<HTMLButtonElement>('button[title="Close"]')!.click();
+	expect(mockClosePanel).toHaveBeenCalledWith("ai-chat");
 });

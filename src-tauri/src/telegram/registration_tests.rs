@@ -25,13 +25,13 @@ async fn assert_no_agent_reply(runtime: &mut Runtime, server: &FakeServer) {
     let result = runtime.deliver(parsed.mail.unwrap()).await.unwrap();
     assert_eq!(result["accepted"], false);
     let requests = server.requests();
-    assert_eq!(requests.len(), 1);
-    assert!(requests[0].0.ends_with("sendMessage"));
+    assert_eq!(requests.len(), 2);
+    assert!(requests[1].0.ends_with("sendMessage"));
     assert_eq!(
-        requests[0].1["text"],
+        requests[1].1["text"],
         "No agent is listening. Ask an agent in TUICommander to register for Telegram."
     );
-    assert_eq!(requests[0].1["chat_id"], 1111111);
+    assert_eq!(requests[1].1["chat_id"], 1111111);
 }
 
 // Catches: registration is still restricted to a configured peer, replacement
@@ -70,11 +70,14 @@ async fn second_register_replaces_first_and_notifies_it_once() {
     let old_handle =
         server.requests()[0].1["reply_markup"]["inline_keyboard"][0][0]["callback_data"].clone();
     runtime
-        .track(PendingMail {
-            id: "old".into(),
-            recipient: PEER.into(),
-            content: json!({"chat_id":"1111111"}).to_string(),
-        })
+        .track(
+            PendingMail {
+                id: "old".into(),
+                recipient: PEER.into(),
+                content: json!({"chat_id":"1111111"}).to_string(),
+            },
+            super::streaming::Recipient::capture(&runtime.state, PEER),
+        )
         .unwrap();
     runtime
         .tool(OTHER, "second-mcp", Input::Register {})
@@ -295,11 +298,11 @@ async fn inbound_without_registration_replies_and_drops_but_strangers_stay_silen
         "9"
     );
     let requests = server.requests();
-    assert_eq!(requests.len(), 2);
-    assert!(requests[1].0.ends_with("sendMessage"));
-    assert_eq!(requests[1].1["chat_id"], 1111111);
+    assert_eq!(requests.len(), 3);
+    assert!(requests[2].0.ends_with("sendMessage"));
+    assert_eq!(requests[2].1["chat_id"], 1111111);
     assert_eq!(
-        requests[1].1["text"],
+        requests[2].1["text"],
         "No agent is listening. Ask an agent in TUICommander to register for Telegram."
     );
     assert!(
@@ -349,7 +352,7 @@ async fn inbound_registered_agent_receives_native_mail_without_phone_error() {
         serde_json::from_str(mail["messages"][0]["content"].as_str().unwrap()).unwrap();
     assert_eq!(envelope["text"], "exact inbound");
     assert_eq!(envelope["request_id"], "tg:test-bot:7");
-    assert_eq!(server.requests().len(), 1);
+    assert_eq!(server.requests().len(), 3);
     worker.abort();
 }
 
@@ -518,6 +521,15 @@ async fn recent_poll_and_outbound_events_1956() {
     .unwrap();
     assert!(matches!(poller.poll().await.unwrap(), Poll::Accepted(1)));
     let value = serde_json::to_value(state.telegram_recent.lock().snapshot()).unwrap();
+    let value = Value::Array(
+        value
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|event| event["kind"] != "status")
+            .cloned()
+            .collect(),
+    );
     worker.abort();
     assert_eq!(value.as_array().unwrap().len(), 5);
     assert_eq!(value[0]["outcome"], "rejected: not authorized");
@@ -676,11 +688,15 @@ async fn failed_link_confirmation_preserves_same_batch_mail_order() {
     let before = inbound::text_update(7, 1111111, "before link");
     let pairing = inbound::text_update(8, 3333333, "A1B2C3");
     let after = inbound::text_update(9, 3333333, "after link");
-    let server = FakeServer::start(vec![
-        inbound::updates(vec![after, pairing, before]),
-        (StatusCode::BAD_GATEWAY, json!({})),
-    ])
-    .await;
+    let server = FakeServer::start(vec![inbound::updates(vec![after, pairing, before])]).await;
+    // The failure belongs to link confirmation, not to the receipt draft that
+    // now precedes it. Keep the fault tied to its HTTP method rather than order.
+    server
+        .state
+        .lock()
+        .unwrap()
+        .send_message_responses
+        .push_back((StatusCode::BAD_GATEWAY, json!({})));
     let runtime = outbound_tests::runtime(paths.clone(), server.address).await;
     let state = runtime.state.clone();
     let (commands, receive) = tokio::sync::mpsc::channel(10);

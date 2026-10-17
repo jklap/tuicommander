@@ -1286,6 +1286,22 @@ fn detect_goose_screen_activity(rows: &[String]) -> AgentScreenActivity {
     lowest_hint.unwrap_or(AgentScreenActivity::Unknown)
 }
 
+/// ego's native composer has one status row immediately above a column-zero
+/// `>` prompt. Only an empty composer is Ready; retained or wrapped drafts and
+/// modal rows fail closed. Shapes are recorded in ego-composer-1957.tcap.
+fn detect_ego_screen_activity(rows: &[String]) -> AgentScreenActivity {
+    let Some((prompt, working)) = crate::chrome::find_ego_composer(rows) else {
+        return AgentScreenActivity::Unknown;
+    };
+    if working {
+        AgentScreenActivity::Working
+    } else if rows[prompt].trim_end() == ">" {
+        AgentScreenActivity::Ready
+    } else {
+        AgentScreenActivity::Unknown
+    }
+}
+
 /// #744-138c: call counter so a test can measure that the reader chunk path
 /// and the silence timer no longer each classify the screen independently —
 /// see `cached_screen_activity`. Not gated behind `#[cfg(test)]` on the
@@ -1323,6 +1339,7 @@ pub(super) fn detect_agent_screen_activity_at(
         Some("pi") => detect_pi_screen_activity(rows),
         Some("opencode") => detect_opencode_screen_activity_at(rows, columns),
         Some("goose") => detect_goose_screen_activity(rows),
+        Some("ego") => detect_ego_screen_activity(rows),
         _ => AgentScreenActivity::Unknown,
     }
 }
@@ -1384,7 +1401,7 @@ pub(crate) fn agent_submission_ack_kind(state: &AppState, session_id: &str) -> &
 pub(crate) fn has_ready_screen_adapter(agent_type: Option<&str>) -> bool {
     matches!(
         agent_type,
-        Some("claude" | "codex" | "gemini" | "grok" | "pi" | "opencode" | "goose")
+        Some("claude" | "codex" | "gemini" | "grok" | "pi" | "opencode" | "goose" | "ego")
     )
 }
 

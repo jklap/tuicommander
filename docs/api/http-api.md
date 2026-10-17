@@ -390,6 +390,13 @@ Content-Type: application/json
 { "data": "ls -la\n" }
 ```
 
+Raw `/write` and `/write-parts` calls leave the runtime thread free and return
+an error after two seconds if PTY input has not finished. Delivery is uncertain:
+a started kernel write may still complete, so clients must not automatically
+resend the data. WebSocket input uses the same bound and closes the connection
+on a write error. Session close bypasses the writer and can terminate a blocked
+session.
+
 ### Submit One Managed-Agent Reply
 
 ```
@@ -3239,3 +3246,7 @@ abnormal document's bounded trail uses source `app`, level `warn`, audience
 keeps that report in per-tab session storage until an acknowledged upload. A
 lost acknowledgement can cause a retry; this route does not provide durable
 exactly-once delivery or persist the backend ring across an app restart.
+
+### Telegram request streaming (1959-162a)
+
+Telegram replies now use TUIC-driven receipt (👀), working (👨‍💻), waiting (🤔), answered (👍) and failed (👎) reactions. An ephemeral native draft shows Italian status lines or unapproved agent previews; it refreshes while work continues and the final reply replaces it. Acknowledgement of work requires inbox Read and a new recipient turn. PTY intent/activity and AI Chat assistant chunks share request correlation; finish remains authoritative after draft retirement. Telegram-mail-woken AI Chat turns automatically send their settled assistant text if finish has not answered. Queue and no-reply notices occur at ten minutes and sixty seconds after Read respectively. Restart keeps no request history. Phone rendering requires a live check after the backend restart.

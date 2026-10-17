@@ -92,7 +92,7 @@ async function openResult(container: HTMLElement, query: string, tab: string, ro
 	expect(container.querySelector("nav button[class*='active']")?.textContent).toBe(tab);
 
 	const scrolled: Element[] = [];
-	for (const el of container.querySelectorAll("h3, label, span")) {
+	for (const el of container.querySelectorAll("h2, h3, label, span")) {
 		el.scrollIntoView = () => scrolled.push(el);
 	}
 	await waitFor(() => expect(scrolled).toHaveLength(1));
@@ -189,7 +189,7 @@ describe("SettingsPanel search", () => {
 		it("the remote machines heading opens Remote Machines at its heading", async () => {
 			const { container } = open();
 			const target = await openResult(container, "remote machines", "Remote Machines", "Remote Machines");
-			expect(target.tagName).toBe("H3");
+			expect(target.tagName).toBe("H2");
 			expect(ownText(target)).toBe("Remote Machines");
 		});
 
@@ -228,14 +228,14 @@ describe("SettingsPanel search", () => {
 	describe("offers only what the current client can open", () => {
 		it("offers nothing on AI Chat while the experimental feature is off", () => {
 			const { container } = open();
-			fireEvent.input(searchInput(container), { target: { value: "providers" } });
+			fireEvent.input(searchInput(container), { target: { value: "provider catalogue" } });
 			expect(resultRows(container)).toHaveLength(0);
 		});
 
 		it("offers AI Chat once the feature is on", () => {
 			vi.mocked(settingsStore.isAiChatEnabled).mockReturnValue(true);
 			const { container } = open();
-			fireEvent.input(searchInput(container), { target: { value: "providers" } });
+			fireEvent.input(searchInput(container), { target: { value: "provider catalogue" } });
 			expect(resultRows(container)).toHaveLength(1);
 		});
 

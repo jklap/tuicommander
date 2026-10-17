@@ -404,6 +404,11 @@ fn try_timer_idle_transition(
         let protocol_stale =
             screen_activity == AgentScreenActivity::Ready && silence.protocol_busy_is_stale();
         let screen_confirms_idle = match screen_activity {
+            AgentScreenActivity::Ready
+                if agent_type == Some("ego") && silence.injection_delivery_uncertain =>
+            {
+                silence.recover_uncertain_injection_on_empty_composer()
+            }
             AgentScreenActivity::Ready if protocol_stale => {
                 tracing::warn!(
                     session_id = %session_id,
@@ -640,6 +645,11 @@ fn spawn_silence_timer(
                     let now = std::time::Instant::now();
                     sl.last_output_at = now;
                     sl.last_chunk_at = now;
+                    if sl.injection_delivery_uncertain {
+                        // Resetting clocks is not a new composer repaint.
+                        sl.injection_uncertain_since = Some(now);
+                        sl.screen_ready_pending_since = None;
+                    }
                 }
                 continue;
             }
@@ -1896,7 +1906,7 @@ impl ChunkProcessor {
                 let refs: Vec<&str> = screen.iter().map(String::as_str).collect();
                 // Fails OPEN by contract: no anchor found is `None`, and `None`
                 // must mean "parse everything", never "parse nothing".
-                crate::chrome::find_chrome_cutoff(&refs)
+                crate::chrome::find_agent_chrome_cutoff(&refs, agent_type.as_deref())
             } else {
                 None
             };

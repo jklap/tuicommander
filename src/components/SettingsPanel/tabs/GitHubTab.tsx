@@ -21,6 +21,7 @@ import { handleOpenUrl } from "../../../utils/openUrl";
 import { Input } from "../../ui/Input";
 import { Select } from "../../ui/Select";
 import { Textarea } from "../../ui/Textarea";
+import { ContextualHelp } from "../ContextualHelp";
 import { ExpertSetting } from "../ExpertSetting";
 import { SettingSelect, SettingToggle } from "../SettingFields";
 import s from "../Settings.module.css";
@@ -741,6 +742,7 @@ export const GitHubTab: Component = () => {
 
 					<div class={s.group}>
 						<label for="default-setup-script">Default Setup Script</label>
+						<ContextualHelp label="Default Setup Script" />
 						<Textarea
 							id="default-setup-script"
 							value={repoDefaultsStore.state.setupScript}
@@ -753,6 +755,7 @@ export const GitHubTab: Component = () => {
 
 					<div class={s.group}>
 						<label for="default-run-script">Default Run Script</label>
+						<ContextualHelp label="Default Run Script" />
 						<Textarea
 							id="default-run-script"
 							value={repoDefaultsStore.state.runScript}
@@ -765,6 +768,7 @@ export const GitHubTab: Component = () => {
 
 					<div class={s.group}>
 						<label for="default-archive-script">Default Archive Script</label>
+						<ContextualHelp label="Default Archive Script" />
 						<Textarea
 							id="default-archive-script"
 							value={repoDefaultsStore.state.archiveScript}
@@ -965,6 +969,7 @@ export const GitHubTab: Component = () => {
 
 						<div class={s.group}>
 							<label for="github-enterprise-host">Add Enterprise account</label>
+							<ContextualHelp label="Add Enterprise account" />
 							<Input
 								type="text"
 								id="github-enterprise-host"
