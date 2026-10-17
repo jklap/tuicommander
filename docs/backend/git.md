@@ -252,9 +252,9 @@ changes; a virtual no-op merge can cover the final tree instead. The removal
 result names the matching rule.
 
 Default-branch resolution uses only verified local Git refs, without a fetch:
+the main checkout branch's explicit `branch.<name>.tuicommander-base`, then
 local `main`, then local `master`, then `origin/HEAD` (local branch when present,
-otherwise the remote-tracking ref), then the main checkout branch's
-`branch.<name>.tuicommander-base`, then the main checkout's attached HEAD branch. A linked
+otherwise the remote-tracking ref), then the main checkout's attached HEAD branch. A linked
 checkout never supplies the fallback HEAD. If none resolves to a commit,
 lifecycle inspection blocks removal with an actionable reason; the sidebar
 shows **No base branch**, with the full reason in its tooltip.

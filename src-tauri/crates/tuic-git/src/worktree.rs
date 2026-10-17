@@ -3641,7 +3641,7 @@ pub fn list_local_branches(repo_path: String) -> Result<Vec<String>, String> {
 }
 
 /// Resolve a verified integration branch without network access.
-/// Prefer main/master, origin/HEAD, the main checkout's configured base, then
+/// Prefer the main checkout's configured base, main/master, origin/HEAD, then
 /// the main checkout's attached HEAD (never a linked checkout's HEAD).
 pub fn get_remote_default_branch(repo_path: &str) -> Result<String, String> {
     let repo = Path::new(repo_path);
@@ -3664,6 +3664,20 @@ pub fn get_remote_default_branch(repo_path: &str) -> Result<String, String> {
         }
         None
     };
+    let worktrees = git_cmd(repo)
+        .args(["worktree", "list", "--porcelain"])
+        .run()
+        .map_err(|error| format!("Cannot resolve default branch: {error}"))?;
+    let main_branch = parse_worktree_entries(&worktrees.stdout)
+        .into_iter()
+        .next()
+        .and_then(|entry| entry.branch);
+    if let Some(branch) = main_branch.as_deref()
+        && let Some(base) = get_branch_base(repo_path, branch)
+        && let Some(reference) = verified(&base)
+    {
+        return Ok(reference);
+    }
     for branch in ["main", "master"] {
         if rev_at(repo, &format!("refs/heads/{branch}^{{commit}}")).is_ok() {
             return Ok(branch.to_string());
@@ -3679,24 +3693,10 @@ pub fn get_remote_default_branch(repo_path: &str) -> Result<String, String> {
         return Ok(reference);
     }
 
-    let worktrees = git_cmd(repo)
-        .args(["worktree", "list", "--porcelain"])
-        .run()
-        .map_err(|error| format!("Cannot resolve default branch: {error}"))?;
-    let main_branch = parse_worktree_entries(&worktrees.stdout)
-        .into_iter()
-        .next()
-        .and_then(|entry| entry.branch);
-    if let Some(branch) = main_branch.as_deref()
-        && let Some(base) = get_branch_base(repo_path, branch)
-        && let Some(reference) = verified(&base)
-    {
-        return Ok(reference);
-    }
     if let Some(reference) = main_branch.as_deref().and_then(verified) {
         return Ok(reference);
     }
-    Err("Cannot resolve default branch: no valid main/master, origin/HEAD, configured base, or attached main checkout branch. Attach the main checkout to a branch or configure its branch.<name>.tuicommander-base.".to_string())
+    Err("Cannot resolve default branch: no valid configured base, main/master, origin/HEAD, or attached main checkout branch. Attach the main checkout to a branch or configure its branch.<name>.tuicommander-base.".to_string())
 }
 
 /// Fetch a remote ref if the ref name is a remote tracking branch (e.g. "origin/main").
@@ -5872,7 +5872,7 @@ mod tests {
         );
     }
 
-    /// Catches remote HEAD or configured base overriding the conventional trunk.
+    /// Catches remote HEAD overriding the conventional trunk without explicit configuration.
     #[test]
     fn default_branch_prefers_main_then_master_before_remote_head() {
         let (_temp, repo, _) = workspace_fixture();
@@ -5882,7 +5882,6 @@ mod tests {
             .args(["branch", "integration"])
             .run()
             .unwrap();
-        set_branch_base(&repo.to_string_lossy(), "main", "integration").unwrap();
         git_cmd(&repo)
             .args(["update-ref", "refs/remotes/origin/trunk", "HEAD"])
             .run()
@@ -5917,9 +5916,9 @@ mod tests {
         );
     }
 
-    /// Catches loss of configured-base fallback when no conventional trunk exists.
+    /// Catches remote HEAD overriding an explicitly configured integration base.
     #[test]
-    fn default_branch_prefers_verified_origin_then_main_checkout_configured_base() {
+    fn default_branch_prefers_verified_main_checkout_configured_base() {
         let (_temp, repo, _) = workspace_fixture();
         git_cmd(&repo)
             .args(["branch", "-m", "feature/base"])
@@ -5948,11 +5947,11 @@ mod tests {
             .unwrap();
         assert_eq!(
             get_remote_default_branch(&repo.to_string_lossy()).unwrap(),
-            "origin/trunk"
+            "integration"
         );
         let options = list_base_ref_options(repo.to_string_lossy().into_owned()).unwrap();
-        assert_eq!(options[0].name, "origin/trunk");
-        assert_eq!(options[0].kind, "remote");
+        assert_eq!(options[0].name, "integration");
+        assert_eq!(options[0].kind, "local");
         assert_eq!(
             options
                 .iter()

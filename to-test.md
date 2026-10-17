@@ -2473,3 +2473,5 @@ Needs an iPhone (iOS 16.4+, 18.4+ preferred), the desktop TUICommander running a
 
 - [ ] After Boss manually rebuilds/restarts, explicitly enable perfDebug and frameWorkload; capture a real long paint/stall, confirm the saved path via eval_js logs, and replay in isolated native WebKit with heartbeat/input and independent backend timings. Synthetic smoke is not the real-stall RED (#1638-c94c). Rust changes do not hot-reload; do not start a second desktop instance.
 - [ ] After Boss manually restarts `make dev` or rebuilds release, verify a disposable repository with local main/master and a different remote HEAD uses main first, then master when main is absent. Keep the no-remote non-standard-base check above (#1961-bab6). Rust does not hot-reload; do not restart live sessions for this check.
+
+- [ ] After the next manual Rust restart/rebuild, verify a disposable repo with a stale `main` and an explicit `branch.<main-checkout-branch>.tuicommander-base=develop` classifies branches integrated into `develop` as Merged. Explicit verified bases take priority; unconfigured repos still prefer main/master before remote HEAD (#1961-bab6).
