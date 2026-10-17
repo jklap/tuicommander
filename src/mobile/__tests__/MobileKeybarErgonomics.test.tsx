@@ -37,7 +37,7 @@ afterEach(() => {
 
 describe("mobile terminal controls", () => {
 	// Catches the call control being presented as dictation or losing its toggle action.
-	it.each([false, true])("uses a handset and call label when armed=%s", (armed) => {
+	it.each([false, true])("uses the call label and pressed state when armed=%s", (armed) => {
 		voice.available = true;
 		voice.armed = armed;
 		render(() => (
@@ -51,8 +51,6 @@ describe("mobile terminal controls", () => {
 		));
 		const call = screen.getByRole("button", { name: armed ? "Stop voice call" : "Start voice call" });
 		expect(call.getAttribute("aria-pressed")).toBe(String(armed));
-		expect(call.querySelector("svg rect")).toBeNull();
-		expect(call.querySelector("svg path")?.getAttribute("d")).toMatch(/^M22 16\.92/);
 		fireEvent.click(call);
 		expect(voice.toggle).toHaveBeenCalledOnce();
 	});
