@@ -364,7 +364,7 @@ export function SessionDetailScreen(props: SessionDetailScreenProps) {
 								void voice.toggle();
 							}}
 						>
-							{voice.armed() ? "Stop voice conversation" : "Start voice conversation"}
+							{voice.armed() ? "Stop voice call" : "Start voice call"}
 						</button>
 					</Show>
 					<button
