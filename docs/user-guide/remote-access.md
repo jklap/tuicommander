@@ -106,10 +106,15 @@ output. This switches the reading surface without closing the terminal or
 clearing its history; returning to CLI follows the latest output. Expand the tool activity and edit to read its **Old**
 and **New** text. Tab stops align at four spaces. Swipe the edit block sideways
 for long lines rather than wrapping coloured terminal rows. Switch back with
-**CLI** for permission prompts. Edit excerpts are bounded to 20,000 characters
+**CLI** for permission prompts. Startup trust, external-file imports, permission
+prompts and selection lists keep their option rows and interaction footer. Edit excerpts are bounded to 20,000 characters
 per version; an ellipsis marks a truncated excerpt. A failed tool card describes
 a proposed edit, not a successful file change.
 
+
+In a terminal, a down-arrow appears to the right of **Send** while CLI or Chat
+output is scrolled back. Tap it to return to the latest output. It does not send
+terminal input or cover the key-bar controls.
 
 Both mobile composers use **+**, a text box with a microphone when browser speech is available, and **Send**. Tap **+ → Attach file** to choose a file or **Take photo** to open the camera capture picker. In a terminal, the upload
 inserts its `@path` into the draft; review the draft and tap Send when ready.
