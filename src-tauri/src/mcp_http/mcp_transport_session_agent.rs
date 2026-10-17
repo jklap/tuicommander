@@ -808,6 +808,35 @@ pub(super) fn handle_session(
     args: &serde_json::Value,
     mcp_session_id: Option<&str>,
 ) -> serde_json::Value {
+    if args["action"] == "output" {
+        let budget = match super::response_pages::budget(args) {
+            Ok(budget) => budget,
+            Err(error) => return error,
+        };
+        if let Some(budget) = budget {
+            let operation = format!("output:{}:{}", args["connection_id"], args["session_id"]);
+            return state
+                .mcp
+                .response_pages
+                .lock()
+                .page(
+                    mcp_session_id.unwrap_or("ipc"),
+                    &operation,
+                    args,
+                    budget,
+                    || handle_session_unpaged(state, args, mcp_session_id),
+                )
+                .0;
+        }
+    }
+    handle_session_unpaged(state, args, mcp_session_id)
+}
+
+fn handle_session_unpaged(
+    state: &Arc<AppState>,
+    args: &serde_json::Value,
+    mcp_session_id: Option<&str>,
+) -> serde_json::Value {
     let action = match require_action(args, "session", SESSION_ACTIONS) {
         Ok(a) => a,
         Err(e) => return e,
@@ -843,6 +872,33 @@ pub(super) fn handle_session(
             }
         }
         "list" => {
+            // Resolve ownership, but keep inventory on the merged mirror snapshot;
+            // the remote command proxy only implements output and submit.
+            let mut inventory_args = args.clone();
+            let scoped_session = if args.get("session_id").is_some() {
+                match super::remote_mcp_sessions::resolve(state, args) {
+                    Some(Ok((host, reference))) => {
+                        inventory_args["connection_id"] = serde_json::json!(host);
+                        Some(reference)
+                    }
+                    Some(Err(error)) => return error,
+                    None => {
+                        if let Some(reference) = args["session_id"]
+                            .as_str()
+                            .and_then(|id| id.strip_prefix("local/"))
+                        {
+                            inventory_args["session_id"] = serde_json::json!(reference);
+                        }
+                        match require_session_id(state, &inventory_args, "list") {
+                            Ok(id) => Some(id),
+                            Err(error) => return error,
+                        }
+                    }
+                }
+            } else {
+                None
+            };
+            let args = &inventory_args;
             let caller_tuic = mcp_session_id
                 .and_then(|sid| state.mcp.to_session.get(sid))
                 .map(|entry| entry.value().clone());
@@ -867,6 +923,7 @@ pub(super) fn handle_session(
                 .session_maps
                 .sessions
                 .iter()
+                .filter(|entry| scoped_session.as_ref().is_none_or(|id| entry.key() == id))
                 .map(|entry| {
                     let id = entry.key().clone();
                     let s = entry.value().lock();
@@ -984,6 +1041,12 @@ pub(super) fn handle_session(
                         "agent_state",
                         agent_state.map(serde_json::Value::String),
                     );
+                    if let Some(snapshot) = session_state
+                        .as_ref()
+                        .filter(|snapshot| snapshot.last_activity_ms > 0)
+                    {
+                        session["last_activity_ms"] = serde_json::json!(snapshot.last_activity_ms);
+                    }
                     session
                 })
                 .collect();
@@ -1001,6 +1064,10 @@ pub(super) fn handle_session(
                 let mut value = to_json_or_error(&row);
                 value["is_caller"] = serde_json::json!(false);
                 if let Some(remote_state) = row.state.as_ref() {
+                    if remote_state.last_activity_ms > 0 {
+                        value["last_activity_ms"] =
+                            serde_json::json!(remote_state.last_activity_ms);
+                    }
                     if let Some(shell_state) = remote_state.shell_state.as_ref() {
                         value["shell_state"] = serde_json::json!(shell_state);
                     }
@@ -1024,6 +1091,35 @@ pub(super) fn handle_session(
                         row["connection_id"] == host
                     }
                 });
+            }
+            if let Some(id) = scoped_session {
+                sessions.retain(|row| {
+                    [
+                        "session_id",
+                        "tuic_session",
+                        "address",
+                        "alias",
+                        "display_name",
+                        "name",
+                    ]
+                    .iter()
+                    .any(|key| row[*key] == id)
+                        || row["session_id"]
+                            .as_str()
+                            .is_some_and(|value| value.starts_with(&id))
+                });
+                if sessions.len() > 1 {
+                    return serde_json::json!({"error":"Session address is ambiguous"});
+                }
+                if sessions.is_empty() {
+                    return serde_json::json!({"error":"Session not found"});
+                }
+            }
+            if args["compact"] == true {
+                sessions = sessions
+                    .iter()
+                    .map(super::response_pages::compact)
+                    .collect();
             }
             serde_json::json!(sessions)
         }

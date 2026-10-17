@@ -2391,6 +2391,108 @@ Prefer `agent action=launch` for a managed worker that needs a selected/new work
 A SQLite journal reserves identity before side effects and uses revision compare-and-swap to prevent concurrent checkpoint owners from both creating resources. An app-scoped async mutex serializes launch mutations; filesystem/process work remains on the existing allocation/spawn paths. A lost reply reuses the child. An uncertain interrupted side effect blocks instead of retrying or changing checkout. Native session/prompt state determines delivery and readiness, never output movement alone. The existing spawn name pinning and managed idle-close exemption are reused. Routing, account choice and local brief rules are not TUIC policy.
 
 Native automation and workflow run bindings also use this transaction through `managed_launch`: automation run IDs and workflow attempt IDs provide stable keys, with an in-process run-owner scope when no peer parent exists. No synthetic peer is registered. Run-owned children use the same pinned-name and explicit keep-open path as MCP children; the existing run controller still owns cancellation and completion. The unkeyed public `spawn` compatibility action continues to use the same low-level PTY spawn implementation.
+
+### Compact inventories and byte-bounded response snapshots
+
+`session action=list session_id=<address>` resolves one session through the same
+address resolver as other session actions. `agent action=list_peers to=<address>`
+uses the send recipient resolver; `connection_id` or `connection/peer` selects a
+remote owner. Missing or ambiguous targets return errors, not empty success.
+Both inventories accept `compact=true`. Rows keep identity/address fields,
+`state`, `activity_age_ms`, and `omitted_fields`. Unknown state is `"unknown"`;
+unknown activity age is `null`, never zero. The omitted-field list names removed
+fields. A failed remote inventory remains an error or `connection_errors`, not
+proof that no peers exist. Activity age comes from the backend session snapshot;
+a peer without a live terminal has unknown state and age.
+
+For `agent action=inbox` and `session action=output`, set
+`byte_budget=4096` (integer range 1024–65536) to request an immutable snapshot:
+
+```json
+{"encoding":"json-text","chunk":"...","offset":0,"total_bytes":49162,"continuation":"opaque token","omitted_fields":[],"expires_after_seconds":300}
+```
+
+The budget counts **UTF-8 bytes of the compact JSON page object**, including its
+escaped `chunk` and all page-envelope fields. It excludes JSON-RPC, MCP content
+blocks, HTTP headers, and transport framing. Even one oversized item is split;
+UTF-8 codepoints stay whole. Concatenate decoded `chunk` strings in page order,
+then parse the resulting JSON to obtain the original response. No fields or
+retained text are removed. `total_bytes` and `offset` refer to that reconstructed
+JSON text, not the escaped page object. `continuation=null` marks the final page.
+
+Repeat the same action, target and connection with the returned `continuation`.
+A continuation defaults to a 4096-byte budget if `byte_budget` is omitted. Tokens
+are bound to the inbox owner or output caller and operation/target; changed
+window arguments do not recapture the snapshot. Repeating a page is safe.
+Snapshots expire 300 seconds after capture, on restart, or when the shared cache
+needs space (128 snapshots, 32 MiB of serialized snapshot text). Invalid,
+foreign, expired or evicted tokens fail explicitly with `restart_required` when
+applicable. Start a new read; do not treat the error as an empty result.
+
+The inbox read cursor advances only when the final chunk is returned. A partial
+or abandoned read does not consume mail or its eviction count. Final-page replay
+does not acknowledge later evictions again. Explicit `since=0` remains replay,
+and cursor advancement remains monotonic. Concurrent new mail stays unread;
+concurrent terminal output does not alter an existing snapshot. Inbox retention
+loss is still reported as `missed_count`; expired terminal retention is still
+reported by the existing output-window metadata. A captured snapshot remains
+readable even if its source ring rolls over. The byte bound cannot recover data
+already lost before capture.
+
+Without `byte_budget` or a token, existing response shapes and cursor behavior
+stay unchanged. Errors remain errors; an error detail that itself exceeds the
+budget becomes `response_error_exceeds_byte_budget` with an explicit omission.
+The shared native handlers own validation and paging. MCP, the IPC MCP bridge,
+and HTTP `format=mcp|mcp_raw` use those handlers; the remote output proxy forwards
+byte budgets and tokens without rewriting the bounded envelope.
+
+Fixture provenance: `src-tauri/src/fixtures/mcp-output-2005.txt` captures the
+49,162-byte response cited in the 2026-10-17 MCP usage audit, coordinator transcript
+result line 168437. It is historical terminal text, not a current-state assertion.
+`src-tauri/src/fixtures/mcp-inbox-2005.txt` captures the audit's 49,609-byte inbox
+response, private TUIC transcript result line 3239. The regression also covers
+multibyte and escaped oversized inbox content.
+
+#### Review clarifications: loss watermarks, wait and local continuation scope
+
+All inbox readers use one delivery-gate acknowledgement boundary. A captured
+byte snapshot records the monotonic eviction watermark at capture time. Final
+completion acknowledges only the previously unacknowledged part of that range.
+Two overlapping snapshots cannot subtract the same historical missed count
+from later losses. An ordinary inbox read advances that same watermark; there
+is no separate byte-page read cursor or client acknowledgement protocol.
+
+`agent action=wait` is **not byte-bounded**. Supplying `byte_budget` or
+`continuation` to wait returns `wait_byte_budget_unsupported` before registering
+a waiter or consuming mail. Use byte-budgeted inbox reads for bounded payloads.
+The existing wait claims and acknowledges mail before its response is returned.
+Adding deferred completion to it would create another acknowledgement model;
+wait paging must instead use the shared subscription/ack reconciliation tracked
+by #2004-4760. This story does not claim to reduce the audit's 14,763-byte wait
+response maximum.
+
+A daemon must support the byte-page envelope to serve a byte-budgeted remote
+output request. The desktop proxy rejects unpaged legacy-daemon responses and
+pages that exceed the requested compact-JSON budget. It does not pass through
+an oversized legacy body merely because `exited` is present. Update an
+incompatible daemon; do not retry without a budget unless unbounded output is
+actually desired.
+
+Full session inventory exposes known `last_activity_ms` from the backend
+snapshot. Compact projection derives `activity_age_ms` from that timestamp;
+a missing or zero timestamp remains unknown. An exact registered local peer
+name is resolved before interpreting a slash as a connection qualifier. With
+an explicit connection selected, a daemon-local slash-containing name remains
+a name unless it carries that same connection prefix.
+
+Inbox tokens are scoped to the bound peer identity. Local native MCP output tokens
+are scoped to their MCP session and target; proxied remote output uses the
+owning daemon's HTTP scope. HTTP MCP-compatible output and the
+IPC MCP passthrough intentionally share the local `ipc` continuation scope for
+the same target: either local-user transport can resume a token issued by the
+other. Tokens are opaque snapshot references, **not authorization credentials**;
+normal endpoint admission and the local OS-user trust boundary still apply.
+
 ### Frame workload dump
 
 The loopback-only `debug action=frame_workload_dump` schedules the enabled frontend recorder dump. Like `invoke_js`, read `eval_js` logs for completion; submission does not prove frontend liveness. `POST /debug/frame-workload` and desktop `save_frame_workload` share the bounded writer. See [stall evidence](stall-journal.md).

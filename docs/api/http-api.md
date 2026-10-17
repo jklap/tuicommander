@@ -3321,6 +3321,28 @@ The receipt includes `launch_id`, reserved `session_id`, `stage`, `status`, `liv
 The journal in the app data directory, `managed-launches.sqlite`, persists request digests and resource identities, not prompt/environment bodies. Its checkpoints precede workspace and PTY creation. A crash in an uncertain creation window returns blocked rather than attempting that side effect again. A retained live child is recovered by its reserved identity; missing delivery metadata stays unknown. An exited child or server restart never causes the same key to create a replacement. Journal records are not expired: they are retry tombstones, unlike the process-lifetime `task_id` in a child response. On uncertain workspace creation inspect the requested repository/branch before a separate, explicitly chosen launch.
 
 Native automation and workflow run bindings also use this transaction through `managed_launch`: automation run IDs and workflow attempt IDs provide stable keys, with an in-process run-owner scope when no peer parent exists. No synthetic peer is registered. Run-owned children use the same pinned-name and explicit keep-open path as MCP children; the existing run controller still owns cancellation and completion. The unkeyed public `spawn` compatibility action continues to use the same low-level PTY spawn implementation.
+
+#### Byte-bounded MCP-compatible terminal output
+
+`GET /sessions/{id}/output?format=mcp&byte_budget=4096` (or `format=mcp_raw`)
+uses the same validator and immutable snapshot pager as MCP `session output`.
+`byte_budget` must be an integer from 1024 to 65536. The compact JSON response,
+including the page envelope, fits that UTF-8 byte budget; HTTP/MCP framing does
+not count. It returns `encoding:"json-text"`, `chunk`, `offset`, `total_bytes`,
+`continuation`, `omitted_fields`, and `expires_after_seconds`. Concatenate chunk
+values, then parse JSON. Continue on the same session and format with the opaque
+`continuation` query parameter until it is null. A token defaults to 4096 bytes
+when the budget is omitted. Snapshots expire after 300 seconds, restart or cache
+eviction; invalid or expired tokens fail explicitly. Concurrent output cannot
+change a captured snapshot. Other output formats keep their existing contract.
+See [the full paging and inventory contract](../backend/mcp-http.md#compact-inventories-and-byte-bounded-response-snapshots).
+
+HTTP MCP-compatible output tokens share the local `ipc` continuation scope with
+IPC MCP passthrough for the same target. A local caller holding a token may
+resume it through either transport. This is not a new authentication boundary;
+normal endpoint admission still applies. Remote byte-budget requests reject
+legacy daemons that do not return the bounded envelope.
+
 ### Frame workload evidence
 
 `POST /debug/frame-workload` accepts `{ "recording": "<schema v1 JSON>" }` and returns the saved path as a JSON string. Same writer and payload as `save_frame_workload` IPC; 8 MiB request cap, 6 MiB recording cap, existing authentication. Writes rotate two instance-local content files and run on the blocking pool. See [stall evidence](../backend/stall-journal.md).
