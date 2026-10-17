@@ -376,7 +376,13 @@ async fn persisted_apply_failure_publishes_unapplied_generation() {
 // Catches: refused or unchanged requests waking readers as if they durably changed settings.
 #[tokio::test]
 async fn rejected_and_noop_settings_edits_publish_nothing() {
-    let (_dir, _guard, state) = super::accounts_tests::isolated();
+    let (dir, _guard, state) = super::accounts_tests::isolated();
+    std::fs::write(
+        dir.path().join("prompt-library.json"),
+        json!({"prompts":[{"id":"fixture","label":"Fixture","text":"unchanged","pinned":false}]})
+            .to_string(),
+    )
+    .unwrap();
     let initial = api::execute(
         &state,
         json!({"action":"get","target":{"kind":"instance"},
@@ -397,7 +403,7 @@ async fn rejected_and_noop_settings_edits_publish_nothing() {
     let unchanged = api::execute(
         &state,
         json!({"action":"set","target":{"kind":"instance"},
-        "store":"prompts","expectedRevision":initial["revision"],"path":"/prompts","value":[]}),
+        "store":"prompts","expectedRevision":initial["revision"],"path":"/prompts/fixture/text","value":"unchanged"}),
         Caller::native(),
     )
     .await;
