@@ -36,3 +36,6 @@
 {"fixture":"src-tauri/src/fixtures/agent_prompts/opencode-1.18.30-mini-turn.tcap","events":182}
 {"fixture":"src-tauri/src/fixtures/agent_prompts/pi-headless-question-20261008.tcap","events":140}
 {"fixture":"src-tauri/src/fixtures/agent_prompts/pi-headless-short-20261008.tcap","events":85}
+{"fixture":"src-tauri/src/fixtures/agent_prompts/softwrap-question-1977-24.tcap","events":6}
+{"fixture":"src-tauri/src/fixtures/agent_prompts/softwrap-spaces-1977-24.tcap","events":5}
+{"fixture":"src-tauri/src/fixtures/agent_prompts/softwrap-spaces-1977-64.tcap","events":5}

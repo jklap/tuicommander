@@ -31,3 +31,7 @@ The explicit `hard break` remained on the next line. Command: `build-slot.sh scr
 - `pty.rs`: ego question parsing receives soft-wrapped logical rows reconstructed from grid metadata; the ego footer matcher itself is unchanged. This overlaps tuic-1973 only at the parser call in `pty.rs`, not its footer implementation.
 - `mobile/utils/logLine.ts`: mobile CLI reflow and retained-screen row equality use the serialized `wrapped` field. Existing heuristic behavior remains only when an older daemon omitted the field.
 - `chat_view/mod.rs`: Chat explicitly reads transcript files and never reads the grid. Its desktop and mobile contract suites were checked as unchanged consumers.
+
+## Corpus replay declaration
+
+The corpus replay declares `shell` for this controlled printf output; it is not an agent recording.

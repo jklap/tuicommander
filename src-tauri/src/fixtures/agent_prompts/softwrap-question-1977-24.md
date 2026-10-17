@@ -9,3 +9,7 @@ Raw output (Python representation):
 ```text
 'Does Boss authorize editing the orchestrator registry?\r\n> 1. Yes, authorize registry integration\r\n  2. No, leave it unchanged\r\nUp/Down or number selects; Enter answers; Esc cancels.'
 ```
+
+## Corpus replay declaration
+
+The corpus replay declares the `ego` parser for this controlled selector shape; this is not a claim of a live ego recording.

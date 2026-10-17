@@ -22,3 +22,7 @@ text: unrestricted filesystemaccess
 ```
 
 Command: `build-slot.sh --remote bash -c 'cd src-tauri && ../scripts/with-test-tmp.sh cargo nextest run -p tuic-terminal --lib -E "test(softwrap_1977)"'`. Exit 100; full log: `~/Gits/.tmp/tuic-1977-red.log`.
+
+## Corpus replay declaration
+
+The corpus replay declares `shell` for this controlled printf output; it is not an agent recording.

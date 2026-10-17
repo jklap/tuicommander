@@ -14222,6 +14222,15 @@ fn replay_oracle_all_committed_tcap_preserves_chunk_decisions() {
                 .starts_with(agent)
                 || fixture.contains(&format!("/{agent}-"))
         })
+        .or_else(|| {
+            // These controlled printf recordings declare the parser under test,
+            // not the identity of a live agent (see each capture's provenance).
+            match std::path::Path::new(&fixture).file_name()?.to_str()? {
+                "softwrap-question-1977-24.tcap" => Some("ego"),
+                "softwrap-spaces-1977-24.tcap" | "softwrap-spaces-1977-64.tcap" => Some("shell"),
+                _ => None,
+            }
+        })
         .unwrap_or_else(|| panic!("{fixture}: declare capture's agent before recording a golden"));
         let capture =
             crate::pty_capture::decode_capture(&std::fs::read(root.join(&fixture)).unwrap())
