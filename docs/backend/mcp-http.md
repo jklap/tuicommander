@@ -2376,3 +2376,9 @@ or `operation:{action:"clear_token"}`. Both actions use the existing CircleCI
 owner; replies contain only token presence. Clearing the stored token does not
 remove `CIRCLE_TOKEN` or the CircleCI CLI configuration. The Git & GitHub page
 continues to show the effective token source. No transport returns the token.
+
+### Machine launch instruction previews
+
+`GET /config/defaults` and `POST /config/defaults` are shared machine routes on
+both the desktop server and `tuic-remote`. The POST previews draft agent settings
+without saving them and uses the same authentication as other machine config routes.

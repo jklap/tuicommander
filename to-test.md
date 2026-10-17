@@ -1,3 +1,7 @@
+## Launch instruction preview critic fixes — Rust restart required
+
+- [ ] After Boss restarts `make dev` or installs `make build`, verify launch instruction previews on a daemon-backed machine. Switch from a loaded local machine to a delayed or unavailable remote: inherited text must not carry over and Customize must stay disabled until that machine's preview arrives. The running desktop backend was not restarted.
+
 ## Agent exit backend cleanup (1990-66ac) — Rust restart required
 
 - [ ] After Boss manually restarts `make dev` or installs `make build`, exit Claude from a mobile-only terminal. Confirm shell output replaces the old agent screen in both the open view and a fresh page, and the session card drops the old intent/task. Repeat with an agent that restores its alternate screen normally. No live desktop was restarted by this peer.

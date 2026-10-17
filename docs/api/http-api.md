@@ -1399,6 +1399,7 @@ Load/save `UIPrefsConfig`.
 GET /config/defaults
 ```
 
+Both methods are available on the desktop server and the authenticated remote daemon.
 `POST /config/defaults` returns the same shape with launch instruction previews
 for a draft. The body is `{ "agents": <AgentsConfig>, "intent_tab_title": true,
 "suggest_followups": true }`. Both marker flags are optional; omitted flags use

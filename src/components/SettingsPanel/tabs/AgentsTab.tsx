@@ -1464,14 +1464,19 @@ export const AgentsTab: Component<AgentsTabProps> = (props) => {
 				const defaults = connectionId
 					? await rpc<ConfigDefaults>("get_config_defaults", { preview }, connectionId)
 					: await invoke<ConfigDefaults>("get_config_defaults", { preview });
-				return defaults.launch_instructions;
+				return { connectionId, instructions: defaults.launch_instructions };
 			} catch (err) {
 				appLogger.error("config", "Failed to load launch instruction previews", err);
 				return undefined;
 			}
 		},
 	);
-	const launchPreview = () => (preview.loading ? undefined : preview());
+	const launchPreview = () => {
+		const snapshot = preview();
+		return activeStore().state.loaded && !preview.loading && snapshot?.connectionId === machine()
+			? snapshot?.instructions
+			: undefined;
+	};
 
 	onMount(() => {
 		detection.detectAll();

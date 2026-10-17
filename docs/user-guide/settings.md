@@ -253,6 +253,9 @@ text, or **Customize for <agent>** in an agent row, to create an editable copy.
 Changes save when the field loses focus. An agent copy no longer follows global
 edits. **Use global** restores agent inheritance; **Reset to default** removes
 the global copy. Previews use the agent's marker toggles and resolve `{VER}`.
+Previews belong to the selected machine. While its configuration loads, or if
+loading fails, inherited previews stay unavailable and **Customize** is disabled;
+text from the previous machine is not reused.
 Empty custom text turns injection off. A warning names each required marker
 (`intent:`, `suggest:`, `💬 `) that an edit removes. See
 [AI Agents](ai-agents.md#launch-instructions-tuic-output-markers).
