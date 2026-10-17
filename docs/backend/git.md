@@ -523,3 +523,7 @@ Creation declarations remain backend metadata. They do not override cwd for tab
 placement on creation, OSC 7, reload or saved-tab restore. A repo-root session waits
 for the root workspace to be discovered rather than joining the selected linked
 worktree.
+
+Explicit worktree removal uses the same current-cwd terminal cleanup as removal
+events and refresh. Sidebar membership does not authorize closing a PTY. Tabs
+outside the removed checkout are rehomed after successful removal.
