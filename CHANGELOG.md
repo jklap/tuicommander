@@ -37,6 +37,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Bound `tuic bg` completion command labels to one line and 120 characters; keep the full command before job output in the log (#1950-43b7).
 ### Fixed
 
+- Prefer local main, then master, then remote HEAD when resolving the worktree base; preserve no-remote repositories with a non-standard base branch (#1961-bab6).
+
 - Preserve unsent mobile answers when opening an ego question card, and exclude startup/help rows from fresh-session free-text questions (#1980-47b7, #1973-3d1b).
 - Preserve original spaces across terminal soft wraps in MCP text, copied selections, ego questions and mobile CLI output; keep hard line breaks (#1977-063c).
 - Preserve Claude /resume session rows and filtered results in mobile CLI output without widening agent-state parsing (#1971-5834).
