@@ -284,6 +284,9 @@ a queued agent message can look like prompt input. A Tab request from the
 composer or keybar accepts one strict extension of a nonempty local draft.
 Explicit keybar Up/Down accepts one history replacement after its PTY write is
 acknowledged, including an empty line, and updates the edit delta baseline.
+When a managed agent awaits an answer without parsed choices, keybar Tab and
+Up/Down still go to the PTY so an open picker can navigate. These keys do not
+import history into the local answer draft.
 Typing, sending, Escape, or a failed write cancels the request. A history response
 arriving before the HTTP acknowledgement is dropped, causing a missed recall.
 Because snapshots have no causal request ID, an unrelated delayed snapshot after
