@@ -10147,3 +10147,42 @@ mod tests {
         assert!(dir.path().join(KEYBINDINGS_FILE).is_file());
     }
 }
+
+#[cfg(test)]
+mod refresh_review_tests {
+    use super::*;
+
+    // Catches: a no-op config commit publishing an app generation and causing needless peer reloads.
+    #[test]
+    fn unchanged_app_commit_does_not_publish_settings_change() {
+        let dir = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+        let _guard = set_config_dir_override(dir.path().to_path_buf());
+        let state = crate::state::tests_support::make_test_app_state();
+        let base = state.config.read().clone();
+        save_app_config(base.clone()).unwrap();
+        let mut events = state.event_bus.subscribe();
+        commit_config_save(&state, base.clone(), base).unwrap();
+        assert!(
+            events.try_recv().is_err(),
+            "no-op commit published a generation"
+        );
+    }
+    // Catches: suppressing app publications entirely while filtering out no-op saves.
+    #[test]
+    fn changed_app_commit_publishes_after_persistence() {
+        let dir = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+        let _guard = set_config_dir_override(dir.path().to_path_buf());
+        let state = crate::state::tests_support::make_test_app_state();
+        let base = state.config.read().clone();
+        let mut desired = base.clone();
+        desired.theme = "light".into();
+        let mut events = state.event_bus.subscribe();
+        commit_config_save(&state, base, desired).unwrap();
+        assert_eq!(load_app_config().theme, "light");
+        let event = events.try_recv().expect("changed app save must publish");
+        assert!(
+            matches!(event, crate::state::AppEvent::SettingsChanged(ref change) if change.section == "app" && change.persisted && change.applied)
+        );
+        assert!(events.try_recv().is_err());
+    }
+}

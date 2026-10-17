@@ -1344,3 +1344,101 @@ mod tests {
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
     }
 }
+
+#[cfg(test)]
+mod refresh_review_tests {
+    use super::*;
+
+    // Catches: an HTTP save returning success without invalidating that owner's clients.
+    #[tokio::test]
+    async fn every_http_config_save_wakes_its_settings_section() {
+        let dir = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+        let _guard = crate::config::set_config_dir_override(dir.path().to_path_buf());
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+        let mut events = state.event_bus.subscribe();
+        macro_rules! save {
+            ($save:ident, $load:ident, $section:literal) => {{
+                let base = crate::config::$load();
+                let desired = crate::settings::refresh_test_support::edited($section, &base);
+                let expected = serde_json::to_value(&desired).unwrap();
+                let response = $save(
+                    ConnectInfo("127.0.0.1:1234".parse().unwrap()), None, State(state.clone()),
+                    Json(crate::config::ConfigSaveRequest { base, config: desired }),
+                ).await.into_response();
+                assert_eq!(response.status(), StatusCode::OK, $section);
+                assert_eq!(serde_json::to_value(crate::config::$load()).unwrap(), expected);
+                let event = events.try_recv().expect(concat!($section, " HTTP save did not publish"));
+                assert!(matches!(event, crate::state::AppEvent::SettingsChanged(ref change) if change.section == $section && change.persisted && change.applied));
+                assert!(events.try_recv().is_err(), "one save must publish once");
+            }};
+        }
+        save!(
+            put_notification_config,
+            load_notification_config,
+            "notifications"
+        );
+        save!(put_ui_prefs, load_ui_prefs, "preferences");
+        save!(put_repo_settings, load_repo_settings, "repositories");
+        save!(put_repo_defaults, load_repo_defaults, "repo_defaults");
+        save!(put_prompt_library, load_prompt_library, "prompts");
+        save!(put_agents_config, load_agents_config, "agents");
+        save!(put_keybindings, load_keybindings, "keybindings");
+        save!(put_pane_layout, load_pane_layout, "pane_layout");
+    }
+    // Catches: a transport retaining its own publisher after CRUD is shared, emitting duplicate generations.
+    #[tokio::test]
+    async fn http_connection_crud_publishes_once_per_persisted_change() {
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+        let connection = crate::remote_connection::RemoteConnection::new_ssh(
+            "fixture",
+            "not-contacted.example",
+            "fixture",
+        );
+        let mut events = state.event_bus.subscribe();
+        let response = put_remote_connection(
+            ConnectInfo("127.0.0.1:1234".parse().unwrap()),
+            None,
+            State(state.clone()),
+            Json(crate::remote_connection::RemoteConnectionSaveRequest {
+                base: None,
+                connection: connection.clone(),
+            }),
+        )
+        .await
+        .into_response();
+        assert_eq!(response.status(), StatusCode::OK);
+        let event = events
+            .try_recv()
+            .expect("HTTP connection save must publish");
+        assert!(
+            matches!(event, crate::state::AppEvent::SettingsChanged(ref change) if change.section == "connections" && change.persisted && change.applied)
+        );
+        assert!(events.try_recv().is_err());
+        let response = delete_remote_connection(
+            ConnectInfo("127.0.0.1:1234".parse().unwrap()),
+            None,
+            State(state.clone()),
+            Path(connection.id.clone()),
+        )
+        .await
+        .into_response();
+        assert_eq!(response.status(), StatusCode::OK);
+        let event = events
+            .try_recv()
+            .expect("HTTP connection delete must publish");
+        assert!(
+            matches!(event, crate::state::AppEvent::SettingsChanged(ref change) if change.section == "connections" && change.persisted && change.applied)
+        );
+        assert!(events.try_recv().is_err());
+        let response = delete_remote_connection(
+            ConnectInfo("127.0.0.1:1234".parse().unwrap()),
+            None,
+            State(state),
+            Path(connection.id),
+        )
+        .await
+        .into_response();
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+        assert!(events.try_recv().is_err());
+    }
+}

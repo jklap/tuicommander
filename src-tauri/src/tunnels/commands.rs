@@ -23,6 +23,18 @@ fn err_json(status: StatusCode, msg: &str) -> Response {
 
 // ── Profile CRUD ────────────────────────────────────────────
 
+/// State-bearing persistence used by both transports.
+pub(crate) fn save_profile(state: &AppState, mut profile: TunnelProfile) -> Result<String, String> {
+    profile.validate()?;
+    ProfileStore::save(&state.data_dir, &profile).map_err(|e| e.to_string())?;
+    Ok(profile.id)
+}
+
+pub(crate) fn delete_profile(state: &AppState, id: &str) -> Result<bool, String> {
+    state.tunnel_manager.stop_if_running(id);
+    ProfileStore::delete(&state.data_dir, None, id).map_err(|e| e.to_string())
+}
+
 /// GET /tunnels/profiles — list all saved profiles.
 pub(crate) async fn list_tunnel_profiles(State(state): State<Arc<AppState>>) -> Response {
     match ProfileStore::load_all(&state.data_dir, None) {
@@ -1206,5 +1218,66 @@ exit /b %record_status%"#,
         assert!(a.unwrap().iter().all(|s| s.auth == HostAuth::Shell));
         assert!(b.unwrap().iter().all(|s| s.auth == HostAuth::Shell));
         assert_eq!(spawns(&counter), 6);
+    }
+}
+
+#[cfg(test)]
+mod refresh_review_tests {
+    use super::*;
+
+    // Catches: desktop profile CRUD persisting changes without refreshing peer Settings.
+    #[test]
+    fn tunnel_owner_save_and_delete_wake_settings_readers() {
+        let state = crate::state::tests_support::make_test_app_state();
+        let mut events = state.event_bus.subscribe();
+        let profile = TunnelProfile::new("fixture", "not-contacted.example", "fixture");
+        save_profile(&state, profile.clone()).unwrap();
+        let notice = events.try_recv().expect("tunnel save did not publish");
+        assert!(
+            matches!(notice, crate::state::AppEvent::SettingsChanged(ref change) if change.section == "tunnels" && change.persisted && change.applied)
+        );
+        assert!(delete_profile(&state, &profile.id).unwrap());
+        let notice = events.try_recv().expect("tunnel delete did not publish");
+        assert!(
+            matches!(notice, crate::state::AppEvent::SettingsChanged(ref change) if change.section == "tunnels" && change.persisted && change.applied)
+        );
+        assert!(
+            ProfileStore::load_all(&state.data_dir, None)
+                .unwrap()
+                .is_empty()
+        );
+    }
+    // Catches: failed validation or deleting a missing profile announcing a durable change.
+    #[test]
+    fn failed_tunnel_writes_do_not_wake_settings_readers() {
+        let state = crate::state::tests_support::make_test_app_state();
+        let mut events = state.event_bus.subscribe();
+        let mut profile = TunnelProfile::new("fixture", "not-contacted.example", "fixture");
+        profile.port = 0;
+        assert!(save_profile(&state, profile).is_err());
+        assert!(!delete_profile(&state, "missing").unwrap());
+        assert!(events.try_recv().is_err());
+    }
+
+    // Catches: HTTP save/delete losing or duplicating the shared desktop publication path.
+    #[tokio::test]
+    async fn http_tunnel_crud_publishes_once_per_persisted_change() {
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+        let mut events = state.event_bus.subscribe();
+        let profile = TunnelProfile::new("fixture", "not-contacted.example", "fixture");
+        let response = save_tunnel_profile(State(state.clone()), Json(profile.clone())).await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let event = events.try_recv().expect("HTTP save must publish");
+        assert!(
+            matches!(event, crate::state::AppEvent::SettingsChanged(ref change) if change.section == "tunnels" && change.persisted)
+        );
+        assert!(events.try_recv().is_err());
+        let response = delete_tunnel_profile(State(state), Path(profile.id)).await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let event = events.try_recv().expect("HTTP delete must publish");
+        assert!(
+            matches!(event, crate::state::AppEvent::SettingsChanged(ref change) if change.section == "tunnels" && change.persisted)
+        );
+        assert!(events.try_recv().is_err());
     }
 }
