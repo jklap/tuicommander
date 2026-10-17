@@ -1213,7 +1213,7 @@ Frontend plugin shortcut IDs publish runtime metadata through the shared action 
 
 ## Settings startup contract status (#1790-1011)
 
-Published workflows and recovery are documented in `docs/backend/settings-startup.md`. Step 10 is not complete: native catalogue coverage does not prove account enumeration, schema-only Ego interactive login, live authentication or refused/expired/conflicting/partial-apply integration. Ego login remains a separate owner follow-up after feature freeze, not an implicit terminal fallback.
+Published workflows and recovery are documented in `docs/backend/settings-startup.md`. Typed account enumeration and configured Ego interactive login start/status are published. The login gives the person a tracked PTY; closed is not authentication success, and credential readback comes from the configured owner. Step 10 remains incomplete until schema-only startup and refusal/expiry/conflict/apply-failure integration are verified; native inventory and compile checks alone are insufficient.
 
 ### CircleCI Settings owner (#1991-bd88)
 

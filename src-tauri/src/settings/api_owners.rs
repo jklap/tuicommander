@@ -21,8 +21,6 @@ pub enum OwnerAction {
     Upstreams {
         operation: crate::settings::upstream_credentials::CredentialAction,
     },
-    // DEFERRED (2026-10-17) — typed interactive Ego login needs a separate owner contract
-    // after feature freeze; services/egoLogin.ts remains a human UI workflow, not a Settings action.
     Ego {
         #[serde(rename = "expectedRevision")]
         expected_revision: String,
@@ -92,13 +90,10 @@ impl Settings {
                 expected_revision,
                 operation,
             } => {
-                let ego = self.ego.clone();
-                let reply = tokio::task::spawn_blocking(move || {
-                    ego.auth_edit(&expected_revision, operation)
-                })
-                .await
-                .map_err(|_| Error::new("ego", "store_failed"))??;
-                serde_json::to_value(reply).map_err(|_| Error::new("ego", "store_failed"))
+                self.ego
+                    .clone()
+                    .perform_auth(expected_revision, operation)
+                    .await
             }
             #[cfg(feature = "dictation")]
             OwnerAction::Voice { operation } => {

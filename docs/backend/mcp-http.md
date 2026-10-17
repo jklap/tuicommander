@@ -2369,7 +2369,7 @@ Telegram replies now use TUIC-driven receipt (👀), working (👨‍💻), wait
 
 ### Settings startup contract
 
-See [Settings startup workflows](settings-startup.md) for discovery, target/revision ownership, device-login intervals, human confirmation and partial-persistence recovery. Native `inventoryComplete` does not prove schema-only authentication onboarding or UI parity. The current account-list and Ego interactive-login publication gaps remain explicit acceptance limits, not implicit legacy-command fallbacks.
+See [Settings startup workflows](settings-startup.md) for discovery, target/revision ownership, device-login intervals, human confirmation and partial-persistence recovery. Native `inventoryComplete` does not prove schema-only authentication onboarding or UI parity. Typed `list_accounts` and Ego `begin_login`/`login_status` use the same owner facade. Login launches the configured process directly in a tracked human terminal, not an arbitrary-command or ACP fallback; status separates process lifetime from credential readback.
 
 ### CircleCI credential settings (#1991-bd88)
 

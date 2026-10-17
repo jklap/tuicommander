@@ -3185,7 +3185,7 @@ Settings includes a typed All settings expert inspector with explicit owner/path
 
 ### Assisted Settings startup: published boundary
 
-[Startup workflow documentation](backend/settings-startup.md) covers GitHub device/Enterprise actions, read-only credential-source provenance and configured Ego settings/readback, with explicit owner revisions, human confirmation and partial-persistence recovery. Complete schema-only authentication onboarding is not claimed: account enumeration and interactive Ego login remain documented publication gaps.
+[Startup workflow documentation](backend/settings-startup.md) covers GitHub device/Enterprise actions, read-only credential-source provenance and configured Ego settings/readback, with explicit owner revisions, human confirmation and partial-persistence recovery. Typed account enumeration and configured Ego interactive login start/status are published. Login returns a human-operated terminal and bounded handle; closed and expired handles never imply authentication success. Complete schema-only onboarding remains subject to integration verification.
 
 ### CircleCI Settings owner (#1991-bd88)
 
