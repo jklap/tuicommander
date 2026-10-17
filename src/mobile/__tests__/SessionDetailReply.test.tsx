@@ -224,3 +224,43 @@ it("types an opened ego free-text answer into its waiting modal instead of requi
 	await waitFor(() => expect(rpc).toHaveBeenCalledWith("write_pty", { sessionId: "ego-free-text", data: "\r" }));
 	expect(rpc.mock.calls.some(([command]) => command === "submit_agent_reply")).toBe(false);
 });
+
+// Catches: opening the question card after typing switches transports and sends
+// Enter without the locally held answer, so the real modal receives no reply.
+it("preserves an unsent ego answer when the question card is opened before Send", async () => {
+	const session: SessionInfo = {
+		session_id: "ego-draft-before-open",
+		cwd: "/repo",
+		worktree_path: null,
+		worktree_branch: null,
+		state: {
+			agent_type: "ego",
+			awaiting_input: true,
+			question_confident: true,
+			question_text: "Which release checks should we run?",
+			shell_state: "busy",
+			rate_limited: false,
+			last_activity_ms: 1,
+		},
+	};
+	const view = render(() => (
+		<SessionDetailScreen
+			subscribeChatWake={() => () => {}}
+			session={session}
+			sessionExists
+			onBack={() => {}}
+			onOpenFiles={() => {}}
+		/>
+	));
+	const answer = "Run the parser checks";
+	await fireEvent.input(view.container.querySelector("textarea")!, { target: { value: answer } });
+	await fireEvent.click(view.getByRole("button", { name: "Open ego question" }));
+	await fireEvent.click(view.getByRole("button", { name: "Send" }));
+	await waitFor(() => {
+		const delivered = rpc.mock.calls
+			.filter(([command]) => command === "write_pty" || command === "submit_agent_reply")
+			.map(([command, args]) => (command === "write_pty" ? args.data : `${args.input}\r`))
+			.join("");
+		expect(delivered).toContain(`${answer}\r`);
+	});
+});
