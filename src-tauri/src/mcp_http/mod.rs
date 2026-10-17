@@ -4978,6 +4978,60 @@ mod tests {
         assert_eq!(crate::mcp_upstream_config::load_mcp_upstreams(), current);
     }
 
+    // Catches: a successful direct credential write leaving other Settings readers stale.
+    #[tokio::test]
+    #[serial_test::serial]
+    async fn legacy_upstream_credential_write_publishes_value_free_refresh() {
+        let tmp = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+        let _guard = crate::config::set_config_dir_override(tmp.path().to_path_buf());
+        let state = test_state();
+        let mut events = state.event_bus.subscribe();
+        let response = build_router(state.clone(), false, true)
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/mcp/upstreams/credential")
+                    .header("content-type", "application/json")
+                    .extension(axum::extract::ConnectInfo(std::net::SocketAddr::from((
+                        [127, 0, 0, 1],
+                        0,
+                    ))))
+                    .body(Body::from(
+                        serde_json::json!({"name":"legacy-publisher-fixture",
+                    "token":"legacy-secret-canary","url":"https://example.com/mcp"})
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            crate::mcp_upstream_credentials::read_credential_for_url(
+                "legacy-publisher-fixture",
+                "https://example.com/mcp"
+            )
+            .unwrap()
+            .as_deref(),
+            Some("legacy-secret-canary")
+        );
+        let notice = std::iter::from_fn(|| events.try_recv().ok())
+            .find_map(|event| match event {
+                crate::state::AppEvent::SettingsChanged(notice) => Some(notice),
+                _ => None,
+            })
+            .expect("durable legacy credential write did not refresh another Settings reader");
+        assert_eq!(notice.section, "upstreams");
+        assert!(notice.persisted);
+        assert!(
+            !serde_json::to_string(&notice)
+                .unwrap()
+                .contains("legacy-secret-canary")
+        );
+        crate::mcp_upstream_credentials::delete_upstream_credential("legacy-publisher-fixture")
+            .unwrap();
+    }
+
     // Catches: HTTP dropping compound credentials or treating omitted replace
     // as permission to overwrite an existing upstream credential.
     #[tokio::test]
