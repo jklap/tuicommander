@@ -15,7 +15,8 @@
 - [ ] [VISUAL] After the Mac unlocks, capture the mobile free-text question, picker selection and refused-answer toast at phone width. Supplied incident screenshots were read; no new screenshots were taken while the screen was locked. No CSS or layout change is part of this fix.
 ## Mobile voice handset (1979-89e1)
 
-- [ ] [VISUAL] After the Mac unlocks, capture the mobile session header in Commander dark and Paper light. Include the idle handset, armed handset, and unchanged composer dictation microphone. Confirm the handset is readable at phone and iPad sizes. The screen was locked during implementation; no visual capture is claimed.
+- [x] [VISUAL] Capture the idle handset in the phone More menu and tablet header in Commander and Paper. _(verified: screenshot-only captures at390×844 and834×844 in `.tmp/mobile-question-visual/after-1979/png/`; visible menu action230×44 and header action44×44; no live microphone or backend access.)_
+- [ ] [VISUAL] Capture the armed handset and unchanged composer dictation microphone on a real voice session. The isolated presentation fixture only captures the idle handset; existing armed/unarmed component tests remain for batch integration.
 
 ## Readable mobile pushes (1978-9cfe) — Rust restart required
 
@@ -2427,7 +2428,8 @@ Needs an iPhone (iOS 16.4+, 18.4+ preferred), the desktop TUICommander running a
 ## Ego mobile question forms (1973-3d1b) — backend restart required
 
 - [ ] After Boss manually restarts `make dev` or installs `make build`, open ego single-choice, multiple-choice, and free-text questions from a narrow mobile terminal. Confirm **Input** and the header question action for each. Multiple-choice taps must toggle without submitting until **Submit answers**; free-text must show its full question above the reply composer. The current running backend cannot load this Rust change through hot reload.
-- [ ] Capture a 360×800 screenshot of each recorded ego question card after the screenshot environment is available. The 1973 agent verified DOM layout from actual Rust replay snapshots, but agent-browser reported a locked macOS screen and timed out; bundled headless Chrome also timed out, including an `about:blank` probe. This is not a completed visual check.
+- [x] Capture all three recorded ego question cards in Commander and Paper at390×844 and834×844. _(verified: `.tmp/mobile-question-visual/after-1973/png/`; actual SessionDetailScreen with existing Rust replay state; cards end at746px above the first key at747px, Paper contrast11.386:1. Presentation only, not a live PTY or physical-phone check.)_
+- [ ] Capture the originally requested360×800 geometry if that exact smaller viewport remains required; this follow-up captured390/834 widths, not360.
 
 ## Telegram AI Chat fallback (#1983-1b47)
 
