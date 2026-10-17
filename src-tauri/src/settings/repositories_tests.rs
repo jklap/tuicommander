@@ -233,3 +233,31 @@ async fn corrupt_file_is_an_error_not_defaults() {
     let error = get(&f, &[&format!("/repos{ONE}/color")]).await.unwrap_err();
     assert_eq!(error.code, "store_failed");
 }
+
+/// Catches: PR visibility overrides disappearing when the typed owner reads them.
+#[tokio::test]
+async fn pr_visibility_filters_survive_owner_readback_1993() {
+    let mut config = initial();
+    for (field, value) in [
+        ("pr_hide_drafts", json!(true)),
+        ("pr_hide_conflicting", json!(false)),
+        ("pr_hide_ci_failing", Value::Null),
+    ] {
+        config["repos"]["/work/one"][field] = value;
+    }
+    let f = fixture(Some(config));
+    for (field, value) in [
+        ("pr_hide_drafts", json!(true)),
+        ("pr_hide_conflicting", json!(false)),
+        ("pr_hide_ci_failing", Value::Null),
+    ] {
+        let path = format!("/repos{ONE}/{field}");
+        let snapshot = get(&f, &[&path]).await.unwrap();
+        assert_eq!(snapshot.values[&path].stored, value);
+        set(&f, revision(&f).await, &path, value.clone()).await.unwrap();
+        assert_eq!(on_disk(&f)["repos"]["/work/one"][field], value);
+    }
+    let disk = on_disk(&f);
+    assert_eq!(disk["repos"]["/work/one"]["setup_script"], CANARY);
+    assert_eq!(disk["repos"]["/work/two"]["display_name"], "Two");
+}
