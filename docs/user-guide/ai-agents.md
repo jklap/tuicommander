@@ -115,7 +115,11 @@ TUICommander passes its output-marker rules (`intent:`, `suggest:`, `💬 `) to 
 
 Resume launches get the flag too. Headless one-shot forms (`claude -p`, `codex exec`, `grok -p`, `goose run`, `opencode run`, `pi -p`, `ego run`) and non-session subcommands do not. When you pass the same flag yourself, TUIC does not add a second one.
 
-Edit the text in **Settings → Agents → Launch instructions**. Each supported agent also has its own override in its row. **Reset to default** removes an override. An empty text turns the instructions off. `{VER}` becomes the TUIC version. The editor warns when a marker that TUIC parses is missing from the text, because the tab title, the suggest buttons and the answers view depend on it. The default text leaves out a marker when you turn that marker off for the agent.
+Open **Settings → Agents → Launch instructions** to see a read-only preview of the shipped default. Select **Customize** to make an editable global copy. Edits save when the field loses focus. **Reset to default** removes the global copy.
+
+Each supported agent row shows **Inherits from global**, or **Uses default** when no global copy exists. Its read-only preview shows the text that the agent receives, with the TUIC version filled in. The default leaves out a marker when its global or per-agent toggle is off. Previews update when you change the global text or marker toggles.
+
+Select **Customize for <agent>** to make an editable copy of the inherited text. This agent then uses its own copy: later global edits do not change it. **Use global** removes the agent copy and restores inheritance. An empty custom text turns injection off; it does not restore inheritance. In custom text, `{VER}` becomes the TUIC version at launch. The editor warns when an edit removes a required marker, because the tab title, suggest buttons and answers view depend on these markers.
 
 TUIC writes the effective text to `<config-dir>/agent-hooks/instructions-<agent>.md` (`.toml` for Codex) at startup, on every agent launch and when you save the agent settings.
 

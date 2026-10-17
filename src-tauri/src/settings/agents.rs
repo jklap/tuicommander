@@ -132,3 +132,91 @@ fn model_aliases(help: &str) -> Result<Vec<Value>, Failure> {
     }
     Ok(values)
 }
+
+/// Read-only draft input: preview current edits without saving or rewriting launch files.
+#[derive(serde::Deserialize)]
+pub(crate) struct LaunchPreview {
+    pub(crate) agents: AgentsConfig,
+    pub(crate) intent_tab_title: Option<bool>,
+    pub(crate) suggest_followups: Option<bool>,
+}
+
+pub(crate) fn launch_instruction_defaults(
+    preview: Option<LaunchPreview>,
+) -> crate::config::LaunchInstructionsDefaults {
+    let mut app = crate::config::load_app_config();
+    let agents = if let Some(preview) = preview {
+        if let Some(intent) = preview.intent_tab_title {
+            app.intent_tab_title = intent;
+        }
+        if let Some(suggest) = preview.suggest_followups {
+            app.suggest_followups = suggest;
+        }
+        preview.agents
+    } else {
+        crate::config::load_agents_config()
+    };
+    launch_instruction_defaults_with(&app, &agents)
+}
+
+fn launch_instruction_defaults_with(
+    app: &crate::config::AppConfig,
+    agents: &AgentsConfig,
+) -> crate::config::LaunchInstructionsDefaults {
+    crate::config::LaunchInstructionsDefaults {
+        default_text: crate::launch_instructions::default_text(
+            app.intent_tab_title,
+            app.suggest_followups,
+        )
+        .replace("{VER}", env!("CARGO_PKG_VERSION")),
+        required_markers: crate::launch_instructions::REQUIRED_MARKERS.to_vec(),
+        effective_text: crate::launch_instructions::AGENTS
+            .into_iter()
+            .map(|agent| {
+                (
+                    agent.to_owned(),
+                    crate::launch_instructions::effective_text(app, agents, agent),
+                )
+            })
+            .collect(),
+    }
+}
+
+#[cfg(test)]
+mod launch_preview_tests {
+    use super::*;
+
+    /// Catches: preview uses all markers for every agent and leaves the version token unresolved.
+    #[test]
+    fn launch_preview_respects_agent_marker_flags() {
+        let mut app = crate::config::AppConfig::default();
+        app.intent_tab_title = true;
+        app.suggest_followups = true;
+        let mut agents = AgentsConfig::default();
+        agents.agents.insert(
+            "claude".into(),
+            crate::config::AgentSettings {
+                suggest_followups: Some(false),
+                ..Default::default()
+            },
+        );
+        let preview = launch_instruction_defaults_with(&app, &agents);
+        assert!(!preview.effective_text["claude"].contains("suggest:"));
+        assert!(preview.effective_text["codex"].contains("suggest:"));
+        assert!(!preview.effective_text["claude"].contains("{VER}"));
+        assert!(preview.effective_text["claude"].contains(env!("CARGO_PKG_VERSION")));
+        app.intent_tab_title = false;
+        let preview = launch_instruction_defaults_with(&app, &agents);
+        assert!(!preview.effective_text["codex"].contains("intent:"));
+        agents.launch_instructions = Some("global {VER}".into());
+        assert_eq!(
+            launch_instruction_defaults_with(&app, &agents).effective_text["claude"],
+            format!("global {}", env!("CARGO_PKG_VERSION"))
+        );
+        agents.agents.get_mut("claude").unwrap().launch_instructions = Some(String::new());
+        assert_eq!(
+            launch_instruction_defaults_with(&app, &agents).effective_text["claude"],
+            ""
+        );
+    }
+}

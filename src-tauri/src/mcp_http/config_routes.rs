@@ -206,7 +206,13 @@ pub(super) async fn get_ui_prefs() -> impl IntoResponse {
 
 /// `_http` suffix: `crate::config::get_config_defaults` already owns the bare name.
 pub(super) async fn get_config_defaults_http() -> impl IntoResponse {
-    Json(crate::config::get_config_defaults())
+    Json(crate::config::get_config_defaults(None))
+}
+
+pub(super) async fn preview_config_defaults_http(
+    Json(preview): Json<crate::settings::agents::LaunchPreview>,
+) -> impl IntoResponse {
+    Json(crate::config::get_config_defaults(Some(preview)))
 }
 
 pub(super) async fn put_ui_prefs(

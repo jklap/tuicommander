@@ -1862,7 +1862,8 @@ pub fn build_router(state: Arc<AppState>, remote_auth: bool, mcp_enabled: bool) 
         )
         .route(
             "/config/defaults",
-            get(config_routes::get_config_defaults_http),
+            get(config_routes::get_config_defaults_http)
+                .post(config_routes::preview_config_defaults_http),
         )
         .route(
             "/config/repo-settings",

@@ -4668,7 +4668,7 @@ pub(crate) struct ConfigDefaults {
     /// route is never registered there either (see `build_remote_router`).
     #[cfg(feature = "dictation")]
     pub(crate) dictation: DictationConfig,
-    /// The shipped launch-instruction text (`{VER}` unexpanded) and the marker
+    /// The resolved launch-instruction previews and the marker
     /// tokens the Settings editor warns about when an edit drops one.
     pub(crate) launch_instructions: LaunchInstructionsDefaults,
 }
@@ -4677,10 +4677,13 @@ pub(crate) struct ConfigDefaults {
 pub(crate) struct LaunchInstructionsDefaults {
     pub(crate) default_text: String,
     pub(crate) required_markers: Vec<&'static str>,
+    pub(crate) effective_text: std::collections::HashMap<String, String>,
 }
 
 #[cfg_attr(feature = "desktop", tauri::command)]
-pub(crate) fn get_config_defaults() -> ConfigDefaults {
+pub(crate) fn get_config_defaults(
+    preview: Option<crate::settings::agents::LaunchPreview>,
+) -> ConfigDefaults {
     let mut agents = AgentsConfig::default();
     migrate_codex_bypass(&mut agents);
     ConfigDefaults {
@@ -4698,10 +4701,7 @@ pub(crate) fn get_config_defaults() -> ConfigDefaults {
             speech_engine: "edge".to_string(),
             ..DictationConfig::default()
         },
-        launch_instructions: LaunchInstructionsDefaults {
-            default_text: crate::launch_instructions::default_text(true, true),
-            required_markers: crate::launch_instructions::REQUIRED_MARKERS.to_vec(),
-        },
+        launch_instructions: crate::settings::agents::launch_instruction_defaults(preview),
     }
 }
 
@@ -9947,7 +9947,7 @@ mod tests {
     /// out of sync with it silently.
     #[test]
     fn get_config_defaults_returns_each_domains_own_default() {
-        let defaults = get_config_defaults();
+        let defaults = get_config_defaults(None);
         assert_eq!(
             serde_json::to_value(&defaults.app).unwrap(),
             serde_json::to_value(AppConfig::default()).unwrap()
@@ -10002,7 +10002,7 @@ mod tests {
     /// key would keep the entry point visible for everyone.
     #[test]
     fn get_config_defaults_carries_no_additional_github_accounts() {
-        let payload = serde_json::to_value(get_config_defaults()).unwrap();
+        let payload = serde_json::to_value(get_config_defaults(None)).unwrap();
         assert_eq!(
             payload["github_accounts"]["accounts"],
             serde_json::json!([])
@@ -10031,7 +10031,7 @@ mod tests {
         let dir = TempDir::new().expect("temp dir");
         let _guard = set_config_dir_override(dir.path().to_path_buf());
 
-        let defaults = get_config_defaults();
+        let defaults = get_config_defaults(None);
 
         assert_eq!(
             serde_json::to_value(&defaults.app).unwrap(),

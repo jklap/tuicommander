@@ -1044,7 +1044,13 @@ Fields marked `skip_serializing_if = "Option::is_none"` are omitted when
 the config files; `settingsExpert.ts` reads a leaf missing from a present
 object as the default `null`.
 
-**Command:** `get_config_defaults()`. HTTP: `GET /config/defaults` (see `docs/api/http-api.md`).
+**Command:** `get_config_defaults(preview?)`. HTTP: `GET /config/defaults`, or
+`POST /config/defaults` with a read-only launch preview draft (see `docs/api/http-api.md`).
+The `launch_instructions` section includes resolved `default_text`, `required_markers`
+and an `effective_text` map keyed by agent. Settings sends its current agent edits
+and local global marker flags for previews, so debounced saves do not leave the
+preview behind. Remote previews use that machine's saved global marker flags.
+This request does not save config or rewrite launch files.
 
 ## Cache Files
 

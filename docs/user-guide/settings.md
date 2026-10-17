@@ -247,9 +247,14 @@ closure. A child can also be marked keep-open at spawn or through the agent or
 session tool.
 
 **Launch instructions** is the TUIC output-marker text that TUIC passes to an
-agent at every launch and resume. Each agent row has its own override. Empty
-turns it off. A warning names every required marker (`intent:`, `suggest:`,
-`💬 `) that an edit removes. **Reset to default** removes the override. See
+agent at every launch and resume. With no override, a read-only preview shows
+**Uses default** or **Inherits from global**. Select **Customize** for the global
+text, or **Customize for <agent>** in an agent row, to create an editable copy.
+Changes save when the field loses focus. An agent copy no longer follows global
+edits. **Use global** restores agent inheritance; **Reset to default** removes
+the global copy. Previews use the agent's marker toggles and resolve `{VER}`.
+Empty custom text turns injection off. A warning names each required marker
+(`intent:`, `suggest:`, `💬 `) that an edit removes. See
 [AI Agents](ai-agents.md#launch-instructions-tuic-output-markers).
 
 Each supported agent has an expandable row showing detection status, version, and MCP badge.

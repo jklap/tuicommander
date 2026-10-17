@@ -1399,9 +1399,18 @@ Load/save `UIPrefsConfig`.
 GET /config/defaults
 ```
 
+`POST /config/defaults` returns the same shape with launch instruction previews
+for a draft. The body is `{ "agents": <AgentsConfig>, "intent_tab_title": true,
+"suggest_followups": true }`. Both marker flags are optional; omitted flags use
+the server's current app config. No values are saved. The `launch_instructions`
+section contains a resolved `default_text`, `required_markers`, and an
+`effective_text` map for supported agents. Agent previews follow the same
+override priority, marker flags, and `{VER}` replacement as launches.
+
+
 Read-only. Returns `ConfigDefaults` — see `docs/backend/config.md` → "Config
 Defaults" — for Settings "expert mode": `{ app, notifications, agent_settings,
-repo_defaults, agents, github_accounts, dictation? }`. `dictation` is present only on desktop
+repo_defaults, agents, github_accounts, dictation?, launch_instructions }`. `dictation` is present only on desktop
 builds. `None` fields are omitted (`skip_serializing_if`); a missing key inside
 a present object means `null`.
 

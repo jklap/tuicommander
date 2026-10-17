@@ -655,3 +655,16 @@
 .rowSwitch::after { content: ""; position: absolute; width: 12px; height: 12px; left: 2px; top: 2px; border-radius: 50%; background: var(--fg-secondary); }
 .rowSwitch:checked { background: var(--accent); border-color: var(--accent); }
 .rowSwitch:checked::after { left: 16px; background: var(--text-on-accent); }
+
+.instructionsPreview {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-height: 240px;
+  overflow: auto;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--bg-tertiary);
+  color: var(--fg-secondary);
+  font: 12px/1.5 var(--font-mono);
+}

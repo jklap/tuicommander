@@ -2446,3 +2446,5 @@ Needs an iPhone (iOS 16.4+, 18.4+ preferred), the desktop TUICommander running a
 - [ ] After the next backend restart, check Claude trust, external-import and Bash permission dialogs in mobile CLI: all options and the footer must remain visible (#1987-606c). Rust changes require a manual restart to load.
 
 - [ ] After Boss restarts the Rust backend, verify CircleCI Settings discovery (`circleci.token`) and presence-only readback through the shared Settings action. Isolated tests cover set/clear and failures; no production credential test is required (#1991-bd88).
+
+- [ ] After the next manual `make dev` restart or release rebuild, open Settings → Agents. Check read-only global and per-agent launch instruction previews, Customize, Use global, empty overrides, and marker-toggle refresh. The Rust preview response is not loaded by hot reload.
