@@ -213,9 +213,13 @@ export default function MobileApp() {
 										<ActivityScreen recoveryRevision={recoveryRevision()} onNavigateSession={navigateToSession} />
 									</Match>
 									<Match when={activeTab() === "files"}>
-										<Show when={chatFileLink()} fallback={<FilesScreen recoveryRevision={recoveryRevision()} />}>
+										<Show
+											when={chatFileLink()}
+											fallback={<FilesScreen sessions={sessions()} recoveryRevision={recoveryRevision()} />}
+										>
 											{(link) => (
 												<FilesScreen
+													sessions={sessions()}
 													recoveryRevision={recoveryRevision()}
 													initialRepo={{ cwd: link().cwd, worktreePath: link().cwd }}
 													initialLink={{ candidate: link().candidate }}
@@ -269,7 +273,9 @@ export default function MobileApp() {
 				<Show when={sessionFilesOpen()}>
 					<main class={styles.content}>
 						<FilesScreen
+							sessions={sessions()}
 							recoveryRevision={recoveryRevision()}
+							initialSessionId={lastKnownSession()!.session_id}
 							initialLink={sessionFileLink() ?? undefined}
 							initialRepo={{
 								worktreePath: sessionFileLink()?.root ?? lastKnownSession()!.worktree_path,
