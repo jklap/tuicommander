@@ -27,6 +27,7 @@ pub(crate) mod background_mode;
 #[cfg(test)]
 mod background_mode_tests;
 pub(crate) mod launch_instructions;
+pub(crate) mod mail_subscriptions;
 pub(crate) mod prompt_receipt;
 pub(crate) mod session_resume;
 pub(crate) mod session_wake;

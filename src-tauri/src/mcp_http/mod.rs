@@ -31,6 +31,7 @@ pub(crate) mod mcp_transport_session_agent;
 mod open_markdown_routes;
 pub(crate) mod response_pages;
 
+mod mail_routes;
 mod mcp_work_item;
 mod plugin_docs;
 mod plugin_routes;
@@ -1934,6 +1935,8 @@ pub fn build_router(state: Arc<AppState>, remote_auth: bool, mcp_enabled: bool) 
             "/audio/output-devices",
             get(config_routes::list_audio_output_devices_http),
         )
+        .route("/agent/subscriptions/action", post(mail_routes::action))
+        .route("/agent/subscriptions/{id}/events", get(mail_routes::events))
         .route(
             "/agent/discover-session",
             post(config_routes::discover_agent_session_http),

@@ -6186,3 +6186,153 @@ async fn agent_wait_rejects_byte_budget_before_consuming_mail() {
     );
     assert_eq!(unread["messages"][0]["id"], "wait-large");
 }
+
+// Catches: routine lifecycle mail wakes a result subscriber, or a legacy reader
+// consumes another subscriber's RESULT. Fixture is audit transcript lines 2241/2249.
+#[tokio::test]
+async fn actionable_subscription_isolates_cursors_and_wakes_once() {
+    let state = test_state();
+    apply_initialize_identity(&state, "subscription-test", Some(TEST_UUID_A));
+    for id in ["pump", "watcher"] {
+        let reply = handle_messaging(
+            &state,
+            &serde_json::json!({
+                "action":"subscribe", "subscription_id":id, "filter":"actionable"
+            }),
+            Some("subscription-test"),
+        );
+        assert_eq!(
+            reply["subscription_id"], id,
+            "independent durable subscription: {reply}"
+        );
+    }
+    let fixture: Vec<serde_json::Value> =
+        serde_json::from_str(include_str!("fixtures/actionable-lifecycle-mail.json")).unwrap();
+    for m in fixture {
+        state.push_agent_inbox(
+            TEST_UUID_A,
+            crate::state::AgentMessage {
+                id: m["id"].as_str().unwrap().into(),
+                from_tuic_session: m["from_tuic_session"].as_str().unwrap().into(),
+                from_name: m["from_name"].as_str().unwrap().into(),
+                content: m["content"].as_str().unwrap().into(),
+                timestamp: m["timestamp"].as_u64().unwrap(),
+                delivered_via_channel: false,
+            },
+        );
+    }
+    let request = serde_json::json!({"action":"wait", "subscription_id":"pump", "timeout_ms":1});
+    let quiet = handle_agent_wait(&state, &request, Some("subscription-test")).await;
+    assert_eq!(
+        quiet["timed_out"], true,
+        "lifecycle-only traffic must not wake: {quiet}"
+    );
+    state.push_agent_inbox(
+        TEST_UUID_A,
+        crate::state::AgentMessage {
+            id: "subscription-result".into(),
+            from_tuic_session: "child".into(),
+            from_name: "child".into(),
+            content: "RESULT captured mail replay complete".into(),
+            timestamp: 1791910429394,
+            delivered_via_channel: false,
+        },
+    );
+    let legacy = handle_messaging(
+        &state,
+        &serde_json::json!({"action":"inbox"}),
+        Some("subscription-test"),
+    );
+    assert_eq!(legacy["count"], 5);
+    let result = handle_agent_wait(&state, &request, Some("subscription-test")).await;
+    assert_eq!(result["messages"].as_array().unwrap().len(), 1);
+    assert_eq!(result["messages"][0]["id"], "subscription-result");
+    let cursor = result["cursor"].clone();
+    // Disconnect before ack: the batch remains recoverable, not silently consumed.
+    let retry = handle_messaging(
+        &state,
+        &serde_json::json!({"action":"inbox", "subscription_id":"pump"}),
+        Some("subscription-test"),
+    );
+    assert_eq!(retry["messages"], result["messages"]);
+    let ack = handle_messaging(
+        &state,
+        &serde_json::json!({"action":"ack", "subscription_id":"pump", "cursor":cursor}),
+        Some("subscription-test"),
+    );
+    assert!(ack.get("error").is_none(), "{ack}");
+    let quiet = handle_agent_wait(&state, &request, Some("subscription-test")).await;
+    assert_eq!(
+        quiet["timed_out"], true,
+        "acknowledged RESULT must not wake twice"
+    );
+    let watcher = handle_messaging(
+        &state,
+        &serde_json::json!({"action":"inbox", "subscription_id":"watcher"}),
+        Some("subscription-test"),
+    );
+    assert_eq!(
+        watcher["messages"], result["messages"],
+        "pump must not consume watcher mail"
+    );
+}
+
+// Catches: a durable subscription ACK fails to settle the same delivery owners
+// as a paged snapshot, or overlapping ACKs erase newer unread-loss accounting.
+#[test]
+fn actionable_subscription_snapshot_overlap_keeps_missed_count_exact() {
+    let state = test_state();
+    register_peer(&state, TEST_UUID_A, "overlap", "mcp-overlap");
+    let invoke = |args| handle_messaging(&state, &args, Some("mcp-overlap"));
+    let subscribed = invoke(
+        serde_json::json!({"action":"subscribe","subscription_id":"overlap","filter":"all"}),
+    );
+    assert!(subscribed.get("error").is_none(), "{subscribed}");
+    let push = |index| {
+        state.push_agent_inbox(
+            TEST_UUID_A,
+            crate::state::AgentMessage {
+                id: format!("overlap-{index}"),
+                from_tuic_session: "child".into(),
+                from_name: "child".into(),
+                content: format!("RESULT {index}"),
+                timestamp: index + 1,
+                delivered_via_channel: false,
+            },
+        )
+    };
+    for index in 0..=100 {
+        push(index);
+    }
+    let (snapshot, _, missed, watermark) = state.read_agent_inbox(TEST_UUID_A, 0, 100, false);
+    assert_eq!(missed, 1);
+    let ids: Vec<_> = snapshot.iter().map(|message| message.id.clone()).collect();
+    let through = snapshot.last().unwrap().timestamp;
+    let batch =
+        invoke(serde_json::json!({"action":"inbox","subscription_id":"overlap","limit":100}));
+    let ack = invoke(
+        serde_json::json!({"action":"ack","subscription_id":"overlap","cursor":batch["cursor"]}),
+    );
+    assert!(ack.get("error").is_none(), "{ack}");
+    assert!(
+        state.agent_read_cursor.get(TEST_UUID_A).is_none(),
+        "subscription ACK must not consume the independent legacy cursor"
+    );
+    push(101);
+    assert_eq!(
+        *state.agent_inbox_evictions.get(TEST_UUID_A).unwrap(),
+        1,
+        "evicting subscription-observed mail is not a new loss"
+    );
+    state.acknowledge_agent_snapshot(TEST_UUID_A, through, &ids, watermark);
+    state.acknowledge_agent_snapshot(TEST_UUID_A, through, &ids, watermark);
+    assert_eq!(*state.agent_inbox_evictions.get(TEST_UUID_A).unwrap(), 0);
+    // The original snapshot observed 1..100. Evict those and one newer unread
+    // item, then replay the old acknowledgement: its watermark cannot hide loss.
+    for index in 102..=201 {
+        push(index);
+    }
+    assert_eq!(*state.agent_inbox_evictions.get(TEST_UUID_A).unwrap(), 1);
+    state.acknowledge_agent_snapshot(TEST_UUID_A, through, &ids, watermark);
+    assert_eq!(*state.agent_inbox_evictions.get(TEST_UUID_A).unwrap(), 1);
+}

@@ -456,7 +456,10 @@ fn session_action_requires_blocking_pool(action: &str) -> bool {
 }
 
 fn agent_action_requires_blocking_pool(action: &str) -> bool {
-    matches!(action, "spawn" | "send")
+    matches!(
+        action,
+        "spawn" | "send" | "inbox" | "subscribe" | "ack" | "unsubscribe"
+    )
 }
 
 fn secret_inspection_tool(name: &str, args: &serde_json::Value) -> bool {

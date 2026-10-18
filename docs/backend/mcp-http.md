@@ -907,7 +907,7 @@ say what was measured, not what the list costs today.
 | Tool | Actions | Default |
 |------|---------|---------|
 | `session` | list, create, submit, input, output, status, wait, resize, rename, close, kill, pause, resume | Enabled |
-| `agent` | spawn, wait, register, list_peers, send, inbox | Enabled |
+| `agent` | spawn, wait, register, list_peers, send, inbox, subscribe, ack, unsubscribe | Enabled |
 | `task` | get, cancel | Enabled |
 | `remote` | preview, update | Enabled |
 | `repo` | list, active, status, branch_integrations, branch_integration, worktree_list, worktree_lifecycle, worktree_create, worktree_remove, orphan_cleanup_answer, branch_delete, progress_list | Enabled |
@@ -2593,3 +2593,89 @@ register on that protocol session. `repair.max_attempts=1` and
 must enforce that bound. Server diagnostics alone do not prove ego compliance.
 An external caller without a project still receives the Progress core's explicit
 `project_required` error, never a guessed project.
+
+## Durable independent mail subscriptions
+
+`agent action=subscribe subscription_id=pump filter=actionable` creates a reader
+owned by the bound peer identity. Repeating it resumes the same reader. Use a
+separate ID for each pump or watcher. The filter is immutable: `actionable`
+(default) excludes routine TUIC lifecycle/idle notices; `all` includes them;
+`exit` selects exits, including failed exits; `failure` selects nonzero exits
+and prompt-delivery failures. Peer messages, including `BLOCKED` and `RESULT`,
+remain actionable regardless of their wording. Unknown system notices fail open
+as actionable. No model-side lifecycle classification is needed.
+
+Read with `agent action=inbox|wait subscription_id=pump [limit=1..100]`.
+The reply contains `messages`, `count`, `cursor`, `acknowledged_cursor`,
+`missed_count`, and `has_more`. A filtered wait returns only for matching mail
+or matching retention loss. Routine traffic does not end the wait. For a
+continuous background consumer, use the HTTP event stream below or subscribe
+to the ACP resource; the consumer does not need a model-driven wait loop.
+
+After processing a batch, call `agent action=ack subscription_id=pump
+cursor=<returned cursor>`. Reads do **not** acknowledge. A pending batch's message
+range is frozen until acknowledgement, so a retry cannot expand it to include
+new results. A changed limit takes effect after the pending batch is acknowledged. Acknowledgement is durable and idempotent. Read again after ack
+when `has_more` is true. A reconnect under the same peer identity and reader ID
+resumes after its acknowledged cursor. Reclaim the same explicit peer UUID when
+registering a new headerless MCP connection. Changing UUID does not migrate
+subscription cursors; legacy `replaces` still migrates the legacy inbox only.
+
+Delivery is **at least once until acknowledgement**, not exactly-once execution.
+If processing succeeds but ack does not reach the server, the retained batch is
+replayed. Deduplicate external effects by message ID. Acknowledged results do
+not replay. Concurrent readers must use distinct subscription IDs; sharing an ID
+means sharing its acknowledgement. Subscriptions never acknowledge another
+subscriber or alter the legacy inbox cursor/delivery owner.
+
+The SQLite journal (`<config dir>/mail-subscriptions.db`, with WAL sidecars)
+retains the newest **1000 messages per recipient** across process restart. This
+is a message-count bound, not a byte budget or an unlimited result archive.
+Every common inbox insertion is journaled before its change notification,
+including forwarded peer mail. Retention is independent of the legacy
+100-message FIFO and lifecycle coalescing. `missed_count` counts matching
+unacknowledged events evicted since the reader started or last acknowledged the
+gap. Filtered routine evictions do not wake an actionable reader. A new reader
+starts at the oldest retained position and does not claim historical losses
+before its creation. Acknowledging the returned gap cursor clears the reported
+loss. A journal append failure is logged and makes subscription reads fail
+explicitly for the lifetime of that process rather than claiming an empty inbox.
+Legacy in-memory mail delivery remains available.
+
+Each peer may keep 32 reader IDs (1–64 ASCII letters, digits, `_` or `-`).
+`agent action=unsubscribe subscription_id=pump` removes a reader, not retained
+mail. The journal and cursors are not removed by MCP disconnect or peer
+retirement. Legacy calls without `subscription_id` retain their existing
+`since`/`next_since` semantics and notifications; `since` is rejected for a
+subscription. No new Tauri command is needed: peer actions still require the
+MCP identity binding, including calls through the IPC MCP bridge.
+
+### Continuous HTTP and ACP notifications
+
+- `POST /agent/subscriptions/action`: accepts the same `subscribe`, `inbox`,
+  `ack`, and `unsubscribe` payload as the agent tool.
+- `GET /agent/subscriptions/{id}/events`: SSE `mail` events carry bounded batches
+  with `id: <cursor>`; keep-alive comments carry no mail. A connection emits an
+  unacknowledged batch once. Ack through the action endpoint advances it to the
+  next batch. Reconnect replays an unacknowledged retained batch. `Last-Event-ID`
+  does not acknowledge processing; only explicit ack does. Stream errors emit
+  `event: error` and close. Both endpoints require loopback, an enabled `agent`
+  tool, and `Mcp-Session-Id` bound to the reader's peer. Body fields cannot select
+  another peer. They use the same service and validation as MCP tools.
+- On MCP over ACP, subscribe/read resource
+  `tuic://inbox/subscriptions/<id>` after creating the reader. It sends
+  `notifications/resources/updated` only for a new actionable batch cursor or a
+  journal error. It also filters the idle-ego wake; routine traffic sends neither
+  a resource update nor a wake. Ack uses the agent tool. Selecting a durable
+  inbox resource replaces the legacy inbox as the idle-wake source on that ACP
+  connection. Explicitly subscribing to `tuic://inbox` still requests its legacy
+  unfiltered resource notifications.
+- HTTP MCP `/mcp`, its SSE/streamable response transport, and the local IPC MCP
+  bridge expose the same agent actions. The new HTTP SSE endpoint supplies
+  continuous durable-mail notifications; ordinary GET `/mcp` and the legacy
+  `tuic://inbox` resource are not silently reinterpreted as filtered readers.
+
+Controlled replay fixture: the audit's four captured idle notifications yield
+four legacy lifecycle deliveries and zero actionable deliveries. A subsequent
+RESULT produces one matching batch per independent acknowledged reader. This
+measurement is not a claim about product-wide token or latency savings.

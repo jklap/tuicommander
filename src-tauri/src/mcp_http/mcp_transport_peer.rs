@@ -1064,6 +1064,15 @@ pub(super) async fn handle_agent_wait(
             return missing_identity_context(mcp_session_id);
         }
     };
+    if args.get("subscription_id").is_some() {
+        return crate::mail_subscriptions::wait(
+            state,
+            &caller_tuic,
+            args,
+            clamp_wait_timeout(args["timeout_ms"].as_u64()),
+        )
+        .await;
+    }
     let since = resolve_agent_since(state, &caller_tuic, args);
     let (mut active_wait, mut inbox_events) = ActiveAgentWaitGuard::new(state, &caller_tuic, since);
     let timeout_ms = clamp_wait_timeout(args["timeout_ms"].as_u64());
@@ -1235,9 +1244,11 @@ pub(crate) async fn local_peer_call_with_message_id(
             })
             .await
         }
-        Some("register" | "list_peers" | "inbox") => handle_messaging(state, args, sid),
+        Some("register" | "list_peers" | "inbox" | "subscribe" | "ack" | "unsubscribe") => {
+            handle_messaging(state, args, sid)
+        }
         _ => {
-            serde_json::json!({"error":"Peer mail permits register/list_peers/send/inbox/wait only"})
+            serde_json::json!({"error":"Peer mail permits register/list_peers/send/inbox/wait/subscribe/ack/unsubscribe only"})
         }
     }
 }
@@ -1290,6 +1301,17 @@ fn handle_messaging_with_message_id(
         Ok(a) => a,
         Err(e) => return e,
     };
+    if matches!(action, "subscribe" | "ack" | "unsubscribe")
+        || (action == "inbox" && args.get("subscription_id").is_some())
+    {
+        let Some(peer) =
+            mcp_session_id.and_then(|sid| state.mcp.to_session.get(sid).map(|e| e.value().clone()))
+        else {
+            return serde_json::json!({"error":"You are not registered. Register first with agent action=register"});
+        };
+        return crate::mail_subscriptions::action(state, &peer, args);
+    }
+
     if matches!(action, "register" | "list_peers") && args.get("project").is_some() {
         return serde_json::json!({"error": "agent parameter project was renamed to path"});
     }

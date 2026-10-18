@@ -130,7 +130,11 @@ impl McpOverAcpHost for AcpMcpHost {
         self.connections.lock().values().any(|link| {
             link.peer_id.as_deref() == Some(peer_id)
                 && !link.forwarder.is_finished()
-                && link.subscriptions.lock().contains(INBOX_URI)
+                && link
+                    .subscriptions
+                    .lock()
+                    .iter()
+                    .any(|uri| uri == INBOX_URI || subscription_id(uri).is_some())
         })
     }
 
@@ -221,6 +225,17 @@ impl McpOverAcpHost for AcpMcpHost {
                             workspace_snapshot(&state, &crate::config::load_repositories())
                         }
                         INBOX_URI => inbox_snapshot(&state, peer_id.as_deref()),
+                        _ if subscription_id(&uri).is_some() => {
+                            let peer = peer_id.as_deref().ok_or_else(|| {
+                                McpOverAcpError::new(INVALID_PARAMS, "Inbox requires a bound peer")
+                            })?;
+                            crate::mail_subscriptions::read(
+                                &state,
+                                peer,
+                                &json!({"action":"inbox","subscription_id":subscription_id(&uri)}),
+                            )
+                            .await
+                        }
                         _ => return Err(unknown_resource(&uri)),
                     };
                     let mut result = json!({ "contents": [{
@@ -233,11 +248,28 @@ impl McpOverAcpHost for AcpMcpHost {
                 }
                 "resources/subscribe" | "resources/unsubscribe" => {
                     let uri = uri_param(params.as_ref())?;
-                    if uri != WORKSPACE_URI && uri != INBOX_URI {
+                    if uri != WORKSPACE_URI && uri != INBOX_URI && subscription_id(&uri).is_none() {
                         return Err(unknown_resource(&uri));
                     }
                     if method == "resources/subscribe" {
+                        if let Some(id) = subscription_id(&uri) {
+                            let peer = peer_id.as_deref().ok_or_else(|| {
+                                McpOverAcpError::new(INVALID_PARAMS, "Inbox requires a bound peer")
+                            })?;
+                            let batch = crate::mail_subscriptions::read(
+                                &state,
+                                peer,
+                                &json!({"action":"inbox","subscription_id":id}),
+                            )
+                            .await;
+                            if let Some(error) = batch["error"].as_str() {
+                                return Err(McpOverAcpError::new(INVALID_PARAMS, error));
+                            }
+                        }
                         subscriptions.lock().insert(uri);
+                        if let Some(peer) = peer_id.as_deref() {
+                            state.notify_mail_subscription_change(peer);
+                        }
                     } else {
                         subscriptions.lock().remove(&uri);
                     }
@@ -315,6 +347,12 @@ impl McpOverAcpHost for AcpMcpHost {
 pub(crate) const WORKSPACE_URI: &str = "tuic://workspace";
 /// This peer's unread mail.
 pub(crate) const INBOX_URI: &str = "tuic://inbox";
+const SUBSCRIPTION_PREFIX: &str = "tuic://inbox/subscriptions/";
+fn subscription_id(uri: &str) -> Option<&str> {
+    uri.strip_prefix(SUBSCRIPTION_PREFIX)
+        .filter(|id| !id.is_empty())
+}
+
 /// How long a burst of changes is gathered into one `resources/updated`.
 const COALESCE: std::time::Duration = std::time::Duration::from_millis(250);
 /// The most unread messages one inbox read carries.
@@ -490,6 +528,8 @@ async fn forward(
     let mut inbox_due: Option<tokio::time::Instant> = None;
     let mut wake_due: Option<tokio::time::Instant> = None;
     let mut last_workspace: Option<Value> = None;
+    let mut notified_subscriptions = std::collections::HashMap::new();
+    let mut woken_subscriptions = std::collections::HashMap::new();
     let arm = |due: &mut Option<tokio::time::Instant>| {
         due.get_or_insert_with(|| tokio::time::Instant::now() + COALESCE);
     };
@@ -537,7 +577,7 @@ async fn forward(
                 }
             } => match changed {
                 Ok(()) => {
-                    if subscribed(INBOX_URI) {
+                    if subscriptions.lock().iter().any(|uri| uri == INBOX_URI || subscription_id(uri).is_some()) {
                         arm(&mut inbox_due);
                     }
                     // Armed whether or not ego subscribed: an idle ego is not
@@ -557,16 +597,42 @@ async fn forward(
             },
             () = until(inbox_due) => {
                 inbox_due = None;
-                updated(INBOX_URI);
+                if subscribed(INBOX_URI) { updated(INBOX_URI); }
+                let uris: Vec<_> = subscriptions.lock().iter().filter(|uri| subscription_id(uri).is_some()).cloned().collect();
+                notified_subscriptions.retain(|uri, _| uris.contains(uri));
+                let Some(state) = state.upgrade() else { return };
+                if let Some(peer) = feeds.peer.as_deref() {
+                    for uri in uris {
+                        let batch = crate::mail_subscriptions::read(&state,peer,&json!({"action":"inbox","subscription_id":subscription_id(&uri)})).await;
+                        let cursor = batch["cursor"].as_u64();
+                        if (crate::mail_subscriptions::pending(&batch) || batch.get("error").is_some()) && notified_subscriptions.get(&uri) != Some(&cursor) {
+                            notified_subscriptions.insert(uri.clone(),cursor);
+                            updated(&uri);
+                        }
+                    }
+                }
             },
             () = until(wake_due) => {
                 wake_due = None;
                 let Some(state) = state.upgrade() else { return };
-                let unread = feeds.peer.as_deref().is_some_and(|peer| {
-                    inbox_snapshot(&state, Some(peer))["messages"]
-                        .as_array()
-                        .is_some_and(|messages| !messages.is_empty())
-                });
+                let uris: Vec<_> = subscriptions.lock().iter().filter(|uri| subscription_id(uri).is_some()).cloned().collect();
+                woken_subscriptions.retain(|uri, _| uris.contains(uri));
+                let mut unread = false;
+                if uris.is_empty() {
+                    unread = feeds.peer.as_deref().is_some_and(|peer| {
+                        inbox_snapshot(&state, Some(peer))["messages"].as_array().is_some_and(|messages| !messages.is_empty())
+                    });
+                } else if let Some(peer) = feeds.peer.as_deref() {
+                    // A durable resource selection also filters the idle ego wake.
+                    for uri in uris {
+                        let batch = crate::mail_subscriptions::read(&state,peer,&json!({"action":"inbox","subscription_id":subscription_id(&uri)})).await;
+                        let cursor = batch["cursor"].as_u64();
+                        if crate::mail_subscriptions::pending(&batch) && woken_subscriptions.get(&uri) != Some(&cursor) {
+                            woken_subscriptions.insert(uri,cursor);
+                            unread = true;
+                        }
+                    }
+                }
                 if unread && let Some(wake) = &wake {
                     wake();
                 }
@@ -1083,5 +1149,94 @@ mod tests {
             .disconnect(connection.connection_id)
             .await
             .expect("disconnect");
+    }
+    // Catches: a durable resource still forwards idle lifecycle notices, or an
+    // acknowledged RESULT wakes ego again after its MCP connection reconnects.
+    #[tokio::test]
+    async fn actionable_subscription_acp_filters_notifications_and_wakes_once() {
+        let state = test_state();
+        let woken: Arc<Mutex<Vec<String>>> = Arc::default();
+        let host = AcpMcpHost {
+            state: Arc::downgrade(&state),
+            connections: Mutex::default(),
+            wake: {
+                let woken = woken.clone();
+                Arc::new(move |peer| woken.lock().push(peer))
+            },
+        };
+        let (notify, heard) = listener();
+        let id = host.connect(Some(PEER), notify).unwrap();
+        let create = crate::mail_subscriptions::action(
+            &state,
+            PEER,
+            &json!({"action":"subscribe","subscription_id":"acp"}),
+        );
+        assert!(create.get("error").is_none(), "{create}");
+        let uri = "tuic://inbox/subscriptions/acp";
+        host.message(
+            &id,
+            "resources/subscribe".into(),
+            object(json!({"uri":uri})),
+        )
+        .await
+        .unwrap();
+        let fixture: Vec<Value> =
+            serde_json::from_str(include_str!("fixtures/actionable-lifecycle-mail.json")).unwrap();
+        for m in fixture {
+            state.push_agent_inbox(
+                PEER,
+                crate::state::AgentMessage {
+                    id: m["id"].as_str().unwrap().into(),
+                    from_tuic_session: m["from_tuic_session"].as_str().unwrap().into(),
+                    from_name: "tuic".into(),
+                    content: m["content"].as_str().unwrap().into(),
+                    timestamp: m["timestamp"].as_u64().unwrap(),
+                    delivered_via_channel: false,
+                },
+            );
+        }
+        // Let both production debounce paths run before asserting no wake.
+        tokio::time::sleep(WAKE_DEBOUNCE + COALESCE * 2).await;
+        assert!(woken.lock().is_empty(), "routine traffic must not wake ego");
+        let updates = || {
+            heard
+                .lock()
+                .iter()
+                .filter(|(method, params)| {
+                    method == "notifications/resources/updated"
+                        && params.as_ref().and_then(|p| p.get("uri")) == Some(&json!(uri))
+                })
+                .count()
+        };
+        assert_eq!(updates(), 0);
+        state.push_agent_inbox(PEER, mail("durable-acp-result", "RESULT acp delivery"));
+        eventually("one actionable notification", || updates() == 1).await;
+        eventually("one actionable wake", || woken.lock().len() == 1).await;
+        let batch = read(&host, &id, uri).await;
+        assert_eq!(batch["count"], 1);
+        let ack = crate::mail_subscriptions::action(
+            &state,
+            PEER,
+            &json!({"action":"ack","subscription_id":"acp","cursor":batch["cursor"]}),
+        );
+        assert!(ack.get("error").is_none(), "{ack}");
+        host.disconnect(&id);
+        let (notify, _) = listener();
+        let resumed = host.connect(Some(PEER), notify).unwrap();
+        host.message(
+            &resumed,
+            "resources/subscribe".into(),
+            object(json!({"uri":uri})),
+        )
+        .await
+        .unwrap();
+        assert_eq!(read(&host, &resumed, uri).await["count"], 0);
+        tokio::time::sleep(WAKE_DEBOUNCE + COALESCE).await;
+        assert_eq!(
+            woken.lock().len(),
+            1,
+            "acknowledged RESULT must not wake after reconnect"
+        );
+        host.disconnect(&resumed);
     }
 }
