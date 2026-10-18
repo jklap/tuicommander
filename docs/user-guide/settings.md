@@ -664,3 +664,7 @@ MCP, IPC and HTTP. Readback reports stored presence only (`set`, `unset`,
 removing a stored token leaves environment and CircleCI CLI fallbacks unchanged.
 
 On narrow screens, search and page selection share one compact navigation row. The workspace path in AI Chat is a read-only field; select or scroll its text to inspect the full path.
+
+### Mobile font sizes
+
+In mobile Settings, use the Terminal and Chat minus/plus controls under Appearance to set each size from 10 to 24 px. Each value is saved on this device. Terminal changes CLI output; Chat changes Session Chat and AI Chat transcripts. The defaults remain 14 px for terminal output and Chat body text. Composers, UI controls and desktop fonts stay unchanged. CLI text wraps to the available width without changing the shared terminal size.

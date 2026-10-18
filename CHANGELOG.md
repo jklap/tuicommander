@@ -8,6 +8,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- Set independent mobile Terminal and Chat font sizes in Settings, remembered on this device only (#2023-54c4).
+
 - Durable keyed managed-child launches across MCP, HTTP and IPC, with explicit workspace, parent, stable name, hold-open policy and retry-safe receipts (#2006-f5a1).
 - Publish typed Settings account enumeration and configured Ego interactive login start/status, with human terminal authentication and separate credential readback (#1790-1011).
 ### Fixed
