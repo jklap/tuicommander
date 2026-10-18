@@ -190,53 +190,6 @@ impl Drop for Call<'_> {
 mod tests {
     use super::*;
 
-    // Catches: a cancelled dispatch gets recorded as no effect, or leaks arguments.
-    #[test]
-    fn mcp_outcome_record_cancelled_call_keeps_unknown_effect_without_bodies() {
-        let audit = Mutex::new(Audit::default());
-        drop(Call::start(
-            &audit,
-            &json!({"name":"agent","arguments":{"action":"send","to":"PRIVATE_TARGET","message":"PRIVATE_BODY"}}),
-        ));
-        let projection = audit.lock().projection();
-        assert_eq!(projection["records"][0]["effect"], "unknown");
-        assert_eq!(projection["records"][0]["application_error"], Value::Null);
-        assert_eq!(
-            projection["records"][0]["transport_error"],
-            "cancelled_before_reply"
-        );
-        assert!(!projection.to_string().contains("PRIVATE"));
-    }
-
-    // Catches: recipient batches collapse into retries or text bytes count scalars.
-    #[test]
-    fn mcp_outcome_record_groups_parent_but_preserves_targets_and_utf8_cost() {
-        let audit = Mutex::new(Audit::default());
-        let parent = Uuid::new_v4();
-        for target in ["recipient-one", "recipient-two"] {
-            let call = Call::start(
-                &audit,
-                &json!({"name":"agent","arguments":{"action":"send","to":target},"_meta":{"tuic/parent_operation_id":parent}}),
-            );
-            call.finish(
-                &json!({"effect":"not_started"}),
-                &json!({"isError":true,"content":[{"type":"text","text":"é"}]}),
-            );
-        }
-        let projection = audit.lock().projection();
-        let rows = projection["records"].as_array().unwrap();
-        assert_eq!(rows[0]["parent_operation_id"], json!(parent));
-        assert_eq!(
-            rows[0]["parent_operation_id"],
-            rows[1]["parent_operation_id"]
-        );
-        assert_ne!(rows[0]["call_id"], rows[1]["call_id"]);
-        assert_ne!(rows[0]["target_digest"], rows[1]["target_digest"]);
-        assert_eq!(rows[0]["response_text_bytes"], 2);
-        assert_eq!(rows[0]["effect"], "not_started");
-        assert_eq!(rows[0]["application_error"], true);
-    }
-
     // Catches: runtime audit retention or its public projection grows without bound.
     #[test]
     fn mcp_outcome_record_projection_evicts_without_retaining_arbitrary_metadata() {

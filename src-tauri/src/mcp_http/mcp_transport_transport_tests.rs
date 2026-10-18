@@ -5737,3 +5737,108 @@ async fn native_input_contracts_compile_without_external_resolution() {
         assert_eq!(response["result"]["isError"], false, "{name}: {response}");
     }
 }
+
+async fn runtime_audit_projection(state: Arc<AppState>) -> serde_json::Value {
+    use axum::{body::Body, http::Request};
+    use tower::ServiceExt;
+    let response = crate::mcp_http::build_router(state, false, true)
+        .oneshot(
+            Request::get("/mcp/audit")
+                .extension(ConnectInfo(loopback_addr()))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), axum::http::StatusCode::OK);
+    let bytes = axum::body::to_bytes(response.into_body(), 1_000_000)
+        .await
+        .unwrap();
+    serde_json::from_slice(&bytes).unwrap()
+}
+
+// Catches: cancelling real dispatch records rollback/no effect, or leaks body values.
+#[tokio::test]
+async fn mcp_outcome_record_cancelled_call_keeps_unknown_effect_without_bodies() {
+    let state = test_state();
+    let mut events = state.event_bus.subscribe();
+    let call_state = state.clone();
+    let call = tokio::spawn(async move {
+        post_test_tool_call(call_state, "audit-cancel", "ui",
+            serde_json::json!({"action":"confirm","title":"PRIVATE_TITLE","message":"PRIVATE_BODY"})).await
+    });
+    loop {
+        if matches!(
+            events.recv().await.unwrap(),
+            crate::state::AppEvent::McpConfirm { .. }
+        ) {
+            break;
+        }
+    }
+    call.abort();
+    assert!(call.await.unwrap_err().is_cancelled());
+    let projection = runtime_audit_projection(state).await;
+    let row = &projection["records"][0];
+    assert_eq!(row["operation"], "ui.confirm");
+    assert_eq!(row["effect"], "unknown");
+    assert_eq!(row["application_error"], serde_json::Value::Null);
+    assert_eq!(row["transport_error"], "cancelled_before_reply");
+    assert!(!projection.to_string().contains("PRIVATE"));
+}
+
+// Catches: runtime recipient batches collapse targets/calls, or charge Unicode scalars as bytes.
+#[cfg(unix)]
+#[tokio::test]
+async fn mcp_outcome_record_groups_parent_but_preserves_targets_and_utf8_cost() {
+    let state = test_state();
+    let parent = uuid::Uuid::new_v4();
+    let mut costs = Vec::new();
+    for (index, target) in ["recipient-one", "recipient-two"].into_iter().enumerate() {
+        install_atomic_submit_test_session(&state, target);
+        state
+            .session_maps
+            .output_buffers
+            .get(target)
+            .unwrap()
+            .lock()
+            .write("é".as_bytes());
+        let mut headers = HeaderMap::new();
+        headers.insert(MCP_SESSION_HEADER, "audit-parent".parse().unwrap());
+        let response = mcp_post(
+            State(state.clone()),
+            ConnectInfo(loopback_addr()),
+            headers,
+            Json(
+                serde_json::json!({"jsonrpc":"2.0","id":index,"method":"tools/call",
+                "params":{"name":"session","arguments":{"action":"output","session_id":target},
+                "_meta":{"tuic/parent_operation_id":parent}}}),
+            ),
+        )
+        .await
+        .into_response();
+        let bytes = axum::body::to_bytes(response.into_body(), 1_000_000)
+            .await
+            .unwrap();
+        let result: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(result["result"]["isError"], false, "{result}");
+        let text = result["result"]["content"][0]["text"].as_str().unwrap();
+        assert!(text.contains('é'), "{result}");
+        assert!(
+            text.len() > text.chars().count(),
+            "fixture must distinguish UTF-8 bytes"
+        );
+        costs.push(text.len());
+    }
+    let projection = runtime_audit_projection(state).await;
+    let rows = projection["records"].as_array().unwrap();
+    assert_eq!(rows.len(), 2);
+    assert_eq!(rows[0]["parent_operation_id"], serde_json::json!(parent));
+    assert_eq!(rows[1]["parent_operation_id"], serde_json::json!(parent));
+    assert_ne!(rows[0]["call_id"], rows[1]["call_id"]);
+    assert_ne!(rows[0]["target_digest"], rows[1]["target_digest"]);
+    for (row, cost) in rows.iter().zip(costs.iter().rev()) {
+        assert_eq!(row["response_text_bytes"], *cost);
+        assert_eq!(row["application_error"], false);
+    }
+    assert!(!projection.to_string().contains("recipient-"));
+}
