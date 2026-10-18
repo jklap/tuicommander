@@ -1014,6 +1014,11 @@ fn shared_routes() -> Router<Arc<AppState>> {
     Router::new()
         .route("/mcp/peer", get(remote_peer::endpoint))
         .route("/settings/action", post(settings_routes::settings_action))
+        // Browser Settings hydration and refresh read the same redacted owner snapshot.
+        .route(
+            "/config",
+            get(config_routes::get_config).put(config_routes::put_config),
+        )
         .route("/accounts/action", post(account_routes::action))
         .route("/accounts/secret-form", post(account_routes::secret_form))
         // Version (authenticated)
@@ -1840,10 +1845,6 @@ pub fn build_router(state: Arc<AppState>, remote_auth: bool, mcp_enabled: bool) 
             post(github_routes::github_unbind_repo),
         )
         // Config
-        .route(
-            "/config",
-            get(config_routes::get_config).put(config_routes::put_config),
-        )
         .route(
             "/config/hash-password",
             post(config_routes::hash_password_http),

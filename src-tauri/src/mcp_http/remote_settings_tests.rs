@@ -144,14 +144,50 @@ async fn remote_settings_refuses_local_only_workflows() {
 #[tokio::test]
 async fn remote_settings_requires_authentication() {
     let (_dir, _guard, state) = isolated();
-    let mut request = request("POST", "/settings/action", json!({"action":"describe"}));
-    *request.uri_mut() = "/settings/action".parse().unwrap();
+    let router = build_remote_router(state);
+    for (method, path) in [
+        ("POST", "/settings/action"),
+        ("GET", "/config"),
+        ("PUT", "/config"),
+    ] {
+        let mut request = request(method, path, json!({"action":"describe"}));
+        *request.uri_mut() = path.parse().unwrap();
+        assert_eq!(
+            router.clone().oneshot(request).await.unwrap().status(),
+            StatusCode::UNAUTHORIZED,
+            "{method} {path} must retain daemon authentication"
+        );
+    }
+}
+
+// Catches: browser Settings disabling persistence because headless GET /config is missing.
+#[tokio::test]
+async fn remote_router_serves_settings_bootstrap() {
+    let (_dir, _guard, state) = isolated();
+    {
+        let mut config = state.config.write();
+        config.default_font_size = 19;
+        config.services.auth.password_hash = "bootstrap-password-canary".into();
+        config.services.auth.session_token = "bootstrap-token-canary".into();
+        config.services.push.vapid_private_key = "bootstrap-vapid-canary".into();
+        config.services.relay.token = "bootstrap-relay-canary".into();
+    }
+    let response = build_remote_router(state)
+        .oneshot(request("GET", "/config", Value::Null))
+        .await
+        .unwrap();
     assert_eq!(
-        build_remote_router(state)
-            .oneshot(request)
-            .await
-            .unwrap()
-            .status(),
-        StatusCode::UNAUTHORIZED
+        response.status(),
+        StatusCode::OK,
+        "browser Settings bootstrap must not fail on a headless daemon"
+    );
+    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let config: Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(config["default_font_size"], 19);
+    assert!(
+        !std::str::from_utf8(&bytes).unwrap().contains("canary"),
+        "shared bootstrap must retain secret redaction"
     );
 }

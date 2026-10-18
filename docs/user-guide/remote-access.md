@@ -569,7 +569,8 @@ machine selector; it defaults to the machine of the repository the settings nav 
 on, and an explicit pick overrides it, so a remote machine is editable from a local repo.
 
 Authenticated Settings actions are available on the headless daemon through the same
-`POST /settings/action` contract as the desktop server. Successful durable edits publish
+`POST /settings/action` contract as the desktop server. The daemon also serves the
+authenticated `/config` snapshot used to load and refresh browser Settings. Successful durable edits publish
 `settings-changed` over SSE so connected Settings readers can refresh without saving.
 
 Three things stay local even while a remote machine is selected, because they cannot work
