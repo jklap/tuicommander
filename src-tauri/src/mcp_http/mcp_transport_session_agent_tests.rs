@@ -4874,3 +4874,161 @@ fn softwrap_1977_session_output_preserves_recorded_spaces() {
         assert!(data.starts_with(&expected), "scroll={scroll}: {data:?}");
     }
 }
+
+// Catches: a lost launch reply creates a second PTY when the same key is retried.
+#[cfg(unix)]
+#[tokio::test]
+async fn lost_launch_reply_reuses_the_same_child() {
+    let state = test_state();
+    let parent = "550e8400-e29b-41d4-a716-446655440b01";
+    register_peer(&state, parent, "orchestrator", "mcp-orch");
+    let workspace = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap();
+    let request = serde_json::json!({
+        "action": "launch", "idempotency_key": "lost-reply", "parent_session_id": parent,
+        "name": "stable-child", "keep_open": true,
+        "workspace": {"existing_path": workspace},
+        "spawn": {"prompt": "hello", "binary_path": "/bin/sh",
+                  "args": ["-c", "exec cat", "{prompt}"]}
+    });
+    let first = crate::mcp_http::mcp_transport::handle_mcp_tool_call_with_context(
+        &state,
+        "127.0.0.1:0".parse().unwrap(),
+        "agent",
+        &request,
+        Some("mcp-orch"),
+        None,
+    )
+    .await;
+    assert!(first.get("error").is_none(), "launch failed: {first}");
+    let second = crate::mcp_http::mcp_transport::handle_mcp_tool_call_with_context(
+        &state,
+        "127.0.0.1:0".parse().unwrap(),
+        "agent",
+        &request,
+        Some("mcp-orch"),
+        None,
+    )
+    .await;
+    assert_eq!(first["launch_id"], second["launch_id"]);
+    assert_eq!(first["session_id"], second["session_id"]);
+    assert_eq!(
+        state.session_maps.sessions.len(),
+        1,
+        "retry must not create a second PTY"
+    );
+    let child = first["session_id"].as_str().unwrap();
+    assert_eq!(
+        state
+            .session_maps
+            .session_parent
+            .get(child)
+            .unwrap()
+            .value(),
+        parent
+    );
+    assert!(state.keep_open_sessions.contains(child));
+    assert_eq!(
+        state
+            .session_maps
+            .sessions
+            .get(child)
+            .unwrap()
+            .lock()
+            .display_name
+            .as_deref(),
+        Some("stable-child")
+    );
+    handle_session(
+        &state,
+        &serde_json::json!({"action":"kill", "session_id":child}),
+        None,
+    );
+}
+
+// Catches: output chunks recapture a moving ring instead of completing the retained snapshot.
+#[test]
+fn budgeted_terminal_output_snapshot_survives_concurrent_output() {
+    let state = test_state();
+    let sid = "budget-output";
+    let source = "界\"\n".repeat(9000);
+    let mut ring = crate::OutputRingBuffer::new(100000);
+    ring.write(source.as_bytes());
+    state
+        .session_maps
+        .output_buffers
+        .insert(sid.into(), parking_lot::Mutex::new(ring));
+    let original = session_output(
+        &state,
+        &serde_json::json!({"action":"output","session_id":sid,"format":"raw","from_byte":0,"limit":100000}),
+    );
+    let mut args = serde_json::json!({"action":"output","session_id":sid,"format":"raw","from_byte":0,"limit":100000,"byte_budget":4096});
+    let mut text = String::new();
+    loop {
+        let page = session_output(&state, &args);
+        assert!(serde_json::to_vec(&page).unwrap().len() <= 4096);
+        text.push_str(page["chunk"].as_str().unwrap());
+        if page["continuation"].is_null() {
+            break;
+        }
+        state
+            .session_maps
+            .output_buffers
+            .get(sid)
+            .unwrap()
+            .lock()
+            .write(b"new output");
+        args["continuation"] = page["continuation"].clone();
+    }
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&text).unwrap(),
+        original
+    );
+    let missing = handle_session(
+        &state,
+        &serde_json::json!({"action":"list","session_id":"absent","compact":true}),
+        None,
+    );
+    assert!(missing.get("error").is_some());
+}
+
+// Catches: live inventory drops the backend activity timestamp and leaves compact activity unknown.
+#[tokio::test]
+async fn session_inventory_exposes_activity_timestamp_and_compact_age() {
+    let state = test_state();
+    let created = handle_session(&state, &serde_json::json!({"action":"create"}), None);
+    if created.get("error").is_some() {
+        return;
+    }
+    let id = created["session_id"].as_str().unwrap();
+    state.session_maps.session_states.insert(
+        id.into(),
+        crate::state::SessionState {
+            last_activity_ms: 1,
+            ..Default::default()
+        },
+    );
+    let full = handle_session(
+        &state,
+        &serde_json::json!({"action":"list","session_id":id}),
+        None,
+    );
+    let compact = handle_session(
+        &state,
+        &serde_json::json!({"action":"list","session_id":id,"compact":true}),
+        None,
+    );
+    handle_session(
+        &state,
+        &serde_json::json!({"action":"kill","session_id":id}),
+        None,
+    );
+    assert_eq!(full[0]["last_activity_ms"], 1);
+    assert!(
+        compact[0]["activity_age_ms"]
+            .as_u64()
+            .is_some_and(|age| age > 0),
+        "{compact}"
+    );
+}

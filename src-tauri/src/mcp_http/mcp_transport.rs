@@ -579,7 +579,9 @@ async fn dispatch_mcp_tool_call_with_context(
         "telegram" => crate::telegram::handle_tool(state, args, mcp_session_id).await,
         "session" => {
             let action = args["action"].as_str().unwrap_or("");
-            if let Some(remote) = super::remote_mcp_sessions::resolve(state, args) {
+            if action != "list"
+                && let Some(remote) = super::remote_mcp_sessions::resolve(state, args)
+            {
                 if matches!(action, "submit" | "force_retry") && !addr.ip().is_loopback() {
                     return serde_json::json!({"error":"This session action is restricted to localhost connections"});
                 }
@@ -667,7 +669,9 @@ async fn dispatch_mcp_tool_call_with_context(
             {
                 return result;
             }
-            if action == "wait" && !addr.ip().is_loopback() {
+            if action == "launch" {
+                super::launch_transaction::execute(state, addr, args).await
+            } else if action == "wait" && !addr.ip().is_loopback() {
                 serde_json::json!({
                     "error": "Inter-agent messaging is restricted to localhost connections"
                 })

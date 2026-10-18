@@ -3299,6 +3299,52 @@ owner; replies contain only token presence. Clearing the stored token does not
 remove `CIRCLE_TOKEN` or the CircleCI CLI configuration. The Git & GitHub page
 continues to show the effective token source. No transport returns the token.
 
+### Durable managed-agent launch
+
+`POST /agents/launch` (localhost only) and IPC `managed_agent_launch { request }` use the same Rust transaction as MCP `agent action=launch`. Send:
+
+```json
+{
+  "idempotency_key": "story-worker-1",
+  "parent_session_id": "<registered-peer-uuid>",
+  "name": "worker-1",
+  "keep_open": true,
+  "workspace": {"existing_path": "/absolute/checkout"},
+  "spawn": {"agent_type": "claude", "prompt": "Perform the task"}
+}
+```
+
+For a new workspace use `workspace: {repo_path, branch, base_ref?}`. No fallback checkout is used after a refusal. `spawn` accepts the existing MCP spawn options; do not put `cwd`, `name`, `keep_open`, `action`, `parent_session_id` or `idempotency_key` inside it. These values belong to the transaction. Model, account and local brief policy remain caller-owned.
+
+The receipt includes `launch_id`, reserved `session_id`, `stage`, `status`, `live`, `prompt_delivery`, `ready`, `reason`, `workspace_path`, `warm_artifacts`, and the original `child` spawn response when available. Read it with `{launch_id}` on the same endpoint, or repeat the identical creation request. Keys are scoped to the explicit parent identity. A changed request under the same key returns `idempotency_conflict`. Retain the key across connection loss; do not generate a new key to retry.
+
+`status` is `created`, `prompt_delivered`, `ready` or `blocked`. `prompt_delivery=delivered` proves argv handoff or successful queued PTY submission, not model acceptance. `ready` additionally requires the native Ready-screen adapter and the shared idle/completed session projection. Terminal movement or silence alone is insufficient. Deferred prompt timeouts (including parentless automation/workflow children after the 30-second budget) and questions report blocked; the initial prompt stays queued and a retry never re-enqueues it. Warm-artifact readiness is a separate observation, not a promise that copying or setup has finished before the child starts.
+
+The journal in the app data directory, `managed-launches.sqlite`, persists request digests and resource identities, not prompt/environment bodies. Its checkpoints precede workspace and PTY creation. A crash in an uncertain creation window returns blocked rather than attempting that side effect again. A retained live child is recovered by its reserved identity; missing delivery metadata stays unknown. An exited child or server restart never causes the same key to create a replacement. Journal records are not expired: they are retry tombstones, unlike the process-lifetime `task_id` in a child response. On uncertain workspace creation inspect the requested repository/branch before a separate, explicitly chosen launch.
+
+Native automation and workflow run bindings also use this transaction through `managed_launch`: automation run IDs and workflow attempt IDs provide stable keys, with an in-process run-owner scope when no peer parent exists. No synthetic peer is registered. Run-owned children use the same pinned-name and explicit keep-open path as MCP children; the existing run controller still owns cancellation and completion. The unkeyed public `spawn` compatibility action continues to use the same low-level PTY spawn implementation.
+
+#### Byte-bounded MCP-compatible terminal output
+
+`GET /sessions/{id}/output?format=mcp&byte_budget=4096` (or `format=mcp_raw`)
+uses the same validator and immutable snapshot pager as MCP `session output`.
+`byte_budget` must be an integer from 1024 to 65536. The compact JSON response,
+including the page envelope, fits that UTF-8 byte budget; HTTP/MCP framing does
+not count. It returns `encoding:"json-text"`, `chunk`, `offset`, `total_bytes`,
+`continuation`, `omitted_fields`, and `expires_after_seconds`. Concatenate chunk
+values, then parse JSON. Continue on the same session and format with the opaque
+`continuation` query parameter until it is null. A token defaults to 4096 bytes
+when the budget is omitted. Snapshots expire after 300 seconds, restart or cache
+eviction; invalid or expired tokens fail explicitly. Concurrent output cannot
+change a captured snapshot. Other output formats keep their existing contract.
+See [the full paging and inventory contract](../backend/mcp-http.md#compact-inventories-and-byte-bounded-response-snapshots).
+
+HTTP MCP-compatible output tokens share the local `ipc` continuation scope with
+IPC MCP passthrough for the same target. A local caller holding a token may
+resume it through either transport. This is not a new authentication boundary;
+normal endpoint admission still applies. Remote byte-budget requests reject
+legacy daemons that do not return the bounded envelope.
+
 ### Frame workload evidence
 
 `POST /debug/frame-workload` accepts `{ "recording": "<schema v1 JSON>" }` and returns the saved path as a JSON string. Same writer and payload as `save_frame_workload` IPC; 8 MiB request cap, 6 MiB recording cap, existing authentication. Writes rotate two instance-local content files and run on the blocking pool. See [stall evidence](../backend/stall-journal.md).
