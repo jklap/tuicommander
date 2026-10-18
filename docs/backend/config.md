@@ -173,7 +173,7 @@ This guard covers unit tests only. Integration tests under `src-tauri/tests/`
 compile the library without `cfg(test)`, and `make dev` is not a test at all —
 both isolate with `TUIC_APP_INSTANCE=<id>` as described above.
 
-The `plugins/` subdirectory holds external plugin packages. Version 1.7.7
+The `plugins/` subdirectory holds external plugin packages. Version 2.0.0
 externalizes Plan Tracker and Stories Ticker by seeding `plugins/plan/` and
 `plugins/stories-ticker/` once. The root marker
 `.externalized-plan-stories-v1` records completion: existing packages are never

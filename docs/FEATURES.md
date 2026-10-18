@@ -28,9 +28,9 @@ Published story workflows can start in Plans and Stories through the owning daem
 >
 > This document intentionally serves two audiences: users need a searchable overview of what exists, while LLMs and contributors need stable names, shortcuts, settings, and implementation anchors. It is an inventory, not a replacement for the chronological [CHANGELOG](../CHANGELOG.md).
 
-**Current version:** 1.7.7  
+**Current version:** 2.0.0\
 **Last verified:** 2026-09-16  
-**Recent feature delta:** See the [Unreleased](https://github.com/sstraus/tuicommander/blob/main/CHANGELOG.md#unreleased) and [1.7.7](https://github.com/sstraus/tuicommander/blob/main/CHANGELOG.md#177---2026-09-16) changelog sections for what changed recently. Keep this page focused on the current state; do not duplicate the full changelog here.
+**Recent feature delta:** See the [Unreleased](https://github.com/sstraus/tuicommander/blob/main/CHANGELOG.md#unreleased) changelog section for what changed recently. Keep this page focused on the current state; do not duplicate the full changelog here.
 
 Desktop AI Chat uses the terminal composer’s pin and blue play buttons. The pin highlights a parked draft; tooltips identify Park, Restore, Swap, Send and Queue. Mobile Park and Stop share the input row with Attach and Send.
 
@@ -3016,6 +3016,11 @@ the created item. The Tasks shell integrates this component separately.
 
 
 Automation worktree cleanup (#1623-8b2a): Automation runs retain automation/run IDs and the exact created workspace path and ID in their saved snapshot, including after definition deletion. Worktree cleanup is explicit and limited to final runs. The backend resolves the saved identity and rechecks shared Git integration/archive proof, dirt, submodule commits and live sessions; it never forces removal or closes sessions. Shared `automation_action` actions `worktree_preview` and `cleanup_worktree` accept a saved run `id` on IPC, HTTP, MCP and CLI.
+
+### Guided event configuration (#2012-72ff)
+
+Three built-in Smart Prompts guide issue-to-draft-PR, incoming PR review and authorized bounded-fix configuration. They open in the composer for review and ask for owner/profile/GitHub/skill prerequisites, confirmed policy limits and supported host capabilities. They do not add a GitHub event runtime or grant publication authority; unavailable intake/publication stops with a draft policy. The after-beta live pilot is not yet verified. See [Guided event configuration](user-guide/event-driven-templates.md).
+
 ### Built-in automation templates
 
 New automation drafts offer weekday repository audit, release readiness, daily
@@ -3194,6 +3199,14 @@ Typed `set_token` and `clear_token` actions share the existing token owner acros
 MCP, IPC and HTTP. Readback reports stored presence only (`set`, `unset`,
 `unavailable`), never a secret. Git & GitHub keeps its effective-source status;
 removing a stored token leaves environment and CircleCI CLI fallbacks unchanged.
+
+### Bounded MCP reads
+
+Session and peer inventories support scoped lookup and `compact=true`, including
+explicit unknown state, activity age and omitted fields. Inbox and terminal
+output support opt-in UTF-8 byte-budget pages with immutable, lossless
+continuations. The envelope counts toward the budget; the inbox cursor advances
+only after the final chunk. HTTP MCP-compatible output shares the same boundary.
 
 ### Opt-in frame workload evidence
 
