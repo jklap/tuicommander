@@ -1,18 +1,30 @@
-import {spawn} from 'node:child_process';
+import {spawn,spawnSync} from 'node:child_process';
+import {createWriteStream} from 'node:fs';
 import {mkdir,readFile,writeFile,unlink} from 'node:fs/promises';
 const source=new URL('./',import.meta.url).pathname;
 const dir=process.cwd()+'/.tmp/settings-visual/'+(process.env.VISUAL_RUN??'capture')+'/';
 await mkdir(dir,{recursive:true});
+if(process.platform==='darwin'){
+ const lock=spawnSync('ioreg',['-n','Root','-d1','-a'],{encoding:'utf8',timeout:10000});
+ if(lock.status===0&&/<key>CGSSessionScreenIsLocked<\/key>\s*<true\/>/.test(lock.stdout)){
+  // DEFERRED (2026-10-18) — macOS pauses Chrome rendering while locked; screenshots need an unlocked display.
+  const error='Visual prerequisite unavailable: macOS screen is locked; unlock the display before screenshot or rAF checks. No UI assertion ran.';
+  await writeFile(dir+'prerequisite-failure.json',JSON.stringify({error},null,2));
+  throw new Error(error);
+ }
+}
 const test=process.env.VISUAL_TEST; const failures=[];
 await mkdir(dir+'chrome-profile',{recursive:true});await mkdir(dir+'png',{recursive:true});
 await unlink(dir+'chrome-profile/DevToolsActivePort').catch(()=>{});
 const chrome=spawn('/Users/stefano.straus/.agent-browser/browsers/chrome-149.0.7827.54/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing',['--headless=new','--no-first-run','--disable-background-networking','--disable-component-update','--disable-sync','--remote-debugging-port=0','--user-data-dir='+dir+'chrome-profile','about:blank'],{stdio:['ignore','ignore','pipe']});
-let ws;
+chrome.stderr.pipe(createWriteStream(dir+'chrome-stderr.log'));
+let ws;const pending=new Map();
 try {
 let port;for(let i=0;i<100;i++){try{port=(await readFile(dir+'chrome-profile/DevToolsActivePort','utf8')).split('\n')[0];break;}catch{await new Promise(r=>setTimeout(r,100));}}
-const targets=await(await fetch(`http://127.0.0.1:${port}/json`)).json();ws=new WebSocket(targets.find(t=>t.type==='page').webSocketDebuggerUrl);await new Promise(r=>ws.addEventListener('open',r,{once:true}));let seq=0;const pending=new Map();let errors=[],network=[];
-ws.addEventListener('message',e=>{const x=JSON.parse(e.data);if(x.id){const p=pending.get(x.id);pending.delete(x.id);x.error?p.reject(new Error(JSON.stringify(x.error))):p.resolve(x.result);}else if(x.method==='Runtime.exceptionThrown')errors.push(x.params.exceptionDetails.exception?.description??x.params.exceptionDetails.text);else if(x.method==='Runtime.consoleAPICalled'&&x.params.type==='error')errors.push(x.params.args.map(a=>a.value??a.description).join(' '));else if(x.method==='Fetch.requestPaused'){const p=x.params;if(p.request.url.startsWith('http://127.0.0.1:15391/')||p.request.url.startsWith('data:'))send('Fetch.continueRequest',{requestId:p.requestId});else{network.push(p.request.url);send('Fetch.failRequest',{requestId:p.requestId,errorReason:'BlockedByClient'});}}});
-function send(method,params={}){return new Promise((resolve,reject)=>{const id=++seq;pending.set(id,{resolve,reject});ws.send(JSON.stringify({id,method,params}));});}
+const targets=await(await fetch(`http://127.0.0.1:${port}/json`)).json();ws=new WebSocket(targets.find(t=>t.type==='page').webSocketDebuggerUrl);await new Promise(r=>ws.addEventListener('open',r,{once:true}));let seq=0;let errors=[],network=[];
+ws.addEventListener('message',e=>{const x=JSON.parse(e.data);if(x.id){const p=pending.get(x.id);if(!p)return;pending.delete(x.id);clearTimeout(p.timer);x.error?p.reject(new Error(JSON.stringify(x.error))):p.resolve(x.result);}else if(x.method==='Runtime.exceptionThrown')errors.push(x.params.exceptionDetails.exception?.description??x.params.exceptionDetails.text);else if(x.method==='Runtime.consoleAPICalled'&&x.params.type==='error')errors.push(x.params.args.map(a=>a.value??a.description).join(' '));else if(x.method==='Fetch.requestPaused'){const p=x.params;if(p.request.url.startsWith('http://127.0.0.1:15391/')||p.request.url.startsWith('data:'))send('Fetch.continueRequest',{requestId:p.requestId});else{network.push(p.request.url);send('Fetch.failRequest',{requestId:p.requestId,errorReason:'BlockedByClient'});}}});
+// Outer harness hang bound, not an assertion about Settings response latency.
+function send(method,params={}){return new Promise((resolve,reject)=>{const id=++seq;const timer=setTimeout(()=>{pending.delete(id);reject(new Error('Visual harness CDP response timed out: '+method));},60000);pending.set(id,{resolve,reject,timer});ws.send(JSON.stringify({id,method,params}));});}
 async function ev(expression){const r=await send('Runtime.evaluate',{expression,awaitPromise:true,returnByValue:true});if(r.exceptionDetails)throw new Error(r.exceptionDetails.exception?.description??r.exceptionDetails.text);return r.result.value;}
 await send('Emulation.setEmulatedMedia',{features:[{name:'prefers-reduced-motion',value:'reduce'}]});await send('Page.enable');await send('Runtime.enable');await send('Fetch.enable',{patterns:[{urlPattern:'*'}]});
 const tabs=process.env.VISUAL_PAGES?process.env.VISUAL_PAGES.split(','):test==='settings_text_contrast_on_themed_surfaces'?['general','terminal','keyboard-shortcuts','ai-chat','plugins','repo:/workspace/fixture-project']:test==='settings_agent_initials_contrast'?['agents']:test==='settings_appearance_legend_light_text_contrast'?['appearance']:test==='settings_help_badges_share_label_line'?['general','notifications','github','agents','repo:/workspace/fixture-project']:['general','appearance','notifications','terminal','keyboard-shortcuts','github','agents','ai-chat','dictation','smart-prompts','mcp','remote-access','remote-machines','telegram','plugins','repo:/workspace/fixture-project'];
@@ -75,4 +87,4 @@ results.push({tab,state,theme,width,geometry,errors:[...errors],blockedNetwork:[
 await writeFile(dir+'geometry-assertions.json',JSON.stringify({failures},null,2));
 if(failures.length)process.exitCode=1;
 if(test){await writeFile(dir+'assertions.json',JSON.stringify({test,failures},null,2)); console.log(test, failures.length?'FAIL':'PASS',JSON.stringify(failures)); if(failures.length)process.exitCode=1;}
-}finally{ws?.close();chrome.kill('SIGTERM');}
+}finally{for(const request of pending?.values()??[])clearTimeout(request.timer);ws?.close();chrome.kill('SIGTERM');}

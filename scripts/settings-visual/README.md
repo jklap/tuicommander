@@ -2,7 +2,7 @@
 
 Run from a worktree with its own installed dependencies. The fixture mounts the real SettingsPanel, page components, theme JSON and controls. Vite aliases intercept RPC, events and logging before application imports. No native backend, user config or external service is used. Chromium blocks non-local requests.
 
-Requirements: the bundled Chrome for Testing path in `capture.mjs`, Node with WebSocket support, and free localhost port 15391. The server uses `--strictPort`; the runner stops its own Vite and Chrome processes.
+Requirements: the bundled Chrome for Testing path in `capture.mjs`, Node with WebSocket support, free localhost port 15391, and an unlocked macOS display. A locked session pauses Chrome rendering, including headless screenshots and animation-frame checks; DOM access alone is not visual proof. The driver records `prerequisite-failure.json` and refuses capture when the system reports a locked session. Unlock the display before rerunning; never mark that refusal as a visual pass. The server uses `--strictPort`; the runner stops its own Vite and Chrome processes. Chrome diagnostics are retained, and a stalled CDP response has a separate 60-second harness bound.
 
 Run a single regression with the normal build admission wrapper:
 
