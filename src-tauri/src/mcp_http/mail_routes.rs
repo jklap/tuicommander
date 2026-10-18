@@ -41,12 +41,10 @@ fn peer(
         .get("mcp-session-id")
         .and_then(|h| h.to_str().ok())
         .and_then(|id| state.mcp.to_session.get(id).map(|p| p.value().clone()))
-        .ok_or_else(|| {
-            (
-                StatusCode::UNAUTHORIZED,
-                "Register an MCP peer first and supply its Mcp-Session-Id header",
-            )
-        })
+        .ok_or((
+            StatusCode::UNAUTHORIZED,
+            "Register an MCP peer first and supply its Mcp-Session-Id header",
+        ))
 }
 
 pub(super) async fn action(
