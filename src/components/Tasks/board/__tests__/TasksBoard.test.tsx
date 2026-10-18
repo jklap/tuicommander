@@ -244,3 +244,10 @@ it("move_menu_stays_open_when_the_menu_itself_scrolls", () => {
 	fireEvent.scroll(screen.getByRole("menu"));
 	expect(screen.getByRole("menu")).toBeInTheDocument();
 });
+
+// Catches: the board header reintroduces always-visible drag instructions.
+it("renders the board without invented guidance", () => {
+	const view = mount(vi.fn());
+	expect(view.getByRole("heading", { name: "Delivery" })).not.toBeNull();
+	expect(view.container.textContent).not.toContain("Drag a card or use its move menu.");
+});

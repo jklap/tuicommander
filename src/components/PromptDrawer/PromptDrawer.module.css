@@ -389,12 +389,6 @@
   margin: 0 2px 0 0;
 }
 
-.fieldHint {
-  font-size: var(--font-xs);
-  color: var(--fg-muted);
-  margin-top: 2px;
-}
-
 /* Reset button */
 .resetBtn {
   background: transparent !important;

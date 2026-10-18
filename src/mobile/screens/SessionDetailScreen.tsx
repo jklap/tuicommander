@@ -487,11 +487,6 @@ export function SessionDetailScreen(props: SessionDetailScreenProps) {
 				</div>
 			</Show>
 
-			<Show when={chat.available() && !chat.active()}>
-				<button type="button" class={styles.diffReadingAction} onClick={chat.openChat}>
-					Read file edits in Chat
-				</button>
-			</Show>
 			<div class={styles.outputArea}>
 				<chat.View />
 				<OutputView

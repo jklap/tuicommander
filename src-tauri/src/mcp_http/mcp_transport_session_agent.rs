@@ -1899,6 +1899,18 @@ pub(super) fn handle_agent_with_parent_cwd(
     mcp_session_id: Option<&str>,
     managed_parent_cwd: Option<&str>,
 ) -> serde_json::Value {
+    spawn_with_identity(state, addr, args, mcp_session_id, managed_parent_cwd, None)
+}
+
+/// Only the launch journal may reserve a PTY identity before side effects.
+pub(super) fn spawn_with_identity(
+    state: &Arc<AppState>,
+    addr: SocketAddr,
+    args: &serde_json::Value,
+    mcp_session_id: Option<&str>,
+    managed_parent_cwd: Option<&str>,
+    identity: Option<(&str, Option<&str>)>,
+) -> serde_json::Value {
     let action = match require_action(args, "agent", AGENT_ACTIONS) {
         Ok(a) => a,
         Err(e) => return e,
@@ -2003,12 +2015,18 @@ pub(super) fn handle_agent_with_parent_cwd(
                 .clone()
                 .unwrap_or_else(|| "agent".to_string());
 
-            let session_id = Uuid::new_v4().to_string();
+            let session_id = identity
+                .map(|(session, _)| session.to_string())
+                .unwrap_or_else(|| Uuid::new_v4().to_string());
 
             // Resolve caller's tuic_session from their MCP session via the O(1) reverse map.
             // Only set when caller is a registered peer — drives multi-agent context + TUIC_PARENT.
-            let caller_tuic: Option<String> = mcp_session_id
-                .and_then(|sid| state.mcp.to_session.get(sid).map(|e| e.value().clone()));
+            let caller_tuic: Option<String> = identity
+                .and_then(|(_, parent)| parent.map(str::to_string))
+                .or_else(|| {
+                    mcp_session_id
+                        .and_then(|sid| state.mcp.to_session.get(sid).map(|e| e.value().clone()))
+                });
 
             // Effective prompt: context prepended for managed-peer spawns, unchanged otherwise.
             let effective_prompt =
@@ -2437,6 +2455,11 @@ pub(super) fn handle_agent_with_parent_cwd(
             // Bidirectional communication additionally needs an identified
             // parent. The child receives TUIC_PARENT + the spawn preamble; the
             // parent receives the child target in the response below.
+            // Run-owned launches also carry their explicit hold policy even when
+            // their owner is a scheduler rather than a peer with an inbox.
+            if keep_open {
+                state.keep_open_sessions.insert(session_id.clone());
+            }
             if let Some(parent_id) = spawn_parent {
                 journal_hand_off(
                     state,
@@ -2450,20 +2473,17 @@ pub(super) fn handle_agent_with_parent_cwd(
                     .session_maps
                     .session_parent
                     .insert(session_id.clone(), parent_id);
-                if keep_open {
-                    state.keep_open_sessions.insert(session_id.clone());
-                }
-                if state.pending_initial_prompts.contains_key(&session_id) {
-                    let watchdog_state = Arc::clone(state);
-                    let watchdog_session = session_id.clone();
-                    tokio::spawn(async move {
-                        tokio::time::sleep(INITIAL_PROMPT_DELIVERY_TIMEOUT).await;
-                        crate::pty::notify_initial_prompt_timeout_if_pending(
-                            &watchdog_state,
-                            &watchdog_session,
-                        );
-                    });
-                }
+            }
+            if state.pending_initial_prompts.contains_key(&session_id) {
+                let watchdog_state = Arc::clone(state);
+                let watchdog_session = session_id.clone();
+                tokio::spawn(async move {
+                    tokio::time::sleep(INITIAL_PROMPT_DELIVERY_TIMEOUT).await;
+                    crate::pty::notify_initial_prompt_timeout_if_pending(
+                        &watchdog_state,
+                        &watchdog_session,
+                    );
+                });
             }
 
             let spawn_ts = std::time::SystemTime::now()

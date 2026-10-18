@@ -89,7 +89,6 @@ export const RemoteQrDialog: Component<{ onClose: () => void }> = (props) => {
 					</span>
 					<div class={d.headerText}>
 						<h4>Remote Mobile Connection</h4>
-						<p class={d.subtitle}>Scan with your phone to connect</p>
 					</div>
 				</div>
 				<div class={d.body}>

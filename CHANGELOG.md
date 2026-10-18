@@ -6,11 +6,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+- Durable keyed managed-child launches across MCP, HTTP and IPC, with explicit workspace, parent, stable name, hold-open policy and retry-safe receipts (#2006-f5a1).
 - Publish typed Settings account enumeration and configured Ego interactive login start/status, with human terminal authentication and separate credential readback (#1790-1011).
 ### Fixed
 
 - Float the Chat new-text badge above the composer without reserving a row, and keep full-radius controls pill-shaped instead of elliptical (#2017-b9e0).
 
+- Report stalled parentless automation/workflow initial prompts as blocked after the existing delivery timeout, without dropping or duplicating the queued task (#2006-f5a1).
 - Honor an explicitly configured worktree integration base before stale conventional or remote default refs (#1961-bab6).
 
 - Correct Settings accent-action text, compact navigation, wrapped help badges, shortcut groups, and workspace path presentation; hide the desktop-only Local tools card in browser mode (#1945).

@@ -183,7 +183,6 @@ const ToolActivity: Component<{
 														</div>
 													</div>
 												</div>
-												<div class={s.editDiffHint}>Scroll horizontally to read long lines →</div>
 											</figure>
 										)}
 									</Show>

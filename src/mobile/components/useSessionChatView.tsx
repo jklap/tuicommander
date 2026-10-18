@@ -66,7 +66,6 @@ export function useSessionChatView(props: {
 						}}
 						subscribeWake={props.subscribeWake}
 						onUnavailable={() => select("cli")}
-						hint="Reply below. Switch to CLI for permission prompts or questions missing here."
 					/>
 				)}
 			</Show>

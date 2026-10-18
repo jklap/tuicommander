@@ -1515,4 +1515,3 @@
 .editDiffNew { background: color-mix(in srgb, var(--success) 12%, var(--bg-primary)); }
 .editDiffOld > span, .editDiffNew > span { display: block; padding: 4px 8px 0; font-size: var(--font-xs); font-weight: 600; }
 .editDiff pre { margin: 0; padding: 4px 8px 8px; white-space: pre; tab-size: 4; font: var(--font-sm)/1.5 var(--font-mono); color: var(--fg-primary); }
-.editDiffHint { padding: 4px 8px; font-size: var(--font-xs); color: var(--fg-secondary); }
