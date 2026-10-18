@@ -86,6 +86,9 @@ if(!metrics.content||errors.length)throw new Error('Settings did not mount clean
 if(test && details){let bad=[]; if(test==='settings_text_contrast_on_themed_surfaces')bad=details.contrast.filter(x=>!['?','#42','G','P','C','X','D','A','O','E'].includes(x.text)); if(test==='settings_agent_initials_contrast')bad=details.contrast.filter(x=>['G','P'].includes(x.text)); if(test==='settings_appearance_legend_light_text_contrast')bad=details.contrast.filter(x=>['?','#','42','#42'].includes(x.text)); if(test==='settings_help_badges_share_label_line')bad=details.badges.filter(x=>x.ownLine); if(bad.length)failures.push({tab,theme,width,bad});}
 results.push({tab,state,theme,width,geometry,errors:[...errors],blockedNetwork:[...network],metrics,details,help,png});await writeFile(dir+'results-'+width+'-'+theme+'.json',JSON.stringify(results.filter(r=>r.width===width&&r.theme===theme),null,2));console.log(name,errors.length,metrics.content?JSON.stringify(metrics.content):'NO CONTENT');if(errors.length&&!process.argv.includes('--all'))console.log(errors);
 }
+// DEFERRED (2026-10-19) — browser captures expose launcher-scenario, wrapped-help,
+// narrow plugin-header and Sidebar Color alignment failures. The night visual
+// owner must reconcile these shared layouts; retain every assertion and nonzero exit.
 await writeFile(dir+'geometry-assertions.json',JSON.stringify({failures},null,2));
 if(failures.length)process.exitCode=1;
 if(test){await writeFile(dir+'assertions.json',JSON.stringify({test,failures},null,2)); console.log(test, failures.length?'FAIL':'PASS',JSON.stringify(failures)); if(failures.length)process.exitCode=1;}
