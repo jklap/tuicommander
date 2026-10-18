@@ -5810,7 +5810,7 @@ async fn mcp_outcome_record_groups_parent_but_preserves_targets_and_utf8_cost() 
             headers,
             Json(
                 serde_json::json!({"jsonrpc":"2.0","id":index,"method":"tools/call",
-                "params":{"name":"session","arguments":{"action":"output","session_id":target},
+                "params":{"name":"session","arguments":{"action":"output","session_id":target,"format":"raw"},
                 "_meta":{"tuic/parent_operation_id":parent}}}),
             ),
         )
