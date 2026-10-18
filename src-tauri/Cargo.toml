@@ -133,7 +133,7 @@ workspace = true
 
 [lib]
 name = "tuicommander_lib"
-# Desktop-only: the bin links the lib as rlib (main.rs → tuicommander_lib::run()).
+# Desktop-only: the bin links the lib as rlib (main.rs → tuicommander_lib::run(context)).
 # staticlib/cdylib are only needed for mobile (iOS/Android) — dropping them makes
 # the huge lib compile once instead of three times. Re-add if mobile is planned.
 crate-type = ["rlib"]

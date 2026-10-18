@@ -166,6 +166,20 @@ the `tuic-dictation` crate explicitly, and therefore compile its native stack.
 TLS uses the existing ring provider. Provider-free reqwest/axum-server features
 avoid compiling AWS-LC while retaining HTTPS and WSS.
 
+### Desktop frontend embedding gate
+
+The desktop binary constructs the Tauri context and passes it to the library.
+Library unit tests do not expand `generate_context!` or embed the ignored Vite
+bundle. HTTP static-file tests use checked-in transport fixtures, including the
+desktop and mobile HTML shells, instead of a worktree-specific `dist/`.
+
+Run `make check-desktop-embedding` after `pnpm build` to compile the real desktop
+entry point with `tauri/custom-protocol`. This gate fails if the frontend bundle
+is missing. It does not launch or restart the application. `make check` and
+desktop CI run this separate gate, so unit-test isolation does not hide desktop
+startup or embedding errors. CI uses minimal HTML stubs; the release build still
+embeds the real frontend bundle.
+
 ### Rust tests in linked worktrees
 
 Run standalone Rust tests through `scripts/with-test-tmp.sh`. In a linked
