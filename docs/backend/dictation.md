@@ -1898,7 +1898,9 @@ The file format remains a plain string-to-string map.
 Both the Settings facade and the legacy IPC/HTTP map writer use TextCorrector's
 strict locked update and atomic persistence. Invalid maps and corrupt files do
 not replace the live dictionary. Empty match keys are rejected because replacement scanning must advance.
-Settings additionally applies its stable-key rules and transaction size bounds;
+Settings applies stable-key rules to requested paths and create/remove keys,
+plus transaction size bounds. Existing legacy keys outside those rules remain
+unchanged when ordinary sibling records are edited, created or removed;
 legacy maps retain their existing string-to-string representation.
 The live corrector is refreshed from the latest committed map, not an older
 transaction result. Durable writes publish value-free `corrections` generations;

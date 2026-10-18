@@ -60,7 +60,6 @@ mod owner {
             let to = row["to"]
                 .as_str()
                 .ok_or_else(|| Error::new("corrections", "invalid_type"))?;
-            super::super::pointer::valid_key(from, "corrections")?;
             if map.insert(from.to_owned(), to.to_owned()).is_some() {
                 return Err(Error::new("corrections", "conflict"));
             }
@@ -214,6 +213,70 @@ mod owner {
                     .correct("Cloud Code"),
                 "Claude Code"
             );
+        }
+
+        // Catches: pointer validation of untouched legacy keys blocking unrelated owner edits.
+        #[tokio::test]
+        async fn corrections_legacy_keys_do_not_block_sibling_mutations() {
+            for legacy_key in [
+                "constructor".to_owned(),
+                "x".repeat(257),
+                "line\nbreak".to_owned(),
+            ] {
+                let dir = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+                let path = dir.path().join("corrections.json");
+                let mut expected = HashMap::from([
+                    (legacy_key.clone(), "legacy replacement".to_owned()),
+                    ("sibling".to_owned(), "original".to_owned()),
+                ]);
+                let seeded = TextCorrector::from_map(expected.clone());
+                seeded.save_to_file(&path).unwrap();
+                let live = Arc::new(Mutex::new(seeded));
+                let owner = Arc::new(CorrectionsStore::at_path(path.clone(), live.clone()));
+                let service = Service::new(Arc::new(native_catalogue().unwrap()), owner.clone());
+                let mut revision = transaction::revision(&owner.read().unwrap()).unwrap();
+                for edit in [
+                    Edit::Set {
+                        path: "/replacements/sibling/to".into(),
+                        value: json!("edited"),
+                    },
+                    Edit::Create {
+                        path: "/replacements".into(),
+                        id: "created".into(),
+                        value: json!({"from":"created","to":"new replacement"}),
+                    },
+                    Edit::Remove {
+                        path: "/replacements".into(),
+                        id: "sibling".into(),
+                    },
+                ] {
+                    match &edit {
+                        Edit::Set { .. } => {
+                            expected.insert("sibling".into(), "edited".into());
+                        }
+                        Edit::Create { .. } => {
+                            expected.insert("created".into(), "new replacement".into());
+                        }
+                        Edit::Remove { .. } => {
+                            expected.remove("sibling");
+                        }
+                        _ => unreachable!(),
+                    }
+                    let reply = service
+                        .patch(Target::Machine, "corrections".into(), revision, vec![edit])
+                        .await
+                        .expect("legacy keys must not reject ordinary sibling mutations");
+                    assert!(reply.persisted);
+                    assert_eq!(
+                        TextCorrector::load_from_file(&path)
+                            .unwrap()
+                            .get_replacements(),
+                        &expected
+                    );
+                    assert_eq!(live.lock().get_replacements(), &expected);
+                    revision = reply.revision;
+                }
+            }
         }
 
         // Catches: invalid later edits or corrupt files partially overwriting the owner map.
