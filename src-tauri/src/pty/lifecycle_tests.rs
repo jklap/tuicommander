@@ -3576,3 +3576,122 @@ fn standby_observer_disconnect_retains_timeout_grace() {
         assert_eq!(standby_session(&fixture.state, "standby-job"), Ok(false));
     }
 }
+
+/// Catches: updating only the grid, losing SIGWINCH, or retaining the spawn width.
+/// The foreground child calls TIOCGWINSZ after SIGWINCH, not a parent-side size read.
+#[cfg(unix)]
+#[tokio::test]
+async fn production_spawn_resize_reaches_child_winsize() {
+    use std::time::{Duration, Instant};
+
+    struct SessionCleanup(Arc<AppState>, String);
+    impl Drop for SessionCleanup {
+        fn drop(&mut self) {
+            close_pty_core(&self.0, &self.1, false);
+        }
+    }
+
+    fn await_size(paths: &[std::path::PathBuf], expected: &str, budget: Duration) {
+        let deadline = Instant::now() + budget;
+        loop {
+            let observed: Vec<_> = paths
+                .iter()
+                .map(|path| std::fs::read_to_string(path).unwrap_or_default())
+                .collect();
+            if observed
+                .iter()
+                .any(|value| value.split_whitespace().collect::<Vec<_>>().join(" ") == expected)
+            {
+                return;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "child winsize at {}: expected {expected}, observed {observed:?}",
+                paths
+                    .iter()
+                    .map(|path| path.display().to_string())
+                    .collect::<Vec<_>>()
+                    .join(", "),
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
+
+    // Separate startup allowance from the post-readiness signal-delivery bound.
+    const STARTUP: Duration = Duration::from_secs(60);
+    const SIGNAL: Duration = Duration::from_secs(10);
+    // The probe must itself own the foreground: a shell trap can miss WINCH
+    // while an interactive shell has handed the foreground to a subprocess.
+    let script = r#"import os, signal
+from pathlib import Path
+
+def sample(path):
+    size = os.get_terminal_size(0)
+    Path(path).write_text(f"{size.lines} {size.columns}")
+
+signal.signal(signal.SIGWINCH, lambda *_: sample("winch"))
+sample("initial")
+while True:
+    signal.pause()
+"#;
+    let shell_command = format!(
+        "exec /usr/bin/python3 -u -c '{}'",
+        script.replace('\'', "'\\''")
+    );
+    for (direct, early_resize) in [(true, false), (false, false), (true, true), (false, true)] {
+        let dir = tempfile::TempDir::new_in(crate::test_support::test_temp_root()).unwrap();
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+        let sid = if direct {
+            crate::mcp_http::session::spawn_pty_command(
+                state.clone(),
+                std::path::Path::new("/usr/bin/python3"),
+                dir.path(),
+                &["-u".into(), "-c".into(), script.into()],
+            )
+        } else {
+            crate::mcp_http::session::spawn_pty_session(
+                state.clone(),
+                "/bin/sh".into(),
+                Some(dir.path().to_string_lossy().into_owned()),
+                24,
+                80,
+                None,
+                crate::mcp_http::session::RequestedIdentity {
+                    startup_command: Some(shell_command.clone()),
+                    ..Default::default()
+                },
+            )
+        }
+        .expect("production PTY spawn must succeed");
+        let _cleanup = SessionCleanup(state.clone(), sid.clone());
+        if early_resize {
+            // Apply the pane size before waiting for the child to install its trap.
+            resize_session_core(&state, &sid, 40, 200).unwrap();
+        }
+        await_size(
+            &[dir.path().join("initial"), dir.path().join("winch")],
+            if early_resize { "40 200" } else { "24 80" },
+            STARTUP,
+        );
+
+        for (rows, cols, expected) in [(40, 200, "40 200"), (24, 60, "24 60"), (40, 200, "40 200")]
+            .into_iter()
+            .skip(usize::from(early_resize))
+        {
+            let signal_file = dir.path().join("winch");
+            if signal_file.exists() {
+                std::fs::remove_file(&signal_file).unwrap();
+            }
+            resize_session_core(&state, &sid, rows, cols).unwrap_or_else(|error| {
+                panic!("direct={direct}, early={early_resize}, target={rows}x{cols}: {error}")
+            });
+            await_size(&[signal_file], expected, SIGNAL);
+            let vt = state.grid.vt_log_buffers.get(&sid).unwrap();
+            let vt = vt.lock();
+            assert_eq!(
+                (vt.grid_screen_lines(), vt.grid_columns()),
+                (rows as usize, cols as usize)
+            );
+        }
+    }
+}
