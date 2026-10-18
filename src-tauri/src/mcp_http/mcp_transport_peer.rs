@@ -1258,6 +1258,9 @@ pub(super) fn handle_messaging(
     args: &serde_json::Value,
     mcp_session_id: Option<&str>,
 ) -> serde_json::Value {
+    if let Some(error) = crate::mail_subscriptions::paging_error(args) {
+        return error;
+    }
     if args["action"] == "inbox" {
         let budget = match super::response_pages::budget(args) {
             Ok(budget) => budget,
@@ -1307,7 +1310,7 @@ fn handle_messaging_with_message_id(
         let Some(peer) =
             mcp_session_id.and_then(|sid| state.mcp.to_session.get(sid).map(|e| e.value().clone()))
         else {
-            return serde_json::json!({"error":"You are not registered. Register first with agent action=register"});
+            return missing_identity_context(mcp_session_id);
         };
         return crate::mail_subscriptions::action(state, &peer, args);
     }

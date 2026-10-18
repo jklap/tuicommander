@@ -106,12 +106,34 @@ impl MailSubscriptions {
     }
 
     /// One validation and transaction boundary for every transport.
+    #[cfg(test)]
     pub(crate) fn action(&self, path: &Path, recipient: &str, args: &Value) -> Value {
-        let result = self.action_result(path, recipient, args);
-        result.unwrap_or_else(|error| json!({"error":error}))
+        self.action_with_observation(path, recipient, args).0
     }
 
-    fn action_result(&self, path: &Path, recipient: &str, args: &Value) -> Result<Value, String> {
+    pub(crate) fn action_with_observation(
+        &self,
+        path: &Path,
+        recipient: &str,
+        args: &Value,
+    ) -> (Value, Vec<String>) {
+        if let Some(error) = paging_error(args) {
+            return (error, Vec::new());
+        }
+        let mut observed = Vec::new();
+        match self.action_result(path, recipient, args, &mut observed) {
+            Ok(reply) => (reply, observed),
+            Err(error) => (json!({"error":error}), Vec::new()),
+        }
+    }
+
+    fn action_result(
+        &self,
+        path: &Path,
+        recipient: &str,
+        args: &Value,
+        observed: &mut Vec<String>,
+    ) -> Result<Value, String> {
         let id = args["subscription_id"]
             .as_str()
             .filter(|id| {
@@ -153,8 +175,15 @@ impl MailSubscriptions {
             if action == "ack" {
                 let cursor = args["cursor"].as_i64().filter(|cursor| *cursor >= 0).ok_or("ack requires a nonnegative integer cursor")?;
                 if cursor > offered || (cursor > ack && cursor != offered) { return Err("cursor must equal a returned subscription batch cursor".into()); }
+                let ids = {
+                    let mut statement = tx.prepare(&format!("SELECT id FROM mail_events WHERE recipient=?1 AND seq>?2 AND seq<=?4 AND {MATCH_FILTER} ORDER BY seq")).map_err(|e| e.to_string())?;
+                    let ids = statement.query_map(params![recipient,ack,filter,cursor], |row| row.get::<_,String>(0))
+                        .map_err(|e| e.to_string())?.collect::<Result<Vec<_>,_>>().map_err(|e| e.to_string())?;
+                    ids
+                };
                 tx.execute("UPDATE mail_subscriptions SET ack=MAX(ack,?3), batch_end=CASE WHEN ?3>=batch_end THEN 0 ELSE batch_end END, missed=CASE WHEN ?3>=MAX(0,COALESCE((SELECT head FROM mail_heads WHERE recipient=?1),0)-?4) THEN 0 ELSE missed END WHERE recipient=?1 AND id=?2", params![recipient,id,cursor,RETAINED_MESSAGES]).map_err(|e| e.to_string())?;
                 tx.commit().map_err(|e| e.to_string())?;
+                *observed = ids;
                 return Ok(json!({"subscription_id":id,"cursor":cursor.max(ack),"acknowledged":true}));
             }
             if !["inbox","wait"].contains(&action) { return Err("Unsupported subscription action".into()); }
@@ -188,9 +217,17 @@ impl MailSubscriptions {
     }
 }
 
+/// Subscription cursors are not tokens for the legacy byte pager.
+pub(crate) fn paging_error(args: &Value) -> Option<Value> {
+    (args.get("subscription_id").is_some()
+        && (args.get("byte_budget").is_some() || args.get("continuation").is_some()))
+    .then(|| json!({"error":"subscription_byte_budget_unsupported", "effect":"not_started",
+        "alternative":"Use the bounded subscription batch and explicit ack; byte paging is legacy inbox only."}))
+}
+
 /// Transport adapters share validation, acknowledgement and notification.
 pub(crate) fn action(state: &crate::AppState, peer: &str, args: &Value) -> Value {
-    let reply = state.mail_subscriptions.action(&state.data_dir, peer, args);
+    let reply = state.apply_mail_subscription_action(peer, args);
     if reply.get("error").is_none()
         && matches!(args["action"].as_str(), Some("ack" | "unsubscribe"))
     {

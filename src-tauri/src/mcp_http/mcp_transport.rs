@@ -681,7 +681,9 @@ async fn dispatch_mcp_tool_call_with_context(
             {
                 return result;
             }
-            if action == "wait" && !addr.ip().is_loopback() {
+            if matches!(action, "wait" | "subscribe" | "ack" | "unsubscribe")
+                && !addr.ip().is_loopback()
+            {
                 serde_json::json!({
                     "error": "Inter-agent messaging is restricted to localhost connections"
                 })
@@ -693,13 +695,20 @@ async fn dispatch_mcp_tool_call_with_context(
                 let sid = mcp_session_id.map(str::to_owned);
                 let parent_cwd = managed_parent_cwd.map(str::to_owned);
                 run_blocking_handler(move || {
-                    handle_agent_unified_with_parent_cwd(
-                        &state,
-                        addr,
-                        &args,
-                        sid.as_deref(),
-                        parent_cwd.as_deref(),
-                    )
+                    if matches!(
+                        args["action"].as_str(),
+                        Some("subscribe" | "ack" | "unsubscribe")
+                    ) {
+                        super::mcp_transport_peer::handle_messaging(&state, &args, sid.as_deref())
+                    } else {
+                        handle_agent_unified_with_parent_cwd(
+                            &state,
+                            addr,
+                            &args,
+                            sid.as_deref(),
+                            parent_cwd.as_deref(),
+                        )
+                    }
                 })
                 .await
             } else {

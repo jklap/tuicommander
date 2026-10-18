@@ -3381,4 +3381,9 @@ The filter defaults to actionable; alternatives are all, exit and failure.
 Reconnect replays retained **unacknowledged** batches. `Last-Event-ID` is not an
 acknowledgement. The journal retains 1000 messages per peer across restart;
 matching unacknowledged evictions are explicit in missed_count. Legacy inbox
-reads do not consume this reader. See [retention and notification semantics](../backend/mcp-http.md#durable-independent-mail-subscriptions).
+reads do not consume this reader. Subscription ACK observes exact live delivery
+IDs without advancing the legacy cursor or acknowledging its loss watermark.
+`byte_budget` and `continuation` are unsupported for subscriptions; acknowledge
+each bounded batch, then read again when `has_more` is true. These endpoints
+require the bound `Mcp-Session-Id`; a stateless `x-tuic-session` alone is not an
+HTTP subscription binding. See [retention and notification semantics](../backend/mcp-http.md#durable-independent-mail-subscriptions).

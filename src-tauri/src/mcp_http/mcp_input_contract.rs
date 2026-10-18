@@ -56,7 +56,11 @@ pub(super) fn complete_schema(tool: &mut Value) {
             required(&["declare_worktree"], &["worktree_path"]);
             conditions.push(json!({"if":{"properties":{"action":{"const":"input"}},"required":["action"]},"then":{"anyOf":[{"required":["input"]},{"required":["special_key"]}]}}));
         }
-        "agent" => required(&["send"], &["to", "message"]),
+        "agent" => {
+            required(&["send"], &["to", "message"]);
+            required(&["subscribe", "ack", "unsubscribe"], &["subscription_id"]);
+            required(&["ack"], &["cursor"]);
+        }
         "repo" => {
             required(
                 &[
@@ -169,6 +173,24 @@ pub(super) fn validate(name: &str, args: &Value) -> Option<Value> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Catches: newly advertised subscription actions omit their repairable required fields.
+    #[test]
+    fn actionable_subscription_schema_requires_identity_and_ack_cursor() {
+        for action in ["subscribe", "ack", "unsubscribe"] {
+            let error = validate("agent", &json!({"action":action})).unwrap();
+            assert_eq!(error["code"], "invalid_arguments");
+            let args = json!({"action":action,"subscription_id":"pump"});
+            assert_eq!(validate("agent", &args).is_some(), action == "ack");
+        }
+        assert!(
+            validate(
+                "agent",
+                &json!({"action":"ack","subscription_id":"pump","cursor":1})
+            )
+            .is_none()
+        );
+    }
 
     /// Catches: a generated native schema cannot be enforced before dispatch.
     #[test]

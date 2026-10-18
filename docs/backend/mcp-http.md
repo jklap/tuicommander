@@ -2611,6 +2611,10 @@ The reply contains `messages`, `count`, `cursor`, `acknowledged_cursor`,
 or matching retention loss. Routine traffic does not end the wait. For a
 continuous background consumer, use the HTTP event stream below or subscribe
 to the ACP resource; the consumer does not need a model-driven wait loop.
+Subscription batches do not use the legacy byte pager: `byte_budget` and
+`continuation` are rejected before either reader is consumed. Use `has_more`
+after explicit ACK to request the next bounded batch. Wait retains its separate
+lease path and also rejects byte paging.
 
 After processing a batch, call `agent action=ack subscription_id=pump
 cursor=<returned cursor>`. Reads do **not** acknowledge. A pending batch's message
@@ -2626,7 +2630,12 @@ If processing succeeds but ack does not reach the server, the retained batch is
 replayed. Deduplicate external effects by message ID. Acknowledged results do
 not replay. Concurrent readers must use distinct subscription IDs; sharing an ID
 means sharing its acknowledgement. Subscriptions never acknowledge another
-subscriber or alter the legacy inbox cursor/delivery owner.
+subscriber or advance the legacy inbox cursor. Explicit subscription ACKs mark
+exact matching live message IDs as observed under the same recipient delivery
+gate as legacy snapshot ACKs. This prevents a later FIFO eviction from counting
+already-delivered mail as lost. It does not acknowledge the legacy loss watermark;
+only the legacy snapshot ACK settles that snapshot's loss count. Filtered gaps
+remain unobserved and cannot clear unrelated wake evidence.
 
 The SQLite journal (`<config dir>/mail-subscriptions.db`, with WAL sidecars)
 retains the newest **1000 messages per recipient** across process restart. This

@@ -6336,3 +6336,165 @@ fn actionable_subscription_snapshot_overlap_keeps_missed_count_exact() {
     state.acknowledge_agent_snapshot(TEST_UUID_A, through, &ids, watermark);
     assert_eq!(*state.agent_inbox_evictions.get(TEST_UUID_A).unwrap(), 1);
 }
+
+// Catches: the admitted subscription actions bypass dispatch, remote restrictions,
+// or accidentally enter the legacy pager and consume a different reader.
+#[tokio::test]
+async fn actionable_subscription_dispatch_preserves_readers_and_loopback_boundary() {
+    let state = test_state();
+    register_peer(&state, TEST_UUID_A, "dispatch", "mcp-sub-dispatch");
+    for args in [
+        serde_json::json!({"action":"subscribe","subscription_id":"dispatch"}),
+        serde_json::json!({"action":"ack","subscription_id":"dispatch","cursor":0}),
+        serde_json::json!({"action":"unsubscribe","subscription_id":"dispatch"}),
+    ] {
+        let denied = handle_mcp_tool_call(
+            &state,
+            "192.0.2.1:1234".parse().unwrap(),
+            "agent",
+            &args,
+            Some("mcp-sub-dispatch"),
+        )
+        .await;
+        assert_eq!(
+            denied["error"], "Inter-agent messaging is restricted to localhost connections",
+            "{denied}"
+        );
+    }
+    let subscribed = handle_mcp_tool_call(
+        &state,
+        loopback_addr(),
+        "agent",
+        &serde_json::json!({"action":"subscribe","subscription_id":"dispatch"}),
+        Some("mcp-sub-dispatch"),
+    )
+    .await;
+    assert_eq!(subscribed["subscription_id"], "dispatch", "{subscribed}");
+    state.push_agent_inbox(
+        TEST_UUID_A,
+        crate::state::AgentMessage {
+            id: "dispatch-result".into(),
+            from_tuic_session: "child".into(),
+            from_name: "child".into(),
+            content: "RESULT dispatch".into(),
+            timestamp: 1,
+            delivered_via_channel: false,
+        },
+    );
+    for paging in [
+        serde_json::json!({"byte_budget":1024}),
+        serde_json::json!({"continuation":"not-a-legacy-token"}),
+    ] {
+        let mut args = serde_json::json!({"action":"inbox","subscription_id":"dispatch"});
+        args.as_object_mut()
+            .unwrap()
+            .extend(paging.as_object().unwrap().clone());
+        let refused = handle_mcp_tool_call(
+            &state,
+            loopback_addr(),
+            "agent",
+            &args,
+            Some("mcp-sub-dispatch"),
+        )
+        .await;
+        assert_eq!(
+            refused["error"], "subscription_byte_budget_unsupported",
+            "{refused}"
+        );
+        assert_eq!(refused["effect"], "not_started");
+        // HTTP/ACP service calls reject the same options before journal effects.
+        assert_eq!(
+            crate::mail_subscriptions::action(&state, TEST_UUID_A, &args),
+            refused
+        );
+    }
+    assert!(state.agent_read_cursor.get(TEST_UUID_A).is_none());
+    let batch = handle_mcp_tool_call(
+        &state,
+        loopback_addr(),
+        "agent",
+        &serde_json::json!({"action":"inbox","subscription_id":"dispatch"}),
+        Some("mcp-sub-dispatch"),
+    )
+    .await;
+    assert_eq!(batch["messages"][0]["id"], "dispatch-result", "{batch}");
+    assert_eq!(batch["acknowledged_cursor"], 0);
+    let ack = handle_mcp_tool_call(
+        &state,
+        loopback_addr(),
+        "agent",
+        &serde_json::json!({"action":"ack","subscription_id":"dispatch","cursor":batch["cursor"]}),
+        Some("mcp-sub-dispatch"),
+    )
+    .await;
+    assert_eq!(ack["acknowledged"], true, "{ack}");
+    let legacy = handle_messaging(
+        &state,
+        &serde_json::json!({"action":"inbox"}),
+        Some("mcp-sub-dispatch"),
+    );
+    assert_eq!(legacy["messages"][0]["id"], "dispatch-result");
+    let removed = handle_mcp_tool_call(
+        &state,
+        loopback_addr(),
+        "agent",
+        &serde_json::json!({"action":"unsubscribe","subscription_id":"dispatch"}),
+        Some("mcp-sub-dispatch"),
+    )
+    .await;
+    assert_eq!(removed["removed"], true, "{removed}");
+}
+
+// Catches: a filtered ACK jumps over an unmatched live message and retracts its wake.
+#[test]
+fn actionable_subscription_filtered_ack_keeps_unobserved_wake_gap() {
+    let state = test_state();
+    register_peer(&state, TEST_UUID_A, "gap", "mcp-sub-gap");
+    let invoke = |args| handle_messaging(&state, &args, Some("mcp-sub-gap"));
+    assert!(
+        invoke(serde_json::json!({"action":"subscribe","subscription_id":"exit","filter":"exit"}))
+            .get("error")
+            .is_none()
+    );
+    for (id, from_name, content, timestamp) in [
+        ("unmatched-mail", "child", "RESULT not an exit", 1),
+        (
+            "tuic-auto-gap-exit",
+            "tuic",
+            r#"{"type":"state_change","state":"exited","exit_code":0}"#,
+            2,
+        ),
+    ] {
+        state.push_agent_inbox(
+            TEST_UUID_A,
+            crate::state::AgentMessage {
+                id: id.into(),
+                from_tuic_session: "child".into(),
+                from_name: from_name.into(),
+                content: content.into(),
+                timestamp,
+                delivered_via_channel: false,
+            },
+        );
+        state.assign_orchestrator_delivery_with_wake_attempt(
+            TEST_UUID_A,
+            id,
+            timestamp,
+            true,
+            || true,
+        );
+    }
+    let before = state.orchestrator_wake_needed_through(TEST_UUID_A);
+    assert_eq!(before, Some(2));
+    let batch = invoke(serde_json::json!({"action":"inbox","subscription_id":"exit"}));
+    assert_eq!(batch["count"], 1, "{batch}");
+    assert_eq!(batch["messages"][0]["id"], "tuic-auto-gap-exit");
+    let ack = invoke(
+        serde_json::json!({"action":"ack","subscription_id":"exit","cursor":batch["cursor"]}),
+    );
+    assert!(ack.get("error").is_none(), "{ack}");
+    assert_eq!(state.orchestrator_wake_needed_through(TEST_UUID_A), before);
+    assert!(state.agent_read_cursor.get(TEST_UUID_A).is_none());
+    let unread = invoke(serde_json::json!({"action":"inbox"}));
+    assert_eq!(unread["messages"][0]["id"], "unmatched-mail");
+}
