@@ -1,3 +1,13 @@
+## Mobile Ideas dictation (2022-1b80)
+
+- [ ] On an iPhone with the updated frontend, dictate with the caret inside an idea and with selected text. Confirm surrounding words remain, a second take works, and no idea or session command is sent until the user explicitly adds or sends it. Browser screenshots verify the real overlay at 390 px, not physical speech recognition.
+
+## Mobile dictation recovery (2020-66aa)
+
+- [ ] After the updated frontend loads on the phone, record a real take and inspect debug source `dictation` on the owner. Retain its session/take-correlated start, first-result, error/abort if present, end and ownership-release sequence for any recurrence. These records are bounded diagnostics, not an assertion that the original incident is fixed.
+
+- [ ] On an iPhone after the updated frontend loads, reproduce a failed/empty recognition, then dictate again without a manual send. Confirm the next transcript inserts and “Dictation failed” stays visible beside the composer mic with the real keyboard open. The worktree browser probe used a focused textarea at 390×480 and a lifecycle driver; it did not record iOS callback order or display a real on-screen keyboard.
+
 ## Run-owned launch timeout (2006-f5a1) — Rust restart required
 
 - [ ] After Boss manually restarts `make dev` or installs `make build`, use an isolated run-owned child stalled before its composer is ready. Read its durable launch receipt after 30 seconds: it must report blocked with a delivery-timeout reason and retain one queued prompt and the same child identity. No live desktop restart was performed by this peer.

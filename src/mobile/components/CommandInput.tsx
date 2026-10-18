@@ -223,6 +223,7 @@ export function CommandInput(props: CommandInputProps) {
 	}
 
 	const browserDictation = useBrowserDictation({
+		sessionId: () => props.sessionId,
 		blocked: () => submitting() || !!props.serverVoiceRecording || props.sessionExists === false,
 		getDraft: () => textareaEl?.value ?? value(),
 		setDraft: (text) => {
