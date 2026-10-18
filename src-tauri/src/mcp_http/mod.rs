@@ -4415,6 +4415,8 @@ mod tests {
             // absent here, tuic-remote answered 404 and remote repos ran with
             // no agent configs.
             "/config/agents",
+            // Headless Settings uses the same bootstrap snapshot as desktop.
+            "/config",
         ];
         // Desktop-only or router-specific — MUST NOT be in shared_routes():
         // /health (public_routes only), /fs/read-editor (router-specific
@@ -4427,7 +4429,6 @@ mod tests {
             "/repo/github",
             "/repo/prs",
             "/dictation/status",
-            "/config",
             "/config/themes",
             "/mcp/status",
             "/plugins/list",
