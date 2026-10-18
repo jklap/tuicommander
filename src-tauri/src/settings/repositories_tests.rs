@@ -254,12 +254,49 @@ async fn pr_visibility_filters_survive_owner_readback_1993() {
         let path = format!("/repos{ONE}/{field}");
         let snapshot = get(&f, &[&path]).await.unwrap();
         assert_eq!(snapshot.values[&path].stored, value);
-        set(&f, revision(&f).await, &path, value.clone())
-            .await
-            .unwrap();
-        assert_eq!(on_disk(&f)["repos"]["/work/one"][field], value);
+        for next in [json!(false), json!(true), Value::Null] {
+            set(&f, revision(&f).await, &path, next.clone())
+                .await
+                .unwrap();
+            assert_eq!(on_disk(&f)["repos"]["/work/one"][field], next);
+            assert_eq!(get(&f, &[&path]).await.unwrap().values[&path].stored, next);
+        }
     }
     let disk = on_disk(&f);
     assert_eq!(disk["repos"]["/work/one"]["setup_script"], CANARY);
     assert_eq!(disk["repos"]["/work/two"]["display_name"], "Two");
+}
+
+/// Catches: global PR filters being discarded by typed disk readback or lacking catalogue defaults.
+#[test]
+fn global_pr_visibility_filters_persist_1993() {
+    use crate::config::{AppConfig, ConfigFile, RepoSettingsEntry};
+    let dir = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+    let file = ConfigFile::<AppConfig>::at_path(dir.path().join("config.json"));
+    let catalogue = native_catalogue().unwrap();
+    let mut config = serde_json::to_value(AppConfig::default()).unwrap();
+    for field in [
+        "pr_hide_drafts",
+        "pr_hide_conflicting",
+        "pr_hide_ci_failing",
+    ] {
+        let descriptor = &catalogue.fields[&format!("app.{field}")];
+        assert_eq!(descriptor.default, Some(json!(false)));
+        assert!(!descriptor.nullable);
+        assert!(catalogue.fields[&format!("repositories.repos.{{key}}.{field}")].nullable);
+        config[field] = json!(true);
+        let typed: AppConfig = serde_json::from_value(config.clone()).unwrap();
+        file.save(&typed).unwrap();
+        let read = file
+            .update_with_strict(|latest| Ok((serde_json::to_value(latest).unwrap(), false)))
+            .unwrap();
+        assert_eq!(read[field], true);
+        assert_eq!(read["font_family"], config["font_family"]);
+        let entry: RepoSettingsEntry =
+            serde_json::from_value(json!({"path":"/work/one", (field):false})).unwrap();
+        assert!(
+            entry.has_custom_settings(),
+            "an explicit show override must survive default pruning"
+        );
+    }
 }

@@ -59,11 +59,8 @@ export interface RepoSettings {
 	autoDeleteOnPrClose: AutoDeleteOnPrClose | null;
 	/** Allowlist of upstream MCP server names for this repo (null = all servers) */
 	mcpUpstreams: string[] | null;
-	// DEFERRED (2026-08-30) — `terminalMetaHotkeys` and the three `prHide*` fields
-	// below now have transient UI writers (persistence follow-up 1993-e7af); `config.rs`
-	// has no matching field on `RepoSettingsEntry`, so a value set here would be
-	// dropped by the backend. Either wire them up or delete them; leaving them is
-	// what let the camelCase persistence bug hide.
+	// DEFERRED (2026-08-30) — terminalMetaHotkeys remains transient: the Rust
+	// RepoSettingsEntry has no matching field. PR visibility overrides persist.
 	/** null = inherit from settingsStore (global) */
 	prHideDrafts: boolean | null;
 	/** null = inherit from settingsStore (global) */
