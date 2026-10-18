@@ -686,3 +686,7 @@ session-state stream carries updates to desktop and browser consumers.
 ### Ego selector row boundaries
 
 Before parsing an ego question, the PTY reader concatenates rows linked by the grid WRAPLINE flag. It preserves original spaces and adds none inside words. Hard line breaks still separate the title, numbered options and footer. Footer recognition remains in the ego parser; it does not infer prose boundaries from row length.
+
+### Mobile intent presentation
+
+The log serializer keeps `intent:` text and its styled spans in history and screen output. Only `suggest:` source markers are stripped for the suggestion-chip UI. Mobile CLI rejoins the terminal soft-wrap boundaries and applies the desktop intent tint to the complete logical line. State/title parsing is unchanged.

@@ -2296,6 +2296,7 @@ pub struct AppState {
     /// leaves the prompt in place so a child that was blocked on a startup
     /// dialog still receives it when it becomes ready.
     pub(crate) pending_initial_prompts: DashMap<String, PendingInitialPrompt>,
+    pub(crate) launch_transaction_lock: tokio::sync::Mutex<()>,
     /// Claude MCP children allowed to answer their one startup trust dialog.
     pub(crate) managed_trust_dialogs: DashSet<String>,
     /// Per-peer atomic handoff between blocking waiters and terminal delivery.
@@ -3714,6 +3715,7 @@ impl AppState {
             pending_injections: DashMap::new(),
             recent_queue_keys: DashMap::new(),
             pending_initial_prompts: DashMap::new(),
+            launch_transaction_lock: tokio::sync::Mutex::new(()),
             managed_trust_dialogs: DashSet::new(),
             active_agent_waiters: DashMap::new(),
             orchestrator_peers: DashSet::new(),

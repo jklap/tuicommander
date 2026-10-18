@@ -298,7 +298,7 @@ Use **New conversation with options** beside the `+` button to override the ego 
 
 A custom conversation runs its own ego ACP process. Its mail identity is separate from daily chats, even when both use the same workspace.
 
-When you scroll up and more conversation content arrives, **New text below** appears above the composer. Select it to return to the bottom and resume following. Reaching the bottom by hand clears it too. Search jumps do not show the pill until later content arrives. Disable **New text indicator** in **Settings → Appearance → Chat**, or mobile Settings. This preference is saved on the current client and applies to terminal Chat too.
+When you scroll up and more conversation content arrives, **New text below** appears as a compact badge floating at the bottom-right of the transcript, above the composer, without reserving a row. Select it to return to the bottom and resume following. Reaching the bottom by hand clears it too. Search jumps do not show the badge until later content arrives. Disable **New text indicator** in **Settings → Appearance → Chat**, or mobile Settings. This preference is saved on the current client and applies to terminal Chat too.
 
 AI Chat replies use plain chat prose without the terminal answer rail. Literal Markdown blockquotes keep their normal quote style.
 

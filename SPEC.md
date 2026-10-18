@@ -1,5 +1,9 @@
 # TUICommander Specification
 
+- [x] Generated launch playbook modules with global/per-agent switches, append-only user additions, explicit all off, legacy default-copy migration and machine-owned effective previews (#2000-b50f).
+
+- [x] Mobile open Markdown tabs: one shared list in a top-bar dropdown at >=768 px, otherwise in the session menu; unchanged-cwd polls do not reset entries (#2024-9a86, #2025-82cb).
+
 - [x] AI Chat smart tables (layout A): protected short columns, sticky first column, conditional scroll hints, exact-source Markdown toggle/copy and read-only document action (#1923-c6fb).
 
 - [x] AI Chat Tidy layout: single header, conditional tab strip, labelled overflow actions, compact process rows, latest-answer suggestions and untimed history (#1958-b67e).
@@ -715,6 +719,7 @@ Some frontend-only stores persist to localStorage:
 - [x] Connected daemon MCP toasts reach the desktop Messages bell with host attribution, original level/sound and safe remote-terminal navigation; no disconnected replay
 - [x] Remote access / HTTP server
 - [x] SSH-managed remote daemon deployment, idle lifetime, pairing-token vaulting, and systemd/launchd installation
+- [x] Mobile Ideas uses shared browser dictation at the caret/selection, without saving an idea or sending to a session (#2022-1b80).
 - [x] Mobile terminal prompt keyboard correction defaults on, with a device-local Settings toggle for autocorrect, spellcheck and sentence capitalization (#1878-3a3c).
 - [x] Mobile CLI and Chat jump-to-bottom arrow floats over output at least 8px above the key bar, outside the composer, only while scrolled back and resumes output follow without terminal input (#1975-4a38).
 - [x] Mobile terminal Ctrl menu (Ctrl+C, Ctrl+B, Ctrl+D, agent-aware Ctrl+Enter)
@@ -1123,8 +1128,7 @@ and answer marker rendering remain on the existing terminal paths.
 
 ## Mobile Claude and ego terminal Chat view
 
-Phone sessions offer a direct **Read file edits in Chat** action while CLI is
-active. The terminal stays mounted. Chat edit tool disclosures render bounded
+The terminal stays mounted. Chat edit tool disclosures render bounded
 old/new blocks, preserve tabs with four-space tab stops and scroll long lines
 horizontally. Claude Edit projection retains diff content through tool completion;
 failed calls remain labelled failed, not represented as applied edits.
@@ -1228,6 +1232,15 @@ MCP, IPC and HTTP. Readback reports stored presence only (`set`, `unset`,
 `unavailable`), never a secret. Git & GitHub keeps its effective-source status;
 removing a stored token leaves environment and CircleCI CLI fallbacks unchanged.
 
+## Durable managed launch (2006-f5a1)
+
+Managed workers can launch through one keyed transaction across MCP, HTTP and IPC. The journal reserves the child identity before workspace or PTY side effects, retains key tombstones, and refuses conflicting reuse. A retry returns the same identity; ambiguous interrupted creation blocks without a replacement or fallback checkout. Existing/new workspaces, a stable name, a registered parent and explicit keep-open policy are supported. Receipts separate prompt transport delivery from model acceptance, require native Ready-screen evidence for ready, and expose warm-artifact state independently. Model/account/brief policy stays outside TUIC.
+
+Native automation and workflow run bindings also use this transaction through `managed_launch`: automation run IDs and workflow attempt IDs provide stable keys, with an in-process run-owner scope when no peer parent exists. No synthetic peer is registered. Run-owned children use the same pinned-name and explicit keep-open path as MCP children; the existing run controller still owns cancellation and completion. The unkeyed public `spawn` compatibility action continues to use the same low-level PTY spawn implementation.
 ## Frame workload evidence (#1638-c94c)
 
 Implemented: opt-in, perfDebug-gated global bounded frame bytes and paint snapshots, rotated instance-local captures, manual debug dump and production grid-paint replay timing. The synthetic smoke fixture checks harness wiring only. Original captured-stall heartbeat/input/backend RED and same-workload GREEN remain open. See docs/backend/stall-journal.md for bounds and privacy.
+
+## Mobile device-local font sizes
+
+Implemented (#2023-54c4): mobile Settings has separate Terminal and Chat controls with smaller/larger buttons and current values, without explanatory text. Each preference has its own localStorage key and 10–24 px range with 1 px steps. The existing defaults stay 14 px for CLI output and Chat body text. Chat changes apply only within Session Chat and AI Chat transcripts. Composers, UI chrome, desktop fonts and other devices are unchanged. CLI rows rewrap locally without resizing the shared PTY and keep the visible row when scrolled back.

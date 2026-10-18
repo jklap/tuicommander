@@ -1399,9 +1399,19 @@ Load/save `UIPrefsConfig`.
 GET /config/defaults
 ```
 
+Both methods are available on the desktop server and the authenticated remote daemon.
+`POST /config/defaults` returns the same shape with launch instruction previews
+for a draft, including module switches and append-only additions in `agents`. The body is `{ "agents": <AgentsConfig>, "intent_tab_title": true,
+"suggest_followups": true }`. Both marker flags are optional; omitted flags use
+the server's current app config. No values are saved. The `launch_instructions`
+section contains a resolved `default_text`, `required_markers`, and an
+`effective_text` map for supported agents. Agent previews follow the same
+override priority, marker flags, and `{VER}` replacement as launches.
+
+
 Read-only. Returns `ConfigDefaults` — see `docs/backend/config.md` → "Config
 Defaults" — for Settings "expert mode": `{ app, notifications, agent_settings,
-repo_defaults, agents, github_accounts, dictation? }`. `dictation` is present only on desktop
+repo_defaults, agents, github_accounts, dictation?, launch_instructions }`. `dictation` is present only on desktop
 builds. `None` fields are omitted (`skip_serializing_if`); a missing key inside
 a present object means `null`.
 
@@ -3264,6 +3274,8 @@ keeps that report in per-tab session storage until an acknowledged upload. A
 lost acknowledgement can cause a retry; this route does not provide durable
 exactly-once delivery or persist the backend ring across an app restart.
 
+Browser dictation also mirrors at most six content-free lifecycle debug records per take through `POST /logs`. Read them with `GET /logs?source=dictation&level=debug&audience=diagnostic`. Messages start with `Browser dictation lifecycle:`; `data_json` contains `event`, a per-take `sequence`, `sessionId`, `takeId`, recording/discarding flags and the first error code when applicable. Session ID is null for an unbound AI Chat draft. This uses the same bounded, best-effort backend ring, not a persistent event journal.
+
 ### Telegram request streaming (1959-162a)
 
 Telegram replies now use TUIC-driven receipt (👀), working (👨‍💻), waiting (🤔), answered (👍) and failed (👎) reactions. An ephemeral native draft shows Italian status lines or unapproved agent previews; it refreshes while work continues and the final reply replaces it. Acknowledgement of work requires inbox Read and a new recipient turn. PTY intent/activity and AI Chat assistant chunks share request correlation; finish remains authoritative after draft retirement. Telegram-mail-woken AI Chat turns automatically send their settled assistant text if finish has not answered. Queue and no-reply notices occur at ten minutes and sixty seconds after Read respectively. Restart keeps no request history. Phone rendering requires a live check after the backend restart.
@@ -3296,6 +3308,31 @@ or `operation:{action:"clear_token"}`. Both actions use the existing CircleCI
 owner; replies contain only token presence. Clearing the stored token does not
 remove `CIRCLE_TOKEN` or the CircleCI CLI configuration. The Git & GitHub page
 continues to show the effective token source. No transport returns the token.
+
+### Durable managed-agent launch
+
+`POST /agents/launch` (localhost only) and IPC `managed_agent_launch { request }` use the same Rust transaction as MCP `agent action=launch`. Send:
+
+```json
+{
+  "idempotency_key": "story-worker-1",
+  "parent_session_id": "<registered-peer-uuid>",
+  "name": "worker-1",
+  "keep_open": true,
+  "workspace": {"existing_path": "/absolute/checkout"},
+  "spawn": {"agent_type": "claude", "prompt": "Perform the task"}
+}
+```
+
+For a new workspace use `workspace: {repo_path, branch, base_ref?}`. No fallback checkout is used after a refusal. `spawn` accepts the existing MCP spawn options; do not put `cwd`, `name`, `keep_open`, `action`, `parent_session_id` or `idempotency_key` inside it. These values belong to the transaction. Model, account and local brief policy remain caller-owned.
+
+The receipt includes `launch_id`, reserved `session_id`, `stage`, `status`, `live`, `prompt_delivery`, `ready`, `reason`, `workspace_path`, `warm_artifacts`, and the original `child` spawn response when available. Read it with `{launch_id}` on the same endpoint, or repeat the identical creation request. Keys are scoped to the explicit parent identity. A changed request under the same key returns `idempotency_conflict`. Retain the key across connection loss; do not generate a new key to retry.
+
+`status` is `created`, `prompt_delivered`, `ready` or `blocked`. `prompt_delivery=delivered` proves argv handoff or successful queued PTY submission, not model acceptance. `ready` additionally requires the native Ready-screen adapter and the shared idle/completed session projection. Terminal movement or silence alone is insufficient. Deferred prompt timeouts (including parentless automation/workflow children after the 30-second budget) and questions report blocked; the initial prompt stays queued and a retry never re-enqueues it. Warm-artifact readiness is a separate observation, not a promise that copying or setup has finished before the child starts.
+
+The journal in the app data directory, `managed-launches.sqlite`, persists request digests and resource identities, not prompt/environment bodies. Its checkpoints precede workspace and PTY creation. A crash in an uncertain creation window returns blocked rather than attempting that side effect again. A retained live child is recovered by its reserved identity; missing delivery metadata stays unknown. An exited child or server restart never causes the same key to create a replacement. Journal records are not expired: they are retry tombstones, unlike the process-lifetime `task_id` in a child response. On uncertain workspace creation inspect the requested repository/branch before a separate, explicitly chosen launch.
+
+Native automation and workflow run bindings also use this transaction through `managed_launch`: automation run IDs and workflow attempt IDs provide stable keys, with an in-process run-owner scope when no peer parent exists. No synthetic peer is registered. Run-owned children use the same pinned-name and explicit keep-open path as MCP children; the existing run controller still owns cancellation and completion. The unkeyed public `spawn` compatibility action continues to use the same low-level PTY spawn implementation.
 
 #### Byte-bounded MCP-compatible terminal output
 

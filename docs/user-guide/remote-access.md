@@ -86,6 +86,8 @@ TUICommander includes a phone-optimized interface for monitoring agents from you
 
 Opening `/` also offers the form login. iPad Safari selects the touch interface, including when it requests the desktop website with a Mac user agent. Desktop browsers keep the full interface. In that interface, **Add Repository** browses folders on the computer running TUICommander, starting at its home directory; it does not browse the device opening Safari.
 
+At widths of 768 px or more, tap **Markdown** in the session top bar to open a desktop Markdown tab from the same repository. On phones, open **More session actions → Markdown** instead. The list refreshes in place when desktop tabs change; ordinary session polls do not reset it.
+
 ### Add to Home Screen
 
 The mobile UI supports PWA (Progressive Web App) installation:
@@ -101,8 +103,7 @@ At phone widths up to 430 px, the session header keeps CLI/Chat one tap away.
 Open **More session actions** for **Start voice call** / **Stop voice call** (with the same handset icon as the header) and session tasks. Tablet
 headers keep these controls directly in the bar. Tap the session name for details.
 
-For Claude sessions on a phone, tap **Read file edits in Chat** above the CLI
-output. This switches the reading surface without closing the terminal or
+For Claude sessions on a phone, tap **Chat** in the session header. This switches the reading surface without closing the terminal or
 clearing its history; returning to CLI follows the latest output. Expand the tool activity and edit to read its **Old**
 and **New** text. Tab stops align at four spaces. Swipe the edit block sideways
 for long lines rather than wrapping coloured terminal rows. Switch back with

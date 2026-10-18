@@ -163,7 +163,7 @@ Use `gap` on flex containers, not margins between children.
 | `--radius-lg` | 6px | Larger controls — dropdowns, add-repo button, form inputs |
 | `--radius-xl` | 8px | Modals, panels, dialogs |
 | `--radius-pill` | 12px | PR badges, status pills |
-| `--radius-full` | 50% | Circles — toggle thumbs, repo initials avatar |
+| `--radius-full` | 9999px | Pills; square elements stay circular — toggle thumbs, repo initials avatar |
 
 ## Shadows
 

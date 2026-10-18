@@ -2,6 +2,28 @@
 
 - [ ] After Boss manually restarts `make dev` or installs `make build`, read `tuic agent ls` and the mobile session list for an ego session at its ready composer. It must not report Working solely because a background job remains pending. Confirm an active ego turn still reports Working and a question still reports Input. Keep background ownership metadata for suspend/standby safety. An idle ego with a current-turn pending descendant probe must refuse Suspend until ownership is resolved, even when `background_work` is false. No live desktop restart was performed by this peer.
 
+## Generated launch modules — Rust restart required
+
+- [ ] Inspect the launch module switches and additions preview after unlocking the Mac. Browser snapshot confirmed all labels and initial checkbox states; direct Chrome and wrapper screenshots could not complete while the macOS screen was locked.
+
+- [ ] After Boss restarts the backend, launch a root and a spawned child. Inspect the delivered launch text: both get enabled modules and global then agent additions; only the child gets Children and omits suggest. Turn all off and verify a new launch has no TUIC playbook. Existing agent processes are not updated by hot reload.
+
+## Launch instruction preview critic fixes — Rust restart required
+
+- [ ] After Boss restarts `make dev` or installs `make build`, verify launch instruction previews on a daemon-backed machine. Switch from a loaded local machine to a delayed or unavailable remote: inherited text must not carry over and Customize must stay disabled until that machine's preview arrives. The running desktop backend was not restarted.
+## Mobile Ideas dictation (2022-1b80)
+
+- [ ] On an iPhone with the updated frontend, dictate with the caret inside an idea and with selected text. Confirm surrounding words remain, a second take works, and no idea or session command is sent until the user explicitly adds or sends it. Browser screenshots verify the real overlay at 390 px, not physical speech recognition.
+
+## Mobile dictation recovery (2020-66aa)
+
+- [ ] After the updated frontend loads on the phone, record a real take and inspect debug source `dictation` on the owner. Retain its session/take-correlated start, first-result, error/abort if present, end and ownership-release sequence for any recurrence. These records are bounded diagnostics, not an assertion that the original incident is fixed.
+
+- [ ] On an iPhone after the updated frontend loads, reproduce a failed/empty recognition, then dictate again without a manual send. Confirm the next transcript inserts and “Dictation failed” stays visible beside the composer mic with the real keyboard open. The worktree browser probe used a focused textarea at 390×480 and a lifecycle driver; it did not record iOS callback order or display a real on-screen keyboard.
+
+## Run-owned launch timeout (2006-f5a1) — Rust restart required
+
+- [ ] After Boss manually restarts `make dev` or installs `make build`, use an isolated run-owned child stalled before its composer is ready. Read its durable launch receipt after 30 seconds: it must report blocked with a delivery-timeout reason and retain one queued prompt and the same child identity. No live desktop restart was performed by this peer.
 ## Guided event configuration (2012-72ff)
 
 - [ ] On a throwaway headless owner or browser-mode instance, send each Configure Smart Prompt to a test agent and verify the step-by-step interview stops on missing owner/profile/GitHub auth/skills and unsupported intake, without saving or launching work. Automated library tests verify the delivered prompt contract, not model compliance.
@@ -2455,7 +2477,7 @@ Needs an iPhone (iOS 16.4+, 18.4+ preferred), the desktop TUICommander running a
 - [ ] After Boss restarts the Rust backend (`make dev` or a release rebuild), send an allowed Telegram message with AI Chat connected and no explicit Telegram registration. Check receipt, delivery to ego and its final reply on the phone. Connect two chats: the latest-connected chat is the fallback, not the selected tab. Connect the second chat while the first is answering phone mail: the first reply must still arrive, and later mail must reach the second chat. Register another agent: it must retain ownership. With neither registration nor a connected AI Chat, check the no-agent instruction. This needs Boss's restart; Rust does not hot-reload.
 - [ ] [VISUAL] #1981-0caf: Capture the session header at 390 px, 430 px, and 834 px in Commander and Paper. Confirm COORDINATOR is readable, CLI/Chat stays direct, phone voice/tasks are in More, and tablet controls stay direct. The local headless capture timed out before producing images; the Mac screen was locked.
 
-- [ ] [VISUAL] #1982-ee68: After the backend rebuild, capture the same tab-separated Claude Edit in Chat at 390 px in Commander and Paper. Expand tool activity and its edit; confirm full-width old/new backgrounds, aligned columns and horizontal scrolling. From phone CLI tap Read file edits in Chat, then CLI; verify terminal history and draft remain intact, with CLI following the latest output. Includes Rust projection changes, so Boss must restart make dev or rebuild release when ready; no Rust hot reload.
+- [ ] [VISUAL] #1982-ee68: After the backend rebuild, capture the same tab-separated Claude Edit in Chat at 390 px in Commander and Paper. Expand tool activity and its edit; confirm full-width old/new backgrounds, aligned columns and horizontal scrolling. From phone CLI tap the header Chat toggle, then CLI; verify terminal history and draft remain intact, with CLI following the latest output. Includes Rust projection changes, so Boss must restart make dev or rebuild release when ready; no Rust hot reload.
 
 ## Settings MCP live refresh (#1788-2163)
 
@@ -2480,8 +2502,15 @@ Needs an iPhone (iOS 16.4+, 18.4+ preferred), the desktop TUICommander running a
 - [ ] After a manual Rust rebuild/restart, answer an ego selector and submit an ordinary prompt: no orange awaiting dot or question sound from the answered selector; a real new question still alerts (#1997-eb30).
 - [ ] After Boss restarts the Rust backend, verify CircleCI Settings discovery (`circleci.token`) and presence-only readback through the shared Settings action. Isolated tests cover set/clear and failures; no production credential test is required (#1991-bd88).
 
+- [ ] After the next manual `make dev` restart or release rebuild, open Settings → Agents. Check read-only global and per-agent launch instruction previews, Customize, Use global, empty overrides, and marker-toggle refresh. The Rust preview response is not loaded by hot reload.
+- [ ] After Boss restarts the Rust backend, exercise `agent action=launch` in an isolated throwaway checkout: repeat a key, confirm the same child/name/parent/hold policy, and read its durable `launch_id` receipt. Rust does not hot-reload. Automated targeted transaction tests cover partial-stage retries; this item checks the installed build.
 - [ ] After Boss rebuilds/restarts TUIC (#2005-191f), read a large inbox and terminal with `byte_budget=4096`, concatenate chunk strings and parse JSON; verify final-page cursor advancement, scoped compact inventory and explicit expired-token errors. Rust does not hot-reload; no desktop verification instance was started.
 - [ ] After Boss manually rebuilds/restarts, explicitly enable perfDebug and frameWorkload; capture a real long paint/stall, confirm the saved path via eval_js logs, and replay in isolated native WebKit with heartbeat/input and independent backend timings. Synthetic smoke is not the real-stall RED (#1638-c94c). Rust changes do not hot-reload; do not start a second desktop instance.
+
+- [ ] After a Boss-controlled rebuild/restart, save and delete a remote connection and tunnel profile from desktop Settings and confirm another connected client refreshes without reopening Settings (#1788-2163 review repair). Rust changes do not hot-reload.
 - [ ] After Boss manually restarts `make dev` or rebuilds release, verify a disposable repository with local main/master and a different remote HEAD uses main first, then master when main is absent. Keep the no-remote non-standard-base check above (#1961-bab6). Rust does not hot-reload; do not restart live sessions for this check.
 
 - [ ] After the next manual Rust restart/rebuild, verify a disposable repo with a stale `main` and an explicit `branch.<main-checkout-branch>.tuicommander-base=develop` classifies branches integrated into `develop` as Merged. Explicit verified bases take priority; unconfigured repos still prefer main/master before remote HEAD (#1961-bab6).
+
+- [ ] After the next backend restart, check a Claude `intent:` line that wraps on a phone: its first row and continuation must both stay visible with the warning tint. The Rust log serializer change requires a manual `make dev` restart or release rebuild. Do not restart live sessions for this check (#2019-7c5d).
+- [ ] On a real iPhone, confirm the session menu Markdown list stays still during session updates; on an iPad, open a listed file from the top-bar Markdown dropdown and return to the session (#2024-9a86, #2025-82cb). Browser evidence covers 390 px and 1024 px, not physical touch behavior.

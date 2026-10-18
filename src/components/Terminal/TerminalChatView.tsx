@@ -47,7 +47,6 @@ export const TerminalChatView: Component<{
 			onSearchRef={props.onSearchRef}
 			onOpenFile={openFile}
 			onUnavailable={() => terminalsStore.setViewMode(props.terminalId, "cli")}
-			hint="Reply below with Compose. Switch to CLI to answer permission prompts."
 		/>
 	);
 };

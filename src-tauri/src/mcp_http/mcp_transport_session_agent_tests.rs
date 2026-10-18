@@ -4875,6 +4875,78 @@ fn softwrap_1977_session_output_preserves_recorded_spaces() {
     }
 }
 
+// Catches: a lost launch reply creates a second PTY when the same key is retried.
+#[cfg(unix)]
+#[tokio::test]
+async fn lost_launch_reply_reuses_the_same_child() {
+    let state = test_state();
+    let parent = "550e8400-e29b-41d4-a716-446655440b01";
+    register_peer(&state, parent, "orchestrator", "mcp-orch");
+    let workspace = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap();
+    let request = serde_json::json!({
+        "action": "launch", "idempotency_key": "lost-reply", "parent_session_id": parent,
+        "name": "stable-child", "keep_open": true,
+        "workspace": {"existing_path": workspace},
+        "spawn": {"prompt": "hello", "binary_path": "/bin/sh",
+                  "args": ["-c", "exec cat", "{prompt}"]}
+    });
+    let first = crate::mcp_http::mcp_transport::handle_mcp_tool_call_with_context(
+        &state,
+        "127.0.0.1:0".parse().unwrap(),
+        "agent",
+        &request,
+        Some("mcp-orch"),
+        None,
+    )
+    .await;
+    assert!(first.get("error").is_none(), "launch failed: {first}");
+    let second = crate::mcp_http::mcp_transport::handle_mcp_tool_call_with_context(
+        &state,
+        "127.0.0.1:0".parse().unwrap(),
+        "agent",
+        &request,
+        Some("mcp-orch"),
+        None,
+    )
+    .await;
+    assert_eq!(first["launch_id"], second["launch_id"]);
+    assert_eq!(first["session_id"], second["session_id"]);
+    assert_eq!(
+        state.session_maps.sessions.len(),
+        1,
+        "retry must not create a second PTY"
+    );
+    let child = first["session_id"].as_str().unwrap();
+    assert_eq!(
+        state
+            .session_maps
+            .session_parent
+            .get(child)
+            .unwrap()
+            .value(),
+        parent
+    );
+    assert!(state.keep_open_sessions.contains(child));
+    assert_eq!(
+        state
+            .session_maps
+            .sessions
+            .get(child)
+            .unwrap()
+            .lock()
+            .display_name
+            .as_deref(),
+        Some("stable-child")
+    );
+    handle_session(
+        &state,
+        &serde_json::json!({"action":"kill", "session_id":child}),
+        None,
+    );
+}
+
 // Catches: output chunks recapture a moving ring instead of completing the retained snapshot.
 #[test]
 fn budgeted_terminal_output_snapshot_survives_concurrent_output() {

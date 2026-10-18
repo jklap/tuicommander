@@ -164,7 +164,6 @@ export const UiLegend: Component = () => {
 			{/* Terminal dot states */}
 			<div class={s.group}>
 				<label class={s.groupLabel}>Terminal Status Dots</label>
-				<p class={s.hint}>The colored dot on each terminal tab</p>
 				<div class={s.grid}>
 					<For each={TERMINAL_DOT_LEGEND}>
 						{(entry) => (
@@ -181,7 +180,6 @@ export const UiLegend: Component = () => {
 			{/* Tab type colors */}
 			<div class={s.group}>
 				<label class={s.groupLabel}>Tab Types</label>
-				<p class={s.hint}>Background tint and bottom border color by tab type</p>
 				<div class={s.grid}>
 					<For each={TAB_TYPE_LEGEND}>
 						{(entry) => (
@@ -198,7 +196,6 @@ export const UiLegend: Component = () => {
 			{/* Panel colors */}
 			<div class={s.group}>
 				<label class={s.groupLabel}>Panels</label>
-				<p class={s.hint}>Right-side panel accent colors</p>
 				<div class={s.grid}>
 					<For each={PANEL_COLOR_LEGEND}>
 						{(entry) => (
@@ -215,7 +212,6 @@ export const UiLegend: Component = () => {
 			{/* Sidebar branch icons */}
 			<div class={s.group}>
 				<label class={s.groupLabel}>Sidebar Symbols</label>
-				<p class={s.hint}>The icon at the start of each sidebar row</p>
 				<div class={s.grid}>
 					<For each={SIDEBAR_SYMBOL_LEGEND}>
 						{(entry) => (
@@ -234,7 +230,6 @@ export const UiLegend: Component = () => {
 			{/* Unmerged marker */}
 			<div class={s.group}>
 				<label class={s.groupLabel}>Branch Markers</label>
-				<p class={s.hint}>Shown at the end of a sidebar branch row</p>
 				<div class={s.grid}>
 					<div class={s.row}>
 						<span class={s.symbol}>
@@ -249,7 +244,6 @@ export const UiLegend: Component = () => {
 			{/* PR badges */}
 			<div class={s.group}>
 				<label class={s.groupLabel}>PR Status Badges</label>
-				<p class={s.hint}>Shown next to branches with a pull request. Hover the marker for the state name</p>
 				<div class={s.grid}>
 					<For each={PR_BADGE_LEGEND}>
 						{(entry) => (
@@ -266,7 +260,6 @@ export const UiLegend: Component = () => {
 			{/* Toolbar ahead/behind */}
 			<div class={s.group}>
 				<label class={s.groupLabel}>Toolbar Branch Counts</label>
-				<p class={s.hint}>Next to the branch name in the toolbar</p>
 				<div class={s.grid}>
 					<For each={TOOLBAR_COUNT_LEGEND}>
 						{(entry) => (
