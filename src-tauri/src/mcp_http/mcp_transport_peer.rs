@@ -735,6 +735,46 @@ pub(super) fn managed_parent_cwd_from_header(
         .and_then(|session| session.lock().cwd.clone())
 }
 
+/// A modern call has no protocol session on the wire. A live host-owned peer
+/// still has one authoritative identity; use an internal routing key only for
+/// that exact peer, never infer identity from a name or a repository path.
+pub(super) fn call_session_context(
+    state: &AppState,
+    headers: &HeaderMap,
+    modern: bool,
+) -> Option<String> {
+    if let Some(sid) = headers
+        .get(MCP_SESSION_HEADER)
+        .and_then(|value| value.to_str().ok())
+    {
+        return Some(sid.to_owned());
+    }
+    if !modern {
+        return None;
+    }
+    let peer = headers
+        .get(super::mcp_transport::TUIC_SESSION_HEADER)
+        .and_then(|value| value.to_str().ok())
+        .filter(|peer| is_valid_uuid(peer))?;
+    if state.live_pty_for_peer(peer).is_none() && state.acp.peer_root(peer).is_none() {
+        return None;
+    }
+    Some(format!("managed-call:{peer}"))
+}
+
+/// Missing identity is not an argument typo. Repeating unchanged inbox/register
+/// calls cannot repair host context; callers must stop until that context changes.
+fn missing_identity_context(mcp_session_id: Option<&str>) -> serde_json::Value {
+    serde_json::json!({
+        "error": "You are not registered. Managed callers must reconnect with their host-issued identity; external callers must initialize then register with that protocol session.",
+        "code": "identity_context_required", "effect": "not_started", "retryable": false,
+        "context": {"protocol_session_present": mcp_session_id.is_some()},
+        "repair": {"retry_after_context_change":true, "max_attempts":1,
+            "managed":"Reconnect with the host-issued x-tuic-session; do not invent an identity or project.",
+            "external":"Initialize, then register on that protocol session; supply an authoritative path only when known."}
+    })
+}
+
 /// Refresh a protocol session and re-assert its PTY identity on every request.
 /// Both maps are in-memory and disappear on a TUIC restart; a long-lived bridge
 /// may keep its old MCP session id, so merely recreating `mcp_sessions` is not
@@ -1021,7 +1061,7 @@ pub(super) async fn handle_agent_wait(
     {
         Some(t) => t,
         None => {
-            return serde_json::json!({"error": "You are not registered. Identity normally auto-binds at initialize; ensure $TUIC_SESSION is set or call agent action=register."});
+            return missing_identity_context(mcp_session_id);
         }
     };
     let since = resolve_agent_since(state, &caller_tuic, args);
@@ -1217,7 +1257,7 @@ pub(super) fn handle_messaging(
                 .and_then(|sid| state.mcp.to_session.get(sid).map(|v| v.value().clone()))
                 .filter(|owner| state.peer_agents.contains_key(owner))
             else {
-                return serde_json::json!({"error":"You are not registered. Register first with agent action=register"});
+                return missing_identity_context(mcp_session_id);
             };
             let (response, cursor) = state.mcp.response_pages.lock().page_with_ack(
                 &owner,
@@ -1602,7 +1642,7 @@ fn handle_messaging_with_message_id(
                 }) {
                 Some(s) => s,
                 None => {
-                    return serde_json::json!({"error": "You are not registered. Register first with agent action=register"});
+                    return missing_identity_context(mcp_session_id);
                 }
             };
             let now_ms = std::time::SystemTime::now()
@@ -2105,10 +2145,7 @@ fn capture_inbox_reply(
     {
         Some(ts) => ts,
         None => {
-            return (
-                serde_json::json!({"error": "You are not registered. Register first with agent action=register"}),
-                None,
-            );
+            return (missing_identity_context(mcp_session_id), None);
         }
     };
     let limit = args["limit"]

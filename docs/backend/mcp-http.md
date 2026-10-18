@@ -2574,3 +2574,22 @@ The projection counts actual MCP ingress, not all Codex model custom calls.
 Client-side correlation/captured traces are needed to identify Codex attempts that
 never reached MCP or whose replies were lost. Do not evaluate transcript JavaScript
 to derive call counts. No OTel exporter is enabled by this feature.
+
+## Managed stateless reconnect context (#2008-5317)
+
+A modern `tools/call` without `mcp-session-id` can recover mail/project routing
+from an exact host-issued `x-tuic-session` only when that peer has a live PTY or
+ACP root. The internal `managed-call:<peer>` routing key is not a wire protocol
+session: the response does not introduce a legacy session header. Existing
+binding ownership, sibling-bridge policy and replacement migration remain the
+only identity mutation seams. Project resolution still follows the live binding;
+it never uses the focused repository, a display name or an invented path.
+
+An unknown/headerless peer receives `code=identity_context_required`,
+`effect=not_started`, `retryable=false` and bounded repair guidance. Managed
+callers must reconnect using host context; external callers initialize and then
+register on that protocol session. `repair.max_attempts=1` and
+`retry_after_context_change=true` prohibit an unchanged retry policy; the client
+must enforce that bound. Server diagnostics alone do not prove ego compliance.
+An external caller without a project still receives the Progress core's explicit
+`project_required` error, never a guessed project.

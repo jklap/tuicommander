@@ -1179,10 +1179,12 @@ pub(super) async fn mcp_post(
             // refuse with guidance the caller can act on, which a blanket -32600
             // never gave them.
             let is_cc_ua = detect_claude_code_from_headers(&headers);
-            if let Some(sid) = headers
-                .get(MCP_SESSION_HEADER)
-                .and_then(|v| v.to_str().ok())
-            {
+            let session_id_str = super::mcp_transport_peer::call_session_context(
+                &state,
+                &headers,
+                request_is_modern_lifecycle(&headers, &body),
+            );
+            if let Some(sid) = session_id_str.as_deref() {
                 refresh_mcp_session(
                     &state,
                     sid,
@@ -1203,10 +1205,6 @@ pub(super) async fn mcp_post(
                 .get("arguments")
                 .cloned()
                 .unwrap_or(serde_json::json!({}));
-            let session_id_str = headers
-                .get(MCP_SESSION_HEADER)
-                .and_then(|v| v.to_str().ok())
-                .map(|s| s.to_string());
             let managed_parent_cwd = managed_parent_cwd_from_header(
                 &state,
                 session_id_str.as_deref(),

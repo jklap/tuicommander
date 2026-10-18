@@ -3358,3 +3358,9 @@ transport/effect uncertainty. HTTP and ACP tools/call share the instrumentation.
 See [MCP runtime audit](../backend/mcp-http.md#runtime-call-outcome-audit-2010-30a7)
 for measurement, retention, privacy and retry-grouping limits. Reply construction
 does not prove delivery; cancelled/lost replies must not imply no effect.
+
+Modern `/mcp` managed calls may omit `mcp-session-id` while carrying the exact
+host-issued `x-tuic-session` for a live PTY/ACP peer. Internal identity recovery
+adds no legacy response session header. Missing identity returns structured
+`identity_context_required` with `effect=not_started`, `retryable=false` and one
+context-change repair attempt; a request repeated unchanged cannot repair it.

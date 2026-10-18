@@ -1237,3 +1237,11 @@ operations, target digests and UTF-8 text-byte costs support runtime correlation
 Application error, transport observation and effect certainty stay separate;
 reply construction is not delivery proof and cancellation does not imply rollback.
 Real ego/Codex correlation and captured lost-reply traces remain unverified.
+
+## Managed MCP stateless identity (#2008-5317)
+
+Modern tools/call uses an internal routing context for an exact live PTY/ACP peer
+asserted by the host header, without adding legacy session state to the wire.
+Unknown peers remain unbound. Missing-context diagnostics prohibit unchanged
+retries and require host reconnect or explicit external initialize/register.
+Consumer retry enforcement remains a separate live ego verification requirement.

@@ -5676,3 +5676,36 @@ async fn managed_reconnect_restores_project_without_identity_guessing() {
     );
     assert_eq!(state.live_pty_for_peer(peer).as_deref(), Some(pty));
 }
+
+// Catches: an unknown/headerless identity is guessed from a focused project, or
+// unchanged inbox failures suggest a blind retry instead of context recovery.
+#[test]
+fn managed_reconnect_missing_context_is_bounded_and_never_guesses_a_peer() {
+    let state = test_state();
+    let first = handle_messaging(&state, &serde_json::json!({"action":"inbox"}), None);
+    let repeat = handle_messaging(
+        &state,
+        &serde_json::json!({"action":"inbox","byte_budget":4096}),
+        None,
+    );
+    assert_eq!(first, repeat);
+    assert_eq!(first["code"], "identity_context_required");
+    assert_eq!(first["retryable"], false);
+    assert_eq!(first["effect"], "not_started");
+    assert_eq!(first["repair"]["max_attempts"], 1);
+    assert!(state.peer_agents.is_empty());
+    assert!(state.mcp.to_session.is_empty());
+    let mut headers = HeaderMap::new();
+    headers.insert(TUIC_SESSION_HEADER, TEST_UUID_A.parse().unwrap());
+    assert!(
+        super::super::mcp_transport_peer::call_session_context(&state, &headers, true).is_none()
+    );
+    assert!(
+        super::super::mcp_transport_peer::call_session_context(&state, &headers, false).is_none()
+    );
+    headers.insert(MCP_SESSION_HEADER, "external-protocol".parse().unwrap());
+    assert_eq!(
+        super::super::mcp_transport_peer::call_session_context(&state, &headers, true).as_deref(),
+        Some("external-protocol")
+    );
+}

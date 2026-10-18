@@ -3215,3 +3215,10 @@ A bounded body-free `/mcp/audit` projection records actual HTTP/ACP runtime call
 response text bytes, correlation UUIDs and separate application/transport/effect
 observations. Unobserved delivery and effects stay unknown; native `error:null`
 is not a failure. Client correlation and captured live traces remain separate.
+
+### Managed MCP reconnect context (#2008-5317)
+
+Modern stateless managed calls recover mail/project routing from their exact live
+host-issued peer identity without model-driven registration. Unknown/headerless
+peers get bounded context-recovery guidance, not a guessed repository or identity.
+Existing explicit identity replacement and stranded-mail receipts remain intact.

@@ -2485,3 +2485,7 @@ Needs an iPhone (iOS 16.4+, 18.4+ preferred), the desktop TUICommander running a
 ## MCP runtime outcomes (2010-30a7) — Rust restart required
 
 - [ ] After Boss manually restarts `make dev` or installs `make build`, capture real ego/client correlation for permission denial, application refusal, rendering success and lost reply in an isolated instance. Inspect `/mcp/audit`: bodies must be absent; a lost reply must not imply no effect. Supply UUID call/parent metadata to distinguish recipient batches. Server-only tests do not verify Codex custom calls that never reach MCP. No desktop restart was performed by this peer.
+
+## Managed stateless reconnect (2008-5317) — Rust restart required
+
+- [ ] After Boss manually restarts `make dev` or installs `make build`, reconnect an isolated real ego managed session using its live host-issued identity with no legacy MCP session header. Verify retained mail and authoritative project recover; missing host context must stop unchanged repair loops. Verify external initialize/register and explicit replacement migration/stranded receipts. No desktop instance was restarted; server contract tests do not prove the ego retry policy.

@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+- Recover modern stateless managed MCP routing from exact live host identity and return bounded missing-context diagnostics instead of blind registration advice (#2008-5317).
+
 - Record bounded body-free runtime MCP call outcomes with separate application, transport and effect observations; do not mark native `error:null` results as failures (#2010-30a7).
 
 - Validate native MCP arguments against advertised action contracts before dispatch; return bounded, value-masked repair details. Progress limits count raw Unicode scalar values consistently across transports (#2007-59f6).
