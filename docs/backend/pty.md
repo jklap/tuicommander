@@ -663,6 +663,12 @@ command. While a meaningful descendant of the agent is alive, session state
 reports `background_work=true` and keeps `agent_state=working`; `shell_state`
 remains `idle` because terminal input readiness is a separate fact.
 
+Ego is turn-scoped: once its shell state is `idle`, a descendant or pending
+process probe does not promote `agent_state` to `working`. Its OSC 7770 idle
+signal ends the active turn even while a background job waits. The shared
+snapshot keeps `background_work` and probe metadata for suspend and standby
+safety. Desktop, mobile, and `agent ls` read this same derived lifecycle state.
+
 A descendant is excluded from that judgement two ways. By name: the persistent
 integration helpers (`mdkb`, `tuic-bridge`, and `node_repl`) and Claude's
 standalone timed `caffeinate -i -t <seconds>` assertion. Unix classification
