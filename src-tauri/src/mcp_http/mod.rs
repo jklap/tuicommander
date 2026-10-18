@@ -1013,6 +1013,12 @@ fn tunnel_routes() -> Router<Arc<AppState>> {
 fn shared_routes() -> Router<Arc<AppState>> {
     Router::new()
         .route("/mcp/peer", get(remote_peer::endpoint))
+        .route("/settings/action", post(settings_routes::settings_action))
+        // Browser Settings hydration and refresh read the same redacted owner snapshot.
+        .route(
+            "/config",
+            get(config_routes::get_config).put(config_routes::put_config),
+        )
         .route("/accounts/action", post(account_routes::action))
         .route("/accounts/secret-form", post(account_routes::secret_form))
         // Version (authenticated)
@@ -1846,10 +1852,6 @@ pub fn build_router(state: Arc<AppState>, remote_auth: bool, mcp_enabled: bool) 
         )
         // Config
         .route(
-            "/config",
-            get(config_routes::get_config).put(config_routes::put_config),
-        )
-        .route(
             "/config/hash-password",
             post(config_routes::hash_password_http),
         )
@@ -1894,7 +1896,6 @@ pub fn build_router(state: Arc<AppState>, remote_auth: bool, mcp_enabled: bool) 
             "/config/pane-layout",
             get(config_routes::get_pane_layout).put(config_routes::put_pane_layout),
         )
-        .route("/settings/action", post(settings_routes::settings_action))
         .route("/config/clear-caches", post(config_routes::clear_caches))
         .route(
             "/config/clear-repo-caches",
@@ -4463,6 +4464,8 @@ mod tests {
             // absent here, tuic-remote answered 404 and remote repos ran with
             // no agent configs.
             "/config/agents",
+            // Headless Settings uses the same bootstrap snapshot as desktop.
+            "/config",
         ];
         // Desktop-only or router-specific — MUST NOT be in shared_routes():
         // /health (public_routes only), /fs/read-editor (router-specific
@@ -4475,7 +4478,6 @@ mod tests {
             "/repo/github",
             "/repo/prs",
             "/dictation/status",
-            "/config",
             "/config/themes",
             "/mcp/status",
             "/plugins/list",
@@ -10889,3 +10891,6 @@ mod workflow_authority_critic_tests {
         }
     }
 }
+
+#[cfg(test)]
+mod remote_settings_tests;

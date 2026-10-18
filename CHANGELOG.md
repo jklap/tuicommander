@@ -29,6 +29,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - Recognize Codex 0.162.1 native question options and open queued questions with the live-verified Shift+Left key on mobile (#2026-9178).
 
+- Keep local HTTP/MCP-spawned agent terminals eligible for Chat; distinguish machine ownership from creation provenance while preserving worker cleanup and notification policy (#2032-8dc3).
+
+- Serve authenticated Settings actions and the browser Settings bootstrap on headless daemons through shared routes; keep desktop-only upstream OAuth unavailable there (#2014-9d06).
 - Report an idle ego turn as idle even while background processes remain tracked, consistently across desktop, mobile, and `agent ls` (#2018-1885).
 
 - Preserve and tint the complete wrapped intent line in mobile CLI output, including its first row (#2019-7c5d).

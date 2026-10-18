@@ -9,6 +9,9 @@
 ## Codex native question parity (2026-9178) — Rust restart required
 
 - [ ] After Boss manually restarts `make dev` or installs `make build`, ask Codex 0.162.1 for a native color question. Verify the desktop/mobile waiting state, use the mobile Open Codex question action, and answer once. Confirm options retract after settlement. Also trigger a CLI-enforced command approval and verify numeric refusal without Enter. Live CLI Shift+Left and numeric answers were captured; updated desktop/mobile rendering has not been verified against this worktree backend.
+## Local spawned-agent Chat (2032-8dc3) — frontend load after landing
+
+- [ ] After the frontend loads the landed change, spawn a throwaway local agent with `tuic agent spawn` and confirm Chat opens once the transcript is bound. Confirm worker-tab cleanup and muted completion policy remain unchanged; configured remote sessions must still have Chat disabled. The live pre-fix desktop reproduced the disabled Chat tooltip with bound Claude session rt-2032-1; that PTY was killed. No desktop restart or second instance was used.
 
 ## Ego idle turn state (2018-1885) — Rust restart required
 
@@ -2519,6 +2522,7 @@ Needs an iPhone (iOS 16.4+, 18.4+ preferred), the desktop TUICommander running a
 - [ ] After Boss rebuilds/restarts TUIC (#2005-191f), read a large inbox and terminal with `byte_budget=4096`, concatenate chunk strings and parse JSON; verify final-page cursor advancement, scoped compact inventory and explicit expired-token errors. Rust does not hot-reload; no desktop verification instance was started.
 - [ ] After Boss manually rebuilds/restarts, explicitly enable perfDebug and frameWorkload; capture a real long paint/stall, confirm the saved path via eval_js logs, and replay in isolated native WebKit with heartbeat/input and independent backend timings. Synthetic smoke is not the real-stall RED (#1638-c94c). Rust changes do not hot-reload; do not start a second desktop instance.
 
+- [ ] After Boss rebuilds/restarts the desktop or deploys the new `tuic-remote`, verify authenticated remote Settings edits refresh open readers; headless upstream OAuth remains unavailable (#2014-9d06). Rust changes do not hot-reload.
 - [ ] After a Boss-controlled rebuild/restart, save and delete a remote connection and tunnel profile from desktop Settings and confirm another connected client refreshes without reopening Settings (#1788-2163 review repair). Rust changes do not hot-reload.
 - [ ] After Boss manually restarts `make dev` or rebuilds release, verify a disposable repository with local main/master and a different remote HEAD uses main first, then master when main is absent. Keep the no-remote non-standard-base check above (#1961-bab6). Rust does not hot-reload; do not restart live sessions for this check.
 
