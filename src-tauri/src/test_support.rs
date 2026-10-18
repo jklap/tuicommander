@@ -594,6 +594,30 @@ impl Drop for ForegroundIdentityProbe {
     }
 }
 
+/// Assert the public pre-dispatch repair contract and return its named constraint.
+pub(crate) fn mcp_argument_constraint<'a>(
+    result: &'a serde_json::Value,
+    path: &str,
+    keyword: &str,
+) -> &'a serde_json::Value {
+    assert_eq!(result["code"], "invalid_arguments", "{result}");
+    assert_eq!(result["effect"], "not_started", "{result}");
+    assert_eq!(result["outcome"], "rejected", "{result}");
+    assert_eq!(result["retryable"], false, "{result}");
+    assert_eq!(result["repair"]["retry_after_correction"], true, "{result}");
+    &result["violations"]
+        .as_array()
+        .expect("repair violations")
+        .iter()
+        .find(|violation| {
+            violation["path"] == path
+                && violation["schema_path"]
+                    .as_str()
+                    .is_some_and(|schema_path| schema_path.rsplit('/').next() == Some(keyword))
+        })
+        .unwrap_or_else(|| panic!("missing {path} {keyword} violation: {result}"))["constraint"]
+}
+
 #[cfg(test)]
 mod temp_root_tests {
     #[test]
@@ -654,28 +678,4 @@ mod temp_root_tests {
             std_temp.display()
         );
     }
-}
-
-/// Assert the public pre-dispatch repair contract and return its named constraint.
-pub(crate) fn mcp_argument_constraint<'a>(
-    result: &'a serde_json::Value,
-    path: &str,
-    keyword: &str,
-) -> &'a serde_json::Value {
-    assert_eq!(result["code"], "invalid_arguments", "{result}");
-    assert_eq!(result["effect"], "not_started", "{result}");
-    assert_eq!(result["outcome"], "rejected", "{result}");
-    assert_eq!(result["retryable"], false, "{result}");
-    assert_eq!(result["repair"]["retry_after_correction"], true, "{result}");
-    &result["violations"]
-        .as_array()
-        .expect("repair violations")
-        .iter()
-        .find(|violation| {
-            violation["path"] == path
-                && violation["schema_path"]
-                    .as_str()
-                    .is_some_and(|schema_path| schema_path.rsplit('/').next() == Some(keyword))
-        })
-        .unwrap_or_else(|| panic!("missing {path} {keyword} violation: {result}"))["constraint"]
 }
