@@ -2130,3 +2130,39 @@ fn catalogue_schema_reuse_generation_changes_with_visibility() {
             .is_some()
     );
 }
+
+/// Catches: observed bad inputs reach handlers and return opaque retry errors.
+#[tokio::test]
+async fn action_validation_rejects_observed_bad_inputs_before_effects() {
+    let state = test_state();
+    let cases = [
+        (
+            "progress",
+            serde_json::json!({"type":"done", "text":"x".repeat(582)}),
+        ),
+        (
+            "progress",
+            serde_json::json!({"type":"done", "text":"x".repeat(543)}),
+        ),
+        (
+            "progress",
+            serde_json::json!({"type":"done", "text":"x".repeat(502)}),
+        ),
+        (
+            "ui",
+            serde_json::json!({"action":"tab", "id":"never-created", "html":"safe"}),
+        ),
+        ("agent", serde_json::json!({"action":"list"})),
+        ("repo", serde_json::json!({"action":"worktree_create"})),
+    ];
+    for (tool, args) in cases {
+        let result = handle_mcp_tool_call(&state, loopback_addr(), tool, &args, None).await;
+        assert_eq!(result["code"], "invalid_arguments", "{tool}: {result}");
+        assert_eq!(result["effect"], "not_started");
+        assert_eq!(result["retryable"], false);
+        assert_eq!(result["repair"]["retry_after_correction"], true);
+        assert!(!result["violations"].as_array().unwrap().is_empty());
+        assert!(result["violations"][0]["path"].is_string());
+    }
+    assert!(state.session_maps.session_html_tabs.is_empty());
+}
