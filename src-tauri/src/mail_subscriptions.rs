@@ -177,9 +177,8 @@ impl MailSubscriptions {
                 if cursor > offered || (cursor > ack && cursor != offered) { return Err("cursor must equal a returned subscription batch cursor".into()); }
                 let ids = {
                     let mut statement = tx.prepare(&format!("SELECT id FROM mail_events WHERE recipient=?1 AND seq>?2 AND seq<=?4 AND {MATCH_FILTER} ORDER BY seq")).map_err(|e| e.to_string())?;
-                    let ids = statement.query_map(params![recipient,ack,filter,cursor], |row| row.get::<_,String>(0))
-                        .map_err(|e| e.to_string())?.collect::<Result<Vec<_>,_>>().map_err(|e| e.to_string())?;
-                    ids
+                    statement.query_map(params![recipient,ack,filter,cursor], |row| row.get::<_,String>(0))
+                        .map_err(|e| e.to_string())?.collect::<Result<Vec<_>,_>>().map_err(|e| e.to_string())?
                 };
                 tx.execute("UPDATE mail_subscriptions SET ack=MAX(ack,?3), batch_end=CASE WHEN ?3>=batch_end THEN 0 ELSE batch_end END, missed=CASE WHEN ?3>=MAX(0,COALESCE((SELECT head FROM mail_heads WHERE recipient=?1),0)-?4) THEN 0 ELSE missed END WHERE recipient=?1 AND id=?2", params![recipient,id,cursor,RETAINED_MESSAGES]).map_err(|e| e.to_string())?;
                 tx.commit().map_err(|e| e.to_string())?;

@@ -14,13 +14,16 @@ use serde_json::{Value, json};
 
 use crate::{AppState, mail_subscriptions};
 
-fn peer(state: &AppState, addr: SocketAddr, headers: &HeaderMap) -> Result<String, Response> {
+fn peer(
+    state: &AppState,
+    addr: SocketAddr,
+    headers: &HeaderMap,
+) -> Result<String, (StatusCode, &'static str)> {
     if !addr.ip().is_loopback() {
         return Err((
             StatusCode::FORBIDDEN,
             "Inter-agent messaging is restricted to localhost connections",
-        )
-            .into_response());
+        ));
     }
     if state
         .config
@@ -32,8 +35,7 @@ fn peer(state: &AppState, addr: SocketAddr, headers: &HeaderMap) -> Result<Strin
         return Err((
             StatusCode::FORBIDDEN,
             "Tool 'agent' is disabled by configuration",
-        )
-            .into_response());
+        ));
     }
     headers
         .get("mcp-session-id")
@@ -44,7 +46,6 @@ fn peer(state: &AppState, addr: SocketAddr, headers: &HeaderMap) -> Result<Strin
                 StatusCode::UNAUTHORIZED,
                 "Register an MCP peer first and supply its Mcp-Session-Id header",
             )
-                .into_response()
         })
 }
 
@@ -56,7 +57,7 @@ pub(super) async fn action(
 ) -> Response {
     let peer = match peer(&state, addr, &headers) {
         Ok(peer) => peer,
-        Err(reply) => return reply,
+        Err(reply) => return reply.into_response(),
     };
     if !matches!(
         args["action"].as_str(),
@@ -81,7 +82,7 @@ pub(super) async fn events(
 ) -> Response {
     let peer = match peer(&state, addr, &headers) {
         Ok(peer) => peer,
-        Err(reply) => return reply,
+        Err(reply) => return reply.into_response(),
     };
     let mut changes = state.subscribe_agent_inbox(&peer);
     let args = json!({"action":"inbox","subscription_id":id});
