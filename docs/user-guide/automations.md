@@ -14,6 +14,14 @@ Select **New automation**, enter a name, repository path, configured run config
 identifier and literal prompt. Choose an existing checkout or a new worktree
 per run with a base branch. The agent uses its run config's permissions.
 
+Saved run configurations are validated against the same named-profile lookup used
+by the runner. Names are case-insensitive; a bare agent type such as `claude`
+is not a saved profile unless a profile has that name. Create, definition
+updates and re-enabling reject an unresolved name with a repair hint listing
+valid saved profiles. Existing list rows retain invalid definitions, but expose
+`run_config_error` and return `next_run_ms: null` until repaired. A profile can
+be removed after saving; launch checks it again and records a failed run.
+
 Choose Hourly, Daily, Weekdays or Weekly, set the time controls and select
 **Apply cadence**. The backend converts the cadence to cron. You can also edit a
 five-field cron expression directly. For a one-time run, choose **Once** and
@@ -59,6 +67,15 @@ Errors stay visible and failed saves retain the draft. **Refresh** retries a
 failed list load. Escape closes the dialog and Tab stays inside it.
 
 ## Needs-you and failure notices
+
+A failed agent-created run also sends one `automation_run_failed` inbox message
+to its recorded creator, including the run id, definition id and failure reason.
+This includes failures before a session or task exists and does not depend on
+sound preferences. Mail uses the normal payload-free peer wake route. The
+recipient must still be registered; acceptance means queued, not read. The
+durable owner-channel claim prevents duplicate or restart replay. Definitions
+created by HTTP/IPC without a creator still use the bell and configured alerts.
+
 
 A live transition to `needs_you` or `failed` adds a Messages bell item. Select
 it to open the canonical saved run, including its status, output and owning

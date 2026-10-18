@@ -179,7 +179,14 @@ pub(crate) async fn execute_as(
             }
             super::create::apply_caller_defaults(definition, &state, &caller)?;
         }
-        execute_stored_as(&definitions, &RunStore::open()?, action, Utc::now(), caller)
+        execute_stored_configured(
+            &definitions,
+            &RunStore::open()?,
+            action,
+            Utc::now(),
+            caller,
+            Some(&crate::config::load_agents_config()),
+        )
     })
     .await
     .map_err(|error| format!("Automation task failed: {error}"))?
@@ -204,6 +211,7 @@ pub(crate) fn execute_stored(
     execute_stored_as(definitions, runs, action, now, Caller::Client)
 }
 
+#[cfg(test)]
 pub(crate) fn execute_stored_as(
     definitions: &DefinitionStore,
     runs: &RunStore,
@@ -211,7 +219,26 @@ pub(crate) fn execute_stored_as(
     now: DateTime<Utc>,
     caller: Caller,
 ) -> Result<Value, String> {
+    execute_stored_configured(definitions, runs, action, now, caller, None)
+}
+
+/// Pure snapshot tests omit ambient agent settings; every live transport supplies them.
+fn execute_stored_configured(
+    definitions: &DefinitionStore,
+    runs: &RunStore,
+    action: AutomationAction,
+    now: DateTime<Utc>,
+    caller: Caller,
+    profiles: Option<&crate::config::AgentsConfig>,
+) -> Result<Value, String> {
     let creator = caller.creator(&action)?;
+    let validate_profile = |definition: &AutomationDefinition| -> Result<(), String> {
+        definition.validate()?;
+        if let Some(profiles) = profiles {
+            profiles.require_named_run_config(&definition.run_config)?;
+        }
+        Ok(())
+    };
     match action {
         AutomationAction::List {} => {
             let mut items = Vec::new();
@@ -227,7 +254,13 @@ pub(crate) fn execute_stored_as(
                     .history(Some(&definition.id), 1, 0)?
                     .first()
                     .map(|run| run.status);
-                items.push(json!({"definition": definition, "next_run_ms": next.map(|t| t.timestamp_millis()), "last_status": last}));
+                let profile_error = profiles.and_then(|profiles| {
+                    profiles
+                        .require_named_run_config(&definition.run_config)
+                        .err()
+                });
+                let next = next.filter(|_| profile_error.is_none());
+                items.push(json!({"definition": definition, "next_run_ms": next.map(|t| t.timestamp_millis()), "last_status": last, "run_config_error": profile_error}));
             }
             Ok(Value::Array(items))
         }
@@ -249,6 +282,7 @@ pub(crate) fn execute_stored_as(
             idempotent,
         } => {
             let definition = super::create::resolve(definition, now)?;
+            validate_profile(&definition)?;
             let saved = actions::create_saved(definitions, definition, creator, idempotent)?;
             create_reply(saved, now)
         }
@@ -258,6 +292,7 @@ pub(crate) fn execute_stored_as(
             enabled,
         } => match (definition, enabled) {
             (Some(definition), None) => {
+                validate_profile(&definition)?;
                 let id = id.unwrap_or_else(|| definition.id.clone());
                 actions::execute(
                     definitions,
@@ -271,6 +306,9 @@ pub(crate) fn execute_stored_as(
             }
             (None, Some(enabled)) => {
                 let id = id.ok_or("Automation update requires id")?;
+                if enabled {
+                    validate_profile(&definitions.get(&id)?)?;
+                }
                 definitions.set_enabled(&id, enabled)?;
                 value(definitions.get(&id)?)
             }
@@ -280,6 +318,7 @@ pub(crate) fn execute_stored_as(
             actions::execute(definitions, DefinitionAction::Pause { id }, None)
         }
         AutomationAction::Resume { id } => {
+            validate_profile(&definitions.get(&id)?)?;
             actions::execute(definitions, DefinitionAction::Resume { id }, None)
         }
         AutomationAction::Delete { id } => {

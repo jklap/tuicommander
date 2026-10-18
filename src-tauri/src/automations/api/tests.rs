@@ -304,3 +304,144 @@ fn relative_create_uses_host_clock_not_caller_wall_time() {
         host_now.timestamp_millis() + 3_600_000
     );
 }
+
+fn saved_profile_config() -> crate::config::AgentsConfig {
+    serde_json::from_value(json!({"agents": {
+        "claude": {"run_configs": [{"name":"Review profile", "command":"claude"}]},
+        "retired-harness": {"run_configs": [{"name":"Retired profile", "command":"retired"}]}
+    }}))
+    .unwrap()
+}
+
+// Catches: accepting create/update configurations that fail the runner's named-profile lookup.
+#[tokio::test]
+async fn automation_create_rejects_unresolvable_run_config() {
+    let dir = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+    let _guard = crate::config::set_config_dir_override(dir.path().to_owned());
+    std::fs::write(
+        dir.path().join("agents.json"),
+        serde_json::to_vec(&saved_profile_config()).unwrap(),
+    )
+    .unwrap();
+    let state = Arc::new(crate::state::tests_support::make_test_app_state_in(
+        dir.path(),
+    ));
+    for (index, profile) in ["claude", "missing", "Retired profile"]
+        .into_iter()
+        .enumerate()
+    {
+        let mut input = definition(&format!("invalid-{index}"));
+        input["run_config"] = json!(profile);
+        let result = execute(
+            json!({"action":"create", "definition":input}),
+            state.clone(),
+        )
+        .await;
+        let error = result.expect_err("create accepted a configuration the runner cannot resolve");
+        assert!(error.contains(profile), "{error}");
+        assert!(
+            error.contains("Review profile"),
+            "missing repair choices: {error}"
+        );
+    }
+    assert!(
+        DefinitionStore::new()
+            .load()
+            .unwrap()
+            .definitions
+            .is_empty()
+    );
+    let mut valid = definition("valid");
+    valid["run_config"] = json!("rEvIeW PrOfIlE");
+    execute(
+        json!({"action":"create", "definition":valid}),
+        state.clone(),
+    )
+    .await
+    .unwrap();
+    let before = std::fs::read(dir.path().join("automations.json")).unwrap();
+    valid["run_config"] = json!("claude");
+    assert!(
+        execute(json!({"action":"update", "definition":valid}), state)
+            .await
+            .is_err()
+    );
+    assert_eq!(
+        std::fs::read(dir.path().join("automations.json")).unwrap(),
+        before
+    );
+    // A removed profile cannot be re-enabled, but pausing remains a repair path.
+    std::fs::write(dir.path().join("agents.json"), b"{}").unwrap();
+    let state = Arc::new(crate::state::tests_support::make_test_app_state_in(
+        dir.path(),
+    ));
+    execute(json!({"action":"pause", "id":"valid"}), state.clone())
+        .await
+        .unwrap();
+    let error = execute(json!({"action":"resume", "id":"valid"}), state.clone())
+        .await
+        .unwrap_err();
+    assert!(error.contains("Save a run configuration"), "{error}");
+    assert!(
+        execute(
+            json!({"action":"update", "id":"valid", "enabled":true}),
+            state
+        )
+        .await
+        .is_err()
+    );
+    assert!(!DefinitionStore::new().get("valid").unwrap().enabled);
+}
+
+// Catches: list advertising an executable occurrence for a configuration rejected by launch.
+#[tokio::test]
+async fn automation_list_and_runner_resolve_run_configs_the_same_way() {
+    let dir = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+    let _guard = crate::config::set_config_dir_override(dir.path().to_owned());
+    std::fs::write(
+        dir.path().join("agents.json"),
+        serde_json::to_vec(&saved_profile_config()).unwrap(),
+    )
+    .unwrap();
+    let state = Arc::new(crate::state::tests_support::make_test_app_state_in(
+        dir.path(),
+    ));
+    for (id, profile) in [
+        ("valid", "review PROFILE"),
+        ("legacy", "claude"),
+        ("retired", "Retired profile"),
+    ] {
+        let mut input = definition(id);
+        input["run_config"] = json!(profile);
+        DefinitionStore::new()
+            .create(serde_json::from_value(input).unwrap())
+            .unwrap();
+    }
+    let listed = execute(json!({"action":"list"}), state.clone())
+        .await
+        .unwrap();
+    let rows = listed.as_array().unwrap();
+    let valid = rows
+        .iter()
+        .find(|row| row["definition"]["id"] == "valid")
+        .unwrap();
+    assert_eq!(valid["run_config_error"], Value::Null);
+    assert!(valid["next_run_ms"].is_number());
+    for (id, profile) in [("legacy", "claude"), ("retired", "Retired profile")] {
+        let error = crate::mcp_http::managed_launch::launch_named(
+            &state, profile, "unused", "unused", "/unused",
+        )
+        .unwrap_err();
+        let row = rows
+            .iter()
+            .find(|row| row["definition"]["id"] == id)
+            .unwrap();
+        assert_eq!(
+            row["run_config_error"].as_str(),
+            Some(error.as_str()),
+            "list hid the runner refusal: {row}"
+        );
+        assert_eq!(row["next_run_ms"], Value::Null);
+        assert!(error.contains("Review profile"));
+    }
+}

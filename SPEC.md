@@ -909,6 +909,14 @@ completion/maximum-duration handling remain pending; idle is not success.
 
 ### Automation HTTP and IPC parity
 
+Saved run configurations use one case-insensitive named-profile lookup across
+create, update, re-enable, list diagnostics and managed launch. Unresolved
+profiles are rejected with valid-profile repair choices; persisted invalid
+list rows expose `run_config_error` and no next occurrence. Failed agent-created
+runs offer one creator inbox notice through a durable owner-channel claim,
+including failures before session/task binding. Mail acceptance is not proof
+of consumption.
+
 Desktop IPC `automation_action` and desktop/headless HTTP `/automations/action`
 share one Rust action API for list/get/create/update/delete, atomic pause/resume,
 Run Now, paginated retained run history, previews/presets and `24h`/`7d` aggregates.

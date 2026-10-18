@@ -2158,6 +2158,49 @@ pub(crate) struct AgentsConfig {
     pub(crate) launch_instructions: Option<String>,
 }
 
+impl AgentsConfig {
+    /// Saved profile identity, without the literal-agent fallback used by interactive spawn.
+    pub(crate) fn named_run_config(&self, name: &str) -> Option<(&str, &AgentRunConfig)> {
+        self.agents.iter().find_map(|(agent, settings)| {
+            if !crate::agent::is_known_agent_type(agent) {
+                return None;
+            }
+            settings
+                .run_configs
+                .iter()
+                .find(|profile| profile.name.eq_ignore_ascii_case(name))
+                .map(|profile| (agent.as_str(), profile))
+        })
+    }
+
+    pub(crate) fn require_named_run_config(
+        &self,
+        name: &str,
+    ) -> Result<(&str, &AgentRunConfig), String> {
+        self.named_run_config(name).ok_or_else(|| {
+            let mut names: Vec<&str> = self
+                .agents
+                .iter()
+                .filter(|(agent, _)| crate::agent::is_known_agent_type(agent))
+                .flat_map(|(_, settings)| {
+                    settings
+                        .run_configs
+                        .iter()
+                        .map(|profile| profile.name.as_str())
+                })
+                .collect();
+            names.sort_unstable();
+            names.dedup();
+            let hint = if names.is_empty() {
+                "Save a run configuration in Settings > Agents first".into()
+            } else {
+                format!("Choose a saved run configuration: {}", names.join(", "))
+            };
+            format!("Automation run configuration '{name}' not found. {hint}")
+        })
+    }
+}
+
 impl Default for AgentsConfig {
     fn default() -> Self {
         Self {

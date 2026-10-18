@@ -268,6 +268,14 @@ async fn automation_contract_regression_missing_actual_profile_refuses_type_defa
 async fn automation_contract_regression_lean_retry_returns_original_saved_occurrence() {
     let dir = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
     let _guard = crate::config::set_config_dir_override(dir.path().to_owned());
+    std::fs::write(
+        dir.path().join("agents.json"),
+        serde_json::to_vec(&json!({"agents": {
+            "codex": {"run_configs": [{"name":"Actual caller profile", "command":"codex"}]}
+        }}))
+        .unwrap(),
+    )
+    .unwrap();
     let state = std::sync::Arc::new(crate::state::tests_support::make_test_app_state_in(
         dir.path(),
     ));

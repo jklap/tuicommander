@@ -2175,6 +2175,21 @@ serialization regressions cover these shared contracts.
 
 ### MCP Tool: `automations`
 
+Saved run configurations are validated against the same named-profile lookup used
+by the runner. Names are case-insensitive; a bare agent type such as `claude`
+is not a saved profile unless a profile has that name. Create, definition
+updates and re-enabling reject an unresolved name with a repair hint listing
+valid saved profiles. Existing list rows retain invalid definitions, but expose
+`run_config_error` and return `next_run_ms: null` until repaired. A profile can
+be removed after saving; launch checks it again and records a failed run.
+
+Failed runs send the bound creator one `automation_run_failed` inbox message
+with run/definition ids and reason, including pre-spawn failures. The existing
+peer mail route supplies payload-free wakes; SQLite claims the `owner` channel
+before delivery, so repeated publication and restarts do not resend it. A
+missing creator registration leaves delivery unconfirmed; bell behavior stays
+unchanged for definitions without a creator.
+
 The native `automations` tool accepts the same top-level action object as
 `automation_action` IPC and the `input` in `POST /automations/action`.
 Actions include `list`, `get`, `create`, `update`, `pause`, `resume`, `delete`,

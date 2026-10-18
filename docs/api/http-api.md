@@ -2997,6 +2997,19 @@ consumers use the separate session event subscription.
 ### Automations
 
 `POST /automations/action` accepts `{ "input": { "action": "list" } }`.
+
+Saved run configurations are validated against the same named-profile lookup used
+by the runner. Names are case-insensitive; a bare agent type such as `claude`
+is not a saved profile unless a profile has that name. Create, definition
+updates and re-enabling reject an unresolved name with a repair hint listing
+valid saved profiles. Existing list rows retain invalid definitions, but expose
+`run_config_error` and return `next_run_ms: null` until repaired. A profile can
+be removed after saving; launch checks it again and records a failed run.
+
+Failed agent-created runs also offer an `automation_run_failed` creator inbox
+message with `run_id`, `definition_id`, `name` and `reason`, even before spawn.
+The durable `owner` notification channel deduplicates publication; acceptance
+means inbox queued, not read. No creator means the existing bell/alert path.
 Unknown `/automations/*` endpoints return HTTP 404 with a JSON `error`, rather
 than the SPA frontend shell.
 It is available on desktop, browser/PWA and headless hosts. The addressed backend

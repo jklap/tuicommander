@@ -1,3 +1,7 @@
+## Automation profile validation and failure mail (2015-bdb3) — Rust restart required
+
+- [ ] After Boss restarts `make dev` or installs `make build`, use an isolated instance to reject an unknown saved profile with valid-profile choices. Remove a profile after saving and confirm list exposes `run_config_error` with no next run. A failed agent-created run must send its creator one inbox message with run id and reason even before spawn; repeated publication must not resend it. The installed backend was not restarted by this peer.
+
 ## Continuous answer gutter (1998-d826)
 
 - [ ] [VISUAL] Capture the worktree CLI gutter for the real Claude answer fixture with blank rows, section headings and marked list items; confirm one continuous line and no line on trailing unmarked prose or tool output. Both headless Chrome capture attempts failed to produce a PNG; the bounded retry stopped its own Chrome/Vite processes after 35 seconds. The production-plan regression passes, but it is not screenshot evidence. No Rust change or backend restart is required.

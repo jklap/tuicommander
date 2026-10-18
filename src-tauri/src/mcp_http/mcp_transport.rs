@@ -1864,3 +1864,5 @@ mod session_placement_tests {
         );
     }
 }
+
+pub(crate) use super::mcp_transport_ancillary::queue_peer_notice;
