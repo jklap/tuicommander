@@ -56,6 +56,8 @@ export interface GridRendererDeps {
 export interface PaintGridOptions {
 	/** Force a full clear + repaint of every row in the rowMap. */
 	fullRepaint: boolean;
+	/** Eviction-stable viewport origin, used only for validated whole-row pixel scrolling. */
+	viewportTop?: number;
 	/** When set (and not fullRepaint), only these row indices are repainted. */
 	dirtyIndices?: Set<number>;
 	/** Backend row indices omitted from the viewport layout. */
@@ -1367,6 +1369,26 @@ export function createGridRenderer(ctx: GridContext2D, deps: GridRendererDeps): 
 	// Display slots last painted by this renderer. A projection change invalidates
 	// only slots whose backend owner or omitted marker span changed.
 	let paintedLayout: Map<number, string> | undefined;
+	let paintedRows = new Map<number, DecodedRow>();
+	let paintedViewportTop: number | undefined;
+	let paintedProjection = "";
+	let paintedGeometry = "";
+
+	function sameRow(a: DecodedRow | undefined, b: DecodedRow): boolean {
+		if (!a || a.count !== b.count) return false;
+		if (a === b) return true;
+		for (let col = 0; col < b.count; col++) {
+			if (
+				a.codepoints[col] !== b.codepoints[col] ||
+				a.fg[col] !== b.fg[col] ||
+				a.bg[col] !== b.bg[col] ||
+				a.attrs[col] !== b.attrs[col] ||
+				a.cellExtras?.get(col) !== b.cellExtras?.get(col)
+			)
+				return false;
+		}
+		return true;
+	}
 
 	function paintGrid(rowMap: Map<number, DecodedRow>, m: CellMetrics, opts: PaintGridOptions): void {
 		const projection = opts.projection ?? new ViewportProjection(rowMap, opts.hiddenRows, opts.hiddenAnswerMarkers);
@@ -1380,7 +1402,43 @@ export function createGridRenderer(ctx: GridContext2D, deps: GridRendererDeps): 
 			layout.set(display, `${index}:${projection.rowLayoutKey(index)}`);
 			displayRows.set(display, row);
 		}
-		if (opts.fullRepaint || !opts.dirtyIndices) {
+		const geometry = `${ctx.canvas.width}:${ctx.canvas.height}:${m.dpr}:${m.cellWidth}:${m.cellHeight}:${m.baseline}:${m.fontSize}:${fontFamily}:${deps.fontWeight()}`;
+		const forceFull = opts.fullRepaint || !opts.dirtyIndices || !paintedLayout || geometry !== paintedGeometry;
+		const scrollRows =
+			opts.viewportTop !== undefined && paintedViewportTop !== undefined ? opts.viewportTop - paintedViewportTop : 0;
+		const rowCount = displayRows.size;
+		const canCopy =
+			!forceFull &&
+			projection.key === ";" &&
+			paintedProjection === ";" &&
+			Number.isInteger(m.cellHeight * m.dpr) &&
+			Number.isInteger(scrollRows) &&
+			scrollRows > 0 &&
+			scrollRows < rowCount &&
+			rowCount === paintedRows.size &&
+			rowCount * m.cellHeight <= ctx.canvas.height / m.dpr &&
+			Array.from({ length: rowCount }, (_, slot) => displayRows.has(slot) && paintedRows.has(slot)).every(Boolean);
+		if (canCopy) {
+			const height = (rowCount - scrollRows) * m.cellHeight;
+			ctx.drawImage(
+				ctx.canvas,
+				0,
+				scrollRows * m.cellHeight * m.dpr,
+				ctx.canvas.width,
+				height * m.dpr,
+				-GUTTER_PX,
+				0,
+				w,
+				height,
+			);
+			for (const [slot, row] of displayRows) {
+				if (slot < rowCount - scrollRows && sameRow(paintedRows.get(slot + scrollRows), row)) continue;
+				const y = slot * m.cellHeight;
+				ctx.fillStyle = cachedBgDefault;
+				ctx.fillRect(-GUTTER_PX, y, w, m.cellHeight);
+				paintRow(row, y, m, fontFamily);
+			}
+		} else if (forceFull) {
 			const h = ctx.canvas.height / m.dpr;
 			ctx.fillStyle = cachedBgDefault;
 			ctx.fillRect(-GUTTER_PX, 0, w, h);
@@ -1408,9 +1466,15 @@ export function createGridRenderer(ctx: GridContext2D, deps: GridRendererDeps): 
 			}
 		}
 		paintedLayout = layout;
+		paintedRows = displayRows;
+		paintedViewportTop = opts.viewportTop;
+		paintedProjection = projection.key;
+		paintedGeometry = geometry;
 	}
 
 	function setTheme(bgDefault: string, fgDefault: string, neutralSurface = bgDefault): void {
+		if (cachedBgDefault !== bgDefault || cachedFgDefault !== fgDefault || cachedNeutralSurface !== neutralSurface)
+			paintedLayout = undefined;
 		cachedBgDefault = bgDefault;
 		cachedFgDefault = fgDefault;
 		cachedNeutralSurface = neutralSurface;
@@ -1419,6 +1483,7 @@ export function createGridRenderer(ctx: GridContext2D, deps: GridRendererDeps): 
 	}
 
 	function invalidateCaches(): void {
+		paintedLayout = undefined;
 		colorStringCache.clear();
 		fontStyleCache.clear();
 	}
