@@ -1405,16 +1405,72 @@ pub fn inspect_workspace_lifecycle_with_pr(
     workspace_id: &str,
     pr_proves_tip: impl Fn(&Path, &str, &str) -> bool,
 ) -> WorkspaceLifecycleStatus {
+    inspect_workspace_lifecycle_resolved_with_pr(
+        base_repo,
+        resolve_removable_workspace(base_repo, workspace_id),
+        false,
+        pr_proves_tip,
+    )
+}
+
+/// Listing already owns the inventory. Reuse unchanged integration proofs, but
+/// always read fresh checkout safety fields; removal preflights never use this cache.
+pub fn inspect_workspace_listing_with_pr(
+    base_repo: &Path,
+    workspace: &WorkspaceWorktree,
+    pr_proves_tip: impl Fn(&Path, &str, &str) -> bool,
+) -> WorkspaceLifecycleStatus {
+    inspect_workspace_lifecycle_resolved_with_pr(
+        base_repo,
+        Ok(workspace.clone()),
+        true,
+        pr_proves_tip,
+    )
+}
+
+fn lifecycle_branch_merge(
+    base_repo: &Path,
+    branch: &str,
+    tip: &str,
+    monitoring: bool,
+    pr_proves_tip: impl Fn(&Path, &str, &str) -> bool,
+) -> Result<MonitoringMerge, String> {
+    // During rebase the checkout HEAD may differ from its branch ref. The
+    // monitoring cache classifies the ref, so retain fresh HEAD classification
+    // in that case rather than changing the lifecycle verdict.
+    let branch_matches_head = monitoring
+        && gix::open(base_repo)
+            .ok()
+            .and_then(|repo| {
+                repo.rev_parse_single(format!("refs/heads/{branch}").as_str())
+                    .ok()
+                    .map(|id| id.to_string() == tip)
+            })
+            .unwrap_or(false);
+    if branch_matches_head {
+        let ref_key = monitoring_ref_key(base_repo, branch)?;
+        monitoring_branch_merge(base_repo, branch, &ref_key, true, pr_proves_tip)
+    } else {
+        let default = get_remote_default_branch(&base_repo.to_string_lossy())?;
+        classify_branch_merge(base_repo, branch, tip, &default, pr_proves_tip)
+    }
+}
+
+fn inspect_workspace_lifecycle_resolved_with_pr(
+    base_repo: &Path,
+    workspace: Result<WorkspaceWorktree, String>,
+    monitoring: bool,
+    pr_proves_tip: impl Fn(&Path, &str, &str) -> bool,
+) -> WorkspaceLifecycleStatus {
     let inspected = (|| -> Result<WorkspaceLifecycleStatus, String> {
-        let workspace = resolve_removable_workspace(base_repo, workspace_id)?;
+        let workspace = workspace?;
         if !Path::new(&workspace.path).exists() {
-            let default_branch = get_remote_default_branch(&base_repo.to_string_lossy())?;
             let tip = rev_at(base_repo, &format!("refs/heads/{}", workspace.branch))?;
-            let (commit_status, merge_proof) = classify_branch_merge(
+            let (commit_status, merge_proof) = lifecycle_branch_merge(
                 base_repo,
                 &workspace.branch,
                 &tip,
-                &default_branch,
+                monitoring,
                 pr_proves_tip,
             )?;
             return Ok(WorkspaceLifecycleStatus {
@@ -1432,14 +1488,13 @@ pub fn inspect_workspace_lifecycle_with_pr(
         let (dirty_fingerprint, submodule_unpushed_commits) =
             dirty_fingerprint_at(Path::new(&workspace.path))?;
         let dirty = dirty_files > 0;
-        let default_branch = get_remote_default_branch(&base_repo.to_string_lossy())?;
         let workspace_path = Path::new(&workspace.path);
         let tip = rev_at(workspace_path, "HEAD")?;
-        let (commit_status, merge_proof) = classify_branch_merge(
+        let (commit_status, merge_proof) = lifecycle_branch_merge(
             base_repo,
             &workspace.branch,
             &tip,
-            &default_branch,
+            monitoring,
             pr_proves_tip,
         )?;
         Ok(WorkspaceLifecycleStatus {
@@ -9433,6 +9488,26 @@ branch refs/heads/feat
             .args(["commit", "-m", name])
             .run()
             .expect("git commit");
+    }
+
+    // Catches: a checkout HEAD changes after inventory, but listing reuses the
+    // branch-ref proof and reports that different checkout tip as unmerged.
+    #[test]
+    fn listing_lifecycle_does_not_reuse_branch_proof_for_detached_head() {
+        let (_temp, repo, _) = workspace_fixture();
+        let base = rev_at(&repo, "HEAD").unwrap();
+        let checkout = add_worktree(&repo, "listing-head");
+        commit_file(&checkout, "feature.txt", "own commit\n");
+        let workspace = resolve_workspace(&repo, "listing-head").unwrap();
+        let before = inspect_workspace_listing_with_pr(&repo, &workspace, |_, _, _| false);
+        assert_eq!(before.commit_status, WorkspaceCommitStatus::Unmerged);
+        git_cmd(&checkout)
+            .args(["checkout", "--detach", &base])
+            .run()
+            .unwrap();
+        let after = inspect_workspace_listing_with_pr(&repo, &workspace, |_, _, _| false);
+        assert_eq!(after.commit_status, WorkspaceCommitStatus::Merged);
+        assert_ne!(before.dirty_fingerprint, after.dirty_fingerprint);
     }
 
     /// A branch sitting exactly on the default branch's tip never merged

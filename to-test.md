@@ -1,3 +1,7 @@
+## MCP worktree listing latency (2044-31f3) — Rust restart required
+
+- [ ] After Boss manually restarts the Rust backend, repeat `tuic mcp repo` with `action=worktree_list` on the many-worktree repositories. Confirm it returns without the CLI timeout, dirty file/fingerprint fields still update after edits, and the sidebar remains unchanged. This peer did not restart the installed app; criterion 4 remains unchecked.
+
 ## Declaration into a newly discovered workspace (2044-31f3) — Rust restart required
 
 - [ ] After Boss restarts the Rust backend, use an isolated instance and declare an existing linked worktree whose saved workspace row has no `savedTerminals`. Confirm declaration succeeds, the caller restore record moves without duplicating sibling records, and cwd-based sidebar reconciliation remains correct. The peer did not restart or mutate the installed instance; live sidebar verification is still pending.

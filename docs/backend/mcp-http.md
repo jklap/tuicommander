@@ -1369,9 +1369,13 @@ Non-Claude Code MCP clients do not receive this field.
 
 MCP `repo action=worktree_list` returns each worktree's `branch`, `path`,
 `kind`, optional `warm_artifacts`, and `lifecycle_status`. `lifecycle_status`
-comes from `inspect_workspace_lifecycle` — the same backend function the
-sidebar's `lifecycleStatus` and `repo action=worktree_lifecycle` already call
-— fanned out concurrently per worktree on the blocking pool:
+uses the same classifier as the sidebar and `repo action=worktree_lifecycle`.
+Inventory and per-checkout inspection run on the blocking pool. Listing reuses
+its inventory and the sidebar's ref-keyed integration proofs and cached GitHub
+answers, instead of repeating unchanged integration subprocesses for every
+checkout. Dirt, fingerprints and submodule commit counts remain fresh; the
+response fields are unchanged. If checkout HEAD differs from its branch ref,
+listing classifies that HEAD freshly. Removal preflights remain uncached:
 
 ```json
 {

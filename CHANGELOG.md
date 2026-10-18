@@ -22,6 +22,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Publish typed Settings account enumeration and configured Ego interactive login start/status, with human terminal authentication and separate credential readback (#1790-1011).
 ### Fixed
 
+- Reuse unchanged worktree integration proofs during MCP listing instead of repeating per-checkout Git work; keep fresh safety fields and uncached removal checks (#2044-31f3).
 - Remove permanent setup narration from AI Chat, Ideas, Tasks setup and Worktrees while keeping their actions and state labels (#2050-2b8a).
 
 - Keep the code Copy control inside its own row above fenced answers, without clipping or covering wrapped text in desktop and mobile Chat (#2045-848c).

@@ -267,6 +267,11 @@ unmerged PRs, mismatched heads, and unavailable API data never prove deletion.
 The request uses the repository-bound GitHub account and host. An incomplete
 pagination read is unknown and is not cached; monitoring reuses definitive
 answers for 300 seconds, while removal always asks again.
+MCP worktree listing uses those monitoring proofs too, keyed by current refs,
+without resolving the full worktree inventory again for each entry. Its dirt,
+fingerprint and submodule fields are still inspected freshly. A checkout HEAD
+that differs from its branch ref bypasses the proof cache; destructive lifecycle
+preflights always bypass it.
 MCP `branch_integrations` and `branch_integration`, the branch panel's merged
 set, and workspace lifecycle share `classify_branch_merge` in `tuic-git`.
 The integration query does not treat `in_sync` as merged and supplies no proof
