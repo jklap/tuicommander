@@ -68,12 +68,17 @@ interface AgentConfigsState {
 			ego_mode?: EgoPermissionMode;
 			ego_sandbox?: EgoSandbox;
 			launch_instructions?: string;
+			launch_modules?: Record<string, boolean>;
+			launch_instructions_disabled?: boolean;
 		}
 	>;
 	/** Which agent CLI to use for headless prompt execution (user-chosen in Settings) */
 	headless_agent: HeadlessAgentChoice | null;
-	/** Global launch instructions override; null = the shipped default. */
+	/** Global user additions; null means no additions. */
 	launch_instructions: string | null;
+	launch_modules: Record<string, boolean>;
+	launch_instructions_disabled: boolean;
+	launch_additions_migrated: boolean;
 	loaded: boolean;
 	loadError: string | null;
 }
@@ -92,6 +97,9 @@ export function createAgentConfigsStore(io: AgentConfigIO = defaultIO, connectio
 		hibernate_scope: "background_only",
 		headless_agent: null,
 		launch_instructions: null,
+		launch_modules: {},
+		launch_instructions_disabled: false,
+		launch_additions_migrated: true,
 		loaded: false,
 		loadError: null,
 	});
@@ -103,6 +111,9 @@ export function createAgentConfigsStore(io: AgentConfigIO = defaultIO, connectio
 			hibernate_scope: state.hibernate_scope,
 			headless_agent: state.headless_agent ?? undefined,
 			launch_instructions: state.launch_instructions ?? undefined,
+			launch_modules: clone(state.launch_modules),
+			launch_instructions_disabled: state.launch_instructions_disabled,
+			launch_additions_migrated: state.launch_additions_migrated,
 		};
 	}
 
@@ -114,6 +125,9 @@ export function createAgentConfigsStore(io: AgentConfigIO = defaultIO, connectio
 				s.hibernate_scope = config.hibernate_scope ?? "background_only";
 				s.headless_agent = toHeadlessAgentChoice(config.headless_agent ?? "");
 				s.launch_instructions = config.launch_instructions ?? null;
+				s.launch_modules = config.launch_modules ?? {};
+				s.launch_instructions_disabled = config.launch_instructions_disabled ?? false;
+				s.launch_additions_migrated = config.launch_additions_migrated ?? true;
 				s.loaded = true;
 				s.loadError = null;
 			}),
@@ -132,6 +146,29 @@ export function createAgentConfigsStore(io: AgentConfigIO = defaultIO, connectio
 	}
 
 	const actions = {
+		async setLaunchModule(id: string, enabled: boolean, type?: AgentType): Promise<void> {
+			setState(
+				produce((s) => {
+					if (type) {
+						if (!s.agents[type]) s.agents[type] = { run_configs: [] };
+						s.agents[type].launch_modules = { ...s.agents[type].launch_modules, [id]: enabled };
+					} else s.launch_modules[id] = enabled;
+				}),
+			);
+			await saveToDisk();
+		},
+		async setLaunchInstructionsDisabled(disabled: boolean, type?: AgentType): Promise<void> {
+			setState(
+				produce((s) => {
+					if (type) {
+						if (!s.agents[type]) s.agents[type] = { run_configs: [] };
+						s.agents[type].launch_instructions_disabled = disabled;
+					} else s.launch_instructions_disabled = disabled;
+				}),
+			);
+			await saveToDisk();
+		},
+
 		startRemoteSync(): () => void {
 			return settingsRefresh.register({
 				section: "agents",

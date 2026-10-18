@@ -172,19 +172,19 @@ async fn reconnects_with_identical_instructions_show_one_row_stable_across_reads
     assert_eq!(served_texts(&state), first, "a second read must not append");
 }
 
-// Catches: building the instructions before the `x-tuic-session` identity is bound, so a
-// spawned child still gets the `suggest:` rule through the real initialize path.
+// Catches: launch-capable roots or children receiving duplicate playbook markers
+// through the real initialize path.
 #[cfg(unix)]
 #[tokio::test]
-async fn initialize_omits_suggest_for_a_spawned_child_and_keeps_it_for_a_root() {
+async fn initialize_omits_duplicate_launch_markers_for_roots_and_children() {
     let root_state = test_state();
     let root = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
     insert_managed_test_session(&root_state, TEST_UUID_A, root.path().to_str().unwrap());
     post_fresh_initialize(&root_state).await;
     let root_text = served_texts(&root_state).join("\n");
     assert!(
-        root_text.contains("`suggest:`"),
-        "root lost suggest: {root_text}"
+        !root_text.contains("`suggest:`"),
+        "launch-capable root received duplicate suggest: {root_text}"
     );
 
     let child_state = test_state();
@@ -200,8 +200,8 @@ async fn initialize_omits_suggest_for_a_spawned_child_and_keeps_it_for_a_root() 
         "child kept suggest: {child_text}"
     );
     assert!(
-        child_text.contains("`ack`"),
-        "child lost the ack rule: {child_text}"
+        !child_text.contains("`ack`"),
+        "launch-capable child received duplicate ack: {child_text}"
     );
 }
 
