@@ -27,6 +27,17 @@ function queueButton(container: HTMLElement): HTMLButtonElement | null {
 	return container.querySelector<HTMLButtonElement>('button[title*="Queue"]');
 }
 
+describe("IdeasPanel — theme-coloured heading", () => {
+	it.each(["inline", "detached"] as const)("rejects a platform emoji in the panel heading (%s)", (mode) => {
+		const { container } = render(() => (
+			<IdeasPanel visible={true} repoPath={null} mode={mode} onClose={noop} onSendToTerminal={noop} />
+		));
+		const title = container.querySelector("#notes-panel > div > div > span");
+		expect(title?.textContent?.trim()).toBe("Ideas");
+		expect(title?.querySelector('svg[fill="currentColor"][aria-hidden="true"]')).not.toBeNull();
+	});
+});
+
 describe("IdeasPanel — IME composition handling", () => {
 	beforeEach(() => {
 		for (const note of [...ideasStore.state.ideas]) {
