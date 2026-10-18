@@ -6,6 +6,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+- Generate configurable launch playbook modules with append-only global and agent additions, explicit all-off controls, child-only guidance and legacy override migration. Effective previews follow the selected machine (#2000-b50f).
 - Keep the mobile Markdown menu list stable during session polls and refresh it in place.
 
 ### Added

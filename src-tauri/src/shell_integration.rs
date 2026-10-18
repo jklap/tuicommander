@@ -354,7 +354,9 @@ if [ -z "$real" ]; then
 fi
 ext=md
 [ "$name" = codex ] && ext=toml
-file=${TUIC_AGENT_INSTRUCTIONS_DIR:+$TUIC_AGENT_INSTRUCTIONS_DIR/instructions-$name.$ext}
+suffix=
+[ "$TUIC_SPAWNED_CHILD" = 1 ] && suffix=-child
+file=${TUIC_AGENT_INSTRUCTIONS_DIR:+$TUIC_AGENT_INSTRUCTIONS_DIR/instructions-$name$suffix.$ext}
 if [ "$name" = gemini ]; then
   [ -z "$TUIC_ATTACHMENTS_DIR" ] || set -- "--include-directories=$TUIC_ATTACHMENTS_DIR" "$@"
   exec "$real" "$@"
