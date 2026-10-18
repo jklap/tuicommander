@@ -1003,6 +1003,18 @@ pub(crate) struct AppConfig {
     #[serde(default = "default_true")]
     #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates auto show pr popover for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
     pub(crate) auto_show_pr_popover: bool,
+    /// Hide draft pull requests by default; repositories may override this.
+    #[serde(default)]
+    #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates draft PR visibility.","operations":["get","set"],"confirmationClass":"ordinary"}))]
+    pub(crate) pr_hide_drafts: bool,
+    /// Hide conflicting pull requests by default; repositories may override this.
+    #[serde(default)]
+    #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates conflicting PR visibility.","operations":["get","set"],"confirmationClass":"ordinary"}))]
+    pub(crate) pr_hide_conflicting: bool,
+    /// Hide CI-failing pull requests by default; repositories may override this.
+    #[serde(default)]
+    #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates CI-failing PR visibility.","operations":["get","set"],"confirmationClass":"ordinary"}))]
+    pub(crate) pr_hide_ci_failing: bool,
     /// Prevent system sleep while any terminal session is busy
     #[serde(default)]
     #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates prevent sleep when busy for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
@@ -1335,6 +1347,9 @@ impl Default for AppConfig {
             tab_tree_enabled: false,
             chat_mute_intermediate_text: true,
             auto_show_pr_popover: true,
+            pr_hide_drafts: false,
+            pr_hide_conflicting: false,
+            pr_hide_ci_failing: false,
             prevent_sleep_when_busy: false,
             auto_update_enabled: true,
             auto_update_plugins_enabled: true,
@@ -1780,6 +1795,18 @@ pub(crate) struct RepoSettingsEntry {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates mcp upstreams for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
     pub(crate) mcp_upstreams: Option<Vec<String>>,
+    /// None inherits global draft PR visibility; false explicitly shows them.
+    #[serde(default)]
+    #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates repository draft PR visibility.","operations":["get","set"],"confirmationClass":"ordinary"}))]
+    pub(crate) pr_hide_drafts: Option<bool>,
+    /// None inherits global conflicting PR visibility; false explicitly shows them.
+    #[serde(default)]
+    #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates repository conflicting PR visibility.","operations":["get","set"],"confirmationClass":"ordinary"}))]
+    pub(crate) pr_hide_conflicting: Option<bool>,
+    /// None inherits global CI-failing PR visibility; false explicitly shows them.
+    #[serde(default)]
+    #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates repository CI-failing PR visibility.","operations":["get","set"],"confirmationClass":"ordinary"}))]
+    pub(crate) pr_hide_ci_failing: Option<bool>,
     /// Human-readable labels for branches/worktrees, keyed by branch name
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates branch labels for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
@@ -1815,6 +1842,9 @@ impl RepoSettingsEntry {
             || self.after_merge.is_some()
             || self.auto_fetch_interval_minutes.is_some()
             || self.auto_delete_on_pr_close.is_some()
+            || self.pr_hide_drafts.is_some()
+            || self.pr_hide_conflicting.is_some()
+            || self.pr_hide_ci_failing.is_some()
             || self.mcp_upstreams.is_some()
             || !self.branch_labels.is_empty()
             || self.auto_consolidate_worktrees
@@ -5483,6 +5513,9 @@ mod tests {
             tab_tree_enabled: true,
             chat_mute_intermediate_text: false,
             auto_show_pr_popover: true,
+            pr_hide_drafts: false,
+            pr_hide_conflicting: false,
+            pr_hide_ci_failing: false,
             prevent_sleep_when_busy: true,
             auto_update_enabled: false,
             language: "it".to_string(),
@@ -6324,6 +6357,9 @@ mod tests {
                 auto_fetch_interval_minutes: None,
                 auto_delete_on_pr_close: None,
                 mcp_upstreams: None,
+                pr_hide_drafts: None,
+                pr_hide_conflicting: None,
+                pr_hide_ci_failing: None,
                 branch_labels: HashMap::new(),
             },
         );

@@ -418,7 +418,7 @@ export const RepoWorktreeTab: Component<RepoTabProps> = (props) => {
 							<Select
 								id={id}
 								aria-describedby={descriptionId()}
-								data-setting-exclusion="transient.repositories.pr_hide_drafts"
+								data-setting-id="repositories.repos.{key}.pr_hide_drafts"
 								value={props.settings.prHideDrafts === null ? INHERIT : String(props.settings.prHideDrafts)}
 								onChange={(e) =>
 									props.onUpdate(
@@ -440,7 +440,7 @@ export const RepoWorktreeTab: Component<RepoTabProps> = (props) => {
 							<Select
 								id={id}
 								aria-describedby={descriptionId()}
-								data-setting-exclusion="transient.repositories.pr_hide_conflicting"
+								data-setting-id="repositories.repos.{key}.pr_hide_conflicting"
 								value={props.settings.prHideConflicting === null ? INHERIT : String(props.settings.prHideConflicting)}
 								onChange={(e) =>
 									props.onUpdate(
@@ -462,7 +462,7 @@ export const RepoWorktreeTab: Component<RepoTabProps> = (props) => {
 							<Select
 								id={id}
 								aria-describedby={descriptionId()}
-								data-setting-exclusion="transient.repositories.pr_hide_ci_failing"
+								data-setting-id="repositories.repos.{key}.pr_hide_ci_failing"
 								value={props.settings.prHideCiFailing === null ? INHERIT : String(props.settings.prHideCiFailing)}
 								onChange={(e) =>
 									props.onUpdate(

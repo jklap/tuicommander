@@ -6,6 +6,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+- Persist global and per-repository PR visibility filters, including explicit Show overrides and inherited defaults (#1993).
 - Send saved mobile Markdown checkbox edits and tweak comments to a repository agent with the desktop review prompt, transient delivered or queued feedback, and visible comment highlighting (#2042-a71b).
 
 - Recover modern stateless managed MCP routing from exact live host identity and return bounded missing-context diagnostics instead of blind registration advice (#2008-5317).

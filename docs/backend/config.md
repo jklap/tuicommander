@@ -1745,6 +1745,15 @@ and base credential owner, never a caller-selected program or profile. Its
 tracked terminal is human-operated; termination and handle expiry are not
 credential success. See [interactive login](settings-startup.md#interactive-login).
 
+## Persistent PR visibility filters
+
+Global `pr_hide_drafts`, `pr_hide_conflicting` and `pr_hide_ci_failing` values
+persist in `config.json` and default to false (show all). Each repository stores
+nullable overrides in `repo-settings.json`: null inherits the current global
+value, true hides the matching PRs, and false explicitly shows them. Settings
+owner transactions preserve unrelated fields, and settings refresh adopts owner
+readback without saving it again. The Rust settings catalogue describes both scopes.
+
 ### Dictation correction Settings store
 
 `corrections` is a machine-owned stable-key projection of TextCorrector's

@@ -1242,6 +1242,7 @@ re-derived later.
 - Triggered from: sidebar PR badge, status bar PR badge, status bar CI badge, toolbar notification bell
 
 ### 8.4 PR Visibility Filters
+- Global filters and nullable repository overrides persist across restarts; an explicit Show overrides a global Hide. Rust catalogue metadata and owner refresh cover both scopes.
 - Global settings (Settings > Git & GitHub > Pull Requests): hide draft PRs, hide conflicting PRs, hide CI-failing PRs
 - Per-repo overrides (Settings > [Repo] > PR Visibility): tri-state toggle per filter (Show / Default / Hide)
 - Default = inherit from global setting, shown in parentheses (e.g. "Draft PRs (Show)")

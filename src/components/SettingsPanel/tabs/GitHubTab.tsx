@@ -693,7 +693,7 @@ export const GitHubTab: Component = () => {
 
 					<SettingToggle
 						row
-						data-setting-exclusion="transient.app.pr_hide_drafts"
+						settingId="app.pr_hide_drafts"
 						checked={settingsStore.state.prHideDrafts}
 						onChange={(v) => {
 							settingsStore.setPrHideDrafts(v);
@@ -705,7 +705,7 @@ export const GitHubTab: Component = () => {
 
 					<SettingToggle
 						row
-						data-setting-exclusion="transient.app.pr_hide_conflicting"
+						settingId="app.pr_hide_conflicting"
 						checked={settingsStore.state.prHideConflicting}
 						onChange={(v) => settingsStore.setPrHideConflicting(v)}
 						label="Hide Conflicting PRs"
@@ -714,7 +714,7 @@ export const GitHubTab: Component = () => {
 
 					<SettingToggle
 						row
-						data-setting-exclusion="transient.app.pr_hide_ci_failing"
+						settingId="app.pr_hide_ci_failing"
 						checked={settingsStore.state.prHideCiFailing}
 						onChange={(v) => settingsStore.setPrHideCiFailing(v)}
 						label="Hide CI Failing PRs"
