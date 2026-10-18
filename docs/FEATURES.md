@@ -487,6 +487,8 @@ Right-click the main worktree row → **Switch Branch** submenu to checkout a di
 Replaced by the Git Panel's Changes tab (section 3.8). `Cmd+Shift+D` now opens the Git Panel
 
 ### 3.3 Markdown Panel (`Cmd+Shift+M`)
+
+- **Mobile review send**: send saved checkbox edits, source edits, and tweak comments from the mobile Markdown view. Choose a repository agent; the originating session is selected when available. The backend delivers at idle or queues for the next idle window and reports the outcome.
 - Renders `.md` and `.mdx` files with syntax-highlighted code blocks
 - A Markdown document tab, including one opened through `tuic://open`, can be detached from its tab context menu into a resizable window. Its tab remains in the main window; selecting it focuses the document window, and closing that window returns the document to the tab. The detached viewer rereads the file on focus and while open.
 - Rendered Markdown links open files and directories in TUICommander, including local symlinks and parent paths; direct UNC hrefs are refused, and paths that reach macOS privacy-protected home directories are not probed. Heading and `file:line` or `file:line:column` targets work without navigating the WebView; web and email links use the system handler
