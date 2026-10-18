@@ -1,3 +1,7 @@
+## Declaration into a newly discovered workspace (2044-31f3) — Rust restart required
+
+- [ ] After Boss restarts the Rust backend, use an isolated instance and declare an existing linked worktree whose saved workspace row has no `savedTerminals`. Confirm declaration succeeds, the caller restore record moves without duplicating sibling records, and cwd-based sidebar reconciliation remains correct. The peer did not restart or mutate the installed instance; live sidebar verification is still pending.
+
 ## Automation profile validation and failure mail (2015-bdb3) — Rust restart required
 
 - [ ] After Boss restarts `make dev` or installs `make build`, use an isolated instance to reject an unknown saved profile with valid-profile choices. Remove a profile after saving and confirm list exposes `run_config_error` with no next run. A failed agent-created run must send its creator one inbox message with run id and reason even before spawn; repeated publication must not resend it. The installed backend was not restarted by this peer.
