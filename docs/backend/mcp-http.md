@@ -2647,7 +2647,10 @@ unacknowledged events evicted since the reader started or last acknowledged the
 gap. Filtered routine evictions do not wake an actionable reader. A new reader
 starts at the oldest retained position and does not claim historical losses
 before its creation. Acknowledging the returned gap cursor clears the reported
-loss. A journal append failure is logged and makes subscription reads fail
+loss. Loss accounting can be conservative when an ACK is delayed until its
+offered batch is below the retention floor: already-processed evictions can
+remain in `missed_count` until a later gap ACK clears the aggregate. This does
+not discard additional mail. A journal append failure is logged and makes subscription reads fail
 explicitly for the lifetime of that process rather than claiming an empty inbox.
 Legacy in-memory mail delivery remains available.
 

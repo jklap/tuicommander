@@ -180,6 +180,10 @@ impl MailSubscriptions {
                     statement.query_map(params![recipient,ack,filter,cursor], |row| row.get::<_,String>(0))
                         .map_err(|e| e.to_string())?.collect::<Result<Vec<_>,_>>().map_err(|e| e.to_string())?
                 };
+                // DEFERRED (2026-10-18) — a delayed ACK below the retention floor
+                // leaves conservative loss accounting until a later gap ACK.
+                // Exact subtraction needs retained per-eviction filter metadata;
+                // the accepted contract permits overcounting in this window.
                 tx.execute("UPDATE mail_subscriptions SET ack=MAX(ack,?3), batch_end=CASE WHEN ?3>=batch_end THEN 0 ELSE batch_end END, missed=CASE WHEN ?3>=MAX(0,COALESCE((SELECT head FROM mail_heads WHERE recipient=?1),0)-?4) THEN 0 ELSE missed END WHERE recipient=?1 AND id=?2", params![recipient,id,cursor,RETAINED_MESSAGES]).map_err(|e| e.to_string())?;
                 tx.commit().map_err(|e| e.to_string())?;
                 *observed = ids;
