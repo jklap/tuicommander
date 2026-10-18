@@ -1240,9 +1240,12 @@ export function createGridRenderer(ctx: GridContext2D, deps: GridRendererDeps): 
 		m: CellMetrics,
 		fontFamily?: string,
 		hideAnswerMarker = false,
+		columns?: [number, number],
 	) {
 		if (hideAnswerMarker) row = omitAnswerMarker(row);
 		fontFamily ??= deps.getFontFamily();
+		const first = columns?.[0] ?? 0;
+		const end = Math.min(columns?.[1] ?? row.count, row.count);
 
 		let lastVisibleCol = -1;
 		for (let c = row.count - 1; c >= 0; c--) {
@@ -1254,7 +1257,7 @@ export function createGridRenderer(ctx: GridContext2D, deps: GridRendererDeps): 
 		}
 
 		// Pass 1: backgrounds
-		for (let c = 0; c < row.count; c++) {
+		for (let c = first; c < end; c++) {
 			const cp = row.codepoints[c];
 			const a = row.attrs[c];
 			const hasExplicitBg = !(a & ATTR_DEFAULT_BG) || (a & ATTR_INVERSE) !== 0;
@@ -1278,7 +1281,7 @@ export function createGridRenderer(ctx: GridContext2D, deps: GridRendererDeps): 
 		let lastFg = "";
 		let lastDim = false;
 
-		for (let c = 0; c < row.count; c++) {
+		for (let c = first; c < end; c++) {
 			const cp = row.codepoints[c];
 			const extras = row.cellExtras?.get(c) ?? "";
 			if ((cp === 0 || cp === 0x20) && extras === "") continue;
@@ -1350,7 +1353,7 @@ export function createGridRenderer(ctx: GridContext2D, deps: GridRendererDeps): 
 		if (lastDim) ctx.globalAlpha = 1.0;
 
 		// Pass 3: decorations
-		for (let c = 0; c < row.count; c++) {
+		for (let c = first; c < end; c++) {
 			const a = row.attrs[c];
 			if (!(a & (ATTR_UNDERLINE | ATTR_STRIKEOUT))) continue;
 			const x = c * m.cellWidth;
@@ -1374,19 +1377,20 @@ export function createGridRenderer(ctx: GridContext2D, deps: GridRendererDeps): 
 	let paintedProjection = "";
 	let paintedGeometry = "";
 
+	function sameCell(a: DecodedRow, b: DecodedRow, col: number): boolean {
+		return (
+			a.codepoints[col] === b.codepoints[col] &&
+			a.fg[col] === b.fg[col] &&
+			a.bg[col] === b.bg[col] &&
+			a.attrs[col] === b.attrs[col] &&
+			a.cellExtras?.get(col) === b.cellExtras?.get(col)
+		);
+	}
+
 	function sameRow(a: DecodedRow | undefined, b: DecodedRow): boolean {
 		if (!a || a.count !== b.count) return false;
 		if (a === b) return true;
-		for (let col = 0; col < b.count; col++) {
-			if (
-				a.codepoints[col] !== b.codepoints[col] ||
-				a.fg[col] !== b.fg[col] ||
-				a.bg[col] !== b.bg[col] ||
-				a.attrs[col] !== b.attrs[col] ||
-				a.cellExtras?.get(col) !== b.cellExtras?.get(col)
-			)
-				return false;
-		}
+		for (let col = 0; col < b.count; col++) if (!sameCell(a, b, col)) return false;
 		return true;
 	}
 
@@ -1400,7 +1404,7 @@ export function createGridRenderer(ctx: GridContext2D, deps: GridRendererDeps): 
 			const display = projection.displayRow(index);
 			if (display === null) continue;
 			layout.set(display, `${index}:${projection.rowLayoutKey(index)}`);
-			displayRows.set(display, row);
+			displayRows.set(display, projection.projectRow(row)!);
 		}
 		const geometry = `${ctx.canvas.width}:${ctx.canvas.height}:${m.dpr}:${m.cellWidth}:${m.cellHeight}:${m.baseline}:${m.fontSize}:${fontFamily}:${deps.fontWeight()}`;
 		const forceFull = opts.fullRepaint || !opts.dirtyIndices || !paintedLayout || geometry !== paintedGeometry;
@@ -1442,10 +1446,7 @@ export function createGridRenderer(ctx: GridContext2D, deps: GridRendererDeps): 
 			const h = ctx.canvas.height / m.dpr;
 			ctx.fillStyle = cachedBgDefault;
 			ctx.fillRect(-GUTTER_PX, 0, w, h);
-			for (const [, row] of displayRows) {
-				const display = projection.projectRow(row)!;
-				paintRow(display, display.index * m.cellHeight, m, fontFamily);
-			}
+			for (const [slot, row] of displayRows) paintRow(row, slot * m.cellHeight, m, fontFamily);
 		} else {
 			const dirtySlots = new Set<number>();
 			for (const index of opts.dirtyIndices) {
@@ -1458,11 +1459,47 @@ export function createGridRenderer(ctx: GridContext2D, deps: GridRendererDeps): 
 			}
 			for (const slot of dirtySlots) {
 				const y = slot * m.cellHeight;
-				ctx.fillStyle = cachedBgDefault;
-				ctx.fillRect(-GUTTER_PX, y, w, m.cellHeight);
 				const row = displayRows.get(slot);
-				const display = row && projection.projectRow(row);
-				if (display) paintRow(display, y, m, fontFamily);
+				const previous = paintedRows.get(slot);
+				const sameLayout = paintedLayout?.get(slot) === layout.get(slot);
+				if (row && sameLayout && sameRow(previous, row)) continue;
+				// Combining sequences may paint beyond a cell vertically. Keep their
+				// established whole-row paint rather than clipping accent pixels.
+				if (
+					row &&
+					previous &&
+					sameLayout &&
+					row.count > 3 &&
+					previous.count === row.count &&
+					!row.cellExtras?.size &&
+					!previous.cellExtras?.size
+				) {
+					let first = 0;
+					while (first < row.count && sameCell(previous, row, first)) first++;
+					let end = row.count;
+					while (end > first && sameCell(previous, row, end - 1)) end--;
+					// Clear neighbors too, and redraw their contributing glyphs through
+					// a clip: wide cells and italic bearings must not be cut or double-blended.
+					first = Math.max(0, first - 1);
+					end = Math.min(row.count, end + 1);
+					const x = first * m.cellWidth;
+					const width = (end - first) * m.cellWidth;
+					ctx.save();
+					ctx.beginPath();
+					ctx.rect(x, y, width, m.cellHeight);
+					ctx.clip();
+					ctx.fillStyle = cachedBgDefault;
+					ctx.fillRect(x, y, width, m.cellHeight);
+					let glyphFirst = Math.max(0, first - 1);
+					if (row.codepoints[glyphFirst] === 0 || previous.codepoints[glyphFirst] === 0)
+						glyphFirst = Math.max(0, glyphFirst - 1);
+					paintRow(row, y, m, fontFamily, false, [glyphFirst, Math.min(row.count, end + 1)]);
+					ctx.restore();
+				} else {
+					ctx.fillStyle = cachedBgDefault;
+					ctx.fillRect(-GUTTER_PX, y, w, m.cellHeight);
+					if (row) paintRow(row, y, m, fontFamily);
+				}
 			}
 		}
 		paintedLayout = layout;

@@ -108,3 +108,48 @@ it("explicit invalidation prevents history pixels crossing a theme or screen bou
 	expect(ctx.drawImage).not.toHaveBeenCalled();
 	expect(ctx.fillText).toHaveBeenCalledTimes(12);
 });
+
+it("one changed cell repaints a clipped span instead of the whole row (2040)", () => {
+	const { ctx, renderer } = setup();
+	ctx.canvas.width = 240;
+	const before = new Map([[0, row(0, "ABCDEFGHIJKL")]]);
+	renderer.paintGrid(before, metrics, { fullRepaint: true });
+	ctx.fillText.mockClear();
+	ctx.fillRect.mockClear();
+	renderer.paintGrid(new Map([[0, row(0, "ABCDEZ GHIJKL".replace(" ", ""))]]), metrics, {
+		fullRepaint: false,
+		dirtyIndices: new Set([0]),
+	});
+	expect(ctx.fillText.mock.calls.map((call) => call[0]).join("")).toBe("DEZGH");
+	expect(ctx.fillRect).toHaveBeenCalledWith(40, 0, 30, 20);
+});
+
+it("unchanged full damage emits no base drawing rather than burning a repaint (2040)", () => {
+	const { ctx, renderer } = setup();
+	renderer.paintGrid(new Map([[0, row(0, "ABCDEF")]]), metrics, { fullRepaint: true });
+	ctx.fillText.mockClear();
+	ctx.fillRect.mockClear();
+	renderer.paintGrid(new Map([[0, row(0, "ABCDEF")]]), metrics, { fullRepaint: false, dirtyIndices: new Set([0]) });
+	expect(ctx.fillText).not.toHaveBeenCalled();
+	expect(ctx.fillRect).not.toHaveBeenCalled();
+});
+it.each(["color", "combining", "shorter"])(
+	"%s changes are not discarded by text-only damage equality (2040)",
+	(kind) => {
+		const { ctx, renderer } = setup();
+		renderer.paintGrid(new Map([[0, row(0, "ABCDEF")]]), metrics, { fullRepaint: true });
+		const next = row(0, kind === "shorter" ? "ABC" : "ABCDEF");
+		if (kind === "color") {
+			next.fg[3] = 0xff0000;
+			next.attrs[3] = ATTR_DEFAULT_BG;
+		}
+		if (kind === "combining") next.cellExtras = new Map([[3, "\u0301"]]);
+		ctx.fillText.mockClear();
+		ctx.fillRect.mockClear();
+		renderer.paintGrid(new Map([[0, next]]), metrics, { fullRepaint: false, dirtyIndices: new Set([0]) });
+		expect(ctx.fillText).toHaveBeenCalled();
+		expect(ctx.fillRect).toHaveBeenCalled();
+		if (kind === "combining") expect(ctx.fillText.mock.calls.map((call) => call[0])).toContain("D\u0301");
+		if (kind === "shorter") expect(ctx.fillRect).toHaveBeenCalledWith(-6, 0, 60, 20);
+	},
+);

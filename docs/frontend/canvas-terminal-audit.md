@@ -23,6 +23,11 @@ forcing a full canvas clear. Overlay painting remains independent. Workload
 recordings include the optional absolute viewport origin for the same replay path;
 older recordings remain readable without scroll reuse.
 
+Dirty rows are compared as cells, including colors, attributes and combining
+content. Unchanged rows do not paint. In-place changes repaint a clipped column
+span with neighboring glyphs for wide-cell and italic overlap. Changed row widths,
+marker ownership and combining sequences keep the whole-row fallback.
+
 ## Architecture
 
 ```
