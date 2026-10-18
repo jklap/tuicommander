@@ -254,7 +254,9 @@ async fn pr_visibility_filters_survive_owner_readback_1993() {
         let path = format!("/repos{ONE}/{field}");
         let snapshot = get(&f, &[&path]).await.unwrap();
         assert_eq!(snapshot.values[&path].stored, value);
-        set(&f, revision(&f).await, &path, value.clone()).await.unwrap();
+        set(&f, revision(&f).await, &path, value.clone())
+            .await
+            .unwrap();
         assert_eq!(on_disk(&f)["repos"]["/work/one"][field], value);
     }
     let disk = on_disk(&f);
