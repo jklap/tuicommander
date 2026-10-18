@@ -774,7 +774,7 @@ pub(crate) fn spawn_pty_session(
     worktree: Option<crate::state::WorktreeInfo>,
     requested: RequestedIdentity,
 ) -> Result<String, (StatusCode, Json<serde_json::Value>)> {
-    spawn_pty_launch(state, shell, cwd, rows, cols, worktree, requested, None)
+    spawn_pty_launch(state, shell, cwd, (rows, cols), worktree, requested, None)
 }
 
 /// Configured owner processes use argv directly, never shell command text.
@@ -800,8 +800,7 @@ pub(crate) fn spawn_pty_command(
         state,
         program.to_string_lossy().into_owned(),
         Some(cwd.to_string_lossy().into_owned()),
-        24,
-        80,
+        (24, 80),
         None,
         RequestedIdentity::default(),
         Some(command),
@@ -812,12 +811,12 @@ fn spawn_pty_launch(
     state: Arc<AppState>,
     shell: String,
     cwd: Option<String>,
-    rows: u16,
-    cols: u16,
+    dimensions: (u16, u16),
     worktree: Option<crate::state::WorktreeInfo>,
     requested: RequestedIdentity,
     direct: Option<portable_pty::CommandBuilder>,
 ) -> Result<String, (StatusCode, Json<serde_json::Value>)> {
+    let (rows, cols) = dimensions;
     // portable-pty can report a successful spawn even when the child fails to
     // enter its requested directory. Reject that request before registering a
     // session that would otherwise render as an empty terminal.
