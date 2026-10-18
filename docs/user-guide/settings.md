@@ -246,11 +246,11 @@ keep a managed child open, and its parent receives an idle-timeout notice before
 closure. A child can also be marked keep-open at spawn or through the agent or
 session tool.
 
-**Launch instructions** is the TUIC output-marker text that TUIC passes to an
-agent at every launch and resume. Each agent row has its own override. Empty
-turns it off. A warning names every required marker (`intent:`, `suggest:`,
-`💬 `) that an edit removes. **Reset to default** removes the override. See
-[AI Agents](ai-agents.md#launch-instructions-tuic-output-markers).
+**Launch instructions** combines generated modules with user additions. Select Markers, Working with the user, Waiting and long work, Git and worktrees, Process safety, and Children. Children applies only to spawned children. Global switches are ceilings for the per-agent switches. **Turn all launch instructions off** suppresses the complete text, including additions.
+
+**Add instructions** and **Add instructions for <agent>** open empty user-addition fields, not copies of the generated text. TUIC appends global additions and then agent additions after enabled modules. Save on blur; clear a layer with **Clear global additions** or **Clear agent additions**. Empty adds nothing. `{VER}` becomes the TUIC version.
+
+Read-only effective previews follow the selected machine and draft changes. While its configuration loads, or if it fails, previews stay unavailable and **Add instructions** is disabled; text from the previous machine is not reused. Legacy default copies migrate away without duplication; custom text remains an addition. See [AI Agents](ai-agents.md#launch-instructions-tuic-output-markers).
 
 Each supported agent has an expandable row showing detection status, version, and MCP badge.
 
@@ -664,3 +664,7 @@ MCP, IPC and HTTP. Readback reports stored presence only (`set`, `unset`,
 removing a stored token leaves environment and CircleCI CLI fallbacks unchanged.
 
 On narrow screens, search and page selection share one compact navigation row. The workspace path in AI Chat is a read-only field; select or scroll its text to inspect the full path.
+
+### Mobile font sizes
+
+In mobile Settings, use the Terminal and Chat minus/plus controls under Appearance to set each size from 10 to 24 px. Each value is saved on this device. Terminal changes CLI output; Chat changes Session Chat and AI Chat transcripts. The defaults remain 14 px for terminal output and Chat body text. Composers, UI controls and desktop fonts stay unchanged. CLI text wraps to the available width without changing the shared terminal size.

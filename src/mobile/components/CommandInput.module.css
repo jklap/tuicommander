@@ -123,6 +123,15 @@
   color: var(--error);
 }
 
+.dictate[data-failed="true"] {
+  width: auto;
+  gap: 4px;
+  padding-inline: 4px;
+  color: var(--error);
+  font-family: var(--font-ui);
+  font-size: var(--font-sm);
+}
+
 .dictate:disabled {
   opacity: 0.5;
 }

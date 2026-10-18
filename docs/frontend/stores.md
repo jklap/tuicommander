@@ -732,7 +732,7 @@ wrote the same value, fired nothing, and left the other pane rendered underneath
 Pinned by `src/__tests__/stores/paneExclusivity.test.ts`.
 
 ### appLogger (`appLogger.ts`)
-Centralized logging — replaces direct `console.*` calls. Writes all levels and their data to the local ring buffer and surfaces them in ErrorLogPanel. Info, warn, and error messages also reach the browser console without data objects. Debug messages reach the console only while `window.__TUIC__.setPerfDebug(true)` is active; they also omit data objects. Info, warn, and error entries continue to reach the Rust log ring and `/logs`, including serialized data, for diagnostics such as `tuic-health.sh`.
+Centralized logging — replaces direct `console.*` calls. Writes all levels and their data to the local ring buffer and surfaces them in ErrorLogPanel. Info, warn, and error messages also reach the browser console without data objects. Debug messages reach the console only while `window.__TUIC__.setPerfDebug(true)` is active; they also omit data objects. Info, warn, and error entries continue to reach the Rust log ring and `/logs`, including serialized data, for diagnostics such as `tuic-health.sh`. The only mirrored debug records are source `dictation` messages starting with `Browser dictation lifecycle:`: at most six content-free records per take, in the diagnostic audience. Other debug entries remain local.
 
 ### debugRegistry (`debugRegistry.ts`)
 Dynamic snapshot registry for MCP `invoke_js` introspection. Stores self-register a snapshot function at init time, exposed on `window.__TUIC__` as `stores()` (list names) and `store(name)` (get snapshot).

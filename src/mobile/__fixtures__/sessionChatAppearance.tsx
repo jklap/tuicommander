@@ -90,11 +90,6 @@ async function mount() {
 						emptyMessage=""
 						observeToolDuration={false}
 					/>
-					<div class={reading.hint}>
-						{mobile
-							? "Reply below. Switch to CLI for permission prompts or questions missing here."
-							: "Reply below with Compose. Switch to CLI to answer permission prompts."}
-					</div>
 				</div>
 				{mobile ? (
 					<CommandInput sessionId="appearance-only" sessionExists={false} />

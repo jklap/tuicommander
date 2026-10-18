@@ -808,6 +808,35 @@ pub(super) fn handle_session(
     args: &serde_json::Value,
     mcp_session_id: Option<&str>,
 ) -> serde_json::Value {
+    if args["action"] == "output" {
+        let budget = match super::response_pages::budget(args) {
+            Ok(budget) => budget,
+            Err(error) => return error,
+        };
+        if let Some(budget) = budget {
+            let operation = format!("output:{}:{}", args["connection_id"], args["session_id"]);
+            return state
+                .mcp
+                .response_pages
+                .lock()
+                .page(
+                    mcp_session_id.unwrap_or("ipc"),
+                    &operation,
+                    args,
+                    budget,
+                    || handle_session_unpaged(state, args, mcp_session_id),
+                )
+                .0;
+        }
+    }
+    handle_session_unpaged(state, args, mcp_session_id)
+}
+
+fn handle_session_unpaged(
+    state: &Arc<AppState>,
+    args: &serde_json::Value,
+    mcp_session_id: Option<&str>,
+) -> serde_json::Value {
     let action = match require_action(args, "session", SESSION_ACTIONS) {
         Ok(a) => a,
         Err(e) => return e,
@@ -843,6 +872,33 @@ pub(super) fn handle_session(
             }
         }
         "list" => {
+            // Resolve ownership, but keep inventory on the merged mirror snapshot;
+            // the remote command proxy only implements output and submit.
+            let mut inventory_args = args.clone();
+            let scoped_session = if args.get("session_id").is_some() {
+                match super::remote_mcp_sessions::resolve(state, args) {
+                    Some(Ok((host, reference))) => {
+                        inventory_args["connection_id"] = serde_json::json!(host);
+                        Some(reference)
+                    }
+                    Some(Err(error)) => return error,
+                    None => {
+                        if let Some(reference) = args["session_id"]
+                            .as_str()
+                            .and_then(|id| id.strip_prefix("local/"))
+                        {
+                            inventory_args["session_id"] = serde_json::json!(reference);
+                        }
+                        match require_session_id(state, &inventory_args, "list") {
+                            Ok(id) => Some(id),
+                            Err(error) => return error,
+                        }
+                    }
+                }
+            } else {
+                None
+            };
+            let args = &inventory_args;
             let caller_tuic = mcp_session_id
                 .and_then(|sid| state.mcp.to_session.get(sid))
                 .map(|entry| entry.value().clone());
@@ -867,6 +923,7 @@ pub(super) fn handle_session(
                 .session_maps
                 .sessions
                 .iter()
+                .filter(|entry| scoped_session.as_ref().is_none_or(|id| entry.key() == id))
                 .map(|entry| {
                     let id = entry.key().clone();
                     let s = entry.value().lock();
@@ -984,6 +1041,12 @@ pub(super) fn handle_session(
                         "agent_state",
                         agent_state.map(serde_json::Value::String),
                     );
+                    if let Some(snapshot) = session_state
+                        .as_ref()
+                        .filter(|snapshot| snapshot.last_activity_ms > 0)
+                    {
+                        session["last_activity_ms"] = serde_json::json!(snapshot.last_activity_ms);
+                    }
                     session
                 })
                 .collect();
@@ -1001,6 +1064,10 @@ pub(super) fn handle_session(
                 let mut value = to_json_or_error(&row);
                 value["is_caller"] = serde_json::json!(false);
                 if let Some(remote_state) = row.state.as_ref() {
+                    if remote_state.last_activity_ms > 0 {
+                        value["last_activity_ms"] =
+                            serde_json::json!(remote_state.last_activity_ms);
+                    }
                     if let Some(shell_state) = remote_state.shell_state.as_ref() {
                         value["shell_state"] = serde_json::json!(shell_state);
                     }
@@ -1024,6 +1091,35 @@ pub(super) fn handle_session(
                         row["connection_id"] == host
                     }
                 });
+            }
+            if let Some(id) = scoped_session {
+                sessions.retain(|row| {
+                    [
+                        "session_id",
+                        "tuic_session",
+                        "address",
+                        "alias",
+                        "display_name",
+                        "name",
+                    ]
+                    .iter()
+                    .any(|key| row[*key] == id)
+                        || row["session_id"]
+                            .as_str()
+                            .is_some_and(|value| value.starts_with(&id))
+                });
+                if sessions.len() > 1 {
+                    return serde_json::json!({"error":"Session address is ambiguous"});
+                }
+                if sessions.is_empty() {
+                    return serde_json::json!({"error":"Session not found"});
+                }
+            }
+            if args["compact"] == true {
+                sessions = sessions
+                    .iter()
+                    .map(super::response_pages::compact)
+                    .collect();
             }
             serde_json::json!(sessions)
         }
@@ -1803,6 +1899,18 @@ pub(super) fn handle_agent_with_parent_cwd(
     mcp_session_id: Option<&str>,
     managed_parent_cwd: Option<&str>,
 ) -> serde_json::Value {
+    spawn_with_identity(state, addr, args, mcp_session_id, managed_parent_cwd, None)
+}
+
+/// Only the launch journal may reserve a PTY identity before side effects.
+pub(super) fn spawn_with_identity(
+    state: &Arc<AppState>,
+    addr: SocketAddr,
+    args: &serde_json::Value,
+    mcp_session_id: Option<&str>,
+    managed_parent_cwd: Option<&str>,
+    identity: Option<(&str, Option<&str>)>,
+) -> serde_json::Value {
     let action = match require_action(args, "agent", AGENT_ACTIONS) {
         Ok(a) => a,
         Err(e) => return e,
@@ -1907,12 +2015,18 @@ pub(super) fn handle_agent_with_parent_cwd(
                 .clone()
                 .unwrap_or_else(|| "agent".to_string());
 
-            let session_id = Uuid::new_v4().to_string();
+            let session_id = identity
+                .map(|(session, _)| session.to_string())
+                .unwrap_or_else(|| Uuid::new_v4().to_string());
 
             // Resolve caller's tuic_session from their MCP session via the O(1) reverse map.
             // Only set when caller is a registered peer — drives multi-agent context + TUIC_PARENT.
-            let caller_tuic: Option<String> = mcp_session_id
-                .and_then(|sid| state.mcp.to_session.get(sid).map(|e| e.value().clone()));
+            let caller_tuic: Option<String> = identity
+                .and_then(|(_, parent)| parent.map(str::to_string))
+                .or_else(|| {
+                    mcp_session_id
+                        .and_then(|sid| state.mcp.to_session.get(sid).map(|e| e.value().clone()))
+                });
 
             // Effective prompt: context prepended for managed-peer spawns, unchanged otherwise.
             let effective_prompt =
@@ -2116,18 +2230,22 @@ pub(super) fn handle_agent_with_parent_cwd(
                 }
             }
             if let Some(agent_type) = effective_agent_type.as_deref() {
-                launch_args = crate::agent_hook_launch::launch_args(
+                let spawned_child = caller_tuic.is_some() || mcp_session_id.is_some();
+                cmd.env("TUIC_SPAWNED_CHILD", if spawned_child { "1" } else { "0" });
+                launch_args = crate::agent_hook_launch::launch_args_for(
                     agent_type,
                     &binary_path,
                     &launch_args,
                     &crate::config::config_dir(),
                     &attachment_dir,
+                    spawned_child,
                 );
-                crate::launch_instructions::apply_env(
+                crate::launch_instructions::apply_env_for(
                     &mut cmd,
                     agent_type,
                     &launch_args,
                     &crate::config::config_dir(),
+                    spawned_child,
                 );
             }
             let skip_trust_dialog = effective_agent_type
@@ -2341,6 +2459,11 @@ pub(super) fn handle_agent_with_parent_cwd(
             // Bidirectional communication additionally needs an identified
             // parent. The child receives TUIC_PARENT + the spawn preamble; the
             // parent receives the child target in the response below.
+            // Run-owned launches also carry their explicit hold policy even when
+            // their owner is a scheduler rather than a peer with an inbox.
+            if keep_open {
+                state.keep_open_sessions.insert(session_id.clone());
+            }
             if let Some(parent_id) = spawn_parent {
                 journal_hand_off(
                     state,
@@ -2354,20 +2477,17 @@ pub(super) fn handle_agent_with_parent_cwd(
                     .session_maps
                     .session_parent
                     .insert(session_id.clone(), parent_id);
-                if keep_open {
-                    state.keep_open_sessions.insert(session_id.clone());
-                }
-                if state.pending_initial_prompts.contains_key(&session_id) {
-                    let watchdog_state = Arc::clone(state);
-                    let watchdog_session = session_id.clone();
-                    tokio::spawn(async move {
-                        tokio::time::sleep(INITIAL_PROMPT_DELIVERY_TIMEOUT).await;
-                        crate::pty::notify_initial_prompt_timeout_if_pending(
-                            &watchdog_state,
-                            &watchdog_session,
-                        );
-                    });
-                }
+            }
+            if state.pending_initial_prompts.contains_key(&session_id) {
+                let watchdog_state = Arc::clone(state);
+                let watchdog_session = session_id.clone();
+                tokio::spawn(async move {
+                    tokio::time::sleep(INITIAL_PROMPT_DELIVERY_TIMEOUT).await;
+                    crate::pty::notify_initial_prompt_timeout_if_pending(
+                        &watchdog_state,
+                        &watchdog_session,
+                    );
+                });
             }
 
             let spawn_ts = std::time::SystemTime::now()

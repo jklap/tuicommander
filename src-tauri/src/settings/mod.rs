@@ -136,3 +136,6 @@ mod startup_flow_tests;
 mod circleci_tests;
 #[cfg(feature = "desktop")]
 pub(crate) mod legacy;
+
+#[cfg(test)]
+pub(crate) mod refresh_test_support;

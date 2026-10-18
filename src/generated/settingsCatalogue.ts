@@ -309,7 +309,7 @@ export const settingsCatalogue = {
       "helpKey": "settings.catalogue.agents.agents.{key}.launch_instructions.help",
       "label": "launch instructions",
       "schema": {
-        "description": "Per-agent launch instructions. Overrides the global text; empty turns injection off.",
+        "description": "User additions appended after generated modules and global additions.",
         "type": [
           "string",
           "null"
@@ -328,6 +328,66 @@ export const settingsCatalogue = {
         "get",
         "set",
         "reset"
+      ],
+      "confirmationClass": "ordinary"
+    },
+    "agents.agents.{key}.launch_instructions_disabled": {
+      "id": "agents.agents.{key}.launch_instructions_disabled",
+      "store": "agents",
+      "owner": "machine",
+      "area": "agents",
+      "group": "agents",
+      "order": 23,
+      "path": "/agents/{key}/launch_instructions_disabled",
+      "labelKey": "settings.catalogue.agents.agents.{key}.launch_instructions_disabled.label",
+      "helpKey": "settings.catalogue.agents.agents.{key}.launch_instructions_disabled.help",
+      "label": "launch instructions disabled",
+      "schema": {
+        "description": "Explicitly disable the entire launch playbook, including additions.",
+        "type": "boolean",
+        "default": false
+      },
+      "nullable": false,
+      "default": false,
+      "availability": {
+        "status": "available"
+      },
+      "choices": null,
+      "sensitivity": "public",
+      "apply": "next_session",
+      "effect": "Disables all launch instructions for new sessions.",
+      "operations": [
+        "get",
+        "set",
+        "reset"
+      ],
+      "confirmationClass": "ordinary"
+    },
+    "agents.agents.{key}.launch_modules.{key}": {
+      "id": "agents.agents.{key}.launch_modules.{key}",
+      "store": "agents",
+      "owner": "machine",
+      "area": "agents",
+      "group": "agents",
+      "order": 22,
+      "path": "/agents/{key}/launch_modules/{key}",
+      "labelKey": "settings.catalogue.agents.agents.{key}.launch_modules.{key}.label",
+      "helpKey": "settings.catalogue.agents.agents.{key}.launch_modules.{key}.help",
+      "label": "{key}",
+      "schema": {
+        "type": "boolean"
+      },
+      "nullable": false,
+      "availability": {
+        "status": "available"
+      },
+      "choices": null,
+      "sensitivity": "public",
+      "apply": "next_session",
+      "effect": "Selects generated launch modules for new sessions.",
+      "operations": [
+        "get",
+        "set"
       ],
       "confirmationClass": "ordinary"
     },
@@ -698,7 +758,7 @@ export const settingsCatalogue = {
       "owner": "machine",
       "area": "agents",
       "group": "headless_agent",
-      "order": 22,
+      "order": 24,
       "path": "/headless_agent",
       "labelKey": "settings.catalogue.agents.headless_agent.label",
       "helpKey": "settings.catalogue.agents.headless_agent.help",
@@ -806,13 +866,13 @@ export const settingsCatalogue = {
       "owner": "machine",
       "area": "agents",
       "group": "launch_instructions",
-      "order": 23,
+      "order": 25,
       "path": "/launch_instructions",
       "labelKey": "settings.catalogue.agents.launch_instructions.label",
       "helpKey": "settings.catalogue.agents.launch_instructions.help",
       "label": "launch instructions",
       "schema": {
-        "description": "Launch instructions for every agent TUIC starts. None = the shipped default\n(`launch_instructions::default_text`); empty turns injection off.",
+        "description": "User additions appended after generated modules for every agent.",
         "type": [
           "string",
           "null"
@@ -831,6 +891,66 @@ export const settingsCatalogue = {
         "get",
         "set",
         "reset"
+      ],
+      "confirmationClass": "ordinary"
+    },
+    "agents.launch_instructions_disabled": {
+      "id": "agents.launch_instructions_disabled",
+      "store": "agents",
+      "owner": "machine",
+      "area": "agents",
+      "group": "launch_instructions_disabled",
+      "order": 27,
+      "path": "/launch_instructions_disabled",
+      "labelKey": "settings.catalogue.agents.launch_instructions_disabled.label",
+      "helpKey": "settings.catalogue.agents.launch_instructions_disabled.help",
+      "label": "launch instructions disabled",
+      "schema": {
+        "description": "Explicitly disable the entire launch playbook, including additions.",
+        "type": "boolean",
+        "default": false
+      },
+      "nullable": false,
+      "default": false,
+      "availability": {
+        "status": "available"
+      },
+      "choices": null,
+      "sensitivity": "public",
+      "apply": "next_session",
+      "effect": "Disables all launch instructions for new sessions.",
+      "operations": [
+        "get",
+        "set",
+        "reset"
+      ],
+      "confirmationClass": "ordinary"
+    },
+    "agents.launch_modules.{key}": {
+      "id": "agents.launch_modules.{key}",
+      "store": "agents",
+      "owner": "machine",
+      "area": "agents",
+      "group": "launch_modules",
+      "order": 26,
+      "path": "/launch_modules/{key}",
+      "labelKey": "settings.catalogue.agents.launch_modules.{key}.label",
+      "helpKey": "settings.catalogue.agents.launch_modules.{key}.help",
+      "label": "{key}",
+      "schema": {
+        "type": "boolean"
+      },
+      "nullable": false,
+      "availability": {
+        "status": "available"
+      },
+      "choices": null,
+      "sensitivity": "public",
+      "apply": "next_session",
+      "effect": "Selects generated launch modules for new sessions.",
+      "operations": [
+        "get",
+        "set"
       ],
       "confirmationClass": "ordinary"
     },
@@ -10920,6 +11040,11 @@ export const settingsCatalogue = {
       "store": "app",
       "path": "/settings_mcp_enabled",
       "reason": "Host-issued MCP settings access policy; only trusted UI can enable it."
+    },
+    {
+      "store": "agents",
+      "path": "/launch_additions_migrated",
+      "reason": "One-time launch additions migration marker."
     },
     {
       "store": "agents",

@@ -401,3 +401,16 @@ it("opens a table document and returns to Chat without changing its conversation
 	expect(view.queryByRole("dialog")).toBeNull();
 	expect(selectSession).not.toHaveBeenCalled();
 });
+
+// Catches: Chat changes resize the mobile composer or screen chrome.
+it("scopes the Chat size to the AI Chat transcript, excluding its composer", async () => {
+	const { mobileFontSizes } = await import("../mobileFontSize");
+	while (mobileFontSizes.chat() < 20) mobileFontSizes.step("chat", 1);
+	const view = render(() => <MobileChatScreen />);
+	const reading = view.container.querySelector("[data-mobile-reading]") as HTMLElement;
+	expect(reading.style.getPropertyValue("--font-base")).toBe("20px");
+	const composer = await screen.findByRole("textbox");
+	expect(composer.closest("[data-mobile-reading]")).toBeNull();
+	expect(view.container.querySelector("header")?.closest("[data-mobile-reading]")).toBeNull();
+	while (mobileFontSizes.chat() > 14) mobileFontSizes.step("chat", -1);
+});

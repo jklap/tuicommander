@@ -2,6 +2,7 @@ import { createEffect, createSignal, Show } from "solid-js";
 import type { AgentType } from "../../agents";
 import { TerminalChatTranscript } from "../../components/Terminal/TerminalChatTranscript";
 import { type ChatViewWake, chatViewStore } from "../../stores/chatView";
+import { mobileChatReadingStyle } from "../mobileFontSize";
 import styles from "./SessionChatView.module.css";
 
 /** Mode belongs to a PTY, not to its polled SessionInfo object. */
@@ -55,19 +56,20 @@ export function useSessionChatView(props: {
 			</Show>
 			<Show when={active() && props.sessionId()} keyed>
 				{(sessionId) => (
-					<TerminalChatTranscript
-						sessionId={sessionId}
-						terminalAgent={props.agentType() as AgentType}
-						mobile
-						onAtBottomChange={setAtBottom}
-						onRegisterScrollToBottom={(fn) => {
-							jump = fn;
-							setAtBottom(true);
-						}}
-						subscribeWake={props.subscribeWake}
-						onUnavailable={() => select("cli")}
-						hint="Reply below. Switch to CLI for permission prompts or questions missing here."
-					/>
+					<div class={styles.reading} data-mobile-reading style={mobileChatReadingStyle()}>
+						<TerminalChatTranscript
+							sessionId={sessionId}
+							terminalAgent={props.agentType() as AgentType}
+							mobile
+							onAtBottomChange={setAtBottom}
+							onRegisterScrollToBottom={(fn) => {
+								jump = fn;
+								setAtBottom(true);
+							}}
+							subscribeWake={props.subscribeWake}
+							onUnavailable={() => select("cli")}
+						/>
+					</div>
 				)}
 			</Show>
 		</>

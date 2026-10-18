@@ -657,6 +657,19 @@
 .rowSwitch:checked { background: var(--accent); border-color: var(--accent); }
 .rowSwitch:checked::after { left: 16px; background: var(--text-on-accent); }
 
+.instructionsPreview {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-height: 240px;
+  overflow: auto;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--bg-tertiary);
+  color: var(--fg-secondary);
+  font: 12px/1.5 var(--font-mono);
+}
+
 .page > [data-settings-page-header] { margin-bottom: 8px; }
 
 .machineScope:empty { display: none; }

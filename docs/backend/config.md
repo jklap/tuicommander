@@ -173,7 +173,7 @@ This guard covers unit tests only. Integration tests under `src-tauri/tests/`
 compile the library without `cfg(test)`, and `make dev` is not a test at all —
 both isolate with `TUIC_APP_INSTANCE=<id>` as described above.
 
-The `plugins/` subdirectory holds external plugin packages. Version 1.7.7
+The `plugins/` subdirectory holds external plugin packages. Version 2.0.0
 externalizes Plan Tracker and Stories Ticker by seeding `plugins/plan/` and
 `plugins/stories-ticker/` once. The root marker
 `.externalized-plan-stories-v1` records completion: existing packages are never
@@ -907,7 +907,7 @@ The settings owner exposes `/root` as a structured bounded geometry value. Group
 
 The `ego` entry supports optional `ego_mode` (`plan|default|edits|auto|yolo`) and `ego_sandbox` (`ro|workspace`). Missing values add no flags. The shared Rust launch translator injects `--mode` and `--sandbox` for terminal and MCP launches (including `run` and `resume`), replacing corresponding raw overrides before `--`. Administrative subcommands (including `mcp-server`) and ACP are excluded. The prompt separator `--` and its full suffix stay unchanged, even after a raw option without a value. An invalid saved ego choice is ignored for that field only; the valid sibling choice and other agents' settings remain intact. These choices apply only to new launches and do not rewrite ego configuration.
 
-`agents.json` may contain `launch_instructions: string` at the top level (the text for every agent) and in each agent entry (an override for that agent). Absent means the shipped default; an empty string turns the launch instructions off. See the user guide, "Launch Instructions".
+`agents.json` stores `launch_instructions: string` as user additions at global and agent level. The composer emits enabled modules, global additions, then agent additions. Empty additions add nothing. `launch_modules` maps stable module IDs (`markers`, `working_with_user`, `waiting`, `git_worktree`, `process_safety`, `children`) to booleans; missing means enabled. Effective flags are global AND per-agent. `launch_instructions_disabled` suppresses modules and additions at either scope. `launch_additions_migrated` records the one-time conversion of legacy replacements: exact marker-default copies are removed, real custom text is retained, and empty replacements become explicit off. Migration runs inside the existing agents-file update lock. Root and child launch files are separate; only child files contain Children. See the user guide, "Launch Instructions".
 
 Each agent entry may contain `native_status_signals: boolean`. For Claude and Codex, an absent value means `true`; `false` disables launch argument injection. `hook_instrumentation` controls only explicit global installation and remains off when absent.
 
@@ -1035,7 +1035,7 @@ config.json written before the field existed — see
 | `repo_defaults` | `RepoDefaultsConfig` | `RepoDefaultsConfig::default()` — what a `repo-defaults.json`-less install loads |
 | `agents` | `AgentsConfig` | `AgentsConfig::default()` — `AgentsConfig`-level fields such as `headless_agent` |
 | `github_accounts` | `GitHubAccountRegistry` | `GitHubAccountRegistry::default()` — `{ "accounts": [] }`, the same shape as `github_accounts.json`; Settings shows the "Add another GitHub account" entry point in basic mode only when accounts exist |
-| `launch_instructions` | `LaunchInstructionsDefaults` | `{ default_text, required_markers }`: the shipped launch-instruction text (`{VER}` unexpanded) and the marker tokens the Settings editor warns about |
+| `launch_instructions` | `LaunchInstructionsDefaults` | `{ default_text, required_markers, effective_text }`: the composed global text, marker tokens recognized by TUIC, and per-agent effective text; `{VER}` is resolved to the running version |
 | `dictation` | `DictationConfig` | Desktop builds only — absent under `--no-default-features` (`tuic-remote`), where `mod dictation` does not compile and the route is not registered |
 
 Fields marked `skip_serializing_if = "Option::is_none"` are omitted when
@@ -1044,7 +1044,13 @@ Fields marked `skip_serializing_if = "Option::is_none"` are omitted when
 the config files; `settingsExpert.ts` reads a leaf missing from a present
 object as the default `null`.
 
-**Command:** `get_config_defaults()`. HTTP: `GET /config/defaults` (see `docs/api/http-api.md`).
+**Command:** `get_config_defaults(preview?)`. HTTP: `GET /config/defaults`, or
+`POST /config/defaults` with a read-only launch preview draft (see `docs/api/http-api.md`).
+The `launch_instructions` section includes resolved `default_text`, `required_markers`
+and an `effective_text` map keyed by agent. Settings sends its current agent edits
+and local global marker flags for previews, so debounced saves do not leave the
+preview behind. Remote previews use that machine's saved global marker flags.
+This request does not save config or rewrite launch files.
 
 ## Cache Files
 
@@ -1714,10 +1720,13 @@ upstream reconnects. No credential value is returned.
 
 The shared settings facade assigns a process-local monotonic generation after a durable transaction or owner workflow, including vault-only writes and persisted apply failures. It returns the generation in the receipt and dual-emits `settings-changed` with `{section, generation, persisted, applied}`. Existing AppConfig saves use the same publisher. The event contains no setting values, credential keys or secret-derived hashes. Owner CAS revisions retain their existing meaning; the generation is only an invalidation cursor and is not persisted.
 
-Frontend readers subscribe once per window and reread their section through non-saving read/apply paths. They advance the acknowledged baseline together with the rendered state, retain dirty fields, report same-field conflicts, cancel obsolete queued writes and discard stale in-flight reads. Reconnect clears generation high-water marks and rereads active sections because a restarted process starts a new counter. Mirrored events retain their connection identity and cannot reload local-machine settings.
+Frontend readers subscribe once per window and reread their section through non-saving read/apply paths. They advance the acknowledged baseline together with the rendered state, retain dirty fields, report same-field conflicts, cancel obsolete queued writes and discard stale in-flight reads. Reconnect clears generation high-water marks and rereads active sections because a restarted process starts a new counter. Mirrored events retain their connection identity and cannot reload local-machine settings. Failed subscriptions and owner reads retry after one second, with exponential backoff capped at 30 seconds. Disposing a reader or disconnecting its owner cancels pending read retries. A failed subscription does not block initial owner reads. Repository refresh normalizes omitted optional keys before three-way adoption; a valid no-op field commit releases its draft. Desktop and HTTP connection/profile saves share state-bearing publication paths, including a persisted connection deletion whose credential cleanup fails. App-config no-op commits do not publish a generation.
 
 Legacy desktop and HTTP save adapters for notifications, preferences, repository settings/defaults, prompts, agents, keybindings and pane layout use the same publisher without changing owner signatures. State-bearing registration, plugin and upstream save paths also publish. Remaining legacy credential/auth writers without this state context are tracked in #1989-22fe; they do not yet provide complete cross-client invalidation.
 
+### Managed launch journal
+
+`managed-launches.sqlite` in the app data directory retains managed launch identities and request digests. It does not store prompt or environment bodies. Records remain as idempotency tombstones across process restarts; they do not imply the PTY survived. Use the same `launch_id` to inspect an old launch, never a new key to retry an uncertain creation.
 ## Catalogue-backed Settings controls
 
 Native Settings controls carry stable catalogue IDs. `settingsCatalogue.ts` is generated by the Rust catalogue test, not edited by hand. Shared selects consume Rust enum values; descriptor keys supply label/help lookup. The All settings inspector uses `settings_action` with explicit target, concrete JSON pointer and owner CAS revision. Each edit is one field, not a cross-store save. String arrays use typed rows; credentials and structured records retain domain workflows.
