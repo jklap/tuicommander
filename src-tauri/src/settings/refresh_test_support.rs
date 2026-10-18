@@ -8,8 +8,10 @@ pub(crate) fn edited<T: Serialize + DeserializeOwned>(section: &str, base: &T) -
         "notifications" => value["enabled"] = json!(!value["enabled"].as_bool().unwrap()),
         "preferences" => value["sidebar_width"] = json!(321),
         "repositories" => {
-            let mut entry = crate::config::RepoSettingsEntry::default();
-            entry.path = "/fixture".into();
+            let entry = crate::config::RepoSettingsEntry {
+                path: "/fixture".into(),
+                ..Default::default()
+            };
             value["repos"]["/fixture"] = serde_json::to_value(entry).unwrap();
         }
         "repo_defaults" => value["base_branch"] = json!("review-base"),
