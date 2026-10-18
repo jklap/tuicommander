@@ -1441,7 +1441,7 @@ export function createGridRenderer(ctx: GridContext2D, deps: GridRendererDeps): 
 			for (const [slot, row] of displayRows) paintRow(row, slot * m.cellHeight, m, fontFamily);
 		} else {
 			const dirtySlots = new Set<number>();
-			for (const index of opts.dirtyIndices) {
+			for (const index of opts.dirtyIndices ?? []) {
 				const display = projection.displayRow(index);
 				if (display !== null) dirtySlots.add(display);
 			}
