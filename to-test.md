@@ -2505,7 +2505,7 @@ Needs an iPhone (iOS 16.4+, 18.4+ preferred), the desktop TUICommander running a
 
 - [ ] After a Boss-controlled rebuild/restart, use an isolated instance to create, edit and remove a `corrections` Settings record; verify Voice and the runtime dictionary adopt it and the new-entry draft remains intact (#1992-d4fa). Seed a legacy `constructor` correction through the owner and verify ordinary sibling edits preserve it without `unknown_path`. No real microphone is needed; the running Rust process does not hot-reload.
 
-- [ ] After a Boss-controlled Rust rebuild/restart, verify isolated legacy upstream credential edits and OAuth completion refresh another open Settings reader; vault rejection must not emit a successful persistence hint (#1989-22fe).
+- [ ] After a Boss-controlled Rust rebuild/restart, verify isolated legacy upstream credential edits, OAuth completion, connection password set/clear, deployment pairing-token creation and deployment-mode changes refresh another open Settings reader; vault rejection must not emit a successful persistence hint (#1989-22fe).
 - [ ] After a Boss-controlled rebuild/restart, save and delete a remote connection and tunnel profile from desktop Settings and confirm another connected client refreshes without reopening Settings (#1788-2163 review repair). Rust changes do not hot-reload.
 - [ ] After Boss manually restarts `make dev` or rebuilds release, verify a disposable repository with local main/master and a different remote HEAD uses main first, then master when main is absent. Keep the no-remote non-standard-base check above (#1961-bab6). Rust does not hot-reload; do not restart live sessions for this check.
 

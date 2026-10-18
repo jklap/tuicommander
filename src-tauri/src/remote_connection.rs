@@ -286,6 +286,31 @@ pub(crate) fn set_connection_password(id: &str, password: &str) -> Result<(), St
     )
 }
 
+/// Legacy IPC and HTTP password writes share persistence and invalidation.
+pub(crate) fn set_connection_password_with_refresh(
+    state: &crate::AppState,
+    id: &str,
+    password: &str,
+) -> Result<(), String> {
+    set_connection_password(id, password)?;
+    crate::settings::api::publish_change(state, "connections", true);
+    Ok(())
+}
+
+/// Deployment creates a credential only when one is absent. Both deployment
+/// paths invalidate the Settings credential-presence projection after persistence.
+pub(crate) fn ensure_pairing_token(state: &crate::AppState, id: &str) -> Result<String, String> {
+    match pairing_token(id)? {
+        Some(token) => Ok(token),
+        None => {
+            let token = uuid::Uuid::new_v4().to_string();
+            set_pairing_token(id, &token)?;
+            crate::settings::api::publish_change(state, "connections", true);
+            Ok(token)
+        }
+    }
+}
+
 pub(crate) fn connection_password_exists(id: &str) -> Result<bool, String> {
     crate::credentials::get(crate::credentials::Credential::RemoteConnection(id))
         .map(|v| v.is_some())
@@ -450,10 +475,12 @@ pub async fn delete_remote_connection(
 
 #[cfg(feature = "desktop")]
 #[tauri::command]
-pub async fn set_remote_connection_password(id: String, password: String) -> Result<(), String> {
-    // DEFERRED (2026-10-17) — #1989-22fe: this legacy transport has no AppState;
-    // facade credential writes publish generations, but this adapter still needs owner wiring.
-    set_connection_password(&id, &password)
+pub async fn set_remote_connection_password(
+    state: tauri::State<'_, std::sync::Arc<crate::AppState>>,
+    id: String,
+    password: String,
+) -> Result<(), String> {
+    set_connection_password_with_refresh(&state, &id, &password)
 }
 
 #[cfg(feature = "desktop")]

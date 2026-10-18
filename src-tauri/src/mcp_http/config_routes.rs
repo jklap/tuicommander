@@ -730,16 +730,16 @@ pub(super) async fn delete_remote_connection(
 pub(super) async fn put_remote_connection_password(
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
     auth: Option<Extension<Authenticated>>,
+    State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
     Json(body): Json<RemoteConnectionPasswordRequest>,
 ) -> impl IntoResponse {
     if let Err(resp) = require_local_or_auth(&addr, auth.is_some()) {
         return resp.into_response();
     }
-    super::json_result(crate::remote_connection::set_connection_password(
-        &id,
-        &body.password,
-    ))
+    super::json_result(
+        crate::remote_connection::set_connection_password_with_refresh(&state, &id, &body.password),
+    )
 }
 
 pub(super) async fn get_remote_connection_password_exists(

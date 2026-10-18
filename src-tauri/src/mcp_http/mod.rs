@@ -5035,6 +5035,88 @@ mod tests {
         assert_eq!(crate::mcp_upstream_config::load_mcp_upstreams(), current);
     }
 
+    // Catches: legacy connection password writes bypassing refresh or advertising failed persistence.
+    #[tokio::test]
+    #[serial_test::serial]
+    async fn legacy_connection_password_settings_refresh_follows_vault_persistence() {
+        let tmp = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+        let _guard = crate::config::set_config_dir_override(tmp.path().to_path_buf());
+        crate::credentials::reset_test_faults();
+        let state = test_state();
+        let app = build_router(state.clone(), false, true);
+        let mut events = state.event_bus.subscribe();
+        let id = "legacy-connection-refresh";
+        let request = |password: &str| {
+            put_from(
+                &format!("/config/remote-connections/{id}/password"),
+                &serde_json::json!({"password": password}),
+                std::net::SocketAddr::from(([127, 0, 0, 1], 0)),
+            )
+        };
+        let response = app
+            .clone()
+            .oneshot(request("connection-secret-canary"))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            crate::credentials::get(crate::credentials::Credential::RemoteConnection(id))
+                .unwrap()
+                .as_deref(),
+            Some("connection-secret-canary")
+        );
+        let crate::state::AppEvent::SettingsChanged(first) = events
+            .try_recv()
+            .expect("durable connection password write must refresh another Settings reader")
+        else {
+            panic!("expected Settings change")
+        };
+        crate::credentials::MOCK_FAIL_WRITES.store(true, std::sync::atomic::Ordering::SeqCst);
+        let rejected = app
+            .clone()
+            .oneshot(request("rejected-secret-canary"))
+            .await
+            .unwrap();
+        crate::credentials::reset_test_faults();
+        assert_eq!(rejected.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        assert!(
+            events.try_recv().is_err(),
+            "failed vault write must not publish"
+        );
+        assert_eq!(
+            crate::credentials::get(crate::credentials::Credential::RemoteConnection(id))
+                .unwrap()
+                .as_deref(),
+            Some("connection-secret-canary")
+        );
+        let response = app.oneshot(request("")).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert!(!crate::remote_connection::connection_password_exists(id).unwrap());
+        let crate::state::AppEvent::SettingsChanged(second) = events
+            .try_recv()
+            .expect("durable connection password clear must refresh another Settings reader")
+        else {
+            panic!("expected Settings change")
+        };
+        assert_eq!(first.section, "connections");
+        assert_eq!(second.section, "connections");
+        assert!(first.persisted && first.applied && second.persisted && second.applied);
+        assert!(first.generation < second.generation);
+        assert!(
+            events.try_recv().is_err(),
+            "each write publishes exactly once"
+        );
+        let payload = serde_json::to_value((first, second)).unwrap();
+        for notice in payload.as_array().unwrap() {
+            assert_eq!(
+                notice.as_object().unwrap().len(),
+                4,
+                "hints contain only section, generation and persistence/apply flags"
+            );
+        }
+        assert!(!payload.to_string().contains("secret-canary"));
+    }
+
     // Catches: a successful direct credential write leaving other Settings readers stale.
     #[tokio::test]
     #[serial_test::serial]
