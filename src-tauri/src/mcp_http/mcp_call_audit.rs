@@ -18,7 +18,9 @@ const PROJECTION_LIMIT: usize = 100;
 
 static OPERATIONS: LazyLock<HashMap<String, Vec<String>>> = LazyLock::new(|| {
     super::mcp_transport_catalogue::native_tool_definitions()
-        .into_iter()
+        .as_array()
+        .expect("native catalogue is an array")
+        .iter()
         .map(|tool| {
             let actions = tool["inputSchema"]["properties"]["action"]["enum"]
                 .as_array()
