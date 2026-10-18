@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, waitFor } from "@solidjs/testing-library";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@solidjs/testing-library";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { appLogger } from "../../stores/appLogger";
 import { SessionDetailScreen } from "../screens/SessionDetailScreen";
@@ -256,6 +256,28 @@ it("excludes server voice while browser recognition starts and releases it on en
 	await screen.findByRole("button", { name: "Stop voice call" });
 	expect(screen.getByRole("button", { name: "Dictate into draft" }).hasAttribute("disabled")).toBe(true);
 });
+
+// Catches: opening Ideas bypasses the session's existing microphone exclusion,
+// so idea speech competes with a voice call or continues into the hidden terminal draft.
+it.each(["voice call", "terminal dictation"])(
+	"blocks Ideas dictation while %s already owns the microphone",
+	async (owner) => {
+		browserSpeech();
+		mount();
+		const server = await screen.findByRole("button", { name: "Start voice call" });
+		if (owner === "voice call") {
+			fireEvent.click(server);
+			await screen.findByRole("button", { name: "Stop voice call" });
+		} else {
+			fireEvent.click(screen.getByRole("button", { name: "Dictate into draft" }));
+		}
+		fireEvent.click(screen.getByRole("button", { name: "More session actions" }));
+		fireEvent.click(screen.getByRole("button", { name: "Ideas", exact: true }));
+		const ideaInput = screen.getByPlaceholderText("Type an idea...");
+		const mic = within(ideaInput.parentElement!).getByRole("button", { name: "Dictate into draft" });
+		expect(mic.hasAttribute("disabled")).toBe(true);
+	},
+);
 
 it("excludes browser speech during a pending server permission prompt", async () => {
 	// Catches: a race before the server has published its armed status.
