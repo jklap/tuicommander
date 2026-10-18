@@ -2095,10 +2095,18 @@ pub(crate) struct AgentSettings {
     )]
     #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"next_session","effect":"Used when the next session or process starts; existing sessions retain their launch configuration.","operations":["get","set"],"confirmationClass":"ordinary"}))]
     pub(crate) ego_sandbox: Option<EgoSandbox>,
-    /// Per-agent launch instructions. Overrides the global text; empty turns injection off.
+    /// User additions appended after generated modules and global additions.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"next_session","effect":"Used when the next session or process starts; existing sessions retain their launch configuration.","operations":["get","set"],"confirmationClass":"ordinary"}))]
     pub(crate) launch_instructions: Option<String>,
+    /// Disabled modules; missing entries inherit enabled defaults.
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"next_session","effect":"Selects generated launch modules for new sessions.","operations":["get","set"],"confirmationClass":"ordinary"}))]
+    pub(crate) launch_modules: HashMap<String, bool>,
+    /// Explicitly disable the entire launch playbook, including additions.
+    #[serde(default)]
+    #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"next_session","effect":"Disables all launch instructions for new sessions.","operations":["get","set"],"confirmationClass":"ordinary"}))]
+    pub(crate) launch_instructions_disabled: bool,
 }
 
 impl Default for AgentSettings {
@@ -2120,6 +2128,8 @@ impl Default for AgentSettings {
             ego_mode: None,
             ego_sandbox: None,
             launch_instructions: None,
+            launch_modules: HashMap::new(),
+            launch_instructions_disabled: false,
         }
     }
 }
@@ -2137,6 +2147,10 @@ pub(crate) enum HibernateScope {
 
 #[derive(Clone, Serialize, Deserialize, schemars::JsonSchema)]
 pub(crate) struct AgentsConfig {
+    /// Old replacement prompts have been converted to additions.
+    #[serde(default)]
+    #[schemars(extend("x-not-setting" = "One-time launch additions migration marker."))]
+    pub(crate) launch_additions_migrated: bool,
     #[serde(default = "default_hibernate_minutes")]
     #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Hibernates unattended resumable agents after awake idle minutes; zero disables.","operations":["get","set"],"confirmationClass":"ordinary"}))]
     pub(crate) hibernate_idle_minutes: u32,
@@ -2151,19 +2165,29 @@ pub(crate) struct AgentsConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates headless agent for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
     pub(crate) headless_agent: Option<String>,
-    /// Launch instructions for every agent TUIC starts. None = the shipped default
-    /// (`launch_instructions::default_text`); empty turns injection off.
+    /// User additions appended after generated modules for every agent.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"next_session","effect":"Used when the next session or process starts; existing sessions retain their launch configuration.","operations":["get","set"],"confirmationClass":"ordinary"}))]
     pub(crate) launch_instructions: Option<String>,
+    /// Disabled modules; missing entries inherit enabled defaults.
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"next_session","effect":"Selects generated launch modules for new sessions.","operations":["get","set"],"confirmationClass":"ordinary"}))]
+    pub(crate) launch_modules: HashMap<String, bool>,
+    /// Explicitly disable the entire launch playbook, including additions.
+    #[serde(default)]
+    #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"next_session","effect":"Disables all launch instructions for new sessions.","operations":["get","set"],"confirmationClass":"ordinary"}))]
+    pub(crate) launch_instructions_disabled: bool,
 }
 
 impl Default for AgentsConfig {
     fn default() -> Self {
         Self {
+            launch_additions_migrated: false,
             agents: HashMap::new(),
             headless_agent: None,
             launch_instructions: None,
+            launch_modules: HashMap::new(),
+            launch_instructions_disabled: false,
             hibernate_idle_minutes: default_hibernate_minutes(),
             hibernate_scope: HibernateScope::default(),
         }
@@ -4555,6 +4579,7 @@ pub(crate) fn save_keybindings(
 pub(crate) fn load_agents_config() -> AgentsConfig {
     let file: ConfigFile<AgentsConfig> = ConfigFile::new(AGENTS_CONFIG_FILE);
     match file.update_with_strict(|config| {
+        let launch_changed = crate::launch_instructions::migrate_additions(config);
         // Older typed agents.json writers discard unknown fields. Keep the
         // durable migration bit outside their document, under the existing lock.
         let stamp = config_dir().join("codex-bypass-migrated");
@@ -4562,9 +4587,9 @@ pub(crate) fn load_agents_config() -> AgentsConfig {
             let settings = config.agents.entry("codex".into()).or_default();
             let changed = !settings.codex_bypass_migrated;
             settings.codex_bypass_migrated = true;
-            return Ok((config.clone(), changed));
+            return Ok((config.clone(), changed || launch_changed));
         }
-        let changed = migrate_codex_bypass(config);
+        let changed = migrate_codex_bypass(config) || launch_changed;
         persist_atomic(&stamp, b"1")?;
         Ok((config.clone(), changed))
     }) {
@@ -4666,7 +4691,7 @@ pub(crate) struct ConfigDefaults {
     /// route is never registered there either (see `build_remote_router`).
     #[cfg(feature = "dictation")]
     pub(crate) dictation: DictationConfig,
-    /// The shipped launch-instruction text (`{VER}` unexpanded) and the marker
+    /// The resolved launch-instruction previews and the marker
     /// tokens the Settings editor warns about when an edit drops one.
     pub(crate) launch_instructions: LaunchInstructionsDefaults,
 }
@@ -4675,12 +4700,16 @@ pub(crate) struct ConfigDefaults {
 pub(crate) struct LaunchInstructionsDefaults {
     pub(crate) default_text: String,
     pub(crate) required_markers: Vec<&'static str>,
+    pub(crate) effective_text: std::collections::HashMap<String, String>,
 }
 
 #[cfg_attr(feature = "desktop", tauri::command)]
-pub(crate) fn get_config_defaults() -> ConfigDefaults {
+pub(crate) fn get_config_defaults(
+    preview: Option<crate::settings::agents::LaunchPreview>,
+) -> ConfigDefaults {
     let mut agents = AgentsConfig::default();
     migrate_codex_bypass(&mut agents);
+    crate::launch_instructions::migrate_additions(&mut agents);
     ConfigDefaults {
         app: AppConfig::default(),
         notifications: NotificationConfig::default(),
@@ -4696,10 +4725,7 @@ pub(crate) fn get_config_defaults() -> ConfigDefaults {
             speech_engine: "edge".to_string(),
             ..DictationConfig::default()
         },
-        launch_instructions: LaunchInstructionsDefaults {
-            default_text: crate::launch_instructions::default_text(true, true),
-            required_markers: crate::launch_instructions::REQUIRED_MARKERS.to_vec(),
-        },
+        launch_instructions: crate::settings::agents::launch_instruction_defaults(preview),
     }
 }
 
@@ -6692,6 +6718,8 @@ mod tests {
             "claude".to_string(),
             AgentSettings {
                 launch_instructions: None,
+                launch_modules: HashMap::new(),
+                launch_instructions_disabled: false,
                 run_configs: vec![
                     AgentRunConfig {
                         name: "Default".to_string(),
@@ -9945,7 +9973,7 @@ mod tests {
     /// out of sync with it silently.
     #[test]
     fn get_config_defaults_returns_each_domains_own_default() {
-        let defaults = get_config_defaults();
+        let defaults = get_config_defaults(None);
         assert_eq!(
             serde_json::to_value(&defaults.app).unwrap(),
             serde_json::to_value(AppConfig::default()).unwrap()
@@ -10000,7 +10028,7 @@ mod tests {
     /// key would keep the entry point visible for everyone.
     #[test]
     fn get_config_defaults_carries_no_additional_github_accounts() {
-        let payload = serde_json::to_value(get_config_defaults()).unwrap();
+        let payload = serde_json::to_value(get_config_defaults(None)).unwrap();
         assert_eq!(
             payload["github_accounts"]["accounts"],
             serde_json::json!([])
@@ -10029,7 +10057,7 @@ mod tests {
         let dir = TempDir::new().expect("temp dir");
         let _guard = set_config_dir_override(dir.path().to_path_buf());
 
-        let defaults = get_config_defaults();
+        let defaults = get_config_defaults(None);
 
         assert_eq!(
             serde_json::to_value(&defaults.app).unwrap(),

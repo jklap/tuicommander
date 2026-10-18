@@ -15,6 +15,7 @@ mod github_pr_action_routes;
 mod github_review_routes;
 mod github_routes;
 mod guards;
+pub(crate) mod launch_transaction;
 mod log_routes;
 pub(crate) mod managed_launch;
 pub(crate) mod mcp_transport;
@@ -27,6 +28,7 @@ mod mcp_transport_catalogue;
 mod mcp_transport_peer;
 pub(crate) mod mcp_transport_session_agent;
 mod open_markdown_routes;
+pub(crate) mod response_pages;
 
 mod mcp_work_item;
 mod plugin_docs;
@@ -1034,6 +1036,12 @@ fn shared_routes() -> Router<Arc<AppState>> {
             "/config/agents",
             get(config_routes::get_agents_config).put(config_routes::put_agents_config),
         )
+        // Defaults and draft previews belong to the same machine as agents.json.
+        .route(
+            "/config/defaults",
+            get(config_routes::get_config_defaults_http)
+                .post(config_routes::preview_config_defaults_http),
+        )
         // Progress. Shared, not desktop-only: the store is a SQLite file in the
         // app config directory and every handler calls `crate::progress::*`,
         // which needs no WebView and no Tauri. These lived in `build_router`
@@ -1372,6 +1380,7 @@ fn shared_routes() -> Router<Arc<AppState>> {
             post(agent_routes::verify_agent_session_http),
         )
         .route("/agents", get(agent_routes::detect_agents))
+        .route("/agents/launch", post(launch_transaction::http))
         .route(
             "/agents/detect",
             get(agent_routes::detect_agent_binary_http),
@@ -1859,10 +1868,6 @@ pub fn build_router(state: Arc<AppState>, remote_auth: bool, mcp_enabled: bool) 
         .route(
             "/config/ui-prefs",
             get(config_routes::get_ui_prefs).put(config_routes::put_ui_prefs),
-        )
-        .route(
-            "/config/defaults",
-            get(config_routes::get_config_defaults_http),
         )
         .route(
             "/config/repo-settings",
@@ -3369,6 +3374,52 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn remote_defaults_preview_is_available_with_authentication() {
+        // Catches: the machine preview route registered only on the desktop router.
+        let state = test_state();
+        *state.session_token.write() = "preview-secret".to_string();
+        state.config.write().services.auth.lan_auth_bypass = false;
+        let app = build_remote_router(state);
+        for (token, expected) in [
+            (None, StatusCode::UNAUTHORIZED),
+            (Some("preview-secret"), StatusCode::OK),
+        ] {
+            let uri = token.map_or_else(
+                || "/config/defaults".to_string(),
+                |token| format!("/config/defaults?token={token}"),
+            );
+            let builder = Request::post(uri)
+                .header(header::HOST, "127.0.0.1:9876")
+                .header(header::CONTENT_TYPE, "application/json");
+            let mut request = builder
+                .body(Body::from(
+                    r#"{"agents":{"agents":{},"launch_instructions":"REMOTE DRAFT"}}"#,
+                ))
+                .unwrap();
+            request
+                .extensions_mut()
+                .insert(ConnectInfo(std::net::SocketAddr::from((
+                    [203, 0, 113, 5],
+                    5555,
+                ))));
+            let response = app.clone().oneshot(request).await.unwrap();
+            assert_eq!(response.status(), expected);
+            if expected == StatusCode::OK {
+                let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+                    .await
+                    .unwrap();
+                let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+                assert!(
+                    json["launch_instructions"]["effective_text"]["claude"]
+                        .as_str()
+                        .unwrap()
+                        .ends_with("REMOTE DRAFT")
+                );
+            }
+        }
+    }
+
+    #[tokio::test]
     async fn remote_update_rejects_a_missing_session_token() {
         let state = test_state();
         *state.session_token.write() = "update-secret".to_string();
@@ -4329,6 +4380,7 @@ mod tests {
         // handler's own 404 (e.g. get_output 404s for a missing session, which would
         // false-fail a GET probe). Path params are filled with a placeholder segment.
         let must_exist = [
+            "/config/defaults",
             "/api/version",
             // The remote client's only way onto a WebSocket: it trades Basic
             // Auth for the session token here, so the remote router must carry

@@ -172,19 +172,19 @@ async fn reconnects_with_identical_instructions_show_one_row_stable_across_reads
     assert_eq!(served_texts(&state), first, "a second read must not append");
 }
 
-// Catches: building the instructions before the `x-tuic-session` identity is bound, so a
-// spawned child still gets the `suggest:` rule through the real initialize path.
+// Catches: launch-capable roots or children receiving duplicate playbook markers
+// through the real initialize path.
 #[cfg(unix)]
 #[tokio::test]
-async fn initialize_omits_suggest_for_a_spawned_child_and_keeps_it_for_a_root() {
+async fn initialize_omits_duplicate_launch_markers_for_roots_and_children() {
     let root_state = test_state();
     let root = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
     insert_managed_test_session(&root_state, TEST_UUID_A, root.path().to_str().unwrap());
     post_fresh_initialize(&root_state).await;
     let root_text = served_texts(&root_state).join("\n");
     assert!(
-        root_text.contains("`suggest:`"),
-        "root lost suggest: {root_text}"
+        !root_text.contains("`suggest:`"),
+        "launch-capable root received duplicate suggest: {root_text}"
     );
 
     let child_state = test_state();
@@ -200,8 +200,8 @@ async fn initialize_omits_suggest_for_a_spawned_child_and_keeps_it_for_a_root() 
         "child kept suggest: {child_text}"
     );
     assert!(
-        child_text.contains("`ack`"),
-        "child lost the ack rule: {child_text}"
+        !child_text.contains("`ack`"),
+        "launch-capable child received duplicate ack: {child_text}"
     );
 }
 
@@ -5997,4 +5997,192 @@ async fn ego_child_without_session_header_binds_through_process_ancestry() {
     let _ = parent.kill();
     let _ = parent.wait();
     assert_eq!(bound, vec![TEST_UUID_A.to_string()]);
+}
+
+// Catches: one oversized UTF-8 inbox item bypasses the byte bound or consumes unread text.
+#[test]
+fn oversized_mcp_item_respects_byte_budget_and_continues() {
+    let state = test_state();
+    register_peer(&state, TEST_UUID_A, "budget", "mcp-budget");
+    let content = "界\"\n".repeat(9000);
+    state.push_agent_inbox(
+        TEST_UUID_A,
+        crate::state::AgentMessage {
+            id: "large".into(),
+            from_tuic_session: "lead".into(),
+            from_name: "lead".into(),
+            content: content.clone(),
+            timestamp: 1000,
+            delivered_via_channel: false,
+        },
+    );
+    let mut args = serde_json::json!({"action":"inbox", "byte_budget":4096});
+    let mut text = String::new();
+    let mut pages = 0;
+    loop {
+        let page = handle_messaging(&state, &args, Some("mcp-budget"));
+        let bytes = serde_json::to_vec(&page).unwrap().len();
+        assert!(bytes <= 4096, "oversized inbox response: {bytes} bytes");
+        text.push_str(page["chunk"].as_str().unwrap());
+        pages += 1;
+        if page["continuation"].is_null() {
+            break;
+        }
+        assert_eq!(
+            state
+                .agent_read_cursor
+                .get(TEST_UUID_A)
+                .map(|v| *v)
+                .unwrap_or(0),
+            0
+        );
+        if pages == 1 {
+            state.push_agent_inbox(
+                TEST_UUID_A,
+                crate::state::AgentMessage {
+                    id: "new".into(),
+                    from_tuic_session: "lead".into(),
+                    from_name: "lead".into(),
+                    content: "new mail".into(),
+                    timestamp: 2000,
+                    delivered_via_channel: false,
+                },
+            );
+        }
+        args["continuation"] = page["continuation"].clone();
+    }
+    let result: serde_json::Value = serde_json::from_str(&text).unwrap();
+    assert_eq!(result["messages"][0]["content"], content);
+    assert_eq!(*state.agent_read_cursor.get(TEST_UUID_A).unwrap(), 1000);
+    assert!(pages > 1);
+    let next = handle_messaging(
+        &state,
+        &serde_json::json!({"action":"inbox"}),
+        Some("mcp-budget"),
+    );
+    assert_eq!(next["count"], 1);
+    assert_eq!(next["messages"][0]["id"], "new");
+}
+
+// Catches: compact scoped lookup turns unknown state or an unresolved recipient into idle/empty success.
+#[test]
+fn compact_inventory_keeps_unknown_state_and_scoped_recipient_errors() {
+    let state = test_state();
+    register_peer(&state, TEST_UUID_A, "one", "mcp-one");
+    register_peer(&state, TEST_UUID_B, "two", "mcp-two");
+    let result = handle_messaging(
+        &state,
+        &serde_json::json!({"action":"list_peers","to":"one","compact":true}),
+        Some("mcp-one"),
+    );
+    assert_eq!(result["peers"].as_array().unwrap().len(), 1);
+    assert_eq!(result["peers"][0]["tuic_session"], TEST_UUID_A);
+    assert_eq!(result["peers"][0]["state"], "unknown");
+    assert!(result["peers"][0]["activity_age_ms"].is_null());
+    assert!(
+        result["peers"][0]["omitted_fields"]
+            .as_array()
+            .unwrap()
+            .contains(&serde_json::json!("orchestrator"))
+    );
+    let missing = handle_messaging(
+        &state,
+        &serde_json::json!({"action":"list_peers","to":"missing"}),
+        Some("mcp-one"),
+    );
+    assert!(missing.get("error").is_some());
+}
+
+// Catches: two snapshot acknowledgements subtract the same historical loss count from newer losses.
+#[test]
+fn overlapping_inbox_snapshots_do_not_erase_new_eviction_losses() {
+    for legacy_first in [false, true] {
+        let state = test_state();
+        register_peer(&state, TEST_UUID_A, "overlap", "mcp-overlap");
+        let push = |index: usize| {
+            state.push_agent_inbox(
+                TEST_UUID_A,
+                crate::state::AgentMessage {
+                    id: format!("message-{index}"),
+                    from_tuic_session: "lead".into(),
+                    from_name: "lead".into(),
+                    content: "x".repeat(1800),
+                    timestamp: index as u64 + 1,
+                    delivered_via_channel: false,
+                },
+            );
+        };
+        for index in 0..105 {
+            push(index);
+        }
+        let args = serde_json::json!({"action":"inbox","limit":1,"since":0,"byte_budget":1024});
+        let first_a = handle_messaging(&state, &args, Some("mcp-overlap"));
+        let first_b = handle_messaging(&state, &args, Some("mcp-overlap"));
+        let finish = |mut page: serde_json::Value| {
+            while !page["continuation"].is_null() {
+                let mut request = args.clone();
+                request["continuation"] = page["continuation"].clone();
+                page = handle_messaging(&state, &request, Some("mcp-overlap"));
+                assert!(page.get("error").is_none(), "{page}");
+            }
+        };
+        if legacy_first {
+            let legacy = handle_messaging(
+                &state,
+                &serde_json::json!({"action":"inbox","limit":1}),
+                Some("mcp-overlap"),
+            );
+            assert_eq!(legacy["missed_count"], 5);
+        } else {
+            finish(first_a.clone());
+        }
+        // The first eviction is the message acknowledged by A; the other two are unread losses.
+        for index in 105..108 {
+            push(index);
+        }
+        if legacy_first {
+            finish(first_a);
+        }
+        finish(first_b);
+        let next = handle_messaging(
+            &state,
+            &serde_json::json!({"action":"inbox","limit":1}),
+            Some("mcp-overlap"),
+        );
+        assert_eq!(
+            next["missed_count"], 2,
+            "B must not erase losses that occurred after capture"
+        );
+    }
+}
+
+// Catches: unsupported wait budgets are silently ignored after the wait consumes the oversized mail.
+#[tokio::test]
+async fn agent_wait_rejects_byte_budget_before_consuming_mail() {
+    let state = test_state();
+    register_peer(&state, TEST_UUID_A, "wait-budget", "mcp-wait-budget");
+    state.push_agent_inbox(
+        TEST_UUID_A,
+        crate::state::AgentMessage {
+            id: "wait-large".into(),
+            from_tuic_session: "lead".into(),
+            from_name: "lead".into(),
+            content: "x".repeat(2000),
+            timestamp: 1000,
+            delivered_via_channel: false,
+        },
+    );
+    let result = handle_agent_wait(
+        &state,
+        &serde_json::json!({"action":"wait","byte_budget":1024}),
+        Some("mcp-wait-budget"),
+    )
+    .await;
+    assert_eq!(result["error"], "wait_byte_budget_unsupported");
+    let unread = handle_messaging(
+        &state,
+        &serde_json::json!({"action":"inbox"}),
+        Some("mcp-wait-budget"),
+    );
+    assert_eq!(unread["messages"][0]["id"], "wait-large");
 }

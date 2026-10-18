@@ -2,6 +2,7 @@ import {
 	type Component,
 	createEffect,
 	createMemo,
+	createResource,
 	createSignal,
 	createUniqueId,
 	For,
@@ -41,7 +42,7 @@ import { editorTabsStore } from "../../../stores/editorTabs";
 import { remoteConnectionsStore } from "../../../stores/remoteConnections";
 import { repositoriesStore } from "../../../stores/repositories";
 import { settingsStore } from "../../../stores/settings";
-import { settingsExpertStore } from "../../../stores/settingsExpert";
+import { type ConfigDefaults, settingsExpertStore } from "../../../stores/settingsExpert";
 import { isTauri, rpc } from "../../../transport";
 import { onClickKeyDown } from "../../../utils/a11y";
 import { buildEnvFromEntries, findDuplicateEnvKeys } from "../../../utils/envVars";
@@ -66,11 +67,14 @@ import a from "./AgentsTab.module.css";
 import {
 	AgentConfigProvider,
 	createRemoteAgentConfigStore,
+	LaunchPreviewProvider,
 	MachineProvider,
 	useAgentConfig,
+	useLaunchPreview,
 	useMachine,
 } from "./agentConfigContext";
 import { LaunchInstructionsEditor } from "./LaunchInstructionsEditor";
+import { LaunchModuleSettings } from "./LaunchModuleSettings";
 
 const ALL_AGENT_TYPES = AGENT_TYPES.filter((t): t is AgentType => t !== "git" && t !== "api");
 
@@ -867,6 +871,7 @@ const AgentRow: Component<{
 	onExpand?: (type: AgentType) => void;
 }> = (props) => {
 	const configStore = useAgentConfig();
+	const launchPreview = useLaunchPreview();
 	const machine = useMachine();
 	const [expanded, setExpanded] = createSignal(false);
 	const [addingConfig, setAddingConfig] = createSignal(false);
@@ -1304,15 +1309,21 @@ const AgentRow: Component<{
 
 					<Show when={LAUNCH_INSTRUCTION_AGENTS.includes(props.agentType) && settingsExpertStore.launchInstructions()}>
 						{(defaults) => (
-							<LaunchInstructionsEditor
-								settingId="agents.agents.{key}.launch_instructions"
-								id={`launch-instructions-${props.agentType}`}
-								label={`Launch instructions for ${agent().name}`}
-								value={configStore.getAgentLaunchInstructions(props.agentType)}
-								fallback={configStore.getLaunchInstructions() ?? defaults().default_text}
-								requiredMarkers={defaults().required_markers}
-								onSave={(text) => void configStore.setAgentLaunchInstructions(props.agentType, text)}
-							/>
+							<>
+								<LaunchModuleSettings agentType={props.agentType} />
+								<LaunchInstructionsEditor
+									settingId="agents.agents.{key}.launch_instructions"
+									id={`launch-instructions-${props.agentType}`}
+									label={`Launch instructions for ${agent().name}`}
+									value={configStore.getAgentLaunchInstructions(props.agentType)}
+									fallback={launchPreview()?.effective_text[props.agentType]}
+									inheritanceLabel="Generated modules and global additions"
+									customizeLabel={`Add instructions for ${agent().name}`}
+									resetLabel="Clear agent additions"
+									requiredMarkers={defaults().required_markers}
+									onSave={(text) => void configStore.setAgentLaunchInstructions(props.agentType, text)}
+								/>
+							</>
 						)}
 					</Show>
 
@@ -1532,6 +1543,45 @@ export const AgentsTab: Component<AgentsTabProps> = (props) => {
 		}),
 	);
 
+	// Pass the current edits, not a delayed disk snapshot: app saves are debounced.
+	// Remote machines keep their own global marker preferences on the backend.
+	const [preview] = createResource(
+		() =>
+			activeStore().state.loaded
+				? {
+						connectionId: machine(),
+						preview: {
+							agents: {
+								agents: JSON.parse(JSON.stringify(activeStore().state.agents)),
+								launch_instructions: activeStore().getLaunchInstructions(),
+								launch_modules: JSON.parse(JSON.stringify(activeStore().state.launch_modules)),
+								launch_instructions_disabled: activeStore().state.launch_instructions_disabled,
+								launch_additions_migrated: true,
+							},
+							intent_tab_title: machine() ? undefined : settingsStore.state.intentTabTitle,
+							suggest_followups: machine() ? undefined : settingsStore.state.suggestFollowups,
+						},
+					}
+				: false,
+		async ({ connectionId, preview }) => {
+			try {
+				const defaults = connectionId
+					? await rpc<ConfigDefaults>("get_config_defaults", { preview }, connectionId)
+					: await invoke<ConfigDefaults>("get_config_defaults", { preview });
+				return { connectionId, instructions: defaults.launch_instructions };
+			} catch (err) {
+				appLogger.error("config", "Failed to load launch instruction previews", err);
+				return undefined;
+			}
+		},
+	);
+	const launchPreview = () => {
+		const snapshot = preview();
+		return activeStore().state.loaded && !preview.loading && snapshot?.connectionId === machine()
+			? snapshot?.instructions
+			: undefined;
+	};
+
 	onMount(() => {
 		detection.detectAll();
 	});
@@ -1546,114 +1596,122 @@ export const AgentsTab: Component<AgentsTabProps> = (props) => {
 	};
 
 	return (
-		<AgentConfigProvider value={activeStore()}>
-			<MachineProvider value={machine}>
-				<div class={`${s.section} ${a.page}`}>
-					<SettingPageHeader
-						title="Terminal agents"
-						description="Configure terminal agents and named launch configurations."
-						scope={
-							machine()
-								? `Machine: ${remoteConnectionsStore.getConnectionState(machine()!)?.connection.name ?? machine()}`
-								: "This machine"
-						}
-						breadcrumb="Agents / Terminal agents"
-						source="Terminal (PTY) launch settings. AI Chat uses separate ACP settings."
-					/>
-					<div class={a.machineScope}>
-						<MachineSelector
-							value={machine()}
-							label="Configure agents on"
-							onChange={(id) => {
-								setMachinePicked(true);
-								setPickedMachine(id);
-							}}
+		<LaunchPreviewProvider value={launchPreview}>
+			<AgentConfigProvider value={activeStore()}>
+				<MachineProvider value={machine}>
+					<div class={`${s.section} ${a.page}`}>
+						<SettingPageHeader
+							title="Terminal agents"
+							description="Configure terminal agents and named launch configurations."
+							scope={
+								machine()
+									? `Machine: ${remoteConnectionsStore.getConnectionState(machine()!)?.connection.name ?? machine()}`
+									: "This machine"
+							}
+							breadcrumb="Agents / Terminal agents"
+							source="Terminal (PTY) launch settings. AI Chat uses separate ACP settings."
 						/>
-						<Show when={machine()}>
-							{(cid) => {
-								const conn = () => remoteConnectionsStore.getConnectionState(cid());
-								return (
-									<div class={a.remoteBanner}>
-										<span class={a.remoteBannerIcon}>&#x27D0;</span>
-										Configuring remote: <strong>{conn()?.connection.name ?? cid()}</strong>
-									</div>
-								);
-							}}
-						</Show>
-						<Show when={remoteLoading()}>
-							<div class={a.remoteLoading}>Loading remote configuration...</div>
-						</Show>
-						<Show when={remoteError()}>
-							<div class={a.remoteError}>Remote config unavailable: {remoteError()}</div>
-						</Show>
-					</div>
-					<SectionCard title="Agent behavior">
-						<p class={s.hint} style={{ "margin-bottom": "12px" }}>
-							Control terminal-agent presentation and expand an agent to edit its named launch configurations.
-						</p>
-
-						<SettingToggle
-							settingId="app.intent_tab_title"
-							row
-							checked={settingsStore.state.intentTabTitle}
-							onChange={(v) => settingsStore.setIntentTabTitle(v)}
-							label="Show agent intent as tab title"
-							hint="When agents declare their current work phase, update the tab name with a short title"
-						/>
-
-						<SettingToggle
-							settingId="app.suggest_followups"
-							row
-							checked={settingsStore.state.suggestFollowups}
-							onChange={(v) => settingsStore.setSuggestFollowups(v)}
-							label="Show suggested follow-up actions"
-							hint="Display actionable suggestions from agents after completing a task"
-						/>
-
-						<ExpertSetting configKey="app.progress_tracking" value={settingsStore.state.progressTracking}>
-							<SettingToggle
-								settingId="app.progress_tracking"
-								row
-								checked={settingsStore.state.progressTracking}
-								onChange={(v) => settingsStore.setProgressTracking(v)}
-								label="Collect project progress"
-								hint="Keep a per-project journal of what agents finished, what blocked them, and what they set out to do. Off removes the progress tool from every agent."
+						<div class={a.machineScope}>
+							<MachineSelector
+								value={machine()}
+								label="Configure agents on"
+								onChange={(id) => {
+									setMachinePicked(true);
+									setPickedMachine(id);
+								}}
 							/>
-						</ExpertSetting>
-
-						<Show when={settingsExpertStore.launchInstructions()}>
-							{(defaults) => (
-								<LaunchInstructionsEditor
-									settingId="agents.launch_instructions"
-									id="launch-instructions-global"
-									label="Launch instructions"
-									value={activeStore().getLaunchInstructions()}
-									fallback={defaults().default_text}
-									requiredMarkers={defaults().required_markers}
-									onSave={(text) => void activeStore().setLaunchInstructions(text)}
-								/>
-							)}
-						</Show>
-
-						<div class={a.agentList}>
-							<For each={sortedAgents()}>
-								{(type) => (
-									<AgentRow
-										agentType={type}
-										detection={detection.getDetection(type)}
-										onExpand={detection.detectVersion}
-									/>
-								)}
-							</For>
+							<Show when={machine()}>
+								{(cid) => {
+									const conn = () => remoteConnectionsStore.getConnectionState(cid());
+									return (
+										<div class={a.remoteBanner}>
+											<span class={a.remoteBannerIcon}>&#x27D0;</span>
+											Configuring remote: <strong>{conn()?.connection.name ?? cid()}</strong>
+										</div>
+									);
+								}}
+							</Show>
+							<Show when={remoteLoading()}>
+								<div class={a.remoteLoading}>Loading remote configuration...</div>
+							</Show>
+							<Show when={remoteError()}>
+								<div class={a.remoteError}>Remote config unavailable: {remoteError()}</div>
+							</Show>
 						</div>
-					</SectionCard>
-					<HibernationSection />
-					<EgoPermissionsSection />
+						<SectionCard title="Agent behavior">
+							<p class={s.hint} style={{ "margin-bottom": "12px" }}>
+								Control terminal-agent presentation and expand an agent to edit its named launch configurations.
+							</p>
 
-					<McpIntegrationsSection />
-				</div>
-			</MachineProvider>
-		</AgentConfigProvider>
+							<SettingToggle
+								settingId="app.intent_tab_title"
+								row
+								checked={settingsStore.state.intentTabTitle}
+								onChange={(v) => settingsStore.setIntentTabTitle(v)}
+								label="Show agent intent as tab title"
+								hint="When agents declare their current work phase, update the tab name with a short title"
+							/>
+
+							<SettingToggle
+								settingId="app.suggest_followups"
+								row
+								checked={settingsStore.state.suggestFollowups}
+								onChange={(v) => settingsStore.setSuggestFollowups(v)}
+								label="Show suggested follow-up actions"
+								hint="Display actionable suggestions from agents after completing a task"
+							/>
+
+							<ExpertSetting configKey="app.progress_tracking" value={settingsStore.state.progressTracking}>
+								<SettingToggle
+									settingId="app.progress_tracking"
+									row
+									checked={settingsStore.state.progressTracking}
+									onChange={(v) => settingsStore.setProgressTracking(v)}
+									label="Collect project progress"
+									hint="Keep a per-project journal of what agents finished, what blocked them, and what they set out to do. Off removes the progress tool from every agent."
+								/>
+							</ExpertSetting>
+
+							<Show when={settingsExpertStore.launchInstructions()}>
+								{(defaults) => (
+									<>
+										<LaunchModuleSettings />
+										<LaunchInstructionsEditor
+											settingId="agents.launch_instructions"
+											id="launch-instructions-global"
+											label="Launch instructions"
+											value={activeStore().getLaunchInstructions()}
+											fallback={launchPreview()?.default_text}
+											inheritanceLabel="Generated modules"
+											customizeLabel="Add instructions"
+											resetLabel="Clear global additions"
+											requiredMarkers={defaults().required_markers}
+											onSave={(text) => void activeStore().setLaunchInstructions(text)}
+										/>
+									</>
+								)}
+							</Show>
+
+							<div class={a.agentList}>
+								<For each={sortedAgents()}>
+									{(type) => (
+										<AgentRow
+											agentType={type}
+											detection={detection.getDetection(type)}
+											onExpand={detection.detectVersion}
+										/>
+									)}
+								</For>
+							</div>
+						</SectionCard>
+						<HibernationSection />
+						<EgoPermissionsSection />
+
+						<McpIntegrationsSection />
+					</div>
+				</MachineProvider>
+			</AgentConfigProvider>
+		</LaunchPreviewProvider>
 	);
 };
 
