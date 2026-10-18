@@ -1,4 +1,5 @@
 import { createEffect, createMemo, createSignal, For, type JSX, onCleanup, onMount, Show } from "solid-js";
+import { INTENT_HIGHLIGHT_RE } from "../../components/Terminal/suggestOverlay";
 import { appLogger } from "../../stores/appLogger";
 import { type PtySubscription, subscribePty } from "../../transport";
 import { mobileFontSizes } from "../mobileFontSize";
@@ -364,11 +365,14 @@ export function OutputView(props: OutputViewProps) {
 			else if (char === "\t") indent += 8 - (indent % 8);
 			else break;
 		}
+		const isIntent = INTENT_HIGHLIGHT_RE.test(text.replaceAll("\uFE0E", ""));
+		const marker = isIntent ? "intent" : undefined;
+		const lineClass = isIntent ? `${styles.line} ${styles.intent}` : styles.line;
 		const wrapStyle = indent ? { "--wrap-indent": `${indent}ch` } : undefined;
 		const links = detectOutputLinks(text).filter((link) => link.kind === "web" || props.onOpenFileLink);
 		if (links.length === 0) {
 			return (
-				<div class={styles.line} style={wrapStyle}>
+				<div class={lineClass} style={wrapStyle} data-terminal-marker={marker}>
 					{styledRange(line, 0, text.length)}
 				</div>
 			);
@@ -397,7 +401,7 @@ export function OutputView(props: OutputViewProps) {
 		}
 		parts.push(...styledRange(line, offset, text.length));
 		return (
-			<div class={styles.line} style={wrapStyle}>
+			<div class={lineClass} style={wrapStyle} data-terminal-marker={marker}>
 				{parts}
 			</div>
 		);

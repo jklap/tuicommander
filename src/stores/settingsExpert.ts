@@ -19,6 +19,7 @@ export interface ConfigDefaults {
 export interface LaunchInstructionsDefaults {
 	default_text: string;
 	required_markers: string[];
+	effective_text: Record<string, string>;
 }
 
 /**

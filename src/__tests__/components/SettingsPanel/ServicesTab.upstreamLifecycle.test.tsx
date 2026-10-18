@@ -211,4 +211,50 @@ describe("UpstreamMcpPanel lifecycle", () => {
 
 		view.unmount();
 	});
+	// Catches: the redacted acknowledgement of a newly saved header being reported as a peer conflict.
+	it.each([false, true])("own saved header acknowledgement preserves real peer conflicts (%s)", async (peerChanged) => {
+		const { settingsRefresh } = await import("../../../services/settingsRefresh");
+		const { toastsStore } = await import("../../../stores/toasts");
+		const notice = vi.spyOn(toastsStore, "add").mockReturnValue(0);
+		let apply: ((value: unknown) => void) | undefined;
+		const registration = vi.spyOn(settingsRefresh, "register").mockImplementation((reader) => {
+			apply = reader.apply;
+			return () => {};
+		});
+		const server = {
+			id: "saved",
+			name: "example",
+			transport: { type: "http", url: "https://example.com/mcp" },
+			enabled: true,
+			timeout_secs: 30,
+			headers: [],
+		};
+		vi.mocked(rpc).mockImplementation(async (command, args) => {
+			if (command === "load_mcp_upstreams") return { servers: [server] };
+			if (command === "get_mcp_upstream_status") return { upstreams: [] };
+			if (command === "save_mcp_upstreams") {
+				const config = structuredClone((args as { config: { servers: Array<typeof server> } }).config);
+				if (peerChanged) config.servers[0].timeout_secs = 99;
+				apply!(config);
+			}
+			return undefined;
+		});
+		const view = render(() => <UpstreamMcpPanel />);
+		try {
+			await vi.advanceTimersByTimeAsync(0);
+			view.getByTitle("Edit").click();
+			view.getByTitle("Add secret header").click();
+			fireEvent.input(view.getByLabelText("Header name 1"), { target: { value: "x-key" } });
+			fireEvent.input(view.getByLabelText("Header secret 1"), { target: { value: "DUMMY_SECRET" } });
+			view.getByText("Save").click();
+			await vi.advanceTimersByTimeAsync(0);
+			expect(rpc).toHaveBeenCalledWith("save_mcp_upstreams", expect.anything(), undefined);
+			if (peerChanged) expect(notice).toHaveBeenCalledOnce();
+			else expect(notice).not.toHaveBeenCalled();
+		} finally {
+			view.unmount();
+			registration.mockRestore();
+			notice.mockRestore();
+		}
+	});
 });

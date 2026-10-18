@@ -22,9 +22,17 @@ impl<T: Serialize + DeserializeOwned + Default> ConfigFileStore<T> {
     }
 
     pub(super) fn read(&self) -> Result<Value, Failure> {
+        self.read_with(|_| false)
+    }
+
+    pub(super) fn read_with(&self, migrate: impl FnOnce(&mut T) -> bool) -> Result<Value, Failure> {
+        // Migrate before computing a revision, under the owner's file lock.
         // Missing files use defaults; corrupt files never silently become defaults.
         self.file
-            .update_with_strict(|config| Ok((self.to_value(config), false)))
+            .update_with_strict(|config| {
+                let changed = migrate(config);
+                Ok((self.to_value(config), changed))
+            })
             .map_err(|_| Error::new(self.id, "store_failed"))?
     }
 
