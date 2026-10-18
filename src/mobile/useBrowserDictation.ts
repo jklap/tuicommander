@@ -58,6 +58,7 @@ export function useBrowserDictation(options: {
 	const Constructor =
 		options.enabled === false ? undefined : (browser.SpeechRecognition ?? browser.webkitSpeechRecognition);
 	const [recording, setRecording] = createSignal(false);
+	const [failed, setFailed] = createSignal(false);
 	let recognition: BrowserRecognition | null = null;
 	let discarding = false;
 	let language = navigator.language;
@@ -85,6 +86,7 @@ export function useBrowserDictation(options: {
 	}
 
 	function fail(code: string, cause?: unknown) {
+		setFailed(true);
 		// The code is in the message: the logger coalesces equal messages and would drop the
 		// data of a second failure with another code before it reaches the server log.
 		appLogger.warn("dictation", `Browser dictation failed: ${code}`, {
@@ -143,6 +145,7 @@ export function useBrowserDictation(options: {
 			recognition = current;
 			discarding = false;
 			renderedSpeech = "";
+			setFailed(false);
 			current.lang = language;
 			current.continuous = true;
 			current.interimResults = true;
@@ -160,8 +163,10 @@ export function useBrowserDictation(options: {
 			};
 			current.onerror = (event) => {
 				if (recognition !== current || discarding) return;
-				discarding = true;
+				// End a failed take through the same shutdown path as an edit/send.
+				// Discarding alone would also prevent edit/send from requesting shutdown.
 				fail(event.error);
+				cancel();
 			};
 			current.onend = () => {
 				if (recognition !== current) return;
@@ -177,5 +182,5 @@ export function useBrowserDictation(options: {
 		}
 	}
 
-	return { available: !!Constructor, recording, toggle, cancel };
+	return { available: !!Constructor, recording, failed, toggle, cancel };
 }
