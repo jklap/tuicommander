@@ -10,8 +10,8 @@ export interface OpenMarkdownTab {
 	fs_root: string;
 }
 
-export function OpenMarkdownMenu(props: { cwd: string | null; onOpen: (tab: OpenMarkdownTab) => void }) {
-	const cwd = createMemo(() => props.cwd);
+export function createOpenMarkdownTabs(getCwd: () => string | null) {
+	const cwd = createMemo(getCwd);
 	const [connected, setConnected] = createSignal(false);
 	const [tabs, setTabs] = createSignal<OpenMarkdownTab[]>([]);
 	const [error, setError] = createSignal("");
@@ -66,6 +66,16 @@ export function OpenMarkdownMenu(props: { cwd: string | null; onOpen: (tab: Open
 			subscription.then((unsubscribe) => unsubscribe()).catch(() => {});
 		});
 	});
+	return { tabs, error, loading };
+}
+
+export function OpenMarkdownMenu(props: {
+	cwd: string | null;
+	source?: ReturnType<typeof createOpenMarkdownTabs>;
+	onOpen: (tab: OpenMarkdownTab) => void;
+}) {
+	const { tabs, error, loading } = props.source ?? createOpenMarkdownTabs(() => props.cwd);
+
 	return (
 		<section role="region" aria-label="Markdown" class={styles.markdownSection}>
 			<div class={styles.markdownHeading}>Markdown</div>
