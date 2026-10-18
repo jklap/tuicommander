@@ -2166,3 +2166,95 @@ async fn action_validation_rejects_observed_bad_inputs_before_effects() {
     }
     assert!(state.session_maps.session_html_tabs.is_empty());
 }
+
+/// Catches: launch-capable agents receiving conflicting rules twice through MCP.
+#[test]
+fn launch_capable_clients_receive_no_duplicate_playbook() {
+    for name in ["claude-code", "codex", "ego"] {
+        let text = render_mcp_instructions(
+            Some(name),
+            false,
+            (true, true),
+            true,
+            &InstructionContext::default(),
+        );
+        assert!(!text.contains("Required Output Markers"), "{name}: {text}");
+        assert!(!text.contains("**Submit:**"));
+        assert!(!text.contains("## Progress — mandatory"));
+        assert!(!text.contains("never `git worktree add/remove`"));
+        assert!(text.contains("## Multi-Agent Work"));
+    }
+}
+
+/// Catches: merging launch bypasses static validation or omits its reusable discovery contract.
+#[tokio::test]
+async fn launch_discovery_schema_matches_predispatch_validation() {
+    let state = test_state();
+    let definition = native_tool_definitions()
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|tool| tool["name"] == "agent")
+        .unwrap()
+        .clone();
+    *state.mcp.tool_search_index.write() =
+        crate::tool_search::ToolSearchIndex::build(std::slice::from_ref(&definition));
+    let discovery = handle_search_tools(
+        &state,
+        &serde_json::json!({
+            "query":"agent", "schema_byte_budget":65536
+        }),
+    );
+    assert_eq!(discovery["top_schema"], definition);
+    let validator = jsonschema::validator_for(&discovery["top_schema"]["inputSchema"]).unwrap();
+    let creation = serde_json::json!({
+        "action":"launch", "idempotency_key":"stable-key", "parent_session_id":"parent",
+        "name":"worker", "keep_open":true, "workspace":{"existing_path":"/fixture"},
+        "spawn":{"prompt":"task", "agent_type":"ego", "rows":24, "cols":80}
+    });
+    let mut new_workspace = creation.clone();
+    new_workspace["workspace"] = serde_json::json!({"repo_path":"/fixture", "branch":"feat/child"});
+    for valid in [
+        &creation,
+        &new_workspace,
+        &serde_json::json!({"action":"launch", "launch_id":"receipt"}),
+    ] {
+        assert!(validator.is_valid(valid), "{valid}");
+        assert!(crate::mcp_http::mcp_input_contract::validate("agent", valid).is_none());
+    }
+    let mut missing = creation.clone();
+    missing.as_object_mut().unwrap().remove("keep_open");
+    let mut mixed = creation.clone();
+    mixed["launch_id"] = serde_json::json!("receipt");
+    let mut ambiguous_workspace = creation.clone();
+    ambiguous_workspace["workspace"]["branch"] = serde_json::json!("feat/child");
+    let mut missing_prompt = creation.clone();
+    missing_prompt["spawn"]
+        .as_object_mut()
+        .unwrap()
+        .remove("prompt");
+    let mut reserved = creation.clone();
+    reserved["spawn"]["cwd"] = serde_json::json!("/other");
+    let mut malformed = creation.clone();
+    malformed["spawn"]["env"] = serde_json::json!({"TOKEN":42});
+    let mut oversized = creation.clone();
+    oversized["spawn"]["rows"] = serde_json::json!(crate::mcp_http::MAX_TERMINAL_DIMENSION + 1);
+    for invalid in [
+        serde_json::json!({"action":"launch"}),
+        missing,
+        mixed,
+        ambiguous_workspace,
+        missing_prompt,
+        reserved,
+        malformed,
+        oversized,
+    ] {
+        assert!(!validator.is_valid(&invalid), "{invalid}");
+        let result = handle_mcp_tool_call(&state, loopback_addr(), "agent", &invalid, None).await;
+        assert_eq!(result["code"], "invalid_arguments", "{result}");
+        assert_eq!(result["effect"], "not_started");
+        assert_eq!(result["retryable"], false);
+    }
+    assert!(!state.data_dir.join("managed-launches.sqlite").exists());
+    assert!(state.session_maps.sessions.is_empty());
+}

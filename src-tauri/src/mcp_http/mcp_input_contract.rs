@@ -106,6 +106,46 @@ pub(super) fn complete_schema(tool: &mut Value) {
             schema["properties"][field]["maximum"] = json!(super::MAX_TERMINAL_DIMENSION);
         }
     }
+    if name == "agent" {
+        // Launch has two disjoint forms. Validate both before the journal or PTY
+        // handler runs, and publish the same contract through lazy discovery.
+        let spawn_properties: serde_json::Map<String, Value> = [
+            "prompt",
+            "pty_description",
+            "model",
+            "env",
+            "print_mode",
+            "output_format",
+            "agent_type",
+            "binary_path",
+            "args",
+            "rows",
+            "cols",
+        ]
+        .into_iter()
+        .map(|field| (field.to_owned(), schema["properties"][field].clone()))
+        .collect();
+        schema["properties"]["spawn"]["properties"] = json!(spawn_properties);
+        schema["properties"]["spawn"]["required"] = json!(["prompt"]);
+        schema["properties"]["spawn"]["not"] = json!({"anyOf": [
+            {"required":["action"]}, {"required":["name"]}, {"required":["keep_open"]},
+            {"required":["cwd"]}, {"required":["parent_session_id"]}, {"required":["idempotency_key"]}
+        ]});
+        schema["properties"]["workspace"]["oneOf"] = json!([
+            {"type":"object", "properties":{"existing_path":{"type":"string"}},
+             "required":["existing_path"], "additionalProperties":false},
+            {"type":"object", "properties":{"repo_path":{"type":"string"}, "branch":{"type":"string"}, "base_ref":{"type":["string","null"]}},
+             "required":["repo_path","branch"], "additionalProperties":false}
+        ]);
+        schema["allOf"].as_array_mut().unwrap().push(json!({
+            "if":{"properties":{"action":{"const":"launch"}},"required":["action"]},
+            "then":{"oneOf":[
+                {"properties":{"action":{},"launch_id":{}}, "required":["launch_id"], "additionalProperties":false},
+                {"properties":{"action":{},"idempotency_key":{"pattern":"\\S"},"parent_session_id":{},"name":{"pattern":"^\\S(?:[\\s\\S]*\\S)?$"},"keep_open":{},"workspace":{},"spawn":{}},
+                 "required":["idempotency_key","parent_session_id","name","keep_open","workspace","spawn"], "additionalProperties":false}
+            ]}
+        }));
+    }
     if name == "progress" {
         schema["additionalProperties"] = json!(false);
         schema["properties"]["text"]["maxLength"] = json!(crate::progress::MAX_TEXT_CHARS);

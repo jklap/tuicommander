@@ -732,7 +732,7 @@ wrote the same value, fired nothing, and left the other pane rendered underneath
 Pinned by `src/__tests__/stores/paneExclusivity.test.ts`.
 
 ### appLogger (`appLogger.ts`)
-Centralized logging — replaces direct `console.*` calls. Writes all levels and their data to the local ring buffer and surfaces them in ErrorLogPanel. Info, warn, and error messages also reach the browser console without data objects. Debug messages reach the console only while `window.__TUIC__.setPerfDebug(true)` is active; they also omit data objects. Info, warn, and error entries continue to reach the Rust log ring and `/logs`, including serialized data, for diagnostics such as `tuic-health.sh`.
+Centralized logging — replaces direct `console.*` calls. Writes all levels and their data to the local ring buffer and surfaces them in ErrorLogPanel. Info, warn, and error messages also reach the browser console without data objects. Debug messages reach the console only while `window.__TUIC__.setPerfDebug(true)` is active; they also omit data objects. Info, warn, and error entries continue to reach the Rust log ring and `/logs`, including serialized data, for diagnostics such as `tuic-health.sh`. The only mirrored debug records are source `dictation` messages starting with `Browser dictation lifecycle:`: at most six content-free records per take, in the diagnostic audience. Other debug entries remain local.
 
 ### debugRegistry (`debugRegistry.ts`)
 Dynamic snapshot registry for MCP `invoke_js` introspection. Stores self-register a snapshot function at init time, exposed on `window.__TUIC__` as `stores()` (list names) and `store(name)` (get snapshot).
@@ -802,3 +802,5 @@ Snapshot adoption merges object leaves. Arrays are atomic owner values: concurre
 ## Startup workflow state versus Settings state
 
 [Settings startup workflows](../backend/settings-startup.md) separates device-login state, human confirmation, owner CAS revisions and process-local invalidation generations. A terminal command exiting is not authentication success. `services/egoLogin.ts` remains the UI login entry point. Schema-only consumers use the typed Ego owner `begin_login`/`login_status` workflow; status reads the configured credential owner after termination and provider refresh determines the displayed model state. The typed inspector blocks another write after partial/unknown persistence until authoritative readback, and retains a dirty draft's original CAS revision across incoming refreshes.
+
+Terminal ownership and creation provenance are independent: `TerminalData.isRemote` reflects a configured remote `connection_id`; `isExternallyCreated` preserves the backend `is_remote` HTTP/MCP creation flag for worker-tab cleanup, decoration and completion policy. Local `session-created` events set only creation provenance; startup reconciliation derives ownership from the connection, not the launch transport.

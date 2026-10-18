@@ -252,9 +252,9 @@ changes; a virtual no-op merge can cover the final tree instead. The removal
 result names the matching rule.
 
 Default-branch resolution uses only verified local Git refs, without a fetch:
-`origin/HEAD` (local branch when present, otherwise the remote-tracking ref),
-then the main checkout branch's `branch.<name>.tuicommander-base`, then local
-`main` or `master`, then the main checkout's attached HEAD branch. A linked
+the main checkout branch's explicit `branch.<name>.tuicommander-base`, then
+local `main`, then local `master`, then `origin/HEAD` (local branch when present,
+otherwise the remote-tracking ref), then the main checkout's attached HEAD branch. A linked
 checkout never supplies the fallback HEAD. If none resolves to a commit,
 lifecycle inspection blocks removal with an actionable reason; the sidebar
 shows **No base branch**, with the full reason in its tooltip.
@@ -523,3 +523,7 @@ Creation declarations remain backend metadata. They do not override cwd for tab
 placement on creation, OSC 7, reload or saved-tab restore. A repo-root session waits
 for the root workspace to be discovered rather than joining the selected linked
 worktree.
+
+Explicit worktree removal uses the same current-cwd terminal cleanup as removal
+events and refresh. Sidebar membership does not authorize closing a PTY. Tabs
+outside the removed checkout are rehomed after successful removal.

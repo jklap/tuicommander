@@ -15,6 +15,7 @@ mod github_pr_action_routes;
 mod github_review_routes;
 mod github_routes;
 mod guards;
+pub(crate) mod launch_transaction;
 mod log_routes;
 pub(crate) mod managed_launch;
 pub(crate) mod mcp_call_audit;
@@ -1016,6 +1017,12 @@ fn shared_routes() -> Router<Arc<AppState>> {
     Router::new()
         .route("/mcp/peer", get(remote_peer::endpoint))
         .route("/mcp/audit", get(mcp_call_audit::endpoint))
+        .route("/settings/action", post(settings_routes::settings_action))
+        // Browser Settings hydration and refresh read the same redacted owner snapshot.
+        .route(
+            "/config",
+            get(config_routes::get_config).put(config_routes::put_config),
+        )
         .route("/accounts/action", post(account_routes::action))
         .route("/accounts/secret-form", post(account_routes::secret_form))
         // Version (authenticated)
@@ -1038,6 +1045,12 @@ fn shared_routes() -> Router<Arc<AppState>> {
         .route(
             "/config/agents",
             get(config_routes::get_agents_config).put(config_routes::put_agents_config),
+        )
+        // Defaults and draft previews belong to the same machine as agents.json.
+        .route(
+            "/config/defaults",
+            get(config_routes::get_config_defaults_http)
+                .post(config_routes::preview_config_defaults_http),
         )
         // Progress. Shared, not desktop-only: the store is a SQLite file in the
         // app config directory and every handler calls `crate::progress::*`,
@@ -1377,6 +1390,7 @@ fn shared_routes() -> Router<Arc<AppState>> {
             post(agent_routes::verify_agent_session_http),
         )
         .route("/agents", get(agent_routes::detect_agents))
+        .route("/agents/launch", post(launch_transaction::http))
         .route(
             "/agents/detect",
             get(agent_routes::detect_agent_binary_http),
@@ -1842,10 +1856,6 @@ pub fn build_router(state: Arc<AppState>, remote_auth: bool, mcp_enabled: bool) 
         )
         // Config
         .route(
-            "/config",
-            get(config_routes::get_config).put(config_routes::put_config),
-        )
-        .route(
             "/config/hash-password",
             post(config_routes::hash_password_http),
         )
@@ -1864,10 +1874,6 @@ pub fn build_router(state: Arc<AppState>, remote_auth: bool, mcp_enabled: bool) 
         .route(
             "/config/ui-prefs",
             get(config_routes::get_ui_prefs).put(config_routes::put_ui_prefs),
-        )
-        .route(
-            "/config/defaults",
-            get(config_routes::get_config_defaults_http),
         )
         .route(
             "/config/repo-settings",
@@ -1894,7 +1900,6 @@ pub fn build_router(state: Arc<AppState>, remote_auth: bool, mcp_enabled: bool) 
             "/config/pane-layout",
             get(config_routes::get_pane_layout).put(config_routes::put_pane_layout),
         )
-        .route("/settings/action", post(settings_routes::settings_action))
         .route("/config/clear-caches", post(config_routes::clear_caches))
         .route(
             "/config/clear-repo-caches",
@@ -3376,6 +3381,52 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn remote_defaults_preview_is_available_with_authentication() {
+        // Catches: the machine preview route registered only on the desktop router.
+        let state = test_state();
+        *state.session_token.write() = "preview-secret".to_string();
+        state.config.write().services.auth.lan_auth_bypass = false;
+        let app = build_remote_router(state);
+        for (token, expected) in [
+            (None, StatusCode::UNAUTHORIZED),
+            (Some("preview-secret"), StatusCode::OK),
+        ] {
+            let uri = token.map_or_else(
+                || "/config/defaults".to_string(),
+                |token| format!("/config/defaults?token={token}"),
+            );
+            let builder = Request::post(uri)
+                .header(header::HOST, "127.0.0.1:9876")
+                .header(header::CONTENT_TYPE, "application/json");
+            let mut request = builder
+                .body(Body::from(
+                    r#"{"agents":{"agents":{},"launch_instructions":"REMOTE DRAFT"}}"#,
+                ))
+                .unwrap();
+            request
+                .extensions_mut()
+                .insert(ConnectInfo(std::net::SocketAddr::from((
+                    [203, 0, 113, 5],
+                    5555,
+                ))));
+            let response = app.clone().oneshot(request).await.unwrap();
+            assert_eq!(response.status(), expected);
+            if expected == StatusCode::OK {
+                let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+                    .await
+                    .unwrap();
+                let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+                assert!(
+                    json["launch_instructions"]["effective_text"]["claude"]
+                        .as_str()
+                        .unwrap()
+                        .ends_with("REMOTE DRAFT")
+                );
+            }
+        }
+    }
+
+    #[tokio::test]
     async fn remote_update_rejects_a_missing_session_token() {
         let state = test_state();
         *state.session_token.write() = "update-secret".to_string();
@@ -4336,6 +4387,7 @@ mod tests {
         // handler's own 404 (e.g. get_output 404s for a missing session, which would
         // false-fail a GET probe). Path params are filled with a placeholder segment.
         let must_exist = [
+            "/config/defaults",
             "/api/version",
             // The remote client's only way onto a WebSocket: it trades Basic
             // Auth for the session token here, so the remote router must carry
@@ -4418,6 +4470,8 @@ mod tests {
             // absent here, tuic-remote answered 404 and remote repos ran with
             // no agent configs.
             "/config/agents",
+            // Headless Settings uses the same bootstrap snapshot as desktop.
+            "/config",
         ];
         // Desktop-only or router-specific — MUST NOT be in shared_routes():
         // /health (public_routes only), /fs/read-editor (router-specific
@@ -4430,7 +4484,6 @@ mod tests {
             "/repo/github",
             "/repo/prs",
             "/dictation/status",
-            "/config",
             "/config/themes",
             "/mcp/status",
             "/plugins/list",
@@ -10841,3 +10894,6 @@ mod workflow_authority_critic_tests {
         }
     }
 }
+
+#[cfg(test)]
+mod remote_settings_tests;

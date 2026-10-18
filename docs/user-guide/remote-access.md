@@ -86,6 +86,8 @@ TUICommander includes a phone-optimized interface for monitoring agents from you
 
 Opening `/` also offers the form login. iPad Safari selects the touch interface, including when it requests the desktop website with a Mac user agent. Desktop browsers keep the full interface. In that interface, **Add Repository** browses folders on the computer running TUICommander, starting at its home directory; it does not browse the device opening Safari.
 
+At widths of 768 px or more, tap **Markdown** in the session top bar to open a desktop Markdown tab from the same repository. On phones, open **More session actions → Markdown** instead. The list refreshes in place when desktop tabs change; ordinary session polls do not reset it.
+
 ### Add to Home Screen
 
 The mobile UI supports PWA (Progressive Web App) installation:
@@ -101,8 +103,7 @@ At phone widths up to 430 px, the session header keeps CLI/Chat one tap away.
 Open **More session actions** for **Start voice call** / **Stop voice call** (with the same handset icon as the header) and session tasks. Tablet
 headers keep these controls directly in the bar. Tap the session name for details.
 
-For Claude sessions on a phone, tap **Read file edits in Chat** above the CLI
-output. This switches the reading surface without closing the terminal or
+For Claude sessions on a phone, tap **Chat** in the session header. This switches the reading surface without closing the terminal or
 clearing its history; returning to CLI follows the latest output. Expand the tool activity and edit to read its **Old**
 and **New** text. Tab stops align at four spaces. Swipe the edit block sideways
 for long lines rather than wrapping coloured terminal rows. Switch back with
@@ -567,6 +568,11 @@ sent to a daemon, including when every registered repository is remote.
 **Settings edits the machine you pick.** The Agents tab and the upstream-MCP panel carry a
 machine selector; it defaults to the machine of the repository the settings nav is standing
 on, and an explicit pick overrides it, so a remote machine is editable from a local repo.
+
+Authenticated Settings actions are available on the headless daemon through the same
+`POST /settings/action` contract as the desktop server. The daemon also serves the
+authenticated `/config` snapshot used to load and refresh browser Settings. Successful durable edits publish
+`settings-changed` over SSE so connected Settings readers can refresh without saving.
 
 Three things stay local even while a remote machine is selected, because they cannot work
 anywhere else: installing or removing the TUIC MCP bridge (`install_agent_mcp`), opening an

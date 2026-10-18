@@ -1527,14 +1527,14 @@ const AGENT_LINE_BULLET_CHARS: [char; 4] = ['\u{25CF}', '\u{23FA}', '\u{2022}', 
 /// stays prose. Intent only — a `suggest:` never follows the ack.
 const ACK_SENTENCE_PREFIX: &str = r"TUICommander[\t ]+v[0-9][^\s]*[\t ]+is[\t ]+connected\.[\t ]+";
 
-/// Remove `intent:` / `suggest:` plain-prefix tokens from a rendered row before
-/// it is served to PWA/REST clients — they are wire markers, not agent prose.
+/// Remove `suggest:` plain-prefix tokens from a rendered row before it is
+/// served to PWA/REST clients. Intent text stays visible for client-side tinting.
 ///
 /// Built from the same [`AGENT_LINE_BULLETS`] and [`ACK_SENTENCE_PREFIX`] the
 /// parser anchors on, because the two had already drifted apart: `state.rs`
 /// carried its own copy knowing only the two Ink bullets, so every Codex
 /// `• suggest: [ … ]` was parsed by TUIC and then shown to the user anyway.
-/// What TUIC reads is what TUIC hides; one grammar is the only way that holds.
+/// Suggest chips replace their source marker; intent rows remain readable.
 ///
 /// The ack sentence is KEPT (capture group 1 is the replacement) — it is the
 /// agent's own greeting and the user is meant to read it. Everything from the
@@ -1543,7 +1543,7 @@ const ACK_SENTENCE_PREFIX: &str = r"TUICommander[\t ]+v[0-9][^\s]*[\t ]+is[\t ]+
 pub fn strip_plain_prefix_tokens(text: &str) -> std::borrow::Cow<'_, str> {
     lazy_static::lazy_static! {
         static ref PLAIN_PREFIX_RE: regex::Regex = regex::Regex::new(&format!(
-            r"(?m)^[\t ]*(?:[{b}][\t ]+)?({a})?(?:intent|suggest):[\t ]+.*$",
+            r"(?m)^[\t ]*(?:[{b}][\t ]+)?({a})?suggest:[\t ]+.*$",
             b = AGENT_LINE_BULLETS,
             a = ACK_SENTENCE_PREFIX
         ))

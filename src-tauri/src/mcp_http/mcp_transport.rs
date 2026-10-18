@@ -57,7 +57,6 @@ use super::mcp_transport_ancillary::worktree_remove_success_response;
 #[cfg(test)]
 use super::mcp_transport_catalogue::AGENT_ACTIONS;
 #[cfg(test)]
-#[cfg(test)]
 use super::mcp_transport_catalogue::DEBUG_ACTIONS;
 #[cfg(test)]
 use super::mcp_transport_catalogue::InstructionContext;
@@ -354,6 +353,14 @@ pub(super) fn resolve_agent_type(client_name: Option<&str>) -> Option<&'static s
         Some("amp")
     } else if name.contains("goose") {
         Some("goose")
+    } else if name.contains("opencode") {
+        Some("opencode")
+    } else if name.contains("grok") {
+        Some("grok")
+    } else if name == "pi" || name.starts_with("pi-") {
+        Some("pi")
+    } else if name.contains("ego") {
+        Some("ego")
     } else {
         None
     }
@@ -681,7 +688,9 @@ async fn dispatch_mcp_tool_call_with_context(
             {
                 return result;
             }
-            if matches!(action, "wait" | "subscribe" | "ack" | "unsubscribe")
+            if action == "launch" {
+                super::launch_transaction::execute(state, addr, args).await
+            } else if matches!(action, "wait" | "subscribe" | "ack" | "unsubscribe")
                 && !addr.ip().is_loopback()
             {
                 serde_json::json!({

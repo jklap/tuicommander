@@ -2299,6 +2299,7 @@ pub struct AppState {
     /// leaves the prompt in place so a child that was blocked on a startup
     /// dialog still receives it when it becomes ready.
     pub(crate) pending_initial_prompts: DashMap<String, PendingInitialPrompt>,
+    pub(crate) launch_transaction_lock: tokio::sync::Mutex<()>,
     /// Claude MCP children allowed to answer their one startup trust dialog.
     pub(crate) managed_trust_dialogs: DashSet<String>,
     /// Per-peer atomic handoff between blocking waiters and terminal delivery.
@@ -3787,6 +3788,7 @@ impl AppState {
             pending_injections: DashMap::new(),
             recent_queue_keys: DashMap::new(),
             pending_initial_prompts: DashMap::new(),
+            launch_transaction_lock: tokio::sync::Mutex::new(()),
             managed_trust_dialogs: DashSet::new(),
             active_agent_waiters: DashMap::new(),
             orchestrator_peers: DashSet::new(),
@@ -4666,7 +4668,14 @@ impl AppState {
                         silence.completion_declared_for_epoch(state.turn_epoch)
                     }
                 });
-        let background_work = state.has_pending_background_probe() || state.background_work;
+        // Ego reports turn boundaries through OSC 7770. Descendants (including
+        // pending background jobs) describe process ownership, not an active turn.
+        // Keep that metadata for suspend/standby safety, but never promote a
+        // confirmed idle ego turn back to working because of those processes.
+        let ego_turn_idle = state.agent_type.as_deref() == Some("ego")
+            && state.shell_state.as_deref() == Some("idle");
+        let background_work =
+            !ego_turn_idle && (state.has_pending_background_probe() || state.background_work);
         // A current-turn completion marker is stronger than a stale BUSY atom
         // (for example a completed Codex screen that still contains its last
         // Working row). Keep real background work authoritative, but normalize
@@ -10898,6 +10907,63 @@ mod tests {
         let snapshot = state.session_state_with_shell("s1").unwrap();
         assert_eq!(snapshot.shell_state.as_deref(), Some("idle"));
         assert_eq!(snapshot.agent_state.as_deref(), Some("completed"));
+    }
+
+    #[test]
+    fn ego_idle_turn_is_not_latched_working_by_background_processes_2018() {
+        // Live fb2bdba2: ego-idle-background-2018.raw records state=idle and
+        // the ready composer; its shared snapshot still had background_work=true.
+        for pending_probe in [false, true] {
+            let state = fresh_state();
+            {
+                let mut session = state.session_maps.session_states.get_mut("s1").unwrap();
+                session.agent_type = Some("ego".into());
+                session.background_work = !pending_probe;
+                if pending_probe {
+                    session.background_probe_turn_epoch = Some(session.turn_epoch);
+                }
+            }
+            state.session_maps.shell_states.insert(
+                "s1".into(),
+                std::sync::atomic::AtomicU8::new(crate::pty::SHELL_IDLE),
+            );
+
+            let snapshot = state.session_state_with_shell("s1").unwrap();
+            assert_eq!(snapshot.agent_state.as_deref(), Some("idle"));
+            assert_eq!(snapshot.shell_state.as_deref(), Some("idle"));
+            // Background ownership still protects suspend/standby safety.
+            assert_eq!(snapshot.background_work, !pending_probe);
+            assert_eq!(snapshot.has_pending_background_probe(), pending_probe);
+        }
+    }
+
+    #[test]
+    fn ego_background_does_not_hide_active_turn_or_question_2018() {
+        for awaiting in [false, true] {
+            let state = fresh_state();
+            {
+                let mut session = state.session_maps.session_states.get_mut("s1").unwrap();
+                session.agent_type = Some("ego".into());
+                session.background_work = true;
+                session.awaiting_input = awaiting;
+            }
+            state.session_maps.shell_states.insert(
+                "s1".into(),
+                std::sync::atomic::AtomicU8::new(crate::pty::SHELL_BUSY),
+            );
+            assert_eq!(
+                state
+                    .session_state_with_shell("s1")
+                    .unwrap()
+                    .agent_state
+                    .as_deref(),
+                Some(if awaiting {
+                    "awaiting_input"
+                } else {
+                    "working"
+                }),
+            );
+        }
     }
 
     #[test]

@@ -4268,26 +4268,24 @@ async fn mcp_codex_spawn_carries_launch_instructions() {
         "MARKERS v{VER}",
     )
     .await;
-    let instructions = format!(
-        "developer_instructions=\"MARKERS v{}\"",
-        env!("CARGO_PKG_VERSION")
-    );
     assert_eq!(
-        argv,
-        [
-            "-c",
-            "check_for_update_on_startup=false",
-            "-c",
-            instructions.as_str(),
-            "resume",
-            "--last",
-            "perform the task"
-        ]
+        &argv[..3],
+        ["-c", "check_for_update_on_startup=false", "-c"]
     );
+    assert_eq!(&argv[4..], ["resume", "--last", "perform the task"]);
+    let parsed: toml::Table = toml::from_str(&argv[3]).unwrap();
+    let text = parsed["developer_instructions"].as_str().unwrap();
+    assert!(text.contains("## TUIC output markers"));
+    assert!(text.contains("## Working with the user"));
+    assert!(
+        !text.contains("## Child agents"),
+        "unparented public spawn is a root"
+    );
+    assert!(text.ends_with(&format!("MARKERS v{}", env!("CARGO_PKG_VERSION"))));
 }
 
 #[cfg(unix)]
-const MOCK_CODEX_ARGV_SCRIPT: &str = "#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$ARGV_OUTPUT.tmp\" && mv \"$ARGV_OUTPUT.tmp\" \"$ARGV_OUTPUT\"\n";
+const MOCK_CODEX_ARGV_SCRIPT: &str = "#!/bin/sh\nprintf '%s\\0' \"$@\" > \"$ARGV_OUTPUT.tmp\" && mv \"$ARGV_OUTPUT.tmp\" \"$ARGV_OUTPUT\"\n";
 
 // Catches: a paused mock writer publishes a partial argv prefix before finishing.
 #[cfg(unix)]
@@ -4300,7 +4298,7 @@ async fn codex_mock_argv_is_published_only_after_writer_finishes() {
     // Override printf to stop after the first argument. stdin releases the writer,
     // so the partial-write window stays open until the test has observed it.
     let script = format!(
-        "printf() {{\n shift\n command printf '%s\\n' \"$1\"\n shift\n command printf ready > \"$ARGV_READY\"\n read -r release\n command printf '%s\\n' \"$@\"\n}}\n{MOCK_CODEX_ARGV_SCRIPT}"
+        "printf() {{\n shift\n command printf '%s\\0' \"$1\"\n shift\n command printf ready > \"$ARGV_READY\"\n read -r release\n command printf '%s\\0' \"$@\"\n}}\n{MOCK_CODEX_ARGV_SCRIPT}"
     );
     let mut writer = std::process::Command::new("/bin/sh")
         .args(["-c", &script, "mock-codex", "--search", "exec", "task"])
@@ -4323,7 +4321,7 @@ async fn codex_mock_argv_is_published_only_after_writer_finishes() {
     assert!(status.success());
     assert_eq!(partial, None, "incomplete argv must not be published");
     let actual = wait_for_file_content_async(&output, std::time::Duration::from_secs(60)).await;
-    assert_eq!(actual, "--search\nexec\ntask\n");
+    assert_eq!(actual, "--search\0exec\0task\0");
 }
 
 #[cfg(unix)]
@@ -4368,7 +4366,7 @@ async fn capture_codex_spawn_with(
         .and_then(|queue| queue.front().map(|injection| injection.text().to_string()));
     let actual = wait_for_file_content_async(&output, std::time::Duration::from_secs(60)).await;
     (
-        actual.lines().map(str::to_string).collect(),
+        actual.split_terminator('\0').map(str::to_string).collect(),
         spawned,
         deferred,
     )
