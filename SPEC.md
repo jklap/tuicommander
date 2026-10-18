@@ -1228,3 +1228,12 @@ removing a stored token leaves environment and CircleCI CLI fallbacks unchanged.
 Implemented: opt-in, perfDebug-gated global bounded frame bytes and paint snapshots, rotated instance-local captures, manual debug dump and production grid-paint replay timing. The synthetic smoke fixture checks harness wiring only. Original captured-stall heartbeat/input/backend RED and same-workload GREEN remain open. See docs/backend/stall-journal.md for bounds and privacy.
 
 MCP lazy discovery returns an optional complete top_schema, bounded by schema_byte_budget (default 16384, maximum 65536 UTF-8 JSON bytes), and catalogue_generation. Clients invalidate admitted schemas on tools/list_changed or changed generation (#2013-73f9).
+
+## Bounded MCP runtime outcomes (#2010-30a7)
+
+HTTP and ACP tools/call share a body-free 1024-record instance-local audit ring;
+`GET /mcp/audit` projects the newest 100 rows. Explicit call/parent UUIDs, recognized
+operations, target digests and UTF-8 text-byte costs support runtime correlation.
+Application error, transport observation and effect certainty stay separate;
+reply construction is not delivery proof and cancellation does not imply rollback.
+Real ego/Codex correlation and captured lost-reply traces remain unverified.

@@ -249,7 +249,10 @@ fn upstream_tool_result(value: &serde_json::Value) -> Option<&serde_json::Value>
 }
 
 fn tool_result_is_error(result: &serde_json::Value) -> bool {
-    result.get("error").is_some()
+    if let Some(upstream) = upstream_tool_result(result) {
+        return upstream["isError"].as_bool().unwrap_or(false);
+    }
+    result.get("error").is_some_and(|error| !error.is_null())
 }
 
 /// Produce the JSON-RPC `result` for a `tools/call` response.
@@ -1194,6 +1197,7 @@ pub(super) async fn mcp_post(
                 .get("params")
                 .cloned()
                 .unwrap_or(serde_json::Value::Null);
+            let audit = super::mcp_call_audit::Call::start(&state.mcp.call_audit, &params);
             let tool_name = params["name"].as_str().unwrap_or("").to_string();
             let args = params
                 .get("arguments")
@@ -1248,6 +1252,7 @@ pub(super) async fn mcp_post(
                 (result, is_error)
             };
             let mut tool_result = format_tool_call_result(&result, is_error);
+            audit.finish(&result, &tool_result);
             if request_is_modern_lifecycle(&headers, &body) {
                 // A completed 2026-07-28 tool call has this discriminator,
                 // including tool-level errors. Preserve any discriminator an

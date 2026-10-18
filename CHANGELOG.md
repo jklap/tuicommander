@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+- Record bounded body-free runtime MCP call outcomes with separate application, transport and effect observations; do not mark native `error:null` results as failures (#2010-30a7).
+
 - Validate native MCP arguments against advertised action contracts before dispatch; return bounded, value-masked repair details. Progress limits count raw Unicode scalar values consistently across transports (#2007-59f6).
 
 - Include a byte-bounded complete top schema in MCP tool search, with catalogue identity and explicit schema reuse until invalidation (#2013-73f9).

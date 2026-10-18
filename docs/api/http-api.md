@@ -3348,3 +3348,13 @@ expiry, retained-terminal cleanup, readback and error semantics.
 `retryable=false`. Correct the identified JSON-pointer fields before retrying.
 See the native argument repair contract in the MCP backend guide. Progress HTTP
 and IPC use the same raw 500-Unicode-scalar text limit as MCP.
+
+### GET /mcp/audit
+
+Returns a bounded, body-free runtime MCP call outcome projection (100 newest rows,
+1024 retained per instance). Includes call/parent correlation UUIDs, recognized
+operation, target digest, UTF-8 response text bytes, application error and separate
+transport/effect uncertainty. HTTP and ACP tools/call share the instrumentation.
+See [MCP runtime audit](../backend/mcp-http.md#runtime-call-outcome-audit-2010-30a7)
+for measurement, retention, privacy and retry-grouping limits. Reply construction
+does not prove delivery; cancelled/lost replies must not imply no effect.

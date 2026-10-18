@@ -17,6 +17,7 @@ mod github_routes;
 mod guards;
 mod log_routes;
 pub(crate) mod managed_launch;
+pub(crate) mod mcp_call_audit;
 mod mcp_input_contract;
 pub(crate) mod mcp_transport;
 mod mcp_transport_ancillary;
@@ -1013,6 +1014,7 @@ fn tunnel_routes() -> Router<Arc<AppState>> {
 fn shared_routes() -> Router<Arc<AppState>> {
     Router::new()
         .route("/mcp/peer", get(remote_peer::endpoint))
+        .route("/mcp/audit", get(mcp_call_audit::endpoint))
         .route("/accounts/action", post(account_routes::action))
         .route("/accounts/secret-form", post(account_routes::secret_form))
         // Version (authenticated)

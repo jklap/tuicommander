@@ -3208,3 +3208,10 @@ only after the final chunk. HTTP MCP-compatible output shares the same boundary.
 The debug frame recorder retains bounded real grid arrivals and immutable paint inputs, dumps on a recovered freeze/long paint or on demand, and replays production grid painting with per-frame timings. It is off by default, requires perfDebug, and stores sensitive terminal content separately from the numeric journal. See [Persistent stall evidence](backend/stall-journal.md). The synthetic smoke fixture is not a real-stall RED.
 
 MCP discovery can include a complete top-match schema within a UTF-8 byte budget; clients can reuse it until catalogue invalidation (#2013-73f9).
+
+### Runtime MCP outcomes (#2010-30a7)
+
+A bounded body-free `/mcp/audit` projection records actual HTTP/ACP runtime calls,
+response text bytes, correlation UUIDs and separate application/transport/effect
+observations. Unobserved delivery and effects stay unknown; native `error:null`
+is not a failure. Client correlation and captured live traces remain separate.

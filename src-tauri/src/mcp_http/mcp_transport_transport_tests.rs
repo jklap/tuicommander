@@ -5564,7 +5564,47 @@ async fn scoped_remote_session_inventory_does_not_use_the_control_proxy() {
 fn mcp_outcome_record_separates_transport_application_and_effect() {
     let rendering = serde_json::json!({"state":"rendering","error":null});
     let response = format_tool_call_result(&rendering, tool_result_is_error(&rendering));
-    assert_eq!(response["isError"], false, "null is not an application error");
+    assert_eq!(
+        response["isError"], false,
+        "null is not an application error"
+    );
     let refusal = serde_json::json!({"error":"application refused"});
     assert!(tool_result_is_error(&refusal));
+    let upstream = mark_upstream_tool_result(serde_json::json!({
+        "isError":true, "content":[{"type":"text","text":"refused"}], "error":null
+    }));
+    assert!(
+        tool_result_is_error(&upstream),
+        "upstream isError stays authoritative"
+    );
+    assert_eq!(
+        format_tool_call_result(&upstream, tool_result_is_error(&upstream))["isError"],
+        true
+    );
+}
+
+// Catches: collapsed calls bypass the runtime audit or expose argument bodies.
+#[tokio::test]
+async fn mcp_outcome_record_covers_collapsed_runtime_calls() {
+    let state = test_state();
+    let result = post_test_tool_call(state.clone(), "audit-contract", "call_tool",
+        serde_json::json!({"tool_name":"progress","arguments":{"type":"done","text":"PRIVATE_TEXT".repeat(100)}})).await;
+    assert_eq!(result["result"]["isError"], true);
+    let Json(projection) = super::super::mcp_call_audit::endpoint(State(state)).await;
+    let row = &projection["records"][0];
+    assert_eq!(row["operation"], "progress");
+    assert_eq!(row["application_error"], true);
+    assert_eq!(row["effect"], "not_started");
+    assert_eq!(
+        row["transport_error"],
+        "unobserved_after_reply_construction"
+    );
+    assert_eq!(
+        row["response_text_bytes"],
+        result["result"]["content"][0]["text"]
+            .as_str()
+            .unwrap()
+            .len()
+    );
+    assert!(!projection.to_string().contains("PRIVATE_TEXT"));
 }

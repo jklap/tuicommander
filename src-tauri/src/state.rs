@@ -1852,6 +1852,7 @@ impl Default for GitHubState {
 /// The MCP half of [`AppState`] (#678-9a75): Streamable-HTTP sessions, the
 /// upstream proxy registry, OAuth flows, and the tool-search index they feed.
 pub struct McpState {
+    pub(crate) call_audit: parking_lot::Mutex<crate::mcp_http::mcp_call_audit::Audit>,
     pub(crate) response_pages: parking_lot::Mutex<crate::mcp_http::response_pages::ResponsePages>,
     /// Active MCP Streamable HTTP sessions (session_id -> metadata for TTL reaping + client identity)
     pub sessions: DashMap<String, McpSessionMeta>,
@@ -1883,6 +1884,7 @@ pub struct McpState {
 impl Default for McpState {
     fn default() -> Self {
         Self {
+            call_audit: parking_lot::Mutex::default(),
             response_pages: parking_lot::Mutex::default(),
             sessions: DashMap::new(),
             upstream_registry: Arc::new(crate::mcp_proxy::registry::UpstreamRegistry::new()),

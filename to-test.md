@@ -2481,3 +2481,7 @@ Needs an iPhone (iOS 16.4+, 18.4+ preferred), the desktop TUICommander running a
 ## MCP argument contracts (2007-59f6) — Rust restart required
 
 - [ ] After the backend rebuild and ego counterpart are available, validate the action-input-contract-2007 fixture in ego locally; static bad arguments must produce no server call. This peer did not restart the desktop backend.
+
+## MCP runtime outcomes (2010-30a7) — Rust restart required
+
+- [ ] After Boss manually restarts `make dev` or installs `make build`, capture real ego/client correlation for permission denial, application refusal, rendering success and lost reply in an isolated instance. Inspect `/mcp/audit`: bodies must be absent; a lost reply must not imply no effect. Supply UUID call/parent metadata to distinguish recipient batches. Server-only tests do not verify Codex custom calls that never reach MCP. No desktop restart was performed by this peer.
