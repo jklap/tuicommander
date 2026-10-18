@@ -213,7 +213,7 @@ export function SessionDetailScreen(props: SessionDetailScreenProps) {
 		if (openingQuestion()) return;
 		setOpeningQuestion(true);
 		try {
-			await rpc("write_pty", { sessionId: props.session.session_id, data: "\x1b[1;3A" });
+			await rpc("write_pty", { sessionId: props.session.session_id, data: "\x1b[1;2D" });
 			setCodexQuestionOpen(true);
 		} catch (err) {
 			appLogger.warn("network", "Could not open Codex question", { error: err });

@@ -830,7 +830,7 @@ pub(crate) fn resolve_choice_prompt_input(state: &AppState, session_id: &str, da
             }
             || match prompt.amend_key.as_deref() {
                 Some("amend") => data == "\t",
-                Some("alt+down") => data == "\x1b[1;3B",
+                Some("shift+right") => data == "\x1b[1;2C",
                 _ => false,
             };
         if !resolves {
@@ -10731,40 +10731,42 @@ mod tests {
 
     #[test]
     fn test_codex_choice_prompt_uses_its_own_exit_keys() {
-        let state = fresh_state();
-        apply(
-            &state,
-            &make_parsed(
-                "choice-prompt",
-                serde_json::json!({
-                    "title": "Boss, scegli rosso o blu?",
-                    "options": [{"key": "2", "label": "Blu", "highlighted": false, "destructive": false}],
-                    "dismiss_key": "ctrl+]",
-                    "amend_key": "alt+down"
-                }),
-            ),
-        );
-        assert!(!resolve_choice_prompt_input(&state, "s1", "\x1b"));
-        assert!(!resolve_choice_prompt_input(&state, "s1", "\t"));
-        assert!(
-            state
-                .session_maps
-                .session_states
-                .get("s1")
-                .unwrap()
-                .choice_prompt
-                .is_some()
-        );
-        assert!(resolve_choice_prompt_input(&state, "s1", "\x1d"));
-        assert!(
-            state
-                .session_maps
-                .session_states
-                .get("s1")
-                .unwrap()
-                .choice_prompt
-                .is_none()
-        );
+        for exit_key in ["\x1d", "\x1b[1;2C"] {
+            let state = fresh_state();
+            apply(
+                &state,
+                &make_parsed(
+                    "choice-prompt",
+                    serde_json::json!({
+                        "title": "Pick a color.",
+                        "options": [{"key": "2", "label": "Blue", "highlighted": false, "destructive": false}],
+                        "dismiss_key": "ctrl+]",
+                        "amend_key": "shift+right"
+                    }),
+                ),
+            );
+            assert!(!resolve_choice_prompt_input(&state, "s1", "\x1b"));
+            assert!(!resolve_choice_prompt_input(&state, "s1", "\t"));
+            assert!(
+                state
+                    .session_maps
+                    .session_states
+                    .get("s1")
+                    .unwrap()
+                    .choice_prompt
+                    .is_some()
+            );
+            assert!(resolve_choice_prompt_input(&state, "s1", exit_key));
+            assert!(
+                state
+                    .session_maps
+                    .session_states
+                    .get("s1")
+                    .unwrap()
+                    .choice_prompt
+                    .is_none()
+            );
+        }
     }
 
     #[test]

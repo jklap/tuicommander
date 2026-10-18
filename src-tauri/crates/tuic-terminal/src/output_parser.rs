@@ -1,4 +1,6 @@
-pub use crate::ego_question::{parse_ego_free_text_question, parse_ego_question};
+pub use crate::ego_question::{
+    parse_ego_approval, parse_ego_free_text_question, parse_ego_question,
+};
 use serde::Serialize;
 
 fn expand_tilde(path: &str) -> String {
@@ -2180,9 +2182,9 @@ pub fn parse_choice_prompt(screen_rows: &[String]) -> Option<ParsedEvent> {
         // Footer: `Esc to cancel · Tab to amend` style.
         static ref FOOTER_RE: regex::Regex =
             regex::Regex::new(r"^\s*(?:Esc|esc|ESC)\s+to\s+(\S+).*?(?:·|\||•)\s*(?:Tab|tab|TAB)\s+to\s+(\S+)").unwrap();
-        // Codex request_user_input opens with Alt+Up and uses a distinct footer.
+        // Supported Codex 0.162 request_user_input opens with Shift+Left.
         static ref CODEX_FOOTER_RE: regex::Regex =
-            regex::Regex::new(r"(?i)^\s*enter\s+submit\s+ctrl\+\]\s+skip\s+⌥\+↓\s+main prompt\s*$").unwrap();
+            regex::Regex::new(r"(?i)^\s*enter\s+submit\s+⌃\]\s+skip\s+⇧→\s+main prompt\s*$").unwrap();
         // Title sentinel: question mark OR imperative verb. Keeps us off markdown lists.
         static ref TITLE_VERB_RE: regex::Regex =
             regex::Regex::new(r"(?i)^\s*(?:do you want|proceed with|continue|should i|confirm|apply|allow)\b").unwrap();
@@ -2199,6 +2201,7 @@ pub fn parse_choice_prompt(screen_rows: &[String]) -> Option<ParsedEvent> {
     let mut dismiss_key: Option<String> = None;
     let mut amend_key: Option<String> = None;
     let mut codex_footer = false;
+    let mut codex_approval = false;
 
     // Step 1: skip trailing blanks + optional footer.
     while idx > 0 {
@@ -2213,9 +2216,15 @@ pub fn parse_choice_prompt(screen_rows: &[String]) -> Option<ParsedEvent> {
             idx -= 1;
             continue;
         }
+        if row == "Press enter to confirm or esc to cancel" {
+            dismiss_key = Some("cancel".to_owned());
+            codex_approval = true;
+            idx -= 1;
+            continue;
+        }
         if CODEX_FOOTER_RE.is_match(&screen_rows[idx - 1]) {
             dismiss_key = Some("ctrl+]".to_string());
-            amend_key = Some("alt+down".to_string());
+            amend_key = Some("shift+right".to_string());
             codex_footer = true;
             idx -= 1;
             continue;
@@ -2275,7 +2284,18 @@ pub fn parse_choice_prompt(screen_rows: &[String]) -> Option<ParsedEvent> {
     if idx == 0 {
         return None;
     }
-    let title_row = screen_rows[idx - 1].trim();
+    // The command approval puts Environment, Reason and the command between
+    // its question and options. Its exact footer distinguishes it from the
+    // queued native question panel, whose numbers also submit immediately.
+    let title_row = if codex_approval {
+        screen_rows[..idx]
+            .iter()
+            .rev()
+            .find(|row| row.trim() == "Would you like to run the following command?")?
+            .trim()
+    } else {
+        screen_rows[idx - 1].trim()
+    };
     // A quoted numbered list can include the footer text. Codex's actual
     // request_user_input panel has this heading above the question.
     if codex_footer
@@ -2287,7 +2307,10 @@ pub fn parse_choice_prompt(screen_rows: &[String]) -> Option<ParsedEvent> {
     {
         return None;
     }
-    let title_qualifies = title_row.ends_with('?') || TITLE_VERB_RE.is_match(title_row);
+    // The exact Codex footer plus queued-panel heading is authoritative even
+    // for imperative titles such as the recorded `Pick a color.`.
+    let title_qualifies =
+        codex_footer || title_row.ends_with('?') || TITLE_VERB_RE.is_match(title_row);
     if !title_qualifies {
         return None;
     }
@@ -2310,6 +2333,143 @@ pub fn parse_choice_prompt(screen_rows: &[String]) -> Option<ParsedEvent> {
         selection_mode: None,
         dismiss_key,
         amend_key,
+    })
+}
+
+/// Grok's native Ask is a framed radio form, not a numbered Markdown list.
+/// Numeric keys settle immediately; z switches to an in-place text composer.
+pub fn parse_grok_question(screen_rows: &[String]) -> Option<ParsedEvent> {
+    lazy_static::lazy_static! {
+        static ref RADIO_RE: regex::Regex = regex::Regex::new(
+            r"^\s*(?:┃\s*)?([1-9]\d*|z)\s+\(([○●])\)\s+(.+?)\s*$"
+        ).unwrap();
+    }
+    let blank = |row: &str| matches!(row.trim(), "" | "┃");
+    let mut end = screen_rows.len();
+    while end > 0 && blank(&screen_rows[end - 1]) {
+        end -= 1;
+    }
+    let mut first = end;
+    let mut options = Vec::new();
+    let mut free_text = false;
+    while first > 0 {
+        let Some(caps) = RADIO_RE.captures(&screen_rows[first - 1]) else {
+            break;
+        };
+        let key = caps[1].to_owned();
+        let text = caps[3].trim();
+        free_text |= key == "z" && &caps[2] == "●" && text.starts_with('❯');
+        let (label, hint) = text.split_once("  ").map_or((text, None), |(label, hint)| {
+            (label, Some(hint.trim().to_owned()))
+        });
+        options.push(ChoiceOption {
+            key,
+            label: label.to_owned(),
+            highlighted: &caps[2] == "●",
+            destructive: label.eq_ignore_ascii_case("no"),
+            hint,
+        });
+        first -= 1;
+    }
+    options.reverse();
+    let ask = options.last()?.key == "z";
+    let numbered = options.len() - usize::from(ask);
+    if numbered < 2
+        || options[..numbered]
+            .iter()
+            .enumerate()
+            .any(|(index, option)| option.key.parse::<usize>().ok() != Some(index + 1))
+    {
+        return None;
+    }
+    let mut title_end = first;
+    while title_end > 0 && blank(&screen_rows[title_end - 1]) {
+        title_end -= 1;
+    }
+    let title = if ask {
+        let mut title_start = title_end;
+        while title_start > 0 {
+            let row = screen_rows[title_start - 1].trim();
+            if !row.starts_with('┃') || blank(row) {
+                break;
+            }
+            title_start -= 1;
+        }
+        if title_start == title_end
+            || !screen_rows[..title_start].iter().rev().take(4).any(|row| {
+                row.trim()
+                    .strip_prefix('◆')
+                    .is_some_and(|row| row.trim_start().starts_with("Waiting on answers for "))
+            })
+        {
+            return None;
+        }
+        screen_rows[title_start..title_end]
+            .iter()
+            .map(|row| row.trim().trim_start_matches('┃').trim())
+            .collect::<Vec<_>>()
+            .join(" ")
+    } else {
+        // Enforced approvals have a framed title, command and scope controls,
+        // not Ask's waiting header or z option. Their numeric replies are also
+        // immediate (the recorded 4 rejects without an Enter).
+        let scope = screen_rows
+            .get(title_end.checked_sub(1)?)?
+            .trim()
+            .strip_prefix('┃')?
+            .trim();
+        if !scope.starts_with("← → narrow scope") || !scope.ends_with("e edit pattern") {
+            return None;
+        }
+        let header = (0..title_end - 1).rev().find(|&index| {
+            screen_rows[index]
+                .trim()
+                .strip_prefix('┃')
+                .is_some_and(|row| row.trim().starts_with('›'))
+        })?;
+        let command = (header + 1..title_end - 1).find(|&index| {
+            screen_rows[index]
+                .trim()
+                .strip_prefix('┃')
+                .is_some_and(|row| row.trim().starts_with('│'))
+        })?;
+        let title = screen_rows[header..command]
+            .iter()
+            .map(|row| {
+                row.trim()
+                    .trim_start_matches('┃')
+                    .trim()
+                    .trim_start_matches('›')
+                    .trim()
+            })
+            .collect::<Vec<_>>()
+            .join(" ");
+        for option in &mut options {
+            if option.label.ends_with(')')
+                && let Some((label, hint)) = option.label.rsplit_once(" (")
+            {
+                option.hint = Some(hint.trim_end_matches(')').to_owned());
+                option.label = label.to_owned();
+            }
+            option.destructive = option.label.to_ascii_lowercase().starts_with("no,");
+        }
+        title
+    };
+    if free_text {
+        return Some(ParsedEvent::Question {
+            prompt_text: title,
+            confident: true,
+        });
+    }
+    if !options.iter().any(|option| option.highlighted) {
+        options[0].highlighted = true;
+    }
+    Some(ParsedEvent::ChoicePrompt {
+        title,
+        options,
+        selection_mode: None,
+        dismiss_key: None,
+        amend_key: None,
     })
 }
 
