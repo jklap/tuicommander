@@ -1,3 +1,7 @@
+## Ego idle turn state (2018-1885) — Rust restart required
+
+- [ ] After Boss manually restarts `make dev` or installs `make build`, read `tuic agent ls` and the mobile session list for an ego session at its ready composer. It must not report Working solely because a background job remains pending. Confirm an active ego turn still reports Working and a question still reports Input. Keep background ownership metadata for suspend/standby safety. An idle ego with a current-turn pending descendant probe must refuse Suspend until ownership is resolved, even when `background_work` is false. No live desktop restart was performed by this peer.
+
 ## Generated launch modules — Rust restart required
 
 - [ ] Inspect the launch module switches and additions preview after unlocking the Mac. Browser snapshot confirmed all labels and initial checkbox states; direct Chrome and wrapper screenshots could not complete while the macOS screen was locked.
