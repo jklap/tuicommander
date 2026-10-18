@@ -262,6 +262,7 @@ export const UpstreamMcpPanel: Component = () => {
 	const [error, setError] = createSignal("");
 	const [editingId, setEditingId] = createSignal<string | null>(null);
 	const [editForm, setEditForm] = createSignal(emptyForm());
+	let pendingEdit: UpstreamMcpServer | undefined;
 	const confirmAuthorization = (origin: string, name: string, crossDomain: boolean) =>
 		oauthDialog.confirm({
 			title: "Authorize MCP server",
@@ -294,7 +295,14 @@ export const UpstreamMcpPanel: Component = () => {
 					read: () => rpc<UpstreamMcpConfig>("load_mcp_upstreams", {}, machine()),
 					apply: (config) => {
 						const edited = config.servers?.find((server) => server.id === editingId());
-						if (edited) {
+						if (
+							edited &&
+							pendingEdit &&
+							JSON.stringify(serverForm(edited)) === JSON.stringify(serverForm(pendingEdit))
+						) {
+							// This is our redacted save acknowledgement, not a competing draft.
+							editBase = serverForm(edited);
+						} else if (edited) {
 							const incoming = serverForm(edited);
 							const merged = mergeSettingsSnapshot(editBase, editForm(), incoming);
 							editBase = incoming;
@@ -487,6 +495,7 @@ export const UpstreamMcpPanel: Component = () => {
 
 	let editBase = emptyForm();
 	function startEdit(server: UpstreamMcpServer) {
+		pendingEdit = undefined;
 		setEditingId(server.id);
 		editBase = serverForm(server);
 		setEditForm(editBase);
@@ -542,8 +551,12 @@ export const UpstreamMcpPanel: Component = () => {
 			setError("Failed to update upstream credentials");
 			return;
 		}
+		pendingEdit = updated;
 		const ok = await saveUpstreams(upstreams().map((s) => (s.id === server.id ? updated : s)));
-		if (!ok) return;
+		if (!ok) {
+			pendingEdit = undefined;
+			return;
+		}
 		try {
 			// Replacing the shared auth slot is destructive too: persist the config first.
 			if (replaceBearer)
@@ -559,11 +572,13 @@ export const UpstreamMcpPanel: Component = () => {
 			);
 			await rpc("reconnect_mcp_upstream", { name: server.name }, machine());
 		} catch {
+			pendingEdit = undefined;
 			setError("Settings saved, but credential cleanup or reconnect failed");
 			return;
 		}
 		setEditForm(emptyForm());
 		setEditingId(null);
+		pendingEdit = undefined;
 	}
 
 	async function toggleUpstream(id: string, enabled: boolean) {

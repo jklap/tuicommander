@@ -18,6 +18,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Publish typed Settings account enumeration and configured Ego interactive login start/status, with human terminal authentication and separate credential readback (#1790-1011).
 ### Fixed
 
+- Keep Settings peer refresh current after no-op edits, omitted repository defaults, transient read failures, and desktop connection/tunnel saves; avoid conflict notices for acknowledged upstream header saves (#1788-2163).
 - Disable Ideas dictation while a voice call or terminal browser dictation owns the microphone (#2022-1b80).
 
 - Mirror bounded browser dictation lifecycle diagnostics with session/take identity to the owner log ring, without transcript content or per-hypothesis logging (#2020-66aa).
