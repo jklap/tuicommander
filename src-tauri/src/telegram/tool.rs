@@ -132,7 +132,16 @@ mod tests {
             json!({"action":"send","text":"hello","buttons":[[{"label":"ok","data":"x","approved":true}]]}),
             json!({"action":"send","text":"hello","chat_id":"1111111"}),
         ] {
-            assert_eq!(invoke(value).await["error"], "telegram_invalid_config");
+            let path = if value.get("buttons").is_some() {
+                "/buttons/0/0"
+            } else {
+                ""
+            };
+            let result = invoke(value).await;
+            assert_eq!(
+                crate::test_support::mcp_argument_constraint(&result, path, "additionalProperties"),
+                &json!(false)
+            );
         }
         assert_eq!(server.requests().len(), 1);
         let inbox = crate::mcp_http::mcp_transport::local_peer_call_with_message_id(

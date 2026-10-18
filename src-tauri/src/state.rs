@@ -1852,6 +1852,7 @@ impl Default for GitHubState {
 /// The MCP half of [`AppState`] (#678-9a75): Streamable-HTTP sessions, the
 /// upstream proxy registry, OAuth flows, and the tool-search index they feed.
 pub struct McpState {
+    pub(crate) call_audit: parking_lot::Mutex<crate::mcp_http::mcp_call_audit::Audit>,
     pub(crate) response_pages: parking_lot::Mutex<crate::mcp_http::response_pages::ResponsePages>,
     /// Active MCP Streamable HTTP sessions (session_id -> metadata for TTL reaping + client identity)
     pub sessions: DashMap<String, McpSessionMeta>,
@@ -1883,6 +1884,7 @@ pub struct McpState {
 impl Default for McpState {
     fn default() -> Self {
         Self {
+            call_audit: parking_lot::Mutex::default(),
             response_pages: parking_lot::Mutex::default(),
             sessions: DashMap::new(),
             upstream_registry: Arc::new(crate::mcp_proxy::registry::UpstreamRegistry::new()),
@@ -2284,6 +2286,7 @@ pub struct AppState {
     /// the position instead: an omitted `since` resumes from here, an explicit one
     /// overrides it, and `since=0` stays the deliberate replay escape hatch.
     pub(crate) agent_read_cursor: DashMap<String, u64>,
+    pub(crate) mail_subscriptions: crate::mail_subscriptions::MailSubscriptions,
     /// Server notices, initial prompts and Compose commands waiting for a
     /// recipient's next safe idle window. Entries share one typed FIFO so
     /// delivery order is global. Peer `send` payloads are never in here — see
@@ -2674,6 +2677,8 @@ impl AppState {
                 })
             });
             let stored_timestamp = msg.timestamp;
+            self.mail_subscriptions
+                .append(&self.data_dir, recipient, &msg);
             inbox.push_back(msg);
             (evicted, stored_timestamp)
         };
@@ -2707,6 +2712,17 @@ impl AppState {
             .entry(recipient.to_string())
             .or_default();
         *pending = pending.saturating_add(count);
+    }
+
+    pub(crate) fn notify_mail_subscription_change(&self, recipient: &str) {
+        let entry = self
+            .active_agent_waiters
+            .entry(recipient.to_owned())
+            .or_default();
+        let mut gate = entry.lock();
+        gate.inbox_revision = gate.inbox_revision.wrapping_add(1);
+        let revision = gate.inbox_revision;
+        gate.inbox_events.send_replace(revision);
     }
 
     /// Hear every change to one peer's inbox without waiting on it.
@@ -3264,8 +3280,36 @@ impl AppState {
             .max()
             .unwrap_or(since);
         let message_ids: Vec<_> = messages.iter().map(|message| message.id.clone()).collect();
-        self.acknowledge_agent_snapshot_locked(tuic_session, read_through, &message_ids, &mut gate);
+        self.acknowledge_agent_snapshot_locked(
+            tuic_session,
+            read_through,
+            &message_ids,
+            true,
+            &mut gate,
+        );
         (messages, has_more, missed_count, gate.eviction_watermark)
+    }
+
+    /// Durable ACK and live delivery observation share the recipient gate used by
+    /// insertions and snapshot ACKs. Independent subscriptions never advance the
+    /// legacy read cursor or acknowledge its separate loss watermark.
+    pub(crate) fn apply_mail_subscription_action(
+        &self,
+        peer: &str,
+        args: &serde_json::Value,
+    ) -> serde_json::Value {
+        let entry = self
+            .active_agent_waiters
+            .entry(peer.to_owned())
+            .or_default();
+        let mut gate = entry.lock();
+        let (reply, observed) =
+            self.mail_subscriptions
+                .action_with_observation(&self.data_dir, peer, args);
+        if !observed.is_empty() {
+            self.acknowledge_agent_snapshot_locked(peer, 0, &observed, false, &mut gate);
+        }
+        reply
     }
 
     /// A byte-paged read acknowledges only the immutable snapshot, never newer mail.
@@ -3290,30 +3334,58 @@ impl AppState {
         }
         gate.acknowledged_eviction_watermark =
             gate.acknowledged_eviction_watermark.max(eviction_watermark);
-        self.acknowledge_agent_snapshot_locked(tuic_session, cursor, message_ids, &mut gate);
+        self.acknowledge_agent_snapshot_locked(tuic_session, cursor, message_ids, true, &mut gate);
     }
 
     fn acknowledge_agent_snapshot_locked(
         &self,
         tuic_session: &str,
-        read_through: u64,
+        mut read_through: u64,
         message_ids: &[String],
+        advance_legacy_cursor: bool,
         gate: &mut AgentDeliveryGate,
     ) {
         // Publish the read position while holding the delivery gate. A sender
         // cannot see a full inbox between this observation and cursor advancement.
-        let mut cursor = self
-            .agent_read_cursor
-            .entry(tuic_session.to_string())
-            .or_insert(0);
-        if read_through > *cursor {
-            *cursor = read_through;
+        if advance_legacy_cursor {
+            let mut cursor = self
+                .agent_read_cursor
+                .entry(tuic_session.to_string())
+                .or_insert(0);
+            if read_through > *cursor {
+                *cursor = read_through;
+            }
         }
         // Reading is delivery, even when a terminal wake was queued first or a
         // sender has buffered mail but has not yet assigned its wake owner.
         for id in message_ids {
-            gate.owners
-                .insert(id.clone(), AgentDeliveryOwner::WaiterObserved);
+            if advance_legacy_cursor
+                || self
+                    .agent_inbox
+                    .get(tuic_session)
+                    .is_some_and(|inbox| inbox.iter().any(|message| message.id == *id))
+            {
+                gate.owners
+                    .insert(id.clone(), AgentDeliveryOwner::WaiterObserved);
+            }
+        }
+        if !advance_legacy_cursor {
+            // Filtered ACKs prove delivery only for their IDs. Advance the wake
+            // observation through the contiguous observed prefix, not past gaps.
+            read_through = self
+                .agent_inbox
+                .get(tuic_session)
+                .and_then(|inbox| {
+                    inbox
+                        .iter()
+                        .take_while(|message| {
+                            gate.owners.get(&message.id)
+                                == Some(&AgentDeliveryOwner::WaiterObserved)
+                        })
+                        .last()
+                        .map(|message| message.timestamp)
+                })
+                .unwrap_or(0);
         }
         gate.urgent_notices
             .retain(|_, notice| notice.through > read_through);
@@ -3331,14 +3403,14 @@ impl AppState {
             });
         }
         gate.orchestrator_observed_through = gate.orchestrator_observed_through.max(read_through);
-        if read_through == 0
+        if (advance_legacy_cursor && read_through == 0)
             || gate
                 .orchestrator_wake_pending_through
                 .is_some_and(|pending| read_through >= pending)
         {
             gate.orchestrator_wake_pending_through = None;
         }
-        if read_through == 0
+        if (advance_legacy_cursor && read_through == 0)
             || gate
                 .orchestrator_wake_needed_through
                 .is_some_and(|needed| read_through >= needed)
@@ -3712,6 +3784,7 @@ impl AppState {
             agent_inbox: DashMap::new(),
             agent_inbox_evictions: DashMap::new(),
             agent_read_cursor: DashMap::new(),
+            mail_subscriptions: Default::default(),
             pending_injections: DashMap::new(),
             recent_queue_keys: DashMap::new(),
             pending_initial_prompts: DashMap::new(),

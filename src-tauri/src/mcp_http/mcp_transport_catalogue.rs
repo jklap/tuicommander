@@ -421,7 +421,7 @@ fn render_capability_map(
         return lines;
     }
     let hint = if collapse_tools {
-        "Names below are `call_tool` targets; load a schema with `get_tool_schema` first."
+        "Names below are `call_tool` targets; use a complete search `top_schema` or load one with `get_tool_schema` first."
     } else if claude_code {
         "Load a tool's schema before the first call (ToolSearch `select:mcp__tuicommander__<tool>`)."
     } else {
@@ -436,13 +436,13 @@ pub(super) fn validate_mcp_repo_path(path: &str) -> Result<(), serde_json::Value
 }
 
 pub(super) const SESSION_ACTIONS: &str = "list, create, submit, force_retry, input, output, resize, rename, keep_open, suspend, close, kill, pause, resume, status, wait, declare_worktree";
-pub(super) const AGENT_ACTIONS: &str = "launch, spawn, register, list_peers, send, inbox, wait";
+pub(super) const AGENT_ACTIONS: &str =
+    "launch, spawn, register, list_peers, send, inbox, wait, subscribe, ack, unsubscribe";
 pub(super) const REPO_ACTIONS: &str = "list, add, active, status, branch_integrations, branch_integration, worktree_list, worktree_lifecycle, worktree_create, worktree_remove, orphan_cleanup_answer, branch_delete, progress_list, work_item, work_item_act";
 pub(super) const UI_ACTIONS: &str = "tab, toast, confirm, screenshot";
 pub(super) const TASK_ACTIONS: &str = "get, cancel";
 pub(super) const DEBUG_ACTIONS: &str =
     "agent_detection, logs, sessions, invoke_js, frame_workload_dump, help";
-#[cfg(any(feature = "dictation", test))]
 pub(super) const VOICE_ACTIONS: &str = "speak, stop, status";
 pub(super) const REMOTE_ACTIONS: &str = "preview, update";
 
@@ -528,7 +528,7 @@ pub(super) const NATIVE_TOOL_SUMMARIES: &[(&str, &str)] = &[
 /// and `progress_tracking`. Leaking the raw list to external clients exposes
 /// tool metadata for gated tools.
 pub(super) fn native_tool_definitions() -> serde_json::Value {
-    let defs = serde_json::json!([
+    let mut defs = serde_json::json!([
         crate::automations::mcp::tool_definition(),
         crate::design_mode::mcp::tool_definition(),
         crate::secrets::tool_definition(),
@@ -565,13 +565,13 @@ pub(super) fn native_tool_definitions() -> serde_json::Value {
         },
         {
             "name": "agent",
-            "description": "AI agent orchestration. There is no separate swarm action: use these agent/session primitives to spawn and coordinate managed peers.\n\nOrchestration in 5 lines:\n1. Managed PTYs auto-bind from $TUIC_SESSION. A headerless external caller calls register without tuic_session to receive an MCP-scoped UUID, or supplies an explicit stable UUID to reclaim it.\n2. Spawn a named peer: spawn name=worker prompt=<task> [agent_type=codex|gemini|...] → {session_id, name}.\n3. Wait for it: agent action=wait (new mail; omit since, the cursor is kept server-side) or session action=wait session_id=<id> until=idle|exited. Cheap blocking call — do NOT poll in a loop. Both cap at 300s: for work that runs longer, or across a reconnect, poll the spawn's task_id with task action=get instead — the outcome is recorded even with nobody waiting.\n4. Talk to it: send to=<peer> message=<text> [urgency=normal|urgent]. Normal is the default; use urgent when the recipient must change course before its next step. Mail stays mail: the payload is never typed into the recipient's composer. It waits in the recipient's inbox, and an idle/completed recipient may be sent a payload-free generic `agent action=inbox` wake. Urgent sends a payload-free inbox notice to a safe busy Claude/Codex/ego composer for the next tool boundary.\n5. Lifecycle notifications carry state only. Every worker must report task output or blockers with send; use session output only if a child anomalously failed to send.\n\nActions:\n- launch: One durable idempotent managed launch (localhost only). Requires idempotency_key, parent_session_id (registered peer), stable name, keep_open, workspace={existing_path} or {repo_path,branch,base_ref?}, and spawn={prompt,...spawn options}. Read a receipt with launch_id alone, or retry the identical request after a lost reply: the same launch_id/session_id returns, never another checkout or PTY. Conflicting key reuse errors explicitly. Receipt status=created|prompt_delivered|ready|blocked, prompt_delivery=queued|delivered|unknown and warm_artifacts are separate. Delivered proves argv handoff or PTY submission, not model acceptance; ready also requires native Ready-screen evidence. Interrupted uncertain creation blocks rather than spawning again; retain the handle and inspect the named resources. Model/account/brief policy remains caller-owned. Also POST /agents/launch and managed_agent_launch IPC, with identical validation.\n- spawn: Launch agent in new PTY (localhost only). Optional name is assigned before prompt delivery. Returns {session_id, name, task_id, poll_interval_ms, server_ts, parent_session_id?}.\n- wait: Block until new inbox mail. Not byte-bounded: byte_budget/continuation are rejected before mail consumption; use inbox for bounded payloads. Omit `since` — the server resumes from your last read position; pass it only to override (since=0 replays everything). Success inlines every retained fresh message (up to the 100-message inbox capacity) in chronological order. Every response carries next_since, timeout included. An active wait suppresses terminal wake.\n- register: Bind an external/headerless caller, or rename/set the repository path of an auto-bound managed peer. tuic_session is optional; omission generates a stable identity for this MCP connection. Reconnecting under a NEW uuid? Pass `replaces=<old_uuid>` or its inbox is stranded — the response reports superseded_identity, mail_migrated, and mail_stranded + identity_warning when the old identity still owns a live PTY (its mail is left alone). Check `terminal` in the response: false means no PTY notice can be typed into you; a subscribed ACP inbox can still notify you or wake idle ego. Otherwise consume mail with wait/inbox. Declare the orchestrator role with orchestrator=true and remove it with false; spawning a child never infers it, and omitting the field preserves the current role. The response reports mail_wake=managed_pty_lifecycle when a wake can reach you; external/headerless peers without a subscribed ACP inbox stay wait/inbox-only.\n- list_peers: Optional to scopes a recipient through the same resolver as send; compact=true returns identity, state (unknown if absent), activity_age_ms (null if absent), and omitted_fields. List peers across the desktop mail hub and connected daemons. address is connection/peer_id (local/peer_id on the hub); connection_id selects one daemon. Returns tuic_session, name, orchestrator, plus alias and session_id for a peer that owns a live terminal. Optional: path filter. Absent fields are omitted.\n- send: Message any local or remote peer (requires to, message). Use to=connection/peer_id or connection_id with a daemon-local address. The owning daemon performs inbox delivery and wake; replies return through the desktop hub. `to` accepts the peer's tuic_session, PTY id, or terminal alias. `urgency` is normal (default) or urgent; use urgent when the recipient must change course before its next step. Urgent keeps the body in the inbox and writes only a notice to a safe busy Claude/Codex/ego composer. `urgent_delivered` reports a PTY notice, subscribed ACP inbox update, inbox read, or waiter; false adds `urgent_fallback_reason` for queued mail. It does not prove model action or interrupt a tool. `delivered` and `delivery_path` describe the routing path; `recipient_state` appears only for a managed PTY.\n- inbox: Optional byte_budget=1024..65536 returns JSON-text chunks; the budget includes the compact page envelope, not MCP framing. Concatenate chunk values then parse JSON; continue with the opaque continuation and same action. Snapshots expire after 300s or cache eviction; errors require a fresh read. The server cursor advances only on the final chunk. Read up to 100 retained messages in FIFO order. Returns next_since and has_more; repeat while has_more is true. Optional: limit (default 100, max 100), since (omit to resume from the server-side cursor). On FIFO eviction, missed_count reports unread messages lost since the last inbox read.",
+            "description": "AI agent orchestration. There is no separate swarm action: use these agent/session primitives to spawn and coordinate managed peers.\n\nOrchestration in 5 lines:\n1. Managed PTYs auto-bind from $TUIC_SESSION. A headerless external caller calls register without tuic_session to receive an MCP-scoped UUID, or supplies an explicit stable UUID to reclaim it.\n2. Spawn a named peer: spawn name=worker prompt=<task> [agent_type=codex|gemini|...] → {session_id, name}.\n3. Wait for it: agent action=wait (new mail; omit since, the cursor is kept server-side) or session action=wait session_id=<id> until=idle|exited. Cheap blocking call — do NOT poll in a loop. Both cap at 300s: for work that runs longer, or across a reconnect, poll the spawn's task_id with task action=get instead — the outcome is recorded even with nobody waiting.\n4. Talk to it: send to=<peer> message=<text> [urgency=normal|urgent]. Normal is the default; use urgent when the recipient must change course before its next step. Mail stays mail: the payload is never typed into the recipient's composer. It waits in the recipient's inbox, and an idle/completed recipient may be sent a payload-free generic `agent action=inbox` wake. Urgent sends a payload-free inbox notice to a safe busy Claude/Codex/ego composer for the next tool boundary.\n5. Lifecycle notifications carry state only. Every worker must report task output or blockers with send; use session output only if a child anomalously failed to send.\n\nActions:\n- launch: One durable idempotent managed launch (localhost only). Requires idempotency_key, parent_session_id (registered peer), stable name, keep_open, workspace={existing_path} or {repo_path,branch,base_ref?}, and spawn={prompt,...spawn options}. Read a receipt with launch_id alone, or retry the identical request after a lost reply: the same launch_id/session_id returns, never another checkout or PTY. Conflicting key reuse errors explicitly. Receipt status=created|prompt_delivered|ready|blocked, prompt_delivery=queued|delivered|unknown and warm_artifacts are separate. Delivered proves argv handoff or PTY submission, not model acceptance; ready also requires native Ready-screen evidence. Interrupted uncertain creation blocks rather than spawning again; retain the handle and inspect the named resources. Model/account/brief policy remains caller-owned. Also POST /agents/launch and managed_agent_launch IPC, with identical validation.\n- spawn: Launch agent in new PTY (localhost only). Optional name is assigned before prompt delivery. Returns {session_id, name, task_id, poll_interval_ms, server_ts, parent_session_id?}.\n- wait: Block until new inbox mail. Not byte-bounded: byte_budget/continuation are rejected before mail consumption; use inbox for bounded payloads. Omit `since` — the server resumes from your last read position; pass it only to override (since=0 replays everything). Success inlines every retained fresh message (up to the 100-message inbox capacity) in chronological order. Every response carries next_since, timeout included. An active wait suppresses terminal wake.\n- register: Bind an external/headerless caller, or rename/set the repository path of an auto-bound managed peer. tuic_session is optional; omission generates a stable identity for this MCP connection. Reconnecting under a NEW uuid? Pass `replaces=<old_uuid>` or its inbox is stranded — the response reports superseded_identity, mail_migrated, and mail_stranded + identity_warning when the old identity still owns a live PTY (its mail is left alone). Check `terminal` in the response: false means no PTY notice can be typed into you; a subscribed ACP inbox can still notify you or wake idle ego. Otherwise consume mail with wait/inbox. Declare the orchestrator role with orchestrator=true and remove it with false; spawning a child never infers it, and omitting the field preserves the current role. The response reports mail_wake=managed_pty_lifecycle when a wake can reach you; external/headerless peers without a subscribed ACP inbox stay wait/inbox-only.\n- list_peers: Optional to scopes a recipient through the same resolver as send; compact=true returns identity, state (unknown if absent), activity_age_ms (null if absent), and omitted_fields. List peers across the desktop mail hub and connected daemons. address is connection/peer_id (local/peer_id on the hub); connection_id selects one daemon. Returns tuic_session, name, orchestrator, plus alias and session_id for a peer that owns a live terminal. Optional: path filter. Absent fields are omitted.\n- send: Message any local or remote peer (requires to, message). Use to=connection/peer_id or connection_id with a daemon-local address. The owning daemon performs inbox delivery and wake; replies return through the desktop hub. `to` accepts the peer's tuic_session, PTY id, or terminal alias. `urgency` is normal (default) or urgent; use urgent when the recipient must change course before its next step. Urgent keeps the body in the inbox and writes only a notice to a safe busy Claude/Codex/ego composer. `urgent_delivered` reports a PTY notice, subscribed ACP inbox update, inbox read, or waiter; false adds `urgent_fallback_reason` for queued mail. It does not prove model action or interrupt a tool. `delivered` and `delivery_path` describe the routing path; `recipient_state` appears only for a managed PTY.\n- inbox: Optional byte_budget=1024..65536 returns JSON-text chunks; the budget includes the compact page envelope, not MCP framing. Concatenate chunk values then parse JSON; continue with the opaque continuation and same action. Snapshots expire after 300s or cache eviction; errors require a fresh read. The server cursor advances only on the final chunk. Read up to 100 retained messages in FIFO order. Returns next_since and has_more; repeat while has_more is true. Optional: limit (default 100, max 100), since (omit to resume from the server-side cursor). On FIFO eviction, missed_count reports unread messages lost since the last inbox read.\n- subscribe: Create or resume a durable independent reader with subscription_id (1..64 ASCII letters/digits/_/-) and filter=actionable (default), all, exit or failure. Actionable excludes routine system lifecycle/idle traffic, not peer mail. A subscription does not consume legacy inbox or another reader.\n- inbox/wait with subscription_id: Return up to limit (1..100) matching journal messages, cursor, acknowledged_cursor, missed_count and has_more. No byte_budget/continuation; ACK then read has_more batches. Reads do not acknowledge. An unacknowledged batch is replayed unchanged while retained. wait returns only for matching mail or matching retention loss; routine traffic stays inside the server. For continuous event-driven delivery use GET /agent/subscriptions/{id}/events with your Mcp-Session-Id header, or over ACP subscribe to resource tuic://inbox/subscriptions/{id}.\n- ack: Acknowledge a processed subscription batch with subscription_id and its cursor. Acknowledged results never replay on reconnect under the same peer identity and subscription_id. Lost replies before ack can replay: deduplicate side effects by message id. Journal retains the newest 1000 messages per peer across restarts; missed_count counts matching unacknowledged evictions, not routine filtered events. since is legacy-only.\n- unsubscribe: Delete one subscription cursor; retained mail and other readers are unchanged.",
             "inputSchema": { "type": "object", "properties": {
                 "connection_id": { "type": "string", "description": "Configured remote connection qualifier (session list/output/submit; agent list_peers/send). Remote addresses also accept connection/id; local/id addresses the desktop hub." },
                 "compact": { "type": "boolean", "description": "Inventory only: identity, state, activity_age_ms and explicit omitted_fields." },
                 "byte_budget": { "type": "integer", "minimum":1024, "maximum":65536, "description": "Opt into byte-bounded JSON-text chunks (inbox/output). Bound includes compact JSON page envelope, excludes MCP framing. Default on continuation: 4096." },
                 "continuation": { "type": "string", "description": "Opaque token from a byte-budget page; repeat with same action and target. Concatenate chunk values then parse JSON. Expires after 300s or cache eviction." },
-                "action": { "type": "string", "description": "One of: launch, spawn, wait, register, list_peers, send, inbox" },
+                "action": { "type": "string", "description": "One of: launch, spawn, wait, register, list_peers, send, inbox, subscribe, ack, unsubscribe" },
                 "idempotency_key": { "type": "string", "minLength": 1, "maxLength": 256, "description": "launch: stable retry key scoped to parent; do not change after a lost reply." },
                 "launch_id": { "type": "string", "description": "launch: read only a durable receipt by handle; omit all creation fields." },
                 "parent_session_id": { "type": "string", "description": "launch: registered parent peer identity." },
@@ -598,8 +598,11 @@ pub(super) fn native_tool_definitions() -> serde_json::Value {
                 "to": { "type": "string", "description": "Recipient address (action=send, required): its tuic_session UUID, PTY id, alias, unique short PTY-id prefix, or unique display name" },
                 "message": { "type": "string", "description": "Message content, max 64KB (action=send, required)" },
                 "urgency": { "type": "string", "enum": ["normal", "urgent"], "description": "action=send: normal (default), or urgent when the recipient must change course before its next step. Urgent writes only a payload-free inbox notice to a safe busy Claude/Codex/ego composer; it never interrupts a running tool." },
-                "keep_open": { "type": "boolean", "description": "action=spawn: keep this managed child open; action=send: set or clear the recipient managed child's keep-open flag." },
+                "keep_open": { "type": "boolean", "description": "action=launch: required explicit child lifetime; action=spawn: keep this managed child open; action=send: set or clear the recipient managed child's keep-open flag." },
                 "limit": { "type": "integer", "minimum": 1, "maximum": crate::state::AGENT_INBOX_CAPACITY, "description": "Maximum inbox entries to return (action=inbox; default 100, maximum 100). Read again while has_more is true." },
+                "subscription_id": { "type":"string", "minLength":1, "maxLength":64, "pattern":"^[A-Za-z0-9_-]+$", "description":"Independent durable reader (subscribe, inbox, wait, ack, unsubscribe). Reuse the same peer identity and id on reconnect." },
+                "filter": { "type":"string", "enum":["actionable","all","exit","failure"], "description":"Immutable subscription filter; default actionable. Exit includes failed exits; failure includes nonzero exits and delivery failures." },
+                "cursor": { "type":"integer", "minimum":0, "description":"Returned subscription batch cursor to acknowledge (ack only); not a legacy since timestamp." },
                 "since": { "type": "integer", "description": "Logical unix-millis cursor (action=inbox|wait). OMIT IT: the server remembers your last read position and resumes from there. Pass it only to override — since=0 deliberately replays the whole inbox. Every wait/inbox response carries next_since, including on timeout" }
             }, "required": ["action"] }
         },
@@ -751,6 +754,10 @@ pub(super) fn native_tool_definitions() -> serde_json::Value {
         }
     ]);
 
+    for tool in defs.as_array_mut().expect("native tool array") {
+        super::mcp_input_contract::complete_schema(tool);
+    }
+
     // Guard invariant: native tool names must never contain "__" — that prefix
     // is the routing discriminator for upstream proxy tools.
     #[cfg(debug_assertions)]
@@ -790,8 +797,9 @@ pub(super) fn meta_tool_definitions(state: &Arc<AppState>) -> serde_json::Value 
 
     let search_desc = format!(
         "Find relevant TUICommander tools by natural-language query. Returns a BM25-ranked \
-         list of tool names + one-line summaries. Use it to discover a tool you do not yet \
-         know, then call `get_tool_schema` for its full input schema. A tool already on your \
+         list of tool names + one-line summaries, plus a complete top_schema when it fits \
+         schema_byte_budget (default 16384 UTF-8 bytes, maximum 65536; 0 disables it). \
+         Use top_schema directly; otherwise call `get_tool_schema` for the selected tool. A tool already on your \
          list, or one whose schema you fetched earlier on this connection, is callable \
          without searching for it again.\n\n\
          Domains available: terminal pane sessions (tmux replacement), AI agent orchestration + \
@@ -807,7 +815,8 @@ pub(super) fn meta_tool_definitions(state: &Arc<AppState>) -> serde_json::Value 
                 "type": "object",
                 "properties": {
                     "query": { "type": "string", "description": "Natural-language query describing what you want to do (e.g. 'manage terminal sessions', 'github PR status', 'cross-repo knowledge search')" },
-                    "limit": { "type": "integer", "description": "Maximum number of results, default 10" }
+                    "limit": { "type": "integer", "description": "Maximum number of results, default 10" },
+                    "schema_byte_budget": { "type": "integer", "minimum": 0, "maximum": 65536, "description": "Serialized UTF-8 byte budget for the complete top_schema; default 16384, 0 omits it" }
                 },
                 "required": ["query"]
             }
@@ -825,7 +834,7 @@ pub(super) fn meta_tool_definitions(state: &Arc<AppState>) -> serde_json::Value 
         },
         {
             "name": "call_tool",
-            "description": "Invoke a TUICommander tool by name with arguments. Dispatches to native tools or upstream-proxied tools (`{upstream}__{tool}`). The arguments object must match the tool's inputSchema.\n\nFirst time with a tool: `search_tools(query=\"…\")` → pick a name → `get_tool_schema(tool_name=…)` → `call_tool(tool_name=…, arguments={…})`. After that, call it straight away with the schema you already have; re-fetch it only after a `notifications/tools/list_changed`, which is the one thing that can move it. Never skip discovery for a name you have NOT seen from `search_tools` or `get_tool_schema`: an invented name is a failed call, not a lucky guess.",
+            "description": "Invoke a TUICommander tool by name with arguments. Dispatches to native tools or upstream-proxied tools (`{upstream}__{tool}`). The arguments object must match the tool's inputSchema.\n\nFirst time with a tool: `search_tools(query=\"…\")` → pick a name → use the returned `top_schema` or `get_tool_schema(tool_name=…)` → `call_tool(tool_name=…, arguments={…})`. After that, call it straight away with the schema you already have; re-fetch it only after a `notifications/tools/list_changed`, which is the one thing that can move it. Never skip discovery for a name you have NOT seen from `search_tools` or `get_tool_schema`: an invented name is a failed call, not a lucky guess.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -1004,18 +1013,20 @@ pub(super) fn searchable_tool_definitions(state: &Arc<AppState>) -> Vec<serde_js
 /// toggle, upstream add/remove, upstream tools/list_changed).
 pub(crate) fn rebuild_tool_search_index(state: &Arc<AppState>) {
     let tools = searchable_tool_definitions(state);
-    let index = crate::tool_search::ToolSearchIndex::build(&tools);
-    *state.mcp.tool_search_index.write() = index;
+    let generation = crate::tool_search::ToolSearchIndex::catalogue_generation(&tools);
+    let mut index = state.mcp.tool_search_index.write();
+    if index.generation() != generation {
+        *index = crate::tool_search::ToolSearchIndex::build(&tools);
+    }
 }
 
 /// Spawn the background task that subscribes to `mcp_tools_changed` and
 /// rebuilds `tool_search_index` on every signal. Also does an initial build
 /// so the index is populated immediately.
 pub(crate) fn spawn_tool_search_index_updater(state: Arc<AppState>) {
-    // Initial build so search_tools works before the first tools_changed signal.
-    rebuild_tool_search_index(&state);
-
+    // Subscribe first so a change during the initial build is not lost.
     let mut rx = state.mcp.tools_changed.subscribe();
+    rebuild_tool_search_index(&state);
     tokio::spawn(async move {
         loop {
             match rx.recv().await {
@@ -1070,7 +1081,24 @@ pub(super) fn handle_search_tools_for_session(
         .take(limit)
         .map(|e| serde_json::json!({ "name": e.name, "summary": e.summary }))
         .collect();
-    serde_json::json!({ "results": ranked, "count": ranked.len() })
+    // Include one complete definition only: never truncate a schema into an
+    // unusable contract. The budget measures its serialized UTF-8 bytes.
+    let budget = args["schema_byte_budget"]
+        .as_u64()
+        .unwrap_or(16384)
+        .min(65536) as usize;
+    let top_schema = ranked
+        .first()
+        .and_then(|entry| entry["name"].as_str())
+        .and_then(|name| index.get_schema(name))
+        .filter(|schema| serde_json::to_vec(schema).is_ok_and(|bytes| bytes.len() <= budget));
+    let mut response = serde_json::json!({
+        "results": ranked, "count": ranked.len(), "catalogue_generation": index.generation()
+    });
+    if let Some(schema) = top_schema {
+        response["top_schema"] = schema.clone();
+    }
+    response
 }
 
 /// Handle `get_tool_schema` meta-tool — exact-name lookup of a tool's full definition.
