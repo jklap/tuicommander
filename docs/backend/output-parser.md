@@ -454,7 +454,7 @@ Fired when the PTY emits either:
 
 ### ChoicePrompt
 
-Numbered confirmation / multiple-choice menu rendered by Claude Code (`Esc to cancel · Tab to amend`) or an opened Codex `request_user_input` panel (`enter submit   ctrl+] skip   ⌥+↓ main prompt`):
+Numbered confirmation / multiple-choice menu rendered by Claude Code (`Esc to cancel · Tab to amend`) or an opened Codex `request_user_input` panel (`enter submit   ⌃] skip   ⇧→ main prompt`):
 
 ```rust
 ParsedEvent::ChoicePrompt {
@@ -467,7 +467,8 @@ ParsedEvent::ChoicePrompt {
 
 **Detection:**
 - **Footer match** extracts `dismiss_key` / `amend_key` from `Esc to <word>` / `Tab to <word>` (or locale equivalents).
-- **Codex panel** requires its `Queued follow-up inputs` heading near the question. The numbered option key submits immediately; `Ctrl+]` skips and `Alt+Down` returns to the main prompt. The heading guard keeps a quoted menu from becoming an interactive choice.
+- **Codex enforced command approval** requires the exact `Press enter to confirm or esc to cancel` footer and `Would you like to run the following command?` title. Command metadata between title and options is not part of the question. Captured numeric refusal submits immediately, despite the footer wording; Escape cancels.
+- **Codex panel** requires its `Queued follow-up inputs` heading near the question. The numbered option key submits immediately; `Ctrl+]` skips and `Shift+Right` returns to the main prompt. The heading guard keeps a quoted menu from becoming an interactive choice. This supports the installed Codex 0.162.1 format, including imperative titles such as `Pick a color.`; the older footer is not supported.
 - **Option regex** `^\s*(?:[❯›>]\s*)?(\d+)[.)]\s+(.+?)\s*$` — numbered items, optional cursor marker (`❯`, `›`, `>`).
 - **Title heuristics** walk up past blank rows and require either a `?` suffix or a verb prefix (`do you want`, `proceed`, `continue`, `should i`, `confirm`, `apply`, `allow`) to avoid matching Markdown numbered lists.
 - **Minimum two options** required to reduce false positives.
@@ -478,16 +479,24 @@ ParsedEvent::ChoicePrompt {
 
 **Flow:** the payload is stored on `SessionState.choice_prompt` and dispatched via `pluginRegistry.dispatchStructuredEvent("choice-prompt", …)`. Animated status-line updates preserve the prompt and its `awaiting_input` lifecycle; resolution, disappearance, replacement, and PTY exit clear it. A disappearing or resolved dialog emits `choice-cleared` so frontend and plugin consumers do not retain stale state. Single-key replies should go through `sendPtyKey()` in `src/utils/sendCommand.ts`, never raw `text + \r`.
 
-The mobile session header opens a queued Codex question with `Alt+Up`. Before it opens, Codex exposes a waiting signal but not the option labels; after the panel renders, `ChoicePrompt` supplies the title and options to the session list and detail overlay. A free-form answer goes to the opened panel's PTY composer, not the atomic idle-agent submission route.
+The mobile session header opens a queued Codex question with `Shift+Left`. Before it opens, Codex exposes a waiting signal but not the option labels; after the panel renders, `ChoicePrompt` supplies the title and options to the session list and detail overlay. A free-form answer goes to the opened panel's PTY composer, not the atomic idle-agent submission route.
 
 Observed Codex prompt forms and evidence:
 
 | Form | Live evidence | TUIC path |
 |------|---------------|-----------|
-| `request_user_input` choices and `Other` | `codex-request-user-input-20260929.tcap`; `captured_codex_request_user_input_reaches_choice_prompt` replays its rendered screen | A queued waiting signal appears first. `Alt+Up` opens the panel; `parse_choice_prompt` recognizes its `Queued follow-up inputs` heading, title, numbered options, and `ctrl+]` footer. |
+| `request_user_input` choices and `Other` | `codex-native-question-2026.tcap`; `captured_codex_0162_question_reaches_answer_controls` replays input/output through the real accumulator | A queued waiting signal appears first. `Shift+Left` opens the panel; `parse_choice_prompt` recognizes its `Queued follow-up inputs` heading, title, numbered options, and `⌃]` / `⇧→` footer. |
 | Command approval | `codex-0.157.1-approval-cancel.tcap`; `codex_canceled_approval_capture_clears_the_waiting_badge` replays an `Action Required` approval and Esc cancellation | The approval title sets the waiting question; the current screen and cancellation logic in `pty.rs` clear it when Codex returns to its composer. This capture does not establish that the approval uses the queued follow-up panel. |
 
 A distinct plan-question screen has not been captured. If Codex displays one, verify its rendered rows and keys before treating it as either form above.
+
+### Grok native questions and enforced approvals
+
+Grok Build 1.0.62 Ask forms use framed radio rows such as `1 (○) Red`, with a `Waiting on answers for` header and a final `z` free-text option. Labels and aligned descriptions are exported separately. Numeric keys answer immediately, without Enter. Mobile sends only the selected native key, including `z`, so it does not submit the newly opened custom-answer composer. Selecting `z` retires the buttons and keeps a confident text-only question until the text is submitted.
+
+The default-mode enforced command approval is a different radio form: a framed `›` title, `│` command, narrow-scope/edit-pattern controls, and five numeric options. Its selected radio mark is preserved. The captured `4` refuses immediately without Enter; this is not a model permission question. Both forms must be the last content on screen, so answered history below a newer composer cannot restore controls. Existing `Action Required` title detection remains unchanged.
+
+Evidence: `grok-native-colour-2027.tcap`, `grok-native-permission-2027.tcap`, and `grok-enforced-approval-2027.tcap`, replayed through the real accumulator. The short approval capture contains its refusal and settlement; the longer Ask captures reached the tap cap after input because of repeated Kitty image-delete output, as documented in their provenance.
 
 ### SlashMenu
 
@@ -645,7 +654,11 @@ wake. Other agents retain their existing uncertain-write recovery contracts.
 
 ### ego terminal questions
 
-The terminal ego CLI reports human-question waits with OSC 7770 awaiting and resumes busy after settlement. TUIC recognizes ego selectors by their exact single-choice or multiple-choice footer and a highlighted numbered option. Footer matching ignores whitespace so a narrow terminal can wrap in the middle of a word. The complete footer must end the active surface: only blank rows may follow it. Answered selectors retained above newer output, a spinner or a composer do not establish a question. A real 12-row ego capture covers the answered selector and next ordinary submission. Single-choice uses `navigate-enter`; multiple-choice uses `toggle-enter`, preserves the visible `[ ]`/`[x]` marks, and submits only on explicit Enter. Changed checkbox labels update the existing choice state. During a confident ego wait, a free-text modal above an empty `>` row supplies the question text without creating numbered choices. An empty composer alone never establishes a question, and a busy spinner is rejected. Desktop and mobile read the same accumulated state; mobile opens the full question card on demand and uses the existing composer for free-text replies. The recorded 1973 captures cover each form at 120 and 44 columns. A fresh-session output-ring export also covers startup/help rows contiguous with the free-text modal. Free-text extraction stops at the nearest blank, separator, startup banner or shortcut-help row, preserving wrapped question rows below it. Opening the mobile card does not change the explicit human-reply transport or stream the draft into the PTY.
+The terminal ego CLI reports human-question waits with OSC 7770 awaiting and resumes busy after settlement. TUIC recognizes ego selectors by their exact single-choice or multiple-choice footer and a highlighted numbered option. Footer matching ignores whitespace so a narrow terminal can wrap in the middle of a word. The complete footer must end the active surface: only blank rows may follow it. Answered selectors retained above newer output, a spinner or a composer do not establish a question. A real 12-row ego capture covers the answered selector and next ordinary submission. Single-choice uses `navigate-enter`; multiple-choice uses `toggle-enter`, preserves the visible `[ ]`/`[x]` marks, and submits only on explicit Enter. Changed checkbox labels update the existing choice state. After protocol busy clears an answered ego selector, repainting the same retained title and options cannot re-arm it without a fresh native wait. A different signature or disappearance followed by a new dialog remains detectable. During a confident ego wait, a free-text modal above an empty `>` row supplies the question text without creating numbered choices. An empty composer alone never establishes a question, and a busy spinner is rejected. Desktop and mobile read the same accumulated state; mobile opens the full question card on demand and uses the existing composer for free-text replies. The recorded 1973 captures cover each form at 120 and 44 columns. A fresh-session output-ring export also covers startup/help rows contiguous with the free-text modal. Free-text extraction stops at the nearest blank, separator, startup banner or shortcut-help row, preserving wrapped question rows below it. Opening the mobile card does not change the explicit human-reply transport or stream the draft into the PTY.
+
+Selector and free-text title extraction share boundaries at `εgo:` diagnostics, submitted composer rows and native working rows. Wrapped question text below the boundary remains intact. Default-mode CLI approvals use a separate strict surface: an `Allow …?` title, a `Risk:` row and the native `y/a/n/e/d` controls. Refusing with `n` replaces the buttons with the CLI explanation prompt; Enter then settles the wait. Real captures cover selector titles and the refusal path, not edit/details or persistent approval actions.
+
+Ego enforced-approval buttons also send only their native key. In particular, `n` opens the refusal explanation without an appended Enter that would immediately settle it.
 
 ### ego terminal provider recovery (1902)
 
@@ -698,3 +711,7 @@ session-state stream carries updates to desktop and browser consumers.
 ### Ego selector row boundaries
 
 Before parsing an ego question, the PTY reader concatenates rows linked by the grid WRAPLINE flag. It preserves original spaces and adds none inside words. Hard line breaks still separate the title, numbered options and footer. Footer recognition remains in the ego parser; it does not infer prose boundaries from row length.
+
+### Mobile intent presentation
+
+The log serializer keeps `intent:` text and its styled spans in history and screen output. Only `suggest:` source markers are stripped for the suggestion-chip UI. Mobile CLI rejoins the terminal soft-wrap boundaries and applies the desktop intent tint to the complete logical line. State/title parsing is unchanged.

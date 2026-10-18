@@ -37,6 +37,10 @@
   min-height: 1.5em;
 }
 
+.intent {
+  background: color-mix(in srgb, var(--warning) 12%, transparent);
+}
+
 .dotSlot {
   display: inline-block;
   width: 1ch;
