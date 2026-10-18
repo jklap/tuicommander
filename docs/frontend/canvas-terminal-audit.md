@@ -26,7 +26,9 @@ older recordings remain readable without scroll reuse.
 Dirty rows are compared as cells, including colors, attributes and combining
 content. Unchanged rows do not paint. In-place changes repaint a clipped column
 span with neighboring glyphs for wide-cell and italic overlap. Changed row widths,
-marker ownership and combining sequences keep the whole-row fallback.
+marker ownership and combining sequences keep the whole-row fallback. Adjacent
+cells with the same resolved explicit background share one fill operation; default
+background gaps and resolved color changes split the runs.
 
 ## Architecture
 

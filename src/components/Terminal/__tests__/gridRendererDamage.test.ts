@@ -153,3 +153,28 @@ it.each(["color", "combining", "shorter"])(
 		if (kind === "shorter") expect(ctx.fillRect).toHaveBeenCalledWith(-6, 0, 60, 20);
 	},
 );
+
+it("same-background cells merge into one fill rather than one operation per cell (2040)", () => {
+	const { ctx, renderer } = setup();
+	const band = row(0, "          ");
+	band.attrs.fill(ATTR_DEFAULT_FG);
+	band.bg.fill(0x141414);
+	renderer.paintRow(band, 0, metrics);
+	expect(ctx.fillRect.mock.calls).toEqual([[0, 0, 100, 20]]);
+});
+
+it("background merging stops at default gaps and resolved color boundaries (2040)", () => {
+	const { ctx, renderer } = setup();
+	const band = row(0, "      ");
+	band.attrs.fill(ATTR_DEFAULT_FG);
+	band.bg.fill(0x141414);
+	band.attrs[2] |= ATTR_DEFAULT_BG;
+	band.bg[4] = 0xff0000;
+	band.bg[5] = 0xff0000;
+	renderer.paintRow(band, 0, metrics);
+	expect(ctx.fillRect.mock.calls).toEqual([
+		[0, 0, 20, 20],
+		[30, 0, 10, 20],
+		[40, 0, 20, 20],
+	]);
+});

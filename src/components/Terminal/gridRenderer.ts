@@ -1247,31 +1247,23 @@ export function createGridRenderer(ctx: GridContext2D, deps: GridRendererDeps): 
 		const first = columns?.[0] ?? 0;
 		const end = Math.min(columns?.[1] ?? row.count, row.count);
 
-		let lastVisibleCol = -1;
-		for (let c = row.count - 1; c >= 0; c--) {
-			const cp = row.codepoints[c];
-			if ((cp !== 0 && cp !== 0x20) || row.cellExtras?.has(c)) {
-				lastVisibleCol = c;
-				break;
-			}
-		}
-
-		// Pass 1: backgrounds
-		for (let c = first; c < end; c++) {
-			const cp = row.codepoints[c];
+		// Pass 1: resolved background runs. Default-background gaps end a run;
+		// explicit trailing blanks and inverse cells remain part of their band.
+		let runStart = first;
+		let runColor: string | undefined;
+		for (let c = first; c <= end; c++) {
 			const a = row.attrs[c];
-			const hasExplicitBg = !(a & ATTR_DEFAULT_BG) || (a & ATTR_INVERSE) !== 0;
-			// Skip only cells with nothing to paint: empty cells and trailing
-			// spaces that ALSO carry the default background. A trailing space with
-			// an explicit bg (e.g. grok's dark tool-block bands, or any full-width
-			// colored bar, extending past the last glyph) MUST still be filled —
-			// otherwise the colored rectangle is truncated at the last visible
-			// glyph, producing dark bands misaligned to the text rows.
-			if (!hasExplicitBg && (cp === 0 || (cp === 0x20 && c > lastVisibleCol))) continue;
-			if (hasExplicitBg) {
-				ctx.fillStyle = resolveBg(row.fg[c], row.bg[c], a);
-				ctx.fillRect(c * m.cellWidth, y, m.cellWidth, m.cellHeight);
+			const color =
+				c < end && (!(a & ATTR_DEFAULT_BG) || (a & ATTR_INVERSE) !== 0)
+					? resolveBg(row.fg[c], row.bg[c], a)
+					: undefined;
+			if (color === runColor) continue;
+			if (runColor !== undefined) {
+				ctx.fillStyle = runColor;
+				ctx.fillRect(runStart * m.cellWidth, y, (c - runStart) * m.cellWidth, m.cellHeight);
 			}
+			runColor = color;
+			runStart = c;
 		}
 
 		// Pass 2: text — render each glyph at its exact grid position to prevent
