@@ -126,6 +126,7 @@ export interface AppInitDeps {
 				display_name_is_custom?: boolean;
 				display_name_from_spawn?: boolean;
 				is_remote?: boolean;
+				connection_id?: string | null;
 				parent_session?: string | null;
 				state?: {
 					shell_state?: "busy" | "idle";
