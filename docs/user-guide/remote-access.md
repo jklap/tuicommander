@@ -568,6 +568,10 @@ sent to a daemon, including when every registered repository is remote.
 machine selector; it defaults to the machine of the repository the settings nav is standing
 on, and an explicit pick overrides it, so a remote machine is editable from a local repo.
 
+Authenticated Settings actions are available on the headless daemon through the same
+`POST /settings/action` contract as the desktop server. Successful durable edits publish
+`settings-changed` over SSE so connected Settings readers can refresh without saving.
+
 Three things stay local even while a remote machine is selected, because they cannot work
 anywhere else: installing or removing the TUIC MCP bridge (`install_agent_mcp`), opening an
 agent's config file in the editor, and the upstream OAuth flow — that one opens a browser

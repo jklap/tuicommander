@@ -1011,6 +1011,7 @@ fn tunnel_routes() -> Router<Arc<AppState>> {
 fn shared_routes() -> Router<Arc<AppState>> {
     Router::new()
         .route("/mcp/peer", get(remote_peer::endpoint))
+        .route("/settings/action", post(settings_routes::settings_action))
         .route("/accounts/action", post(account_routes::action))
         .route("/accounts/secret-form", post(account_routes::secret_form))
         // Version (authenticated)
@@ -1889,7 +1890,6 @@ pub fn build_router(state: Arc<AppState>, remote_auth: bool, mcp_enabled: bool) 
             "/config/pane-layout",
             get(config_routes::get_pane_layout).put(config_routes::put_pane_layout),
         )
-        .route("/settings/action", post(settings_routes::settings_action))
         .route("/config/clear-caches", post(config_routes::clear_caches))
         .route(
             "/config/clear-repo-caches",
@@ -10837,3 +10837,6 @@ mod workflow_authority_critic_tests {
         }
     }
 }
+
+#[cfg(test)]
+mod remote_settings_tests;
