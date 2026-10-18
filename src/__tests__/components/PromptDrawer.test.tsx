@@ -103,6 +103,20 @@ describe("PromptDrawer auto-execute", () => {
 		vi.useRealTimers();
 	});
 
+	// Catches: execution-mode controls reintroduce always-visible helper captions.
+	it("renders prompt controls without invented guidance", () => {
+		const view = render(() => <PromptDrawer />);
+		fireEvent.click(buttonByText(view.container, "+ New Prompt"));
+		expect(view.container.textContent).toContain("Send immediately");
+		expect(view.container.textContent).not.toContain("Uncheck to review before sending");
+		const mode = Array.from(view.container.querySelectorAll("select")).find((select) =>
+			Array.from(select.options).some((option) => option.value === "api"),
+		)!;
+		fireEvent.change(mode, { target: { value: "api" } });
+		expect(view.container.textContent).toContain("System Prompt");
+		expect(view.container.textContent).not.toContain("Sent as the system message to the LLM");
+	});
+
 	it("submits an editor-created prompt with autoExecute enabled exactly once", async () => {
 		const { container } = render(() => <PromptDrawer />);
 		const row = createPromptThroughEditor(container, "Run custom prompt", "Do the custom task", true);

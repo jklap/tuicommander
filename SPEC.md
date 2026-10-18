@@ -1123,8 +1123,7 @@ and answer marker rendering remain on the existing terminal paths.
 
 ## Mobile Claude and ego terminal Chat view
 
-Phone sessions offer a direct **Read file edits in Chat** action while CLI is
-active. The terminal stays mounted. Chat edit tool disclosures render bounded
+The terminal stays mounted. Chat edit tool disclosures render bounded
 old/new blocks, preserve tabs with four-space tab stops and scroll long lines
 horizontally. Claude Edit projection retains diff content through tool completion;
 failed calls remain labelled failed, not represented as applied edits.

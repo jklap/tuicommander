@@ -122,7 +122,6 @@ export function TasksRoadmap(props: TasksRoadmapProps) {
 					</div>
 					<aside class={`${s.undated} ${listStyles.list}`} aria-label="Tasks without usable dates">
 						<h3>Without usable dates ({projection().undated.length})</h3>
-						<p class={s.help}>Unset, invalid or reversed dates stay here. One date shows as a one-day milestone.</p>
 						<TaskRows
 							items={projection().undated}
 							groups={[]}

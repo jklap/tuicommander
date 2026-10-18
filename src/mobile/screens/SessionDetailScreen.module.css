@@ -297,23 +297,6 @@
   .overflow .phoneAction { display: flex; }
 }
 
-.diffReadingAction { display: none; }
-@media (max-width: 430px) {
-  .diffReadingAction {
-    display: block;
-    flex-shrink: 0;
-    min-height: 44px;
-    padding: 8px 12px;
-    border: 0;
-    border-bottom: 1px solid var(--border);
-    background: var(--bg-secondary);
-    color: var(--accent);
-    font: inherit;
-    text-align: left;
-    cursor: pointer;
-  }
-}
-
 /* Anchor composer sheets above both input and keys, regardless of keybar height. */
 .controls {
   position: relative;
