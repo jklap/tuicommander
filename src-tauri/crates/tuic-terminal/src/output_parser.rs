@@ -5404,6 +5404,44 @@ Enter to select · ↑/↓ to navigate · Esc to cancel";
         screen
     }
 
+    // Catches: a one-result ego completion is discarded, leaving the old broad menu cached.
+    #[test]
+    fn recorded_ego_slash_filter_keeps_the_single_goal_match() {
+        let bytes = std::fs::read(
+            std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("../../src/fixtures/agent_prompts/ego-slash-filter-2030.tcap"),
+        )
+        .unwrap();
+        let capture = crate::pty_capture::decode_capture(&bytes).unwrap();
+        let (rows, cols) = capture.geometry.unwrap();
+        let mut grid = crate::terminal_grid::TerminalGrid::new(rows, cols, 2000);
+        let mut typed = String::new();
+        let mut checked = false;
+        for record in capture.records {
+            if record.direction == crate::pty_capture::CaptureDirection::Input {
+                if record.data == b"a" && typed == "/go" {
+                    let screen = grid.screen_text_rows();
+                    assert!(screen.iter().any(|row| row.trim() == "| /go"));
+                    let ParsedEvent::SlashMenu { items } = parse_slash_menu(&screen)
+                        .expect("the real /go screen must replace the unfiltered menu")
+                    else {
+                        panic!("expected slash menu");
+                    };
+                    assert_eq!(items.len(), 1);
+                    assert_eq!(items[0].command, "/goal");
+                    checked = true;
+                    break;
+                }
+                if !record.data.starts_with(b"\x1b") {
+                    typed.push_str(std::str::from_utf8(&record.data).unwrap());
+                }
+            } else {
+                grid.process(&record.data);
+            }
+        }
+        assert!(checked, "capture must contain the /go boundary");
+    }
+
     #[test]
     fn test_slash_menu_claude_code_basic() {
         let screen = make_screen(
