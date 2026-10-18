@@ -3264,6 +3264,8 @@ keeps that report in per-tab session storage until an acknowledged upload. A
 lost acknowledgement can cause a retry; this route does not provide durable
 exactly-once delivery or persist the backend ring across an app restart.
 
+Browser dictation also mirrors at most six content-free lifecycle debug records per take through `POST /logs`. Read them with `GET /logs?source=dictation&level=debug&audience=diagnostic`. Messages start with `Browser dictation lifecycle:`; `data_json` contains `event`, a per-take `sequence`, `sessionId`, `takeId`, recording/discarding flags and the first error code when applicable. Session ID is null for an unbound AI Chat draft. This uses the same bounded, best-effort backend ring, not a persistent event journal.
+
 ### Telegram request streaming (1959-162a)
 
 Telegram replies now use TUIC-driven receipt (👀), working (👨‍💻), waiting (🤔), answered (👍) and failed (👎) reactions. An ephemeral native draft shows Italian status lines or unapproved agent previews; it refreshes while work continues and the final reply replaces it. Acknowledgement of work requires inbox Read and a new recipient turn. PTY intent/activity and AI Chat assistant chunks share request correlation; finish remains authoritative after draft retirement. Telegram-mail-woken AI Chat turns automatically send their settled assistant text if finish has not answered. Queue and no-reply notices occur at ten minutes and sixty seconds after Read respectively. Restart keeps no request history. Phone rendering requires a live check after the backend restart.

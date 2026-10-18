@@ -19,6 +19,7 @@ export function IdeasOverlay(props: IdeasOverlayProps) {
 	const [inputText, setInputText] = createSignal("");
 	let inputEl: HTMLTextAreaElement | undefined;
 	const browserDictation = useBrowserDictation({
+		sessionId: () => props.sessionId,
 		blocked: () => false,
 		getDraft: inputText,
 		getSelection: () => ({ start: inputEl?.selectionStart ?? 0, end: inputEl?.selectionEnd ?? 0 }),

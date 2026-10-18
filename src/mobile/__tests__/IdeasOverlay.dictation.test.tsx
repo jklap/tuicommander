@@ -8,7 +8,9 @@ vi.mock("../../transport", () => ({ rpc: vi.fn(async () => ({ language: "it" }))
 vi.mock("../../stores/ideas", () => ({
 	ideasStore: { getFilteredIdeas: () => [], addIdea: vi.fn() },
 }));
-vi.mock("../../stores/appLogger", () => ({ appLogger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() } }));
+vi.mock("../../stores/appLogger", () => ({
+	appLogger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
+}));
 vi.mock("../../stores/toasts", () => ({ toastsStore: { add: vi.fn() } }));
 
 class Recognition {

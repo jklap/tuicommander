@@ -14,6 +14,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Publish typed Settings account enumeration and configured Ego interactive login start/status, with human terminal authentication and separate credential readback (#1790-1011).
 ### Fixed
 
+- Mirror bounded browser dictation lifecycle diagnostics with session/take identity to the owner log ring, without transcript content or per-hypothesis logging (#2020-66aa).
+
 - Browser dictation now requests shutdown through the existing cancellation path after a recognition error. “Dictation failed” also stays beside the composer mic, above the mobile keyboard.
 
 - Report stalled parentless automation/workflow initial prompts as blocked after the existing delivery timeout, without dropping or duplicating the queued task (#2006-f5a1).
