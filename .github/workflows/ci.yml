@@ -190,6 +190,10 @@ jobs:
       - name: Third-party notices (Rust)
         run: node scripts/third-party-notices.mjs --check --only rust
 
+      - name: Desktop frontend embedding
+        shell: bash
+        run: bash scripts/check-desktop-embedding.sh
+
       - name: Clippy
         working-directory: src-tauri
         env:
@@ -432,6 +436,10 @@ jobs:
             touch "src-tauri/binaries/tuic-bridge-${target}.exe"
             touch "src-tauri/binaries/tuic-${target}.exe"
           fi
+
+      - name: Desktop frontend embedding
+        shell: bash
+        run: bash scripts/check-desktop-embedding.sh
 
       - name: Clippy
         working-directory: src-tauri
