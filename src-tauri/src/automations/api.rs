@@ -124,13 +124,11 @@ pub(crate) async fn execute_as(
         definition,
         idempotent,
     } = &mut action
+        && let Caller::Agent(Some(creator)) = &caller
+        && definition.get("id").is_none()
     {
-        if let Caller::Agent(Some(creator)) = &caller
-            && definition.get("id").is_none()
-        {
-            super::create::assign_retry_id(definition, creator)?;
-            *idempotent = true;
-        }
+        super::create::assign_retry_id(definition, creator)?;
+        *idempotent = true;
     }
     if let AutomationAction::RunNow { id } = action {
         return value(AutomationRuntime::run_now(&state, &id).await?);
