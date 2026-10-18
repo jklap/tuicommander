@@ -725,7 +725,7 @@ export const Transcript: Component<TranscriptProps> = (props) => {
 		}
 	};
 	return (
-		<>
+		<div class={s.transcriptViewport}>
 			<div
 				class={cx(s.messageList, props.mobile && s.mobileTranscript)}
 				ref={container}
@@ -1023,15 +1023,13 @@ export const Transcript: Component<TranscriptProps> = (props) => {
 				{props.children}
 			</div>
 			<Show when={newTextBelow() && transcriptPreferences.enabled()}>
-				<div class={s.newTextBar}>
-					<button type="button" class={s.newTextPill} onClick={scrollToBottom}>
-						<svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
-							<path d="M7 2h2v8.2l3.6-3.6L14 8l-6 6-6-6 1.4-1.4L7 10.2z" />
-						</svg>
-						New text below
-					</button>
-				</div>
+				<button type="button" class={s.newTextBadge} onClick={scrollToBottom}>
+					<svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+						<path d="M7 2h2v8.2l3.6-3.6L14 8l-6 6-6-6 1.4-1.4L7 10.2z" />
+					</svg>
+					New text below
+				</button>
 			</Show>
-		</>
+		</div>
 	);
 };
