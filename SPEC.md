@@ -1,5 +1,9 @@
 # TUICommander Specification
 
+- [x] Mobile Markdown review sends persisted edits and tweak comments through the shared desktop prompt and backend idle queue, with repository agent selection and delivery feedback (#2042-a71b).
+
+- [x] Durable independent peer-mail subscriptions: shared insertion journal, filtered bounded replay, explicit acknowledgement, retention-loss counters, HTTP SSE and ACP resource notifications (#2004-4760).
+
 - [x] Generated launch playbook modules with global/per-agent switches, append-only user additions, explicit all off, legacy default-copy migration and machine-owned effective previews (#2000-b50f).
 
 - [x] Mobile open Markdown tabs: one shared list in a top-bar dropdown at >=768 px, otherwise in the session menu; unchanged-cwd polls do not reset entries (#2024-9a86, #2025-82cb).
@@ -1246,6 +1250,25 @@ keyed by heard text. The existing TextCorrector map remains the stored format;
 Settings and legacy transports share locked atomic persistence, runtime adoption
 and value-free refresh hints. Non-dictation builds report unavailable descriptors
 (#1992-d4fa).
+
+MCP lazy discovery returns an optional complete top_schema, bounded by schema_byte_budget (default 16384, maximum 65536 UTF-8 JSON bytes), and catalogue_generation. Clients invalidate admitted schemas on tools/list_changed or changed generation (#2013-73f9).
+
+## Bounded MCP runtime outcomes (#2010-30a7)
+
+HTTP and ACP tools/call share a body-free 1024-record instance-local audit ring;
+`GET /mcp/audit` projects the newest 100 rows. Explicit call/parent UUIDs, recognized
+operations, target digests and UTF-8 text-byte costs support runtime correlation.
+Application error, transport observation and effect certainty stay separate;
+reply construction is not delivery proof and cancellation does not imply rollback.
+Real ego/Codex correlation and captured lost-reply traces remain unverified.
+
+## Managed MCP stateless identity (#2008-5317)
+
+Modern tools/call uses an internal routing context for an exact live PTY/ACP peer
+asserted by the host header, without adding legacy session state to the wire.
+Unknown peers remain unbound. Missing-context diagnostics prohibit unchanged
+retries and require host reconnect or explicit external initialize/register.
+Consumer retry enforcement remains a separate live ego verification requirement.
 
 ## Mobile device-local font sizes
 

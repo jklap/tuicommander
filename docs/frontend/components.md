@@ -275,6 +275,8 @@ resolved path. HTTP(S) output links open outside the PWA.
 Markdown images in the Files viewer resolve relative to their source file and
 load through the authenticated `/fs/markdown-image` route.
 
+`FilesScreen` receives the existing mobile session list and the originating session ID from `MobileApp`. Its Markdown review controls select a live agent in the owning repository and call `enqueue_agent_command` over HTTP. Desktop and mobile use `buildMarkdownReviewPrompt` for the same path, checkbox, and tweak-comment contract. Successful sends clear only the acknowledged review state; failed sends remain retryable.
+
 The embedded Progress list clamps long messages to four lines until More is
 pressed. Activity presents local 24-hour times, minute durations, and singular
 block counts. Mobile Settings shows app/server versions and a persistent Dark

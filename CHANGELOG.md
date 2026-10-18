@@ -6,6 +6,22 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+- Send saved mobile Markdown checkbox edits and tweak comments to a repository agent with the desktop review prompt, transient delivered or queued feedback, and visible comment highlighting (#2042-a71b).
+
+- Recover modern stateless managed MCP routing from exact live host identity and return bounded missing-context diagnostics instead of blind registration advice (#2008-5317).
+
+- Record bounded body-free runtime MCP call outcomes with separate application, transport and effect observations; do not mark native `error:null` results as failures (#2010-30a7).
+
+- Validate native MCP arguments against advertised action contracts before dispatch; return bounded, value-masked repair details. Progress limits count raw Unicode scalar values consistently across transports (#2007-59f6).
+
+- Include a byte-bounded complete top schema in MCP tool search, with catalogue identity and explicit schema reuse until invalidation (#2013-73f9).
+
+- Publish typed Settings account enumeration and configured Ego interactive login start/status, with human terminal authentication and separate credential readback (#1790-1011).
+### Fixed
+
+- Return the same structured static-validation errors from automation HTTP and MCP calls (#2007-59f6).
+
+- Preserve description-only MCP session input without terminal bytes, and consume ACP mail wake cursors only after an accepted turn (#2007, #2004).
 - Generate configurable launch playbook modules with append-only global and agent additions, explicit all-off controls, child-only guidance and legacy override migration. Effective previews follow the selected machine (#2000-b50f).
 - Keep the mobile Markdown menu list stable during session polls and refresh it in place.
 
@@ -20,6 +36,23 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Fixed
 
 - Refresh Settings readers after legacy upstream credential and OAuth owner writes, including durable partial-vault failures, connection password edits, deployment pairing-token creation and deployment-mode changes (#1989-22fe).
+- Dismiss the mobile suggestion list as soon as a chip is picked, without restoring it from session activity updates; re-arm after the backend clears or replaces the list and show the existing send-failure notice if submission fails (#2029-994d).
+
+- Send Grok and ego immediate approval keys without an extra Enter on mobile, and keep answered ego selectors cleared during retirement scrolling (#2027-7ef3, #2028-6999).
+
+- Export CLI-enforced Codex command approvals past command metadata, preserving immediate numeric refusal (#2026-9178).
+
+- Keep ego selector titles free of diagnostics and working rows, and expose default-mode CLI approval controls with the refusal explanation wait (#2028-6999).
+
+- Export Grok native Ask and CLI-enforced approval options, preserving immediate numeric answers and the free-text transition (#2027-7ef3).
+
+- Recognize Codex 0.162.1 native question options and open queued questions with the live-verified Shift+Left key on mobile (#2026-9178).
+
+- Keep local HTTP/MCP-spawned agent terminals eligible for Chat; distinguish machine ownership from creation provenance while preserving worker cleanup and notification policy (#2032-8dc3).
+
+- Serve authenticated Settings actions and the browser Settings bootstrap on headless daemons through shared routes; keep desktop-only upstream OAuth unavailable there (#2014-9d06).
+- Report an idle ego turn as idle even while background processes remain tracked, consistently across desktop, mobile, and `agent ls` (#2018-1885).
+
 - Preserve and tint the complete wrapped intent line in mobile CLI output, including its first row (#2019-7c5d).
 - Keep Settings peer refresh current after no-op edits, omitted repository defaults, transient read failures, and desktop connection/tunnel saves; avoid conflict notices for acknowledged upstream header saves (#1788-2163).
 - Disable Ideas dictation while a voice call or terminal browser dictation owns the microphone (#2022-1b80).
@@ -33,6 +66,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Honor an explicitly configured worktree integration base before stale conventional or remote default refs (#1961-bab6).
 
 - Correct Settings accent-action text, compact navigation, wrapped help badges, shortcut groups, and workspace path presentation; hide the desktop-only Local tools card in browser mode (#1945).
+- Add independent durable peer-mail subscriptions with actionable filters, explicit acknowledgement, bounded replay, retention-loss reporting, HTTP SSE and ACP notifications (#2004-4760).
 
 - Keep marker-projected terminal frames incremental: repaint dirty display rows and changed projection slots instead of clearing the whole canvas (#2003-f218).
 - Bound CLI marker planning to 128 rows above the viewport, reuse unchanged row generations, and resolve cold prompt ownership in bounded background steps (#2002-2239).

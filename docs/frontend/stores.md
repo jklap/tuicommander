@@ -807,3 +807,5 @@ The dictation store subscribes separately to `voice` configuration and
 `corrections` dictionary generations. Correction refresh calls
 `get_correction_map` without saving; the Voice page's new-entry text remains
 component-local and is not overwritten. Both subscriptions are disposed together.
+
+Terminal ownership and creation provenance are independent: `TerminalData.isRemote` reflects a configured remote `connection_id`; `isExternallyCreated` preserves the backend `is_remote` HTTP/MCP creation flag for worker-tab cleanup, decoration and completion policy. Local `session-created` events set only creation provenance; startup reconciliation derives ownership from the connection, not the launch transport.

@@ -57,7 +57,6 @@ use super::mcp_transport_ancillary::worktree_remove_success_response;
 #[cfg(test)]
 use super::mcp_transport_catalogue::AGENT_ACTIONS;
 #[cfg(test)]
-#[cfg(test)]
 use super::mcp_transport_catalogue::DEBUG_ACTIONS;
 #[cfg(test)]
 use super::mcp_transport_catalogue::InstructionContext;
@@ -93,7 +92,6 @@ use super::mcp_transport_catalogue::meta_tool_definitions;
 pub(crate) use super::mcp_transport_catalogue::native_tool_catalog;
 #[cfg(test)]
 use super::mcp_transport_catalogue::native_tool_definitions;
-#[cfg(test)]
 pub(crate) use super::mcp_transport_catalogue::rebuild_tool_search_index;
 use super::mcp_transport_catalogue::removed_native_action_replacement;
 #[cfg(test)]
@@ -247,6 +245,13 @@ fn upstream_tool_result(value: &serde_json::Value) -> Option<&serde_json::Value>
         .as_object()
         .filter(|object| object.len() == 1)
         .and_then(|object| object.get(UPSTREAM_TOOL_RESULT_MARKER))
+}
+
+fn tool_result_is_error(result: &serde_json::Value) -> bool {
+    if let Some(upstream) = upstream_tool_result(result) {
+        return upstream["isError"].as_bool().unwrap_or(false);
+    }
+    result.get("error").is_some_and(|error| !error.is_null())
 }
 
 /// Produce the JSON-RPC `result` for a `tools/call` response.
@@ -458,7 +463,10 @@ fn session_action_requires_blocking_pool(action: &str) -> bool {
 }
 
 fn agent_action_requires_blocking_pool(action: &str) -> bool {
-    matches!(action, "spawn" | "send")
+    matches!(
+        action,
+        "spawn" | "send" | "inbox" | "subscribe" | "ack" | "unsubscribe"
+    )
 }
 
 fn secret_inspection_tool(name: &str, args: &serde_json::Value) -> bool {
@@ -551,6 +559,9 @@ async fn dispatch_mcp_tool_call_with_context(
             .is_some_and(|id| !id.is_empty() && id.len() <= 128 && !id.contains('/'))
     {
         return serde_json::json!({"error":"connection_id must be a nonempty connection qualifier"});
+    }
+    if let Some(error) = super::mcp_input_contract::validate(name, args) {
+        return error;
     }
     // Resolve client identity at dispatch level — tool handlers get a plain bool
     let is_claude_code = mcp_session_id
@@ -679,7 +690,9 @@ async fn dispatch_mcp_tool_call_with_context(
             }
             if action == "launch" {
                 super::launch_transaction::execute(state, addr, args).await
-            } else if action == "wait" && !addr.ip().is_loopback() {
+            } else if matches!(action, "wait" | "subscribe" | "ack" | "unsubscribe")
+                && !addr.ip().is_loopback()
+            {
                 serde_json::json!({
                     "error": "Inter-agent messaging is restricted to localhost connections"
                 })
@@ -691,13 +704,20 @@ async fn dispatch_mcp_tool_call_with_context(
                 let sid = mcp_session_id.map(str::to_owned);
                 let parent_cwd = managed_parent_cwd.map(str::to_owned);
                 run_blocking_handler(move || {
-                    handle_agent_unified_with_parent_cwd(
-                        &state,
-                        addr,
-                        &args,
-                        sid.as_deref(),
-                        parent_cwd.as_deref(),
-                    )
+                    if matches!(
+                        args["action"].as_str(),
+                        Some("subscribe" | "ack" | "unsubscribe")
+                    ) {
+                        super::mcp_transport_peer::handle_messaging(&state, &args, sid.as_deref())
+                    } else {
+                        handle_agent_unified_with_parent_cwd(
+                            &state,
+                            addr,
+                            &args,
+                            sid.as_deref(),
+                            parent_cwd.as_deref(),
+                        )
+                    }
                 })
                 .await
             } else {
@@ -1180,10 +1200,12 @@ pub(super) async fn mcp_post(
             // refuse with guidance the caller can act on, which a blanket -32600
             // never gave them.
             let is_cc_ua = detect_claude_code_from_headers(&headers);
-            if let Some(sid) = headers
-                .get(MCP_SESSION_HEADER)
-                .and_then(|v| v.to_str().ok())
-            {
+            let session_id_str = super::mcp_transport_peer::call_session_context(
+                &state,
+                &headers,
+                request_is_modern_lifecycle(&headers, &body),
+            );
+            if let Some(sid) = session_id_str.as_deref() {
                 refresh_mcp_session(
                     &state,
                     sid,
@@ -1198,15 +1220,12 @@ pub(super) async fn mcp_post(
                 .get("params")
                 .cloned()
                 .unwrap_or(serde_json::Value::Null);
+            let audit = super::mcp_call_audit::Call::start(&state.mcp.call_audit, &params);
             let tool_name = params["name"].as_str().unwrap_or("").to_string();
             let args = params
                 .get("arguments")
                 .cloned()
                 .unwrap_or(serde_json::json!({}));
-            let session_id_str = headers
-                .get(MCP_SESSION_HEADER)
-                .and_then(|v| v.to_str().ok())
-                .map(|s| s.to_string());
             let managed_parent_cwd = managed_parent_cwd_from_header(
                 &state,
                 session_id_str.as_deref(),
@@ -1236,7 +1255,7 @@ pub(super) async fn mcp_post(
                     }
                 })
                 .await;
-                let is_error = result.get("error").is_some();
+                let is_error = tool_result_is_error(&result);
                 (result, is_error)
             } else {
                 let result = Box::pin(handle_mcp_tool_call_with_context(
@@ -1248,10 +1267,11 @@ pub(super) async fn mcp_post(
                     managed_parent_cwd.as_deref(),
                 ))
                 .await;
-                let is_error = result.get("error").is_some();
+                let is_error = tool_result_is_error(&result);
                 (result, is_error)
             };
             let mut tool_result = format_tool_call_result(&result, is_error);
+            audit.finish(&result, &tool_result);
             if request_is_modern_lifecycle(&headers, &body) {
                 // A completed 2026-07-28 tool call has this discriminator,
                 // including tool-level errors. Preserve any discriminator an
@@ -1423,7 +1443,9 @@ pub(super) async fn mcp_get(
             tokio::select! {
                 result = tools_rx.recv() => {
                     match result {
-                        Ok(()) => {
+                        Ok(()) | Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
+                            // Publish fresh schemas before telling the client to refetch.
+                            rebuild_tool_search_index(&state);
                             let notification = serde_json::json!({
                                 "jsonrpc": "2.0",
                                 "method": "notifications/tools/list_changed"
@@ -1433,7 +1455,6 @@ pub(super) async fn mcp_get(
                                     .data(serde_json::to_string(&notification).unwrap_or_default())
                             );
                         }
-                        Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
                         Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
                     }
                 }
