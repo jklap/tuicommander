@@ -4,7 +4,7 @@ pub const PLUGIN_DOCS: &str = r###"# TUICommander Plugin Development Reference
 
 ## Settings startup authority
 
-Plugin-scoped settings do not confer host account, executable or provider-login authority. Runtime shortcut-ID publication is metadata, not permission to invoke authentication or arbitrary commands. The host startup contract documents the separate owner workflows and current publication limits (docs/backend/settings-startup.md).
+Plugin-scoped settings do not confer host account, executable or provider-login authority. Runtime shortcut-ID publication is metadata, not permission to invoke authentication or arbitrary commands. The host startup contract documents typed GitHub enumeration and Ego human-login owner workflows; these do not grant plugins host authentication authority (docs/backend/settings-startup.md).
 
 ## Installation
 

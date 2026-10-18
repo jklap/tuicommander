@@ -325,6 +325,8 @@ Wheel, touch and scrollbar gestures send `terminal_scroll_to_anchor` with `histo
 
 ### Hidden agent marker rows
 
+Mobile CLI uses the log transport rather than the canvas. Its serializer preserves intent spans in both history and screen snapshots. OutputView rejoins soft wraps before classification and applies the shared intent anchor and 12% warning tint to the whole paragraph.
+
 The marker plan keeps intent text visible with a theme-aware warning tint, including column-zero ego rows and bullet-prefixed Claude/Codex rows. Intent continuation includes soft wraps and adjacent rows with at least two leading spaces (Codex/Ink cursor-move hard wraps). A blank row ends the walk. Complete suggest blocks are projected out of the displayed grid without changing stored backend coordinates. Paint and hit testing share the viewport projection. Copy classifies the same recorded rows and asks the backend for retained runs only, so omitted marker rows cannot leak through a selection spanning them. Backend selection reads still unwrap soft wraps and reject evicted rows. Off-screen selection classification reads styled rows with marker lookback. A blank row ends an indented marker tail. Unwrapped output, answer and prompt rows start separate blocks.
 
 Answer-rule overlay geometry is invalidated on cell-height and projected-row changes, even when the answer markers are unchanged. This keeps font-load and theme remeasurements aligned with the grid.
@@ -339,6 +341,10 @@ agent-aware command submission helper.
 ### Soft-wrap text fidelity
 
 Backend selection and logical-row extraction retain real spaces at soft-wrap margins. Mobile CLI log rendering uses serialized `wrapped` boundaries rather than word-length guesses when metadata is present. Older daemon rows without this field retain the existing prose reflow fallback. This changes extracted text, not canvas layout or styling.
+
+### Opt-in workload evidence
+
+CanvasTerminal records raw arrivals before decode and immutable merged grid snapshots immediately before the base paint, plus visibility transitions. Capture requires both the explicit recorder flag and perfDebug. No render behavior changes. See [stall evidence](../backend/stall-journal.md) for caps, timing replay and limitations.
 
 ### Prompt ownership after reflow (#1389-3a47)
 

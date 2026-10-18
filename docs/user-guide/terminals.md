@@ -76,6 +76,8 @@ Notice cards preserve line breaks between their heading and body. Harness inbox 
 
 In Chat, Compose stays docked and open after sending or queueing, clears the submitted text, and keeps focus for the next message. It cannot be closed or unpinned while Chat is active. **Esc** returns to CLI for terminal interaction; the Compose shortcut focuses the Chat input. Switching back to CLI restores that tab's previous Compose open and pin state. Unsent drafts survive switching in either direction, including text entered while a send or queue is still pending.
 
+Local agents started through `tuic agent spawn` or HTTP remain eligible for Chat. HTTP/MCP creation controls worker-tab styling, cleanup and completion sounds; it does not mean that the PTY runs on another machine. A session owned by a configured remote connection remains unavailable to Chat.
+
 **Chat** is disabled, with the reason as its tooltip, when the terminal has no agent, the agent has no supported transcript adapter, or TUICommander has not bound the agent to a session file yet. If the agent exits or the binding is lost while Chat is open, the terminal returns to CLI with a one-line notice.
 
 Chat follows new transcript entries while the agent writes. When you scroll up and more content arrives, **New text below** appears above Compose. Select it to return to the bottom and resume following. Reaching the bottom by hand also clears it. Search jumps show no indicator until later content arrives. Turn the indicator off in **Settings → Appearance → Chat**; this preference is saved on the current client. A replaced transcript resets the displayed conversation, including when the replacement keeps the same file name and size.
@@ -100,6 +102,7 @@ Older recorded prompts with a prompt ID also appear when Claude did not record a
 - Press **Enter** to confirm, **Escape** to cancel
 - Explicit custom names persist through reconnects and are never replaced by agent output
 - Spawn-assigned agent labels are base names: an `intent: text (Title)` marker may replace them with the current work phase, even when its text wraps across many terminal rows
+- Mobile CLI also keeps complete `intent:` text visible, rejoins terminal soft wraps, and tints every browser-wrapped row with the same theme warning colour.
 - The canvas keeps `intent:` rows visible with a theme-aware warning tint for ego, Claude and Codex. It removes complete `suggest:` marker rows and their continuation rows from the displayed grid. They occupy no selectable line and are excluded from copied text, including selections that cross scrollback. Suggestion chips remain independent of this projection. When blank separators surround the removed block, one separator remains instead of two adjacent blank lines.
 - Agent terminals show an expandable **Context** bar. It separates the model's current **Intent**, the orchestrator-owned **Assignment**, and the last substantial user **Prompt**. MCP-connected models are instructed to refresh intent at task start and whenever the material work phase changes
 - Captured intent and prompt are recovered when reconnecting to a live session, including an idle agent. **Prompt** retains the most recent submission with at least ten words; shorter follow-ups do not replace it.
@@ -453,3 +456,5 @@ Terminal selection copy, AI Chat answer buttons (desktop and mobile), and the An
 ### Spaces at terminal wrap points
 
 Mobile CLI output and session text reads preserve spaces when text wraps at the terminal margin. A word split across two terminal rows remains one word. Explicit line breaks remain separate. The mobile client uses exact wrap information from current backends; older backends retain the previous text reflow behavior. Chat reads the agent transcript separately and does not rebuild text from terminal rows.
+
+On mobile, scroll back in CLI or Chat to show the floating down-arrow at the bottom-right of output, above the key bar. Tap it to return to the latest output without sending terminal input. The button hides at the bottom and stays outside the composer.

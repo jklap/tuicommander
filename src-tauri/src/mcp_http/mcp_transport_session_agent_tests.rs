@@ -3311,6 +3311,8 @@ async fn parent_registration_after_spawn_links_existing_child() {
             "action": "spawn",
             "prompt": "hello",
             "binary_path": LONG_LIVED_TEST_BINARY,
+            // cat must read stdin before interpreting the delivered task as a filename.
+            "args": ["-"],
             "cwd": TEST_SPAWN_CWD,
         }),
         Some(parent_mcp),
@@ -3440,6 +3442,8 @@ async fn parent_registration_after_spawn_links_existing_child() {
             "action": "spawn",
             "prompt": "report with agent send",
             "binary_path": LONG_LIVED_TEST_BINARY,
+            // cat must read stdin before interpreting the delivered task as a filename.
+            "args": ["-"],
             "cwd": TEST_SPAWN_CWD,
         }),
         Some(parent_mcp),
@@ -4872,5 +4876,224 @@ fn softwrap_1977_session_output_preserves_recorded_spaces() {
         );
         let data = response["data"].as_str().expect("MCP text output");
         assert!(data.starts_with(&expected), "scroll={scroll}: {data:?}");
+    }
+}
+
+// Catches: a lost launch reply creates a second PTY when the same key is retried.
+#[cfg(unix)]
+#[tokio::test]
+async fn lost_launch_reply_reuses_the_same_child() {
+    let state = test_state();
+    let parent = "550e8400-e29b-41d4-a716-446655440b01";
+    register_peer(&state, parent, "orchestrator", "mcp-orch");
+    let workspace = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap();
+    let request = serde_json::json!({
+        "action": "launch", "idempotency_key": "lost-reply", "parent_session_id": parent,
+        "name": "stable-child", "keep_open": true,
+        "workspace": {"existing_path": workspace},
+        "spawn": {"prompt": "hello", "binary_path": "/bin/sh",
+                  "args": ["-c", "exec cat", "{prompt}"]}
+    });
+    let first = crate::mcp_http::mcp_transport::handle_mcp_tool_call_with_context(
+        &state,
+        "127.0.0.1:0".parse().unwrap(),
+        "agent",
+        &request,
+        Some("mcp-orch"),
+        None,
+    )
+    .await;
+    assert!(first.get("error").is_none(), "launch failed: {first}");
+    let second = crate::mcp_http::mcp_transport::handle_mcp_tool_call_with_context(
+        &state,
+        "127.0.0.1:0".parse().unwrap(),
+        "agent",
+        &request,
+        Some("mcp-orch"),
+        None,
+    )
+    .await;
+    assert_eq!(first["launch_id"], second["launch_id"]);
+    assert_eq!(first["session_id"], second["session_id"]);
+    assert_eq!(
+        state.session_maps.sessions.len(),
+        1,
+        "retry must not create a second PTY"
+    );
+    let child = first["session_id"].as_str().unwrap();
+    assert_eq!(
+        state
+            .session_maps
+            .session_parent
+            .get(child)
+            .unwrap()
+            .value(),
+        parent
+    );
+    assert!(state.keep_open_sessions.contains(child));
+    assert_eq!(
+        state
+            .session_maps
+            .sessions
+            .get(child)
+            .unwrap()
+            .lock()
+            .display_name
+            .as_deref(),
+        Some("stable-child")
+    );
+    handle_session(
+        &state,
+        &serde_json::json!({"action":"kill", "session_id":child}),
+        None,
+    );
+}
+
+// Catches: output chunks recapture a moving ring instead of completing the retained snapshot.
+#[test]
+fn budgeted_terminal_output_snapshot_survives_concurrent_output() {
+    let state = test_state();
+    let sid = "budget-output";
+    let source = "界\"\n".repeat(9000);
+    let mut ring = crate::OutputRingBuffer::new(100000);
+    ring.write(source.as_bytes());
+    state
+        .session_maps
+        .output_buffers
+        .insert(sid.into(), parking_lot::Mutex::new(ring));
+    let original = session_output(
+        &state,
+        &serde_json::json!({"action":"output","session_id":sid,"format":"raw","from_byte":0,"limit":100000}),
+    );
+    let mut args = serde_json::json!({"action":"output","session_id":sid,"format":"raw","from_byte":0,"limit":100000,"byte_budget":4096});
+    let mut text = String::new();
+    loop {
+        let page = session_output(&state, &args);
+        assert!(serde_json::to_vec(&page).unwrap().len() <= 4096);
+        text.push_str(page["chunk"].as_str().unwrap());
+        if page["continuation"].is_null() {
+            break;
+        }
+        state
+            .session_maps
+            .output_buffers
+            .get(sid)
+            .unwrap()
+            .lock()
+            .write(b"new output");
+        args["continuation"] = page["continuation"].clone();
+    }
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&text).unwrap(),
+        original
+    );
+    let missing = handle_session(
+        &state,
+        &serde_json::json!({"action":"list","session_id":"absent","compact":true}),
+        None,
+    );
+    assert!(missing.get("error").is_some());
+}
+
+// Catches: live inventory drops the backend activity timestamp and leaves compact activity unknown.
+#[tokio::test]
+async fn session_inventory_exposes_activity_timestamp_and_compact_age() {
+    let state = test_state();
+    let created = handle_session(&state, &serde_json::json!({"action":"create"}), None);
+    if created.get("error").is_some() {
+        return;
+    }
+    let id = created["session_id"].as_str().unwrap();
+    state.session_maps.session_states.insert(
+        id.into(),
+        crate::state::SessionState {
+            last_activity_ms: 1,
+            ..Default::default()
+        },
+    );
+    let full = handle_session(
+        &state,
+        &serde_json::json!({"action":"list","session_id":id}),
+        None,
+    );
+    let compact = handle_session(
+        &state,
+        &serde_json::json!({"action":"list","session_id":id,"compact":true}),
+        None,
+    );
+    handle_session(
+        &state,
+        &serde_json::json!({"action":"kill","session_id":id}),
+        None,
+    );
+    assert_eq!(full[0]["last_activity_ms"], 1);
+    assert!(
+        compact[0]["activity_age_ms"]
+            .as_u64()
+            .is_some_and(|age| age > 0),
+        "{compact}"
+    );
+}
+
+// Catches: pre-dispatch validation rejects description-only updates or writes a dummy Enter.
+#[cfg(unix)]
+#[tokio::test]
+async fn action_validation_description_only_updates_without_pty_input() {
+    let state = test_state();
+    let sid = "description-only";
+    let bytes = install_atomic_submit_test_session(&state, sid);
+    for description in [
+        serde_json::json!("Reviewing results"),
+        serde_json::Value::Null,
+        serde_json::json!("Another task"),
+        serde_json::json!(""),
+    ] {
+        let response = post_test_tool_call(
+            state.clone(),
+            "description-contract",
+            "session",
+            serde_json::json!({"action":"input","session_id":sid,"pty_description":description}),
+        )
+        .await;
+        assert_eq!(response["result"]["isError"], false, "{response}");
+        let listing = handle_mcp_tool_call(
+            &state,
+            loopback_addr(),
+            "session",
+            &serde_json::json!({"action":"list"}),
+            None,
+        )
+        .await;
+        let row = listing
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|row| row["session_id"] == sid)
+            .unwrap();
+        let expected = if description.as_str() == Some("") {
+            serde_json::Value::Null
+        } else {
+            description
+        };
+        assert_eq!(row["pty_description"], expected, "{listing}");
+        assert!(
+            bytes.lock().unwrap().is_empty(),
+            "description updates must not write PTY input"
+        );
+    }
+    for extra in [
+        serde_json::json!({}),
+        serde_json::json!({"pty_description":7}),
+    ] {
+        let mut args = serde_json::json!({"action":"input","session_id":sid});
+        args.as_object_mut()
+            .unwrap()
+            .extend(extra.as_object().unwrap().clone());
+        let response =
+            post_test_tool_call(state.clone(), "description-contract", "session", args).await;
+        assert_eq!(response["result"]["isError"], true, "{response}");
+        assert!(bytes.lock().unwrap().is_empty());
     }
 }

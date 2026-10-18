@@ -309,7 +309,7 @@ export const settingsCatalogue = {
       "helpKey": "settings.catalogue.agents.agents.{key}.launch_instructions.help",
       "label": "launch instructions",
       "schema": {
-        "description": "Per-agent launch instructions. Overrides the global text; empty turns injection off.",
+        "description": "User additions appended after generated modules and global additions.",
         "type": [
           "string",
           "null"
@@ -328,6 +328,66 @@ export const settingsCatalogue = {
         "get",
         "set",
         "reset"
+      ],
+      "confirmationClass": "ordinary"
+    },
+    "agents.agents.{key}.launch_instructions_disabled": {
+      "id": "agents.agents.{key}.launch_instructions_disabled",
+      "store": "agents",
+      "owner": "machine",
+      "area": "agents",
+      "group": "agents",
+      "order": 23,
+      "path": "/agents/{key}/launch_instructions_disabled",
+      "labelKey": "settings.catalogue.agents.agents.{key}.launch_instructions_disabled.label",
+      "helpKey": "settings.catalogue.agents.agents.{key}.launch_instructions_disabled.help",
+      "label": "launch instructions disabled",
+      "schema": {
+        "description": "Explicitly disable the entire launch playbook, including additions.",
+        "type": "boolean",
+        "default": false
+      },
+      "nullable": false,
+      "default": false,
+      "availability": {
+        "status": "available"
+      },
+      "choices": null,
+      "sensitivity": "public",
+      "apply": "next_session",
+      "effect": "Disables all launch instructions for new sessions.",
+      "operations": [
+        "get",
+        "set",
+        "reset"
+      ],
+      "confirmationClass": "ordinary"
+    },
+    "agents.agents.{key}.launch_modules.{key}": {
+      "id": "agents.agents.{key}.launch_modules.{key}",
+      "store": "agents",
+      "owner": "machine",
+      "area": "agents",
+      "group": "agents",
+      "order": 22,
+      "path": "/agents/{key}/launch_modules/{key}",
+      "labelKey": "settings.catalogue.agents.agents.{key}.launch_modules.{key}.label",
+      "helpKey": "settings.catalogue.agents.agents.{key}.launch_modules.{key}.help",
+      "label": "{key}",
+      "schema": {
+        "type": "boolean"
+      },
+      "nullable": false,
+      "availability": {
+        "status": "available"
+      },
+      "choices": null,
+      "sensitivity": "public",
+      "apply": "next_session",
+      "effect": "Selects generated launch modules for new sessions.",
+      "operations": [
+        "get",
+        "set"
       ],
       "confirmationClass": "ordinary"
     },
@@ -698,7 +758,7 @@ export const settingsCatalogue = {
       "owner": "machine",
       "area": "agents",
       "group": "headless_agent",
-      "order": 22,
+      "order": 24,
       "path": "/headless_agent",
       "labelKey": "settings.catalogue.agents.headless_agent.label",
       "helpKey": "settings.catalogue.agents.headless_agent.help",
@@ -806,13 +866,13 @@ export const settingsCatalogue = {
       "owner": "machine",
       "area": "agents",
       "group": "launch_instructions",
-      "order": 23,
+      "order": 25,
       "path": "/launch_instructions",
       "labelKey": "settings.catalogue.agents.launch_instructions.label",
       "helpKey": "settings.catalogue.agents.launch_instructions.help",
       "label": "launch instructions",
       "schema": {
-        "description": "Launch instructions for every agent TUIC starts. None = the shipped default\n(`launch_instructions::default_text`); empty turns injection off.",
+        "description": "User additions appended after generated modules for every agent.",
         "type": [
           "string",
           "null"
@@ -831,6 +891,66 @@ export const settingsCatalogue = {
         "get",
         "set",
         "reset"
+      ],
+      "confirmationClass": "ordinary"
+    },
+    "agents.launch_instructions_disabled": {
+      "id": "agents.launch_instructions_disabled",
+      "store": "agents",
+      "owner": "machine",
+      "area": "agents",
+      "group": "launch_instructions_disabled",
+      "order": 27,
+      "path": "/launch_instructions_disabled",
+      "labelKey": "settings.catalogue.agents.launch_instructions_disabled.label",
+      "helpKey": "settings.catalogue.agents.launch_instructions_disabled.help",
+      "label": "launch instructions disabled",
+      "schema": {
+        "description": "Explicitly disable the entire launch playbook, including additions.",
+        "type": "boolean",
+        "default": false
+      },
+      "nullable": false,
+      "default": false,
+      "availability": {
+        "status": "available"
+      },
+      "choices": null,
+      "sensitivity": "public",
+      "apply": "next_session",
+      "effect": "Disables all launch instructions for new sessions.",
+      "operations": [
+        "get",
+        "set",
+        "reset"
+      ],
+      "confirmationClass": "ordinary"
+    },
+    "agents.launch_modules.{key}": {
+      "id": "agents.launch_modules.{key}",
+      "store": "agents",
+      "owner": "machine",
+      "area": "agents",
+      "group": "launch_modules",
+      "order": 26,
+      "path": "/launch_modules/{key}",
+      "labelKey": "settings.catalogue.agents.launch_modules.{key}.label",
+      "helpKey": "settings.catalogue.agents.launch_modules.{key}.help",
+      "label": "{key}",
+      "schema": {
+        "type": "boolean"
+      },
+      "nullable": false,
+      "availability": {
+        "status": "available"
+      },
+      "choices": null,
+      "sensitivity": "public",
+      "apply": "next_session",
+      "effect": "Selects generated launch modules for new sessions.",
+      "operations": [
+        "get",
+        "set"
       ],
       "confirmationClass": "ordinary"
     },
@@ -1056,7 +1176,7 @@ export const settingsCatalogue = {
       "owner": "machine",
       "area": "app",
       "group": "auto_update_enabled",
-      "order": 52,
+      "order": 55,
       "path": "/auto_update_enabled",
       "labelKey": "settings.catalogue.app.auto_update_enabled.label",
       "helpKey": "settings.catalogue.app.auto_update_enabled.help",
@@ -1088,7 +1208,7 @@ export const settingsCatalogue = {
       "owner": "machine",
       "area": "app",
       "group": "auto_update_plugins_enabled",
-      "order": 53,
+      "order": 56,
       "path": "/auto_update_plugins_enabled",
       "labelKey": "settings.catalogue.app.auto_update_plugins_enabled.label",
       "helpKey": "settings.catalogue.app.auto_update_plugins_enabled.help",
@@ -1227,7 +1347,7 @@ export const settingsCatalogue = {
       "owner": "machine",
       "area": "app",
       "group": "bell_style",
-      "order": 69,
+      "order": 72,
       "path": "/bell_style",
       "labelKey": "settings.catalogue.app.bell_style.label",
       "helpKey": "settings.catalogue.app.bell_style.help",
@@ -1273,7 +1393,7 @@ export const settingsCatalogue = {
       "owner": "machine",
       "area": "app",
       "group": "block_folding_enabled",
-      "order": 78,
+      "order": 81,
       "path": "/block_folding_enabled",
       "labelKey": "settings.catalogue.app.block_folding_enabled.label",
       "helpKey": "settings.catalogue.app.block_folding_enabled.help",
@@ -1381,7 +1501,7 @@ export const settingsCatalogue = {
       "owner": "machine",
       "area": "app",
       "group": "collapse_tools",
-      "order": 62,
+      "order": 65,
       "path": "/collapse_tools",
       "labelKey": "settings.catalogue.app.collapse_tools.label",
       "helpKey": "settings.catalogue.app.collapse_tools.help",
@@ -1477,7 +1597,7 @@ export const settingsCatalogue = {
       "owner": "machine",
       "area": "app",
       "group": "copy_on_select",
-      "order": 66,
+      "order": 69,
       "path": "/copy_on_select",
       "labelKey": "settings.catalogue.app.copy_on_select.label",
       "helpKey": "settings.catalogue.app.copy_on_select.help",
@@ -1509,7 +1629,7 @@ export const settingsCatalogue = {
       "owner": "machine",
       "area": "app",
       "group": "cursor_style",
-      "order": 74,
+      "order": 77,
       "path": "/cursor_style",
       "labelKey": "settings.catalogue.app.cursor_style.label",
       "helpKey": "settings.catalogue.app.cursor_style.help",
@@ -1553,7 +1673,7 @@ export const settingsCatalogue = {
       "owner": "machine",
       "area": "app",
       "group": "custom_launchers",
-      "order": 85,
+      "order": 88,
       "path": "/custom_launchers/{id}/args",
       "labelKey": "settings.catalogue.app.custom_launchers.{id}.args.label",
       "helpKey": "settings.catalogue.app.custom_launchers.{id}.args.help",
@@ -1587,7 +1707,7 @@ export const settingsCatalogue = {
       "owner": "machine",
       "area": "app",
       "group": "custom_launchers",
-      "order": 86,
+      "order": 89,
       "path": "/custom_launchers/{id}/enabled",
       "labelKey": "settings.catalogue.app.custom_launchers.{id}.enabled.label",
       "helpKey": "settings.catalogue.app.custom_launchers.{id}.enabled.help",
@@ -1618,7 +1738,7 @@ export const settingsCatalogue = {
       "owner": "machine",
       "area": "app",
       "group": "custom_launchers",
-      "order": 84,
+      "order": 87,
       "path": "/custom_launchers/{id}/executable",
       "labelKey": "settings.catalogue.app.custom_launchers.{id}.executable.label",
       "helpKey": "settings.catalogue.app.custom_launchers.{id}.executable.help",
@@ -1646,7 +1766,7 @@ export const settingsCatalogue = {
       "owner": "machine",
       "area": "app",
       "group": "custom_launchers",
-      "order": 82,
+      "order": 85,
       "path": "/custom_launchers/{id}/id",
       "labelKey": "settings.catalogue.app.custom_launchers.{id}.id.label",
       "helpKey": "settings.catalogue.app.custom_launchers.{id}.id.help",
@@ -1673,7 +1793,7 @@ export const settingsCatalogue = {
       "owner": "machine",
       "area": "app",
       "group": "custom_launchers",
-      "order": 83,
+      "order": 86,
       "path": "/custom_launchers/{id}/name",
       "labelKey": "settings.catalogue.app.custom_launchers.{id}.name.label",
       "helpKey": "settings.catalogue.app.custom_launchers.{id}.name.help",
@@ -1701,7 +1821,7 @@ export const settingsCatalogue = {
       "owner": "machine",
       "area": "app",
       "group": "custom_launchers",
-      "order": 87,
+      "order": 90,
       "path": "/custom_launchers/{id}/platform",
       "labelKey": "settings.catalogue.app.custom_launchers.{id}.platform.label",
       "helpKey": "settings.catalogue.app.custom_launchers.{id}.platform.help",
@@ -1785,7 +1905,7 @@ export const settingsCatalogue = {
       "owner": "machine",
       "area": "app",
       "group": "defer_update_relaunch",
-      "order": 54,
+      "order": 57,
       "path": "/defer_update_relaunch",
       "labelKey": "settings.catalogue.app.defer_update_relaunch.label",
       "helpKey": "settings.catalogue.app.defer_update_relaunch.help",
@@ -1817,7 +1937,7 @@ export const settingsCatalogue = {
       "owner": "machine",
       "area": "app",
       "group": "disabled_agents",
-      "order": 59,
+      "order": 62,
       "path": "/disabled_agents",
       "labelKey": "settings.catalogue.app.disabled_agents.label",
       "helpKey": "settings.catalogue.app.disabled_agents.help",
@@ -1852,7 +1972,7 @@ export const settingsCatalogue = {
       "owner": "machine",
       "area": "app",
       "group": "disabled_mcp_agents",
-      "order": 60,
+      "order": 63,
       "path": "/disabled_mcp_agents",
       "labelKey": "settings.catalogue.app.disabled_mcp_agents.label",
       "helpKey": "settings.catalogue.app.disabled_mcp_agents.help",
@@ -1887,7 +2007,7 @@ export const settingsCatalogue = {
       "owner": "machine",
       "area": "app",
       "group": "disabled_native_tools",
-      "order": 61,
+      "order": 64,
       "path": "/disabled_native_tools",
       "labelKey": "settings.catalogue.app.disabled_native_tools.label",
       "helpKey": "settings.catalogue.app.disabled_native_tools.help",
@@ -1928,7 +2048,7 @@ export const settingsCatalogue = {
       "owner": "machine",
       "area": "app",
       "group": "disabled_plugin_ids",
-      "order": 57,
+      "order": 60,
       "path": "/disabled_plugin_ids",
       "labelKey": "settings.catalogue.app.disabled_plugin_ids.label",
       "helpKey": "settings.catalogue.app.disabled_plugin_ids.help",
@@ -1963,7 +2083,7 @@ export const settingsCatalogue = {
       "owner": "machine",
       "area": "app",
       "group": "eager_resume_after_update",
-      "order": 55,
+      "order": 58,
       "path": "/eager_resume_after_update",
       "labelKey": "settings.catalogue.app.eager_resume_after_update.label",
       "helpKey": "settings.catalogue.app.eager_resume_after_update.help",
@@ -2059,7 +2179,7 @@ export const settingsCatalogue = {
       "owner": "machine",
       "area": "app",
       "group": "experimental_features_enabled",
-      "order": 72,
+      "order": 75,
       "path": "/experimental_features_enabled",
       "labelKey": "settings.catalogue.app.experimental_features_enabled.label",
       "helpKey": "settings.catalogue.app.experimental_features_enabled.help",
@@ -2204,7 +2324,7 @@ export const settingsCatalogue = {
       "owner": "machine",
       "area": "app",
       "group": "global_hotkey",
-      "order": 70,
+      "order": 73,
       "path": "/global_hotkey",
       "labelKey": "settings.catalogue.app.global_hotkey.label",
       "helpKey": "settings.catalogue.app.global_hotkey.help",
@@ -2278,7 +2398,7 @@ export const settingsCatalogue = {
       "owner": "machine",
       "area": "app",
       "group": "index_memory_budget_mb",
-      "order": 80,
+      "order": 83,
       "path": "/index_memory_budget_mb",
       "labelKey": "settings.catalogue.app.index_memory_budget_mb.label",
       "helpKey": "settings.catalogue.app.index_memory_budget_mb.help",
@@ -2312,7 +2432,7 @@ export const settingsCatalogue = {
       "owner": "machine",
       "area": "app",
       "group": "index_strategy",
-      "order": 79,
+      "order": 82,
       "path": "/index_strategy",
       "labelKey": "settings.catalogue.app.index_strategy.label",
       "helpKey": "settings.catalogue.app.index_strategy.help",
@@ -2358,7 +2478,7 @@ export const settingsCatalogue = {
       "owner": "machine",
       "area": "app",
       "group": "inline_blame_enabled",
-      "order": 88,
+      "order": 91,
       "path": "/inline_blame_enabled",
       "labelKey": "settings.catalogue.app.inline_blame_enabled.label",
       "helpKey": "settings.catalogue.app.inline_blame_enabled.help",
@@ -2390,7 +2510,7 @@ export const settingsCatalogue = {
       "owner": "machine",
       "area": "app",
       "group": "intent_tab_title",
-      "order": 63,
+      "order": 66,
       "path": "/intent_tab_title",
       "labelKey": "settings.catalogue.app.intent_tab_title.label",
       "helpKey": "settings.catalogue.app.intent_tab_title.help",
@@ -2422,7 +2542,7 @@ export const settingsCatalogue = {
       "owner": "machine",
       "area": "app",
       "group": "issue_filter",
-      "order": 71,
+      "order": 74,
       "path": "/issue_filter",
       "labelKey": "settings.catalogue.app.issue_filter.label",
       "helpKey": "settings.catalogue.app.issue_filter.help",
@@ -2470,7 +2590,7 @@ export const settingsCatalogue = {
       "owner": "machine",
       "area": "app",
       "group": "language",
-      "order": 56,
+      "order": 59,
       "path": "/language",
       "labelKey": "settings.catalogue.app.language.label",
       "helpKey": "settings.catalogue.app.language.help",
@@ -2635,7 +2755,7 @@ export const settingsCatalogue = {
       "owner": "machine",
       "area": "app",
       "group": "osc52_clipboard",
-      "order": 67,
+      "order": 70,
       "path": "/osc52_clipboard",
       "labelKey": "settings.catalogue.app.osc52_clipboard.label",
       "helpKey": "settings.catalogue.app.osc52_clipboard.help",
@@ -2661,13 +2781,109 @@ export const settingsCatalogue = {
       ],
       "confirmationClass": "ordinary"
     },
+    "app.pr_hide_ci_failing": {
+      "id": "app.pr_hide_ci_failing",
+      "store": "app",
+      "owner": "machine",
+      "area": "app",
+      "group": "pr_hide_ci_failing",
+      "order": 53,
+      "path": "/pr_hide_ci_failing",
+      "labelKey": "settings.catalogue.app.pr_hide_ci_failing.label",
+      "helpKey": "settings.catalogue.app.pr_hide_ci_failing.help",
+      "label": "pr hide ci failing",
+      "schema": {
+        "description": "Hide CI-failing pull requests by default; repositories may override this.",
+        "type": "boolean",
+        "default": false
+      },
+      "nullable": false,
+      "default": false,
+      "availability": {
+        "status": "available"
+      },
+      "choices": null,
+      "sensitivity": "public",
+      "apply": "live",
+      "effect": "Updates CI-failing PR visibility.",
+      "operations": [
+        "get",
+        "set",
+        "reset"
+      ],
+      "confirmationClass": "ordinary"
+    },
+    "app.pr_hide_conflicting": {
+      "id": "app.pr_hide_conflicting",
+      "store": "app",
+      "owner": "machine",
+      "area": "app",
+      "group": "pr_hide_conflicting",
+      "order": 52,
+      "path": "/pr_hide_conflicting",
+      "labelKey": "settings.catalogue.app.pr_hide_conflicting.label",
+      "helpKey": "settings.catalogue.app.pr_hide_conflicting.help",
+      "label": "pr hide conflicting",
+      "schema": {
+        "description": "Hide conflicting pull requests by default; repositories may override this.",
+        "type": "boolean",
+        "default": false
+      },
+      "nullable": false,
+      "default": false,
+      "availability": {
+        "status": "available"
+      },
+      "choices": null,
+      "sensitivity": "public",
+      "apply": "live",
+      "effect": "Updates conflicting PR visibility.",
+      "operations": [
+        "get",
+        "set",
+        "reset"
+      ],
+      "confirmationClass": "ordinary"
+    },
+    "app.pr_hide_drafts": {
+      "id": "app.pr_hide_drafts",
+      "store": "app",
+      "owner": "machine",
+      "area": "app",
+      "group": "pr_hide_drafts",
+      "order": 51,
+      "path": "/pr_hide_drafts",
+      "labelKey": "settings.catalogue.app.pr_hide_drafts.label",
+      "helpKey": "settings.catalogue.app.pr_hide_drafts.help",
+      "label": "pr hide drafts",
+      "schema": {
+        "description": "Hide draft pull requests by default; repositories may override this.",
+        "type": "boolean",
+        "default": false
+      },
+      "nullable": false,
+      "default": false,
+      "availability": {
+        "status": "available"
+      },
+      "choices": null,
+      "sensitivity": "public",
+      "apply": "live",
+      "effect": "Updates draft PR visibility.",
+      "operations": [
+        "get",
+        "set",
+        "reset"
+      ],
+      "confirmationClass": "ordinary"
+    },
     "app.prevent_sleep_when_busy": {
       "id": "app.prevent_sleep_when_busy",
       "store": "app",
       "owner": "machine",
       "area": "app",
       "group": "prevent_sleep_when_busy",
-      "order": 51,
+      "order": 54,
       "path": "/prevent_sleep_when_busy",
       "labelKey": "settings.catalogue.app.prevent_sleep_when_busy.label",
       "helpKey": "settings.catalogue.app.prevent_sleep_when_busy.help",
@@ -2699,7 +2915,7 @@ export const settingsCatalogue = {
       "owner": "machine",
       "area": "app",
       "group": "progress_tracking",
-      "order": 65,
+      "order": 68,
       "path": "/progress_tracking",
       "labelKey": "settings.catalogue.app.progress_tracking.label",
       "helpKey": "settings.catalogue.app.progress_tracking.help",
@@ -2731,7 +2947,7 @@ export const settingsCatalogue = {
       "owner": "machine",
       "area": "app",
       "group": "scrollback_reflow",
-      "order": 73,
+      "order": 76,
       "path": "/scrollback_reflow",
       "labelKey": "settings.catalogue.app.scrollback_reflow.label",
       "helpKey": "settings.catalogue.app.scrollback_reflow.help",
@@ -3418,7 +3634,7 @@ export const settingsCatalogue = {
       "owner": "machine",
       "area": "app",
       "group": "show_block_timestamps",
-      "order": 76,
+      "order": 79,
       "path": "/show_block_timestamps",
       "labelKey": "settings.catalogue.app.show_block_timestamps.label",
       "helpKey": "settings.catalogue.app.show_block_timestamps.help",
@@ -3450,7 +3666,7 @@ export const settingsCatalogue = {
       "owner": "machine",
       "area": "app",
       "group": "show_last_prompt",
-      "order": 68,
+      "order": 71,
       "path": "/show_last_prompt",
       "labelKey": "settings.catalogue.app.show_last_prompt.label",
       "helpKey": "settings.catalogue.app.show_last_prompt.help",
@@ -3482,7 +3698,7 @@ export const settingsCatalogue = {
       "owner": "machine",
       "area": "app",
       "group": "show_scrollbar_marks",
-      "order": 77,
+      "order": 80,
       "path": "/show_scrollbar_marks",
       "labelKey": "settings.catalogue.app.show_scrollbar_marks.label",
       "helpKey": "settings.catalogue.app.show_scrollbar_marks.help",
@@ -3556,7 +3772,7 @@ export const settingsCatalogue = {
       "owner": "machine",
       "area": "app",
       "group": "standby_timeout_minutes",
-      "order": 81,
+      "order": 84,
       "path": "/standby_timeout_minutes",
       "labelKey": "settings.catalogue.app.standby_timeout_minutes.label",
       "helpKey": "settings.catalogue.app.standby_timeout_minutes.help",
@@ -3591,7 +3807,7 @@ export const settingsCatalogue = {
       "owner": "machine",
       "area": "app",
       "group": "suggest_followups",
-      "order": 64,
+      "order": 67,
       "path": "/suggest_followups",
       "labelKey": "settings.catalogue.app.suggest_followups.label",
       "helpKey": "settings.catalogue.app.suggest_followups.help",
@@ -3731,7 +3947,7 @@ export const settingsCatalogue = {
       "owner": "machine",
       "area": "app",
       "group": "terminal_renderer",
-      "order": 75,
+      "order": 78,
       "path": "/terminal_renderer",
       "labelKey": "settings.catalogue.app.terminal_renderer.label",
       "helpKey": "settings.catalogue.app.terminal_renderer.help",
@@ -3812,7 +4028,7 @@ export const settingsCatalogue = {
       "owner": "machine",
       "area": "app",
       "group": "update_channel",
-      "order": 58,
+      "order": 61,
       "path": "/update_channel",
       "labelKey": "settings.catalogue.app.update_channel.label",
       "helpKey": "settings.catalogue.app.update_channel.help",
@@ -4342,6 +4558,63 @@ export const settingsCatalogue = {
         "get",
         "set_secret",
         "clear_secret"
+      ],
+      "confirmationClass": "ordinary"
+    },
+    "corrections.replacements.{from}.from": {
+      "id": "corrections.replacements.{from}.from",
+      "store": "corrections",
+      "owner": "machine",
+      "area": "corrections",
+      "group": "replacements",
+      "order": 0,
+      "path": "/replacements/{from}/from",
+      "labelKey": "settings.catalogue.corrections.replacements.{from}.from.label",
+      "helpKey": "settings.catalogue.corrections.replacements.{from}.from.help",
+      "label": "from",
+      "schema": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 256
+      },
+      "nullable": false,
+      "availability": {
+        "status": "available"
+      },
+      "choices": null,
+      "sensitivity": "private",
+      "apply": "live",
+      "effect": "Identifies heard text to replace after transcription.",
+      "operations": [
+        "get"
+      ],
+      "confirmationClass": "ordinary"
+    },
+    "corrections.replacements.{from}.to": {
+      "id": "corrections.replacements.{from}.to",
+      "store": "corrections",
+      "owner": "machine",
+      "area": "corrections",
+      "group": "replacements",
+      "order": 1,
+      "path": "/replacements/{from}/to",
+      "labelKey": "settings.catalogue.corrections.replacements.{from}.to.label",
+      "helpKey": "settings.catalogue.corrections.replacements.{from}.to.help",
+      "label": "to",
+      "schema": {
+        "type": "string"
+      },
+      "nullable": false,
+      "availability": {
+        "status": "available"
+      },
+      "choices": null,
+      "sensitivity": "private",
+      "apply": "live",
+      "effect": "Updates replacement text through the TextCorrector owner.",
+      "operations": [
+        "get",
+        "set"
       ],
       "confirmationClass": "ordinary"
     },
@@ -7640,7 +7913,7 @@ export const settingsCatalogue = {
       "owner": "instance",
       "area": "repositories",
       "group": "repos",
-      "order": 20,
+      "order": 23,
       "path": "/repos/{key}/auto_consolidate_worktrees",
       "labelKey": "settings.catalogue.repositories.repos.{key}.auto_consolidate_worktrees.label",
       "helpKey": "settings.catalogue.repositories.repos.{key}.auto_consolidate_worktrees.help",
@@ -7793,7 +8066,7 @@ export const settingsCatalogue = {
       "owner": "instance",
       "area": "repositories",
       "group": "repos",
-      "order": 19,
+      "order": 22,
       "path": "/repos/{key}/branch_labels/{key}",
       "labelKey": "settings.catalogue.repositories.repos.{key}.branch_labels.{key}.label",
       "helpKey": "settings.catalogue.repositories.repos.{key}.branch_labels.{key}.help",
@@ -7956,7 +8229,7 @@ export const settingsCatalogue = {
       "owner": "instance",
       "area": "repositories",
       "group": "repos",
-      "order": 21,
+      "order": 24,
       "path": "/repos/{key}/dev_server_url",
       "labelKey": "settings.catalogue.repositories.repos.{key}.dev_server_url.label",
       "helpKey": "settings.catalogue.repositories.repos.{key}.dev_server_url.help",
@@ -8117,6 +8390,111 @@ export const settingsCatalogue = {
       "effect": "Updates path for the current owner.",
       "operations": [
         "get"
+      ],
+      "confirmationClass": "ordinary"
+    },
+    "repositories.repos.{key}.pr_hide_ci_failing": {
+      "id": "repositories.repos.{key}.pr_hide_ci_failing",
+      "store": "repositories",
+      "owner": "instance",
+      "area": "repositories",
+      "group": "repos",
+      "order": 21,
+      "path": "/repos/{key}/pr_hide_ci_failing",
+      "labelKey": "settings.catalogue.repositories.repos.{key}.pr_hide_ci_failing.label",
+      "helpKey": "settings.catalogue.repositories.repos.{key}.pr_hide_ci_failing.help",
+      "label": "pr hide ci failing",
+      "schema": {
+        "description": "None inherits global CI-failing PR visibility; false explicitly shows them.",
+        "type": [
+          "boolean",
+          "null"
+        ],
+        "default": null
+      },
+      "nullable": true,
+      "default": null,
+      "availability": {
+        "status": "available"
+      },
+      "choices": null,
+      "sensitivity": "public",
+      "apply": "live",
+      "effect": "Updates repository CI-failing PR visibility.",
+      "operations": [
+        "get",
+        "set",
+        "reset"
+      ],
+      "confirmationClass": "ordinary"
+    },
+    "repositories.repos.{key}.pr_hide_conflicting": {
+      "id": "repositories.repos.{key}.pr_hide_conflicting",
+      "store": "repositories",
+      "owner": "instance",
+      "area": "repositories",
+      "group": "repos",
+      "order": 20,
+      "path": "/repos/{key}/pr_hide_conflicting",
+      "labelKey": "settings.catalogue.repositories.repos.{key}.pr_hide_conflicting.label",
+      "helpKey": "settings.catalogue.repositories.repos.{key}.pr_hide_conflicting.help",
+      "label": "pr hide conflicting",
+      "schema": {
+        "description": "None inherits global conflicting PR visibility; false explicitly shows them.",
+        "type": [
+          "boolean",
+          "null"
+        ],
+        "default": null
+      },
+      "nullable": true,
+      "default": null,
+      "availability": {
+        "status": "available"
+      },
+      "choices": null,
+      "sensitivity": "public",
+      "apply": "live",
+      "effect": "Updates repository conflicting PR visibility.",
+      "operations": [
+        "get",
+        "set",
+        "reset"
+      ],
+      "confirmationClass": "ordinary"
+    },
+    "repositories.repos.{key}.pr_hide_drafts": {
+      "id": "repositories.repos.{key}.pr_hide_drafts",
+      "store": "repositories",
+      "owner": "instance",
+      "area": "repositories",
+      "group": "repos",
+      "order": 19,
+      "path": "/repos/{key}/pr_hide_drafts",
+      "labelKey": "settings.catalogue.repositories.repos.{key}.pr_hide_drafts.label",
+      "helpKey": "settings.catalogue.repositories.repos.{key}.pr_hide_drafts.help",
+      "label": "pr hide drafts",
+      "schema": {
+        "description": "None inherits global draft PR visibility; false explicitly shows them.",
+        "type": [
+          "boolean",
+          "null"
+        ],
+        "default": null
+      },
+      "nullable": true,
+      "default": null,
+      "availability": {
+        "status": "available"
+      },
+      "choices": null,
+      "sensitivity": "public",
+      "apply": "live",
+      "effect": "Updates repository draft PR visibility.",
+      "operations": [
+        "get",
+        "set",
+        "reset"
       ],
       "confirmationClass": "ordinary"
     },
@@ -10866,6 +11244,11 @@ export const settingsCatalogue = {
     },
     {
       "store": "agents",
+      "path": "/launch_additions_migrated",
+      "reason": "One-time launch additions migration marker."
+    },
+    {
+      "store": "agents",
       "path": "/agents/{key}/codex_bypass_migrated",
       "reason": "One-time bypass migration marker; cannot be edited to rerun migration."
     },
@@ -11773,6 +12156,34 @@ export const settingsCatalogue = {
           "forwards",
           "options"
         ]
+      },
+      "operations": [
+        "get",
+        "create",
+        "remove"
+      ]
+    },
+    {
+      "store": "corrections",
+      "path": "/replacements",
+      "key": "from",
+      "schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "from",
+          "to"
+        ],
+        "properties": {
+          "from": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "to": {
+            "type": "string"
+          }
+        }
       },
       "operations": [
         "get",

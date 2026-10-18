@@ -27,6 +27,7 @@ pub(crate) mod background_mode;
 #[cfg(test)]
 mod background_mode_tests;
 pub(crate) mod launch_instructions;
+pub(crate) mod mail_subscriptions;
 pub(crate) mod prompt_receipt;
 pub(crate) mod session_resume;
 pub(crate) mod session_wake;
@@ -35,6 +36,7 @@ pub mod work_items;
 pub use tuic_core::app_instance;
 pub(crate) mod app_logger;
 pub(crate) mod changelog;
+mod frame_workload;
 mod stall_journal;
 pub(crate) use tuic_terminal::chrome;
 pub(crate) mod circleci;
@@ -1559,7 +1561,7 @@ fn release_webview_document_resources(state: &AppState, webview_label: &str) {
 
 #[cfg(feature = "desktop")]
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
-pub fn run() {
+pub fn run(mut context: tauri::Context<tauri::Wry>) {
     // Must run before the first `config::config_dir()` read (below) — see
     // `app_instance::select_app_instance_from_env` for why this exists: a
     // debug/test build launched with `TUIC_APP_INSTANCE=<id>` gets its own
@@ -1743,7 +1745,6 @@ pub fn run() {
     }
     let startup_background =
         themes::window_background::resolve(&themes::load_themes(&themes_dir), &config.theme);
-    let mut context = tauri::generate_context!();
     for window in &mut context.config_mut().app.windows {
         window.background_color = Some(tauri::window::Color(
             startup_background[0],
@@ -2132,6 +2133,7 @@ pub fn run() {
             pty::terminal_request_frame,
             pty::ack_terminal_frame,
             frontend_liveness::frontend_heartbeat,
+            frame_workload::save_frame_workload,
             pty::terminal_exit_alt_screen,
             pty::terminal_scroll,
             pty::terminal_scroll_to_offset,
@@ -2177,6 +2179,7 @@ pub fn run() {
             agent_hook_launch::prepare_agent_launch_args,
             agent::detect_all_agent_binaries,
             agent::spawn_agent,
+            mcp_http::launch_transaction::managed_agent_launch,
             agent_session::discover_agent_session,
             agent_session::verify_agent_session,
             agent_session::claude_project_dir,
@@ -2400,7 +2403,7 @@ pub fn run() {
             mcp_upstream_config::reconnect_mcp_upstream,
             mcp_upstream_config::get_mcp_upstream_status,
             mcp_upstream_credentials::commands::save_mcp_upstream_credential,
-            mcp_upstream_credentials::delete_mcp_upstream_credential,
+            mcp_upstream_credentials::commands::delete_mcp_upstream_credential,
             mcp_oauth::commands::start_mcp_upstream_oauth,
             mcp_oauth::commands::mcp_oauth_callback,
             mcp_oauth::commands::cancel_mcp_upstream_oauth,
@@ -3717,7 +3720,7 @@ mod tests {
     fn boot_takes_only_the_env_github_token_and_defers_the_rest() {
         let source = include_str!("lib.rs");
         let desktop_run = source
-            .split("pub fn run()")
+            .split("pub fn run(")
             .nth(1)
             .expect("desktop run function")
             .split("fn build_connect_url")
@@ -3764,7 +3767,7 @@ mod tests {
     #[test]
     fn every_boot_path_writes_the_launch_assets_through_the_shared_helper() {
         let source = include_str!("lib.rs");
-        for entry in ["pub fn run()", "pub async fn run_remote("] {
+        for entry in ["pub fn run(", "pub async fn run_remote("] {
             let body = source
                 .split(entry)
                 .nth(1)
@@ -3783,7 +3786,7 @@ mod tests {
     fn desktop_setup_reuses_the_config_loaded_at_process_start() {
         let source = include_str!("lib.rs");
         let desktop_run = source
-            .split("pub fn run()")
+            .split("pub fn run(")
             .nth(1)
             .expect("desktop run function")
             .split("fn build_connect_url")

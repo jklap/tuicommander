@@ -165,6 +165,17 @@ impl Settings {
             #[cfg(not(feature = "desktop"))]
             let speaker = None;
             register!(super::voice::VoiceSettingsStore::new(speaker));
+            #[cfg(feature = "desktop")]
+            let corrections = {
+                use tauri::Manager;
+                state.app_handle.read().as_ref().and_then(|app| {
+                    app.try_state::<crate::dictation::DictationState>()
+                        .map(|dictation| dictation.corrections.clone())
+                })
+            };
+            #[cfg(not(feature = "desktop"))]
+            let corrections = None;
+            register!(super::corrections::CorrectionsStore::new(corrections));
         }
         let weak = Arc::downgrade(&state);
         let connections = super::remote::ConnectionCredentialSettings::new(

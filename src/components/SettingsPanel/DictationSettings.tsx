@@ -291,7 +291,11 @@ export const DictationSettings: Component = () => {
 				)}
 				actions={
 					<>
-						<button data-setting-exclusion="dictation.corrections" class={s.testBtn} onClick={handleImportCorrections}>
+						<button
+							data-setting-id="corrections.replacements.{from}.to"
+							class={s.testBtn}
+							onClick={handleImportCorrections}
+						>
 							{t("dictation.import", "Import")}
 						</button>
 						<button
@@ -315,7 +319,7 @@ export const DictationSettings: Component = () => {
 							name={`${from} → ${to}`}
 							actions={
 								<button
-									data-setting-exclusion="dictation.corrections"
+									data-setting-id="corrections.replacements.{from}.to"
 									class={s.testBtn}
 									onClick={() => handleRemoveCorrection(from)}
 									title={t("dictation.removeCorrection", "Remove correction")}
@@ -334,7 +338,7 @@ export const DictationSettings: Component = () => {
 								aria-describedby={descriptionId()}
 								type="text"
 								placeholder={t("dictation.correctionFromPlaceholder", "Heard text...")}
-								data-setting-exclusion="dictation.corrections"
+								data-setting-id="corrections.replacements.{from}.from"
 								value={newFrom()}
 								onInput={(e) => setNewFrom(e.currentTarget.value)}
 								onKeyDown={(e) => e.key === "Enter" && handleAddCorrection()}
@@ -343,13 +347,13 @@ export const DictationSettings: Component = () => {
 								aria-label={t("dictation.correctionsTo", "To")}
 								type="text"
 								placeholder={t("dictation.correctionToPlaceholder", "Replace with...")}
-								data-setting-exclusion="dictation.corrections"
+								data-setting-id="corrections.replacements.{from}.to"
 								value={newTo()}
 								onInput={(e) => setNewTo(e.currentTarget.value)}
 								onKeyDown={(e) => e.key === "Enter" && handleAddCorrection()}
 							/>
 							<button
-								data-setting-exclusion="dictation.corrections"
+								data-setting-id="corrections.replacements.{from}.to"
 								class={s.testBtn}
 								onClick={handleAddCorrection}
 								disabled={!newFrom().trim() || !newTo().trim()}

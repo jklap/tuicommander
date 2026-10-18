@@ -524,15 +524,17 @@ pub(super) async fn get_output(
     // Both local MCP and the remote proxy use the same serializer, including
     // cursor windows, secret redaction and retained output after PTY exit.
     if matches!(format, "mcp" | "mcp_raw") {
-        let result = super::mcp_transport::session_output(
-            &state,
-            &serde_json::json!({
-                "action": "output", "session_id": session_id,
-                "format": if format == "mcp_raw" { "raw" } else { "text" },
-                "limit": query.limit, "from_line": query.from_line,
-                "since_cursor": query.since_cursor, "from_byte": query.from_byte,
-            }),
-        );
+        let mut args = serde_json::json!({
+            "action": "output", "session_id": session_id,
+            "format": if format == "mcp_raw" { "raw" } else { "text" },
+            "limit": query.limit, "from_line": query.from_line,
+            "since_cursor": query.since_cursor, "from_byte": query.from_byte,
+            "byte_budget": query.byte_budget, "continuation": query.continuation,
+        });
+        args.as_object_mut()
+            .expect("output arguments")
+            .retain(|_, value| !value.is_null());
+        let result = super::mcp_transport::session_output(&state, &args);
         return (
             if result.get("error").is_some() {
                 StatusCode::NOT_FOUND
@@ -765,6 +767,16 @@ pub(crate) struct RequestedIdentity {
     pub agent_type: Option<String>,
 }
 
+struct PtyLaunch {
+    shell: String,
+    cwd: Option<String>,
+    rows: u16,
+    cols: u16,
+    worktree: Option<crate::state::WorktreeInfo>,
+    requested: RequestedIdentity,
+    direct: Option<portable_pty::CommandBuilder>,
+}
+
 pub(crate) fn spawn_pty_session(
     state: Arc<AppState>,
     shell: String,
@@ -774,6 +786,66 @@ pub(crate) fn spawn_pty_session(
     worktree: Option<crate::state::WorktreeInfo>,
     requested: RequestedIdentity,
 ) -> Result<String, (StatusCode, Json<serde_json::Value>)> {
+    spawn_pty_launch(
+        state,
+        PtyLaunch {
+            shell,
+            cwd,
+            rows,
+            cols,
+            worktree,
+            requested,
+            direct: None,
+        },
+    )
+}
+
+/// Configured owner processes use argv directly, never shell command text.
+pub(crate) fn spawn_pty_command(
+    state: Arc<AppState>,
+    program: &std::path::Path,
+    cwd: &std::path::Path,
+    args: &[String],
+) -> Result<String, (StatusCode, Json<serde_json::Value>)> {
+    if state.session_maps.sessions.len() >= MAX_CONCURRENT_SESSIONS {
+        return Err((
+            StatusCode::TOO_MANY_REQUESTS,
+            Json(serde_json::json!({"error":"Max concurrent sessions reached"})),
+        ));
+    }
+    let mut command = portable_pty::CommandBuilder::new(program.as_os_str());
+    crate::pty::sanitize_pty_parent_env(&mut command);
+    command.args(args);
+    command.cwd(cwd);
+    command.env("TERM", "xterm-256color");
+    command.env("COLORTERM", "truecolor");
+    spawn_pty_launch(
+        state,
+        PtyLaunch {
+            shell: program.to_string_lossy().into_owned(),
+            cwd: Some(cwd.to_string_lossy().into_owned()),
+            rows: 24,
+            cols: 80,
+            worktree: None,
+            requested: RequestedIdentity::default(),
+            direct: Some(command),
+        },
+    )
+}
+
+fn spawn_pty_launch(
+    state: Arc<AppState>,
+    launch: PtyLaunch,
+) -> Result<String, (StatusCode, Json<serde_json::Value>)> {
+    let PtyLaunch {
+        shell,
+        cwd,
+        rows,
+        cols,
+        worktree,
+        requested,
+        direct,
+    } = launch;
     // portable-pty can report a successful spawn even when the child fails to
     // enter its requested directory. Reject that request before registering a
     // session that would otherwise render as an empty terminal.
@@ -808,6 +880,11 @@ pub(crate) fn spawn_pty_session(
             pixel_height: 0,
         },
         || {
+            if let Some(mut command) = direct {
+                crate::pty::bind_pty_identity(&state, &mut command, &session_id, None);
+                crate::pty::apply_agent_screen_env(&mut command, &std::collections::HashMap::new());
+                return command;
+            }
             let mut cmd = build_shell_command(&shell);
             if let Some(ref dir) = cwd {
                 let dir = crate::cli::expand_tilde(dir);

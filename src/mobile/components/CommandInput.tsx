@@ -17,8 +17,6 @@ import { SlashMenuOverlay } from "./SlashMenuOverlay";
 import { type ComposerInputKey, computeInputDelta, isPostSendGuardActive, isSupersetEcho } from "./syncGuards";
 
 interface CommandInputProps {
-	showScrollToBottom?: boolean;
-	onScrollToBottom?: () => void;
 	sessionId: string;
 	serverVoiceRecording?: boolean;
 	onBrowserDictating?: (recording: boolean) => void;
@@ -34,7 +32,7 @@ interface CommandInputProps {
 	choicePrompt?: ChoicePrompt;
 	/** Native free-text question, opened explicitly by the user. */
 	questionText?: string;
-	/** The Codex question panel has been opened with Alt+Up in this view. */
+	/** The Codex question panel has been opened with Shift+Left in this view. */
 	codexQuestionOpen?: boolean;
 	/** Managed agent waiting for a free-text answer. */
 	managedSession?: boolean;
@@ -225,6 +223,7 @@ export function CommandInput(props: CommandInputProps) {
 	}
 
 	const browserDictation = useBrowserDictation({
+		sessionId: () => props.sessionId,
 		blocked: () => submitting() || !!props.serverVoiceRecording || props.sessionExists === false,
 		getDraft: () => textareaEl?.value ?? value(),
 		setDraft: (text) => {
@@ -489,8 +488,9 @@ export function CommandInput(props: CommandInputProps) {
 				return;
 			}
 			await sendPtyKey(write, key);
-			// Most raw-mode prompts submit on the numeric key.
-			if (!props.choicePrompt?.dismiss_key) {
+			// Native Grok answers and ego approvals act on the key itself;
+			// an extra Enter would submit their newly opened text composer.
+			if (!props.choicePrompt?.dismiss_key && props.agentType !== "grok" && props.agentType !== "ego") {
 				await write("\r");
 			}
 		} catch (err) {
@@ -586,19 +586,6 @@ export function CommandInput(props: CommandInputProps) {
 					<path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z" />
 				</svg>
 			</button>
-			<Show when={props.showScrollToBottom}>
-				<button
-					type="button"
-					class={styles.jumpBottom}
-					aria-label="Scroll to bottom"
-					onMouseDown={(event) => event.preventDefault()}
-					onClick={() => props.onScrollToBottom?.()}
-				>
-					<svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
-						<path d="M11 4h2v12.17l4.59-4.58L19 13l-7 7-7-7 1.41-1.41L11 16.17z" />
-					</svg>
-				</button>
-			</Show>
 		</div>
 	);
 }

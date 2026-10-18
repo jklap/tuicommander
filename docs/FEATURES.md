@@ -1,5 +1,9 @@
 # TUICommander — Complete Feature Reference
 
+- Independent durable peer-mail readers filter routine lifecycle traffic, retain acknowledged cursors across reconnect, and support continuous HTTP/ACP notification delivery (#2004-4760).
+
+- Mobile session headers offer an open-Markdown dropdown at widths of 768 px or more. Phones keep the same list in More session actions, with stable in-place refreshes.
+
 - AI Chat tables protect short fields, scroll wide content, toggle exact Markdown source, copy Markdown, and open read-only documents (#1923-c6fb).
 
 - AI Chat uses a compact title picker, labelled overflow actions and one-line process disclosures; model and repository sit below the composer (#1958-b67e).
@@ -28,9 +32,9 @@ Published story workflows can start in Plans and Stories through the owning daem
 >
 > This document intentionally serves two audiences: users need a searchable overview of what exists, while LLMs and contributors need stable names, shortcuts, settings, and implementation anchors. It is an inventory, not a replacement for the chronological [CHANGELOG](../CHANGELOG.md).
 
-**Current version:** 1.7.7  
+**Current version:** 2.0.0\
 **Last verified:** 2026-09-16  
-**Recent feature delta:** See the [Unreleased](https://github.com/sstraus/tuicommander/blob/main/CHANGELOG.md#unreleased) and [1.7.7](https://github.com/sstraus/tuicommander/blob/main/CHANGELOG.md#177---2026-09-16) changelog sections for what changed recently. Keep this page focused on the current state; do not duplicate the full changelog here.
+**Recent feature delta:** See the [Unreleased](https://github.com/sstraus/tuicommander/blob/main/CHANGELOG.md#unreleased) changelog section for what changed recently. Keep this page focused on the current state; do not duplicate the full changelog here.
 
 Desktop AI Chat uses the terminal composer’s pin and blue play buttons. The pin highlights a parked draft; tooltips identify Park, Restore, Swap, Send and Queue. Mobile Park and Stop share the input row with Attach and Send.
 
@@ -166,7 +170,7 @@ Right-click an HTTP(S) terminal link (including localhost) and choose **Start in
 - **Mobile Claude CLI / Chat** — Switch in the existing session header; the composer and terminal stream stay mounted. Both desktop and mobile let the backend decide Claude transcript binding and show a notice when unavailable. Returning to CLI follows the latest output. Fresh session snapshots clear stale agent/question controls after exit, including when the output socket pauses; the composer then targets the remaining shell.
 - **CLI / Chat view** — Claude, Grok, Codex and ego terminals switch between the grid and a conversation view with docked Compose input, built from the agent's session file (Grok: its `chat_history.jsonl`, bound only through the exact `active_sessions.json` registry entry; including older prompts, human text/image follow-ups queued while Claude is busy, replies, folded tool cards, image/PDF markers and model-change cards). ego uses the exact live PID-to-lease session binding and the documented `ego export --format transcript --after` contract, not private conversation storage. Completed messages and tool lifecycle updates use the shared ticker; goal continuations and compaction checkpoints are notices. An ego executable with transcript v1 support must be configured. Desktop and mobile support ego Chat. The grid is hidden, never unmounted.
 
-- **Readable session edits** — Expand a Chat tool card to read structured old/new edit blocks with aligned four-space tab stops and horizontal scrolling. Phone Claude CLI sessions offer **Read file edits in Chat** without unmounting the terminal.
+- **Readable session edits** — Expand a Chat tool card to read structured old/new edit blocks with aligned four-space tab stops and horizontal scrolling.
 - **Mobile session Chat appearance** — The session detail CLI/Chat view shares desktop prompt/answer theme tokens and transcript typography. Mobile keeps its existing touch-sized switch and native input; AI Chat is a separate surface.
 - **Deferred update restart** — After an in-app update installs, TUICommander restarts only when no session is busy or awaiting input; the APP UPDATE notification shows how many are busy and offers **Restart now** (with confirmation). Turn off in **Settings → General → Updates → Wait for agents before restarting** (`defer_update_relaunch`, default on).
 - **Eager resume after an update** — When the app restarts to apply an update, every agent tab with a confirmed session id resumes by itself on every branch, without selecting the branch first. Tabs without a confirmed id keep the click-to-resume banner. Turn off in **Settings → General → Updates → Resume all agents after an update** (`eager_resume_after_update`, default on).
@@ -483,6 +487,8 @@ Right-click the main worktree row → **Switch Branch** submenu to checkout a di
 Replaced by the Git Panel's Changes tab (section 3.8). `Cmd+Shift+D` now opens the Git Panel
 
 ### 3.3 Markdown Panel (`Cmd+Shift+M`)
+
+- **Mobile review send**: send saved checkbox edits, source edits, and tweak comments from the mobile Markdown view. Choose a repository agent; the originating session is selected when available. The backend delivers at idle or queues for the next idle window and reports the outcome.
 - Renders `.md` and `.mdx` files with syntax-highlighted code blocks
 - A Markdown document tab, including one opened through `tuic://open`, can be detached from its tab context menu into a resizable window. Its tab remains in the main window; selecting it focuses the document window, and closing that window returns the document to the tab. The detached viewer rereads the file on focus and while open.
 - Rendered Markdown links open files and directories in TUICommander, including local symlinks and parent paths; direct UNC hrefs are refused, and paths that reach macOS privacy-protected home directories are not probed. Heading and `file:line` or `file:line:column` targets work without navigating the WebView; web and email links use the system handler
@@ -809,6 +815,14 @@ Tabbed side panel with four tabs: Changes, Log, Stashes, Branches. Replaces the 
 
 ## 6. AI Agent Support
 
+### Launch instruction editing
+
+Settings → Agents shows read-only default and inherited launch instruction previews.
+Customize creates an editable global or per-agent copy. Use global restores an
+agent's inheritance; Reset to default removes the global copy. Agent previews use
+backend resolution, marker toggles and the current TUIC version. Empty custom text
+disables injection. Custom text saves on blur and warns about missing markers.
+
 ### Launch instruction inspector
 
 The terminal context menu offers **Inspect Launch Instructions…**. Collapsible sections show the prospectively captured final launch brief, explicit system instruction arguments/file snapshots and served MCP initialize responses, with recorded source and original UTF-8 byte count. Redacted text is bounded to 32 KiB per section, 64 KiB per receipt and 16 captured sections. Queued briefs are labeled until submission succeeds. Historical launches, shell-launched agents and files the agent reads independently show **Not observable by TUIC**. Receipts belong to live PTY/MCP metadata, survive frontend reloads and end with the backend/session lifetime; workflow preview/hash receipts remain unchanged.
@@ -876,6 +890,11 @@ Every terminal tab has a stable UUID (`tuicSession`) injected as the `TUIC_SESSI
 - Auto-expire: rate limits are cleared automatically after `retry_after_ms` (or 120s default) without requiring agent output
 
 ### 6.4 Question Detection
+
+- ego question titles exclude preceding diagnostics and working rows. Default-mode command approvals expose native keys and preserve the refusal explanation wait.
+- Grok native Ask and enforced command-approval radio forms export their options, selected state and immediate numeric-answer semantics; the Ask free-text action remains waiting until submission.
+
+- Codex 0.162.1 native panels export their question and options. Mobile opens queued questions with Shift+Left; numeric options submit immediately. CLI-enforced command approvals also export their title and options past command metadata.
 - An open Ink selection dialog restores a missing question badge with native hooks enabled, including after a later busy hook; repeated paints do not duplicate the notification.
 - Recognizes interactive prompts (yes/no, multiple choice, numbered options)
 - Tab dot turns orange (pulsing) when awaiting input; sidebar branch icon shows `?` in orange
@@ -1223,6 +1242,7 @@ re-derived later.
 - Triggered from: sidebar PR badge, status bar PR badge, status bar CI badge, toolbar notification bell
 
 ### 8.4 PR Visibility Filters
+- Global filters and nullable repository overrides persist across restarts; an explicit Show overrides a global Hide. Rust catalogue metadata and owner refresh cover both scopes.
 - Global settings (Settings > Git & GitHub > Pull Requests): hide draft PRs, hide conflicting PRs, hide CI-failing PRs
 - Per-repo overrides (Settings > [Repo] > PR Visibility): tri-state toggle per filter (Show / Default / Hide)
 - Default = inherit from global setting, shown in parentheses (e.g. "Draft PRs (Show)")
@@ -2305,10 +2325,13 @@ Unsupported actions are hidden. Menus close on outside tap or Escape and use
 - Safe-area-inset padding for notched devices
 - `font-variant-emoji: text` on output view — forces Unicode symbols (●, ○, ◉) to render as monochrome text glyphs instead of colorful emoji
 
+- The mobile Ideas overlay uses the same browser dictation hook and mic as the composer. Speech replaces the selection captured at the start of a take; later hypotheses replace only that speech and keep the surrounding idea text. Dictation never saves an idea or sends it to a session. Typing or adding the idea cancels recognition. Empty takes preserve selected text; settings and failure handling match the composer. Its mic is disabled while a voice call or terminal browser dictation owns the microphone.
+
 ### 18.11 Standalone CSS
 - Mobile human replies can answer an awaiting agent even while its shell remains busy and no question was recognized. Recognized native questions keep their direct answer controls. Rejected replies retain the draft and show the backend reason instead of a generic busy message.
-- The mobile composer offers browser dictation directly next to Send (44 px touch targets) when `SpeechRecognition` or `webkitSpeechRecognition` is available. Interim and final speech append to the draft without focusing the textarea or sending; tap again to stop. Editing the draft cancels recognition and keeps the edit exactly; the mic becomes available again when the browser confirms the previous session has ended. Errors also retain the microphone claim until that confirmation, so repeated taps cannot overlap recognition sessions. Late results from the cancelled recording are ignored. Errors keep the draft and show a toast. It uses the configured dictation language, falling back to the browser language for automatic detection. Browser dictation and server hands-free conversation cannot record together.
-- Mobile CLI and Chat output show a down-arrow to the right of Send, level with the composer submit button, while scrolled back. It has its own touch target and never covers the key bar. Tap it to return to the latest output; it hides at the bottom and never sends a terminal key.
+- The mobile composer offers browser dictation directly next to Send (44 px touch targets) when `SpeechRecognition` or `webkitSpeechRecognition` is available. Interim and final speech append to the draft without focusing the textarea or sending; tap again to stop. Editing the draft cancels recognition and keeps the edit exactly; the mic becomes available again when the browser confirms the previous session has ended. Errors also retain the microphone claim until that confirmation, so repeated taps cannot overlap recognition sessions. Late results from the cancelled recording are ignored. Errors request cancellation through the same shutdown path, keep the draft, and show a toast. “Dictation failed” also remains beside the composer mic above the keyboard until the next take starts. It uses the configured dictation language, falling back to the browser language for automatic detection. Browser dictation and server hands-free conversation cannot record together. Bounded, content-free lifecycle debug records carry session/take IDs to the existing diagnostic log ring for incident reconstruction.
+- Mobile CLI and Chat output show a floating down-arrow at the bottom-right of the output area while scrolled back, at least 8px above the key bar and outside the composer. It has its own touch target and never covers the key bar. Tap it to return to the latest output; it hides at the bottom and never sends a terminal key.
+- Mobile Settings → Appearance offers independent Terminal and Chat font controls (10–24 px), each saved on this device. Existing defaults remain 14 px for CLI and Chat body text. Chat changes affect Session Chat and AI Chat transcripts only; composers and UI chrome do not change. CLI output rewraps locally and preserves the visible row without resizing the shared PTY.
 - Mobile Settings → Input → Autocorrect and spellcheck enables keyboard correction and sentence capitalization for the terminal prompt and mobile Chat composers by default. Disable it for literal command entry. The preference stays on this device across reloads; file and code editors keep spellcheck off.
 - Dictated mobile drafts survive reload without automatic terminal input. Send or the first edit reconciles the restored draft with the current terminal line, preserving cleared text without duplicating text still present.
 - iPhone Home Screen availability remains device-dependent: [WebKit bug 225298](https://bugs.webkit.org/show_bug.cgi?id=225298#c3) documents the historical standalone restriction; Safari's [14.1 release notes](https://webkit.org/blog/11648/new-webkit-features-in-safari-14-1/) require Siri enabled. Feature detection and error handling apply; Safari tab support does not prove PWA support.
@@ -3029,6 +3052,11 @@ the created item. The Tasks shell integrates this component separately.
 
 
 Automation worktree cleanup (#1623-8b2a): Automation runs retain automation/run IDs and the exact created workspace path and ID in their saved snapshot, including after definition deletion. Worktree cleanup is explicit and limited to final runs. The backend resolves the saved identity and rechecks shared Git integration/archive proof, dirt, submodule commits and live sessions; it never forces removal or closes sessions. Shared `automation_action` actions `worktree_preview` and `cleanup_worktree` accept a saved run `id` on IPC, HTTP, MCP and CLI.
+
+### Guided event configuration (#2012-72ff)
+
+Three built-in Smart Prompts guide issue-to-draft-PR, incoming PR review and authorized bounded-fix configuration. They open in the composer for review and ask for owner/profile/GitHub/skill prerequisites, confirmed policy limits and supported host capabilities. They do not add a GitHub event runtime or grant publication authority; unavailable intake/publication stops with a draft policy. The after-beta live pilot is not yet verified. See [Guided event configuration](user-guide/event-driven-templates.md).
+
 ### Built-in automation templates
 
 New automation drafts offer weekday repository audit, release readiness, daily
@@ -3198,7 +3226,7 @@ Settings includes a typed All settings expert inspector with explicit owner/path
 
 ### Assisted Settings startup: published boundary
 
-[Startup workflow documentation](backend/settings-startup.md) covers GitHub device/Enterprise actions, read-only credential-source provenance and configured Ego settings/readback, with explicit owner revisions, human confirmation and partial-persistence recovery. Complete schema-only authentication onboarding is not claimed: account enumeration and interactive Ego login remain documented publication gaps.
+[Startup workflow documentation](backend/settings-startup.md) covers GitHub device/Enterprise actions, read-only credential-source provenance and configured Ego settings/readback, with explicit owner revisions, human confirmation and partial-persistence recovery. Typed account enumeration and configured Ego interactive login start/status are published. Login returns a human-operated terminal and bounded handle; closed and expired handles never imply authentication success. Complete schema-only onboarding remains subject to integration verification.
 
 ### CircleCI Settings owner (#1991-bd88)
 
@@ -3207,3 +3235,47 @@ Typed `set_token` and `clear_token` actions share the existing token owner acros
 MCP, IPC and HTTP. Readback reports stored presence only (`set`, `unset`,
 `unavailable`), never a secret. Git & GitHub keeps its effective-source status;
 removing a stored token leaves environment and CircleCI CLI fallbacks unchanged.
+
+### Generated launch playbook
+
+Settings > Agents selects generated Markers, Working with the user, Waiting, Git/worktrees, Process safety and child-only Children modules. Global and per-agent additions append after the modules; an explicit all-off switch suppresses the entire prompt. Effective previews use the selected machine. Exact old default copies migrate away without duplication.
+
+### Durable managed-child launch
+
+- MCP `agent launch`, HTTP `POST /agents/launch`, and IPC `managed_agent_launch` share an idempotent transaction.
+- Select/create a workspace, pin a stable name, link a registered parent, and choose keep-open in one request.
+- Durable launch handles survive lost replies; conflicting retries and uncertain partial creation fail explicitly without a second PTY or fallback checkout.
+- Receipts separate creation, prompt submission, native readiness, blocked state and warm-artifact status.
+
+### Bounded MCP reads
+
+Session and peer inventories support scoped lookup and `compact=true`, including
+explicit unknown state, activity age and omitted fields. Inbox and terminal
+output support opt-in UTF-8 byte-budget pages with immutable, lossless
+continuations. The envelope counts toward the budget; the inbox cursor advances
+only after the final chunk. HTTP MCP-compatible output shares the same boundary.
+
+### Opt-in frame workload evidence
+
+The debug frame recorder retains bounded real grid arrivals and immutable paint inputs, dumps on a recovered freeze/long paint or on demand, and replays production grid painting with per-frame timings. It is off by default, requires perfDebug, and stores sensitive terminal content separately from the numeric journal. See [Persistent stall evidence](backend/stall-journal.md). The synthetic smoke fixture is not a real-stall RED.
+
+Dictation correction dictionaries are discoverable and editable through the
+shared Settings owner as stable heard-text keys. Revision-checked edits reuse
+TextCorrector persistence and refresh the runtime without microphone access
+(#1992-d4fa).
+
+MCP discovery can include a complete top-match schema within a UTF-8 byte budget; clients can reuse it until catalogue invalidation (#2013-73f9).
+
+### Runtime MCP outcomes (#2010-30a7)
+
+A bounded body-free `/mcp/audit` projection records actual HTTP/ACP runtime calls,
+response text bytes, correlation UUIDs and separate application/transport/effect
+observations. Unobserved delivery and effects stay unknown; native `error:null`
+is not a failure. Client correlation and captured live traces remain separate.
+
+### Managed MCP reconnect context (#2008-5317)
+
+Modern stateless managed calls recover mail/project routing from their exact live
+host-issued peer identity without model-driven registration. Unknown/headerless
+peers get bounded context-recovery guidance, not a guessed repository or identity.
+Existing explicit identity replacement and stranded-mail receipts remain intact.

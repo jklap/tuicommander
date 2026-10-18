@@ -148,3 +148,7 @@ no clock or list lookup is needed. Retrying the identical request from the same
 caller returns the original reminder without resetting its delay. Supply a new
 explicit id to schedule a separate identical reminder. Elapsed delays remain
 exact across daylight-saving changes.
+
+### Guided GitHub event configuration
+
+For step-by-step policy setup, use the three [event configuration Smart Prompts](event-driven-templates.md), not the scheduled draft templates above. The guides verify the owning daemon, agent/reviewer profiles, GitHub auth, skills and supported intake/publication APIs. Missing capabilities stop the interview; no event subscription is created by applying a scheduled template.

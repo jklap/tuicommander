@@ -429,7 +429,12 @@ async fn automation_list_and_runner_resolve_run_configs_the_same_way() {
     assert!(valid["next_run_ms"].is_number());
     for (id, profile) in [("legacy", "claude"), ("retired", "Retired profile")] {
         let error = crate::mcp_http::managed_launch::launch_named(
-            &state, profile, "unused", "unused", "/unused",
+            &state,
+            profile,
+            "unused",
+            "unused",
+            "/unused",
+            "unlaunched-profile-test",
         )
         .unwrap_err();
         let row = rows
