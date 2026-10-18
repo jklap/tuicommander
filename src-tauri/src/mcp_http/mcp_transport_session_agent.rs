@@ -1730,7 +1730,7 @@ pub(crate) fn suspend_refusal(ss: &crate::state::SessionState) -> Option<&'stati
     }
     if ss.agent_type.is_some() {
         let working = matches!(ss.agent_state.as_deref(), Some("working" | "starting"));
-        if ss.background_work || working {
+        if ss.has_pending_background_probe() || ss.background_work || working {
             return Some("agent working");
         }
     } else if ss.shell_state.as_deref() == Some("busy") {
