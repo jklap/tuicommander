@@ -51,6 +51,7 @@ authors and communities behind each project.
 | ignore | 0.4.31 | Unlicense OR MIT |
 | include_dir | 0.7.4 | MIT |
 | jsonc-parser | 0.33.1 | MIT |
+| jsonschema | 0.59.0 | MIT |
 | keepawake | 0.6.0 | MIT |
 | keyring | 3.6.3 | MIT OR Apache-2.0 |
 | lazy_static | 1.5.0 | MIT OR Apache-2.0 |
@@ -234,7 +235,7 @@ Counts below collapse equivalent SPDX expressions (`MIT OR Apache-2.0` ≡ `Apac
 | License | Count |
 |---------|-------|
 | MIT OR Apache-2.0 | 80 |
-| MIT | 69 |
+| MIT | 70 |
 | Apache-2.0 | 8 |
 | Unlicense OR MIT | 7 |
 | Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT | 4 |

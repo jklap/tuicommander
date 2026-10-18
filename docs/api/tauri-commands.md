@@ -1079,3 +1079,5 @@ persistence; its host-injected state publishes a value-free change after saving.
 The upstream credential save/delete commands retain their public arguments;
 host-injected state routes both through the shared value-free Settings publisher
 only after owner persistence. Their HTTP equivalents use the same adapters.
+
+Progress reporting rejects text longer than 500 raw Unicode scalar values before trimming, consistently with HTTP and the native MCP schema (#2007-59f6).

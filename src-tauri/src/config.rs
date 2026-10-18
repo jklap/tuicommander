@@ -10004,7 +10004,7 @@ mod tests {
         assert_eq!(
             serde_json::to_value(&defaults.agents).unwrap(),
             expected,
-            "the settings baseline includes the same persisted Codex launch migration"
+            "the settings baseline includes the persisted Codex bypass and launch additions migrations"
         );
         assert_eq!(
             serde_json::to_value(&defaults.github_accounts).unwrap(),

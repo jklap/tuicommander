@@ -34,7 +34,7 @@ export MACOSX_DEPLOYMENT_TARGET ?= 10.15
 # Distribution output
 DIST_DIR=dist-release
 
-.PHONY: all clean dev test test-shell build build-dmg check cov crap fmt sign verify-sign notarize release dist \
+.PHONY: all clean dev test test-shell build build-dmg check check-desktop-embedding cov crap fmt sign verify-sign notarize release dist \
        nightly github-release preview bump release-notes hooks docs docs-serve \
        gh-debug-on gh-debug-off gh-debug-status gh-debug-logs gh-rate logs
 
@@ -125,8 +125,12 @@ fmt:
 	@pnpm exec biome check --fix src/
 	@cd src-tauri && cargo fmt
 
+# Check the production embedding path; unit tests use fixed transport fixtures.
+check-desktop-embedding:
+	@bash scripts/check-desktop-embedding.sh
+
 # Type-check, lint, format, and test (no Tauri build)
-check: test-shell
+check: test-shell check-desktop-embedding
 	@echo "Running checks..."
 	@scripts/with-test-tmp.sh $(RTK) pnpm exec tsc --noEmit && echo "  tsc ✓"
 	@scripts/with-test-tmp.sh $(RTK) pnpm exec biome check --max-diagnostics=100 src/ && echo "  biome ✓"
