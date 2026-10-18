@@ -10,12 +10,6 @@ const mod = isMacOS() ? "Cmd" : "Ctrl";
 
 export const TIPS: Tip[] = [
 	{
-		feature: "Tablet Markdown dropdown",
-		description:
-			"On a tablet, open a desktop Markdown tab from Markdown in the session header. On a phone, find the same list in More session actions.",
-		shortcut: null,
-	},
-	{
 		feature: "All settings inspector",
 		description:
 			"Open Settings → All settings (Expert) for typed catalogue fields without a dedicated page. Select the owner and existing record key, then read before saving. Credentials stay in their domain workflows.",

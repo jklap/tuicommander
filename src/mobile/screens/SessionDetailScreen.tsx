@@ -308,7 +308,6 @@ export function SessionDetailScreen(props: SessionDetailScreenProps) {
 						<button
 							type="button"
 							class={styles.markdownTrigger}
-							aria-label="Open Markdown files"
 							aria-expanded={markdownOpen()}
 							onClick={() => {
 								setMoreOpen(false);

@@ -260,7 +260,7 @@ it("replaces changed cwd results in place without an empty frame", async () => {
 it("shows the top-bar dropdown only at wide widths and keeps one shared list", async () => {
 	vi.stubGlobal("innerWidth", 1024);
 	const view = render(() => <MobileApp />);
-	const dropdown = await waitFor(() => view.getByRole("button", { name: "Open Markdown files" }));
+	const dropdown = await waitFor(() => view.getByRole("button", { name: "Markdown" }));
 	const subscriptions = vi.mocked(subscribeEvents).mock.calls.length;
 	await openMenu(view);
 	expect(view.queryByRole("region", { name: "Markdown" })).toBeNull();
@@ -269,7 +269,7 @@ it("shows the top-bar dropdown only at wide widths and keeps one shared list", a
 	expect(view.getAllByRole("region", { name: "Markdown" })).toHaveLength(1);
 	vi.stubGlobal("innerWidth", 767);
 	window.dispatchEvent(new Event("resize"));
-	expect(view.queryByRole("button", { name: "Open Markdown files" })).toBeNull();
+	expect(view.queryByRole("button", { name: "Markdown" })).toBeNull();
 	await openMenu(view);
 	expect(view.getAllByRole("region", { name: "Markdown" })).toHaveLength(1);
 	vi.stubGlobal("innerWidth", 390);
@@ -284,7 +284,7 @@ it("shows the top-bar dropdown only at wide widths and keeps one shared list", a
 it("opens a wide-screen dropdown entry in the mobile Markdown viewer", async () => {
 	vi.stubGlobal("innerWidth", 768);
 	const view = render(() => <MobileApp />);
-	await fireEvent.click(await waitFor(() => view.getByRole("button", { name: "Open Markdown files" })));
+	await fireEvent.click(await waitFor(() => view.getByRole("button", { name: "Markdown" })));
 	await fireEvent.click(await waitFor(() => view.getByRole("button", { name: "guide.md docs/guide.md" })));
 	await waitFor(() => expect(view.container.querySelector("#markdown-content h1")?.textContent).toBe("Desktop guide"));
 });
