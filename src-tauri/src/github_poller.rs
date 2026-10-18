@@ -11,6 +11,10 @@ use tokio::sync::{Notify, mpsc};
 use crate::github::BranchPrStatus;
 use crate::state::{AppEvent, AppState};
 
+#[cfg(test)]
+#[path = "github_volume_measurement_1995.rs"]
+mod volume_measurement_1995;
+
 /// Desktop delivery is optional; the event bus is authoritative on headless daemons.
 fn emit_window<T: Serialize + Clone>(state: &AppState, event: &str, payload: T) {
     #[cfg(feature = "desktop")]
