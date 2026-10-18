@@ -2473,17 +2473,17 @@ pub(super) fn spawn_with_identity(
                     .session_maps
                     .session_parent
                     .insert(session_id.clone(), parent_id);
-                if state.pending_initial_prompts.contains_key(&session_id) {
-                    let watchdog_state = Arc::clone(state);
-                    let watchdog_session = session_id.clone();
-                    tokio::spawn(async move {
-                        tokio::time::sleep(INITIAL_PROMPT_DELIVERY_TIMEOUT).await;
-                        crate::pty::notify_initial_prompt_timeout_if_pending(
-                            &watchdog_state,
-                            &watchdog_session,
-                        );
-                    });
-                }
+            }
+            if state.pending_initial_prompts.contains_key(&session_id) {
+                let watchdog_state = Arc::clone(state);
+                let watchdog_session = session_id.clone();
+                tokio::spawn(async move {
+                    tokio::time::sleep(INITIAL_PROMPT_DELIVERY_TIMEOUT).await;
+                    crate::pty::notify_initial_prompt_timeout_if_pending(
+                        &watchdog_state,
+                        &watchdog_session,
+                    );
+                });
             }
 
             let spawn_ts = std::time::SystemTime::now()
