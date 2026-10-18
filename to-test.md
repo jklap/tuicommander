@@ -2556,3 +2556,5 @@ Needs an iPhone (iOS 16.4+, 18.4+ preferred), the desktop TUICommander running a
 
 - [ ] After the next backend restart, check a Claude `intent:` line that wraps on a phone: its first row and continuation must both stay visible with the warning tint. The Rust log serializer change requires a manual `make dev` restart or release rebuild. Do not restart live sessions for this check (#2019-7c5d).
 - [ ] On a real iPhone, confirm the session menu Markdown list stays still during session updates; on an iPad, open a listed file from the top-bar Markdown dropdown and return to the session (#2024-9a86, #2025-82cb). Browser evidence covers 390 px and 1024 px, not physical touch behavior.
+
+- [x] Mobile Markdown review send (#2042-a71b): 360×800 agent-browser fixture check ticks a checkbox, saves a block comment, sends one path-and-count prompt, and displays queued feedback; screenshots are in the orchestrator report. The fixture uses real components with an isolated transport, not a live backend round trip.

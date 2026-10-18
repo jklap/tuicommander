@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+- Send saved mobile Markdown checkbox edits and tweak comments to a repository agent with the desktop review prompt and delivered or queued feedback (#2042-a71b).
+
 - Recover modern stateless managed MCP routing from exact live host identity and return bounded missing-context diagnostics instead of blind registration advice (#2008-5317).
 
 - Record bounded body-free runtime MCP call outcomes with separate application, transport and effect observations; do not mark native `error:null` results as failures (#2010-30a7).

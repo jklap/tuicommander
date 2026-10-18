@@ -1,5 +1,7 @@
 # TUICommander Specification
 
+- [x] Mobile Markdown review sends persisted edits and tweak comments through the shared desktop prompt and backend idle queue, with repository agent selection and delivery feedback (#2042-a71b).
+
 - [x] Durable independent peer-mail subscriptions: shared insertion journal, filtered bounded replay, explicit acknowledgement, retention-loss counters, HTTP SSE and ACP resource notifications (#2004-4760).
 
 - [x] Generated launch playbook modules with global/per-agent switches, append-only user additions, explicit all off, legacy default-copy migration and machine-owned effective previews (#2000-b50f).

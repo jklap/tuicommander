@@ -1,11 +1,20 @@
-import { createEffect, createSignal, For, on, onCleanup, onMount, Show } from "solid-js";
+import { createEffect, createMemo, createSignal, For, on, onCleanup, onMount, Show } from "solid-js";
+import { Select } from "../../components/ui/Select";
+import { t } from "../../i18n";
 import { appLogger } from "../../stores/appLogger";
 import { toastsStore } from "../../stores/toasts";
 import { rpc } from "../../transport";
-import { isAbsolutePath, pathStripPrefix } from "../../utils/pathUtils";
+import { buildMarkdownReviewPrompt } from "../../utils/markdownReviewPrompt";
+import { isAbsolutePath, joinPath, pathStripPrefix } from "../../utils/pathUtils";
 import { repoImageUrl } from "../../utils/repoImageUrl";
-import { insertTweakBlockComment, type TweakComment, toggleCheckbox } from "../../utils/tweakComments";
+import {
+	insertTweakBlockComment,
+	parseTweakComments,
+	type TweakComment,
+	toggleCheckbox,
+} from "../../utils/tweakComments";
 import { ReviewableMarkdown } from "../components/ReviewableMarkdown";
+import type { SessionInfo } from "../useSessions";
 import styles from "./FilesScreen.module.css";
 
 interface FileEntry {
@@ -18,6 +27,8 @@ interface FileEntry {
 const MAX_MOBILE_FILE_BYTES = 1_048_576;
 
 interface FilesScreenProps {
+	sessions?: SessionInfo[];
+	initialSessionId?: string;
 	recoveryRevision?: number;
 	initialRepo?: { worktreePath: string | null; cwd: string | null };
 	initialLink?: { candidate: string; line?: number };
@@ -51,7 +62,74 @@ export function FilesScreen(props: FilesScreenProps) {
 	const [error, setError] = createSignal("");
 	// Refusals of a review write (file changed on disk, write failed). Unlike `error` it keeps the document visible.
 	const [notice, setNotice] = createSignal("");
+	const [sendNotice, setSendNotice] = createSignal("");
 	const [writing, setWriting] = createSignal(false);
+	const [editedSinceSend, setEditedSinceSend] = createSignal(false);
+	const [sentCommentIds, setSentCommentIds] = createSignal<Set<string>>(new Set());
+	const [sendingChanges, setSendingChanges] = createSignal(false);
+	const [selectedAgentSession, setSelectedAgentSession] = createSignal("");
+	const reviewComments = createMemo(() => parseTweakComments(content()));
+	const hasReviewChanges = () =>
+		editedSinceSend() || reviewComments().some((comment) => !sentCommentIds().has(comment.id));
+	const reviewAgents = createMemo(() =>
+		(props.sessions ?? []).filter(
+			(session) =>
+				!!session.state?.agent_type &&
+				!!repo() &&
+				(session.worktree_path
+					? normalizedPath(session.worktree_path) === normalizedPath(repo()!)
+					: !!session.cwd &&
+						withinRoot(session.cwd, repo()!) &&
+						!repos().some(
+							(root) =>
+								normalizedPath(root) !== normalizedPath(repo()!) &&
+								withinRoot(root, repo()!) &&
+								withinRoot(session.cwd!, root),
+						)),
+		),
+	);
+	createEffect(() => {
+		const agents = reviewAgents();
+		if (agents.some((agent) => agent.session_id === selectedAgentSession())) return;
+		setSelectedAgentSession(
+			agents.find((agent) => agent.session_id === props.initialSessionId)?.session_id ?? agents[0]?.session_id ?? "",
+		);
+	});
+	async function sendChanges() {
+		const sessionId = selectedAgentSession();
+		const filePath = file();
+		const repoPath = repo();
+		if (!sessionId || !filePath || !repoPath || !hasReviewChanges() || sendingChanges() || writing()) return;
+		const sentContent = content();
+		const comments = reviewComments();
+		const currentRequest = requestId;
+		setSendingChanges(true);
+		setSendNotice("");
+		setNotice("");
+		try {
+			const outcome = await rpc<{ typed: boolean; queued: number }>("enqueue_agent_command", {
+				sessionId,
+				text: buildMarkdownReviewPrompt(
+					isAbsolutePath(filePath) ? filePath : joinPath(repoPath, filePath),
+					comments.length,
+				),
+			});
+			if (currentRequest === requestId) {
+				setSentCommentIds(new Set(comments.map((comment) => comment.id)));
+				if (content() === sentContent) setEditedSinceSend(false);
+				setSendNotice(
+					outcome.typed
+						? t("markdownTab.sentToAgentNow", "The review request was delivered now.")
+						: t("markdownTab.sentToAgentQueued", "The review request is queued for the agent's next idle window."),
+				);
+			}
+		} catch (err) {
+			appLogger.error("network", `Failed to queue Markdown review: ${String(err)}`);
+			if (currentRequest === requestId) setNotice(t("markdownTab.sendFailed", "Couldn't send changes"));
+		} finally {
+			setSendingChanges(false);
+		}
+	}
 	let openedEntry: FileEntry | undefined;
 	let requestId = 0;
 	let searchRequestId = 0;
@@ -100,6 +178,7 @@ export function FilesScreen(props: FilesScreenProps) {
 			}
 			const config = await rpc<{ repos?: Record<string, unknown> }>("load_repositories");
 			const registered = Object.keys(config.repos ?? {});
+			setRepos(registered);
 			if (cwd) {
 				const matching = registered.filter((path) => withinRoot(cwd, path)).sort((a, b) => b.length - a.length);
 				if (matching.length === 0) {
@@ -136,6 +215,7 @@ export function FilesScreen(props: FilesScreenProps) {
 			return;
 		}
 		const config = await rpc<{ repos?: Record<string, unknown> }>("load_repositories");
+		setRepos(Object.keys(config.repos ?? {}));
 		const roots = [props.initialRepo?.worktreePath, ...Object.keys(config.repos ?? {})].filter(
 			(path): path is string => !!path,
 		);
@@ -226,6 +306,9 @@ export function FilesScreen(props: FilesScreenProps) {
 		openedEntry = entry;
 		const currentRequest = ++requestId;
 		setFile(entry.path);
+		setSendNotice("");
+		setEditedSinceSend(false);
+		setSentCommentIds(new Set<string>());
 		setContent("");
 		setEditing(false);
 		setError("");
@@ -266,6 +349,7 @@ export function FilesScreen(props: FilesScreenProps) {
 
 	function goBack() {
 		requestId++;
+		setSendNotice("");
 		setBusy(false);
 		setError("");
 		setNotice("");
@@ -309,7 +393,10 @@ export function FilesScreen(props: FilesScreenProps) {
 			expected: content(),
 			content: next,
 		});
-		if (written) setContent(next);
+		if (written) {
+			setContent(next);
+			setEditedSinceSend(true);
+		}
 		return written;
 	}
 
@@ -444,6 +531,11 @@ export function FilesScreen(props: FilesScreenProps) {
 					{error()}
 				</p>
 			</Show>
+			<Show when={sendNotice()}>
+				<p class={styles.status} role="status">
+					{sendNotice()}
+				</p>
+			</Show>
 			<Show when={notice()}>
 				<p class={styles.error} role="alert">
 					{notice()}
@@ -518,14 +610,45 @@ export function FilesScreen(props: FilesScreenProps) {
 					when={editing()}
 					fallback={
 						file()?.toLowerCase().endsWith(".md") ? (
-							<div class={styles.markdownView}>
-								<ReviewableMarkdown
-									content={content()}
-									imageSrc={markdownImageSrc}
-									onCheckboxToggle={toggleTask}
-									onSaveBlockComment={saveBlockComment}
-								/>
-							</div>
+							<>
+								<Show when={hasReviewChanges()}>
+									<div class={styles.reviewActions}>
+										<label for="mobile-review-agent">{t("markdownTab.agentLabel", "Agent")}</label>
+										<Select
+											id="mobile-review-agent"
+											aria-label={t("markdownTab.reviewAgent", "Review agent")}
+											value={selectedAgentSession()}
+											disabled={!reviewAgents().length || sendingChanges()}
+											onChange={(event) => setSelectedAgentSession(event.currentTarget.value)}
+										>
+											<Show when={!reviewAgents().length}>
+												<option value="">{t("markdownTab.noAgents", "No agents")}</option>
+											</Show>
+											<For each={reviewAgents()}>
+												{(agent) => <option value={agent.session_id}>{agent.display_name || agent.session_id}</option>}
+											</For>
+										</Select>
+										<button
+											class={styles.action}
+											data-ready={selectedAgentSession() && !sendingChanges() && !writing() ? "true" : undefined}
+											disabled={!selectedAgentSession() || sendingChanges() || writing()}
+											title={t("markdownTab.sendChanges", "Send changes to agent")}
+											aria-label={t("markdownTab.sendChanges", "Send changes to agent")}
+											onClick={() => void sendChanges()}
+										>
+											{sendingChanges() ? t("markdownTab.sending", "Sending…") : t("markdownTab.send", "Send")}
+										</button>
+									</div>
+								</Show>
+								<div class={styles.markdownView}>
+									<ReviewableMarkdown
+										content={content()}
+										imageSrc={markdownImageSrc}
+										onCheckboxToggle={toggleTask}
+										onSaveBlockComment={saveBlockComment}
+									/>
+								</div>
+							</>
 						) : (
 							<pre class={styles.viewer}>{content()}</pre>
 						)
