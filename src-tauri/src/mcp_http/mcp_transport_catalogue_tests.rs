@@ -2048,7 +2048,7 @@ fn catalogue_schema_reuse_avoids_second_discovery_hop() {
         "inputSchema": {"type": "object", "properties": {}}
     });
     *state.mcp.tool_search_index.write() =
-        crate::tool_search::ToolSearchIndex::build(&[definition.clone()]);
+        crate::tool_search::ToolSearchIndex::build(std::slice::from_ref(&definition));
     let args = serde_json::json!({"query": "needle", "schema_byte_budget": 4096});
     let first = handle_search_tools(&state, &args);
     assert_eq!(first["top_schema"], definition);
@@ -2072,7 +2072,7 @@ fn catalogue_schema_reuse_budget_counts_complete_utf8_definition() {
     let definition = serde_json::json!({"name":"needle", "description":"Needle éé discovery.", "inputSchema":{"type":"object"}});
     let bytes = serde_json::to_vec(&definition).unwrap().len();
     *state.mcp.tool_search_index.write() =
-        crate::tool_search::ToolSearchIndex::build(&[definition.clone()]);
+        crate::tool_search::ToolSearchIndex::build(std::slice::from_ref(&definition));
     for budget in [0, bytes - 1] {
         let result = handle_search_tools(
             &state,

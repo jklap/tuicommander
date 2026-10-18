@@ -241,7 +241,7 @@ mod tests {
     #[test]
     fn mcp_outcome_record_projection_evicts_without_retaining_arbitrary_metadata() {
         let audit = Mutex::new(Audit::default());
-        for _ in 0..CAPACITY + 1 {
+        for _ in 0..=CAPACITY {
             drop(Call::start(
                 &audit,
                 &json!({"name":"SECRET_TOOL","_meta":{"tuic/call_id":"SECRET_ID"}}),
