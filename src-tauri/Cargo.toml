@@ -330,6 +330,8 @@ desktop = [
 # Native speech is opt-in for Cargo dev/test builds. Tauri dev/release builds
 # enable it through tauri.conf.json.
 dictation = ["desktop", "dep:tuic-dictation"]
+# Opt-in generated-command IPC tests use Tauri's mock runtime, never a desktop app.
+settings-ipc-test = ["desktop", "tauri/test"]
 
 # GPU features for Linux builds (macOS always has Metal via target dep; Windows
 # is CPU-only — the whisper.cpp Vulkan backend's vulkan-shaders-gen sub-build is

@@ -17,14 +17,19 @@ async function ev(expression){const r=await send('Runtime.evaluate',{expression,
 await send('Emulation.setEmulatedMedia',{features:[{name:'prefers-reduced-motion',value:'reduce'}]});await send('Page.enable');await send('Runtime.enable');await send('Fetch.enable',{patterns:[{urlPattern:'*'}]});
 const tabs=process.env.VISUAL_PAGES?process.env.VISUAL_PAGES.split(','):test==='settings_text_contrast_on_themed_surfaces'?['general','terminal','keyboard-shortcuts','ai-chat','plugins','repo:/workspace/fixture-project']:test==='settings_agent_initials_contrast'?['agents']:test==='settings_appearance_legend_light_text_contrast'?['appearance']:test==='settings_help_badges_share_label_line'?['general','notifications','github','agents','repo:/workspace/fixture-project']:['general','appearance','notifications','terminal','keyboard-shortcuts','github','agents','ai-chat','dictation','smart-prompts','mcp','remote-access','remote-machines','telegram','plugins','repo:/workspace/fixture-project'];
 const results=[];
-for(const width of [1400,390])for(const theme of ['dark','light'])for(const entry of [...tabs.map(tab=>({tab,state:'ready'})),{tab:'plugin:fixture',state:'ready'},{tab:'plugin:fixture',state:'loading'},{tab:'plugin:fixture',state:'error'},{tab:'plugin:fixture',state:'stale'},{tab:'ai-chat',state:'nested'},{tab:'general',state:'launcher-editor'},...['general','ai-chat','repo:/workspace/fixture-project'].map(tab=>({tab,state:'long-text'}))]){const {tab,state}=entry;errors=[];network=[];await send('Emulation.setDeviceMetricsOverride',{width,height:width===1400?900:844,deviceScaleFactor:1,mobile:false});const url=`http://127.0.0.1:15391/scripts/settings-visual/index.html?theme=${theme}&tab=${encodeURIComponent(tab)}&state=${state}`;
+for(const width of [1400,390])for(const theme of ['dark','light'])for(const entry of [...tabs.map(tab=>({tab,state:'ready'})),{tab:'plugin:fixture',state:'ready'},{tab:'plugin:fixture',state:'loading'},{tab:'plugin:fixture',state:'error'},{tab:'plugin:fixture',state:'stale'},{tab:'ai-chat',state:'nested'},{tab:'general',state:'launcher-editor'},...['general','ai-chat','repo:/workspace/fixture-project'].map(tab=>({tab,state:'long-text'}))]){const {tab,state}=entry;errors=[];network=[];await send('Emulation.setDeviceMetricsOverride',{width,height:width===1400?900:844,deviceScaleFactor:1,mobile:false});const url=`http://127.0.0.1:15391/scripts/settings-visual/index.html?theme=${theme}&tab=${encodeURIComponent(tab)}&state=${state}${process.env.VISUAL_BROWSER==='1'?'&browser=1':''}`;
 await send('Page.navigate',{url});
 let settled=false;
 for(let ready=0;ready<100;ready++){
  try{settled=await ev(`location.href===${JSON.stringify(url)}&&document.readyState==='complete'&&!!document.querySelector('[data-settings-content] header')&&document.documentElement.dataset.theme===${JSON.stringify(theme==='light'?'vscode-light':'commander')}&&getComputedStyle(document.body).color===${JSON.stringify(theme==='light'?'rgb(51, 51, 51)':'rgb(212, 212, 212)')}`);}catch{settled=false;}
  if(settled)break;await new Promise(r=>setTimeout(r,100));
 }
-if(!settled)throw new Error('Requested Settings document/theme did not settle: '+url);
+if(!settled){
+ const diagnostic={url,errors,blockedNetwork:network,page:await ev(`({url:location.href,ready:document.readyState,text:document.body.innerText,theme:document.documentElement.dataset.theme,foreground:getComputedStyle(document.body).color})`)};
+ await writeFile(dir+'setup-failure.json',JSON.stringify(diagnostic,null,2));
+ await writeFile(dir+'setup-failure.png',Buffer.from((await send('Page.captureScreenshot',{format:'png'})).data,'base64'));
+ throw new Error('Requested Settings document/theme did not settle: '+JSON.stringify(diagnostic));
+}
 await ev(`document.fonts.ready.then(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))))`);
 // Inherited text may still be black on the first mounted frame while Vite installs styles.
 // Read the actual targets, not just root tokens, before accepting the document.
@@ -37,6 +42,11 @@ if(!textSettled)throw new Error('Settings text theme did not settle: '+url);
 await ev(`new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))`);
 
 
+if(tab==='all-settings'){
+ await ev(`(()=>{const select=document.querySelector('[data-settings-content] select');select.value='app.shell';select.dispatchEvent(new Event('change',{bubbles:true}));})()`);
+ let mounted=false;for(let ready=0;ready<100;ready++){mounted=await ev(`!!document.querySelector('input[data-setting-id="app.shell"]')&&document.body.innerText.includes('Source: visual fixture')`);if(mounted)break;await new Promise(r=>setTimeout(r,50));}
+ if(!mounted)throw new Error('Expert inspector did not render its descriptor-bound owner read');
+}
 if(state==='long-text')await ev(`(()=>{const c=document.querySelector('[data-settings-content]');const label=c.querySelector('label');label?.append(' — Long translated configuration label that must wrap without overlapping its help badge or control');const input=[...c.querySelectorAll('input')].find(e=>e.type==='text');if(input)input.value='/workspace/long-repository-name/long-profile-name/long-configuration-value';})()`);
 if(state==='nested')await ev(`(()=>{[...document.querySelectorAll('button')].find(e=>e.textContent==='Add folder')?.click();})()`);
 if(state==='launcher-editor')await ev(`(()=>{[...document.querySelectorAll('button')].find(e=>e.textContent==='Add launcher')?.click();})()`);

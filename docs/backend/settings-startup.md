@@ -21,6 +21,16 @@ not live UI convergence or complete authentication onboarding.
    `expectedRevision`. Never combine different stores in one patch. Stable
    collection keys are not array indexes or arbitrary file paths.
 
+The opt-in `settings-ipc-test` Cargo feature tests the generated
+`settings_action` command with Tauri's mock runtime and real `InvokeRequest`
+argument extraction. Run the targeted
+`settings_generated_mock_ipc_agrees_with_mcp_and_http` test through the repository
+test wrapper. It compares durable notification edits across MCP, HTTP and mock
+IPC, rejects a missing `{request: ...}` wrapper without writing, and preserves
+native access when MCP is disabled. It does not start the desktop setup closure,
+open an OS WebView, or prove the installed app's registration and ACL state.
+Live desktop parity remains a separate check after a Boss-controlled restart.
+
 Tauri `settings_action`, HTTP `POST /settings/action`, and MCP `settings` use the
 same request DTOs and owner services. MCP mutation is loopback-only. HTTP keeps
 its local-or-authenticated caller policy; native IPC keeps host-issued trust.
@@ -170,3 +180,37 @@ These results validate the isolated contracts, not complete live onboarding.
 Step 10 remains open for human-assisted GitHub/Ego authentication and recorded
 provider-expiry evidence. No successful authentication, external expired-token
 response, or native desktop validation is inferred from these runs.
+
+### Boss-controlled acceptance procedure
+
+Prerequisites: a Boss-controlled backend rebuild/restart, a disposable isolated
+instance and registered test repository, a test GitHub account, and a configured
+Ego executable/workspace with a provider that supports interactive login. Do not
+launch a second desktop app or use production credentials for this check.
+
+1. Enable Settings MCP from trusted UI. Discover the current schema and account
+   operations. Run `begin_cloud_login`, complete the returned GitHub verification
+   in the browser, and poll `complete_cloud_login` only at the returned interval.
+   Verify success through `list_accounts` and presence-only owner readback. Use
+   the described preference and binding operations with each owner's revision;
+   read back the preference and repository binding rather than inspecting files.
+2. Discover Ego providers and the published model field. Read the machine owner
+   revision, call `begin_login` for the selected supported provider, and complete
+   authentication in the returned terminal. Call `login_status` after exit;
+   require fresh credential presence, not merely `closed`. Refresh provider
+   state, select the model through the published field and read it back. Confirm
+   the next-session effect; do not relaunch an existing ACP conversation.
+3. In separate test flows, decline GitHub authorization and abandon an unapproved
+   flow until it expires. Preserve a real provider-issued `expired_token` response
+   only if the provider returns one before TUIC's local deadline takes effect.
+   A local `expired` result does not establish that external response. If TUIC's
+   deadline wins, record that limitation; do not invent a response or weaken the
+   deadline. Ego host-handle expiry is a different condition.
+4. Retain only redacted action names, outcome/status, provider error code and
+   readback evidence. Never retain device codes, user codes, tokens, cookies,
+   authorization headers, terminal authentication text or credential-store data.
+
+The source-level refusal/confirmation-expiry, stale-revision, owner deadline and
+persisted-apply-failure tests cover automatable recovery independently. They do
+not require a live provider, and passing them must not be reported as completion
+of the human authentication or external-response steps above.
