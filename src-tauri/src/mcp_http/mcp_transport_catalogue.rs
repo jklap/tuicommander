@@ -410,7 +410,7 @@ fn render_capability_map(
         return lines;
     }
     let hint = if collapse_tools {
-        "Names below are `call_tool` targets; load a schema with `get_tool_schema` first."
+        "Names below are `call_tool` targets; use a complete search `top_schema` or load one with `get_tool_schema` first."
     } else if claude_code {
         "Load a tool's schema before the first call (ToolSearch `select:mcp__tuicommander__<tool>`)."
     } else {
@@ -774,8 +774,9 @@ pub(super) fn meta_tool_definitions(state: &Arc<AppState>) -> serde_json::Value 
 
     let search_desc = format!(
         "Find relevant TUICommander tools by natural-language query. Returns a BM25-ranked \
-         list of tool names + one-line summaries. Use it to discover a tool you do not yet \
-         know, then call `get_tool_schema` for its full input schema. A tool already on your \
+         list of tool names + one-line summaries, plus a complete top_schema when it fits \
+         schema_byte_budget (default 16384 UTF-8 bytes, maximum 65536; 0 disables it). \
+         Use top_schema directly; otherwise call `get_tool_schema` for the selected tool. A tool already on your \
          list, or one whose schema you fetched earlier on this connection, is callable \
          without searching for it again.\n\n\
          Domains available: terminal pane sessions (tmux replacement), AI agent orchestration + \
@@ -791,7 +792,8 @@ pub(super) fn meta_tool_definitions(state: &Arc<AppState>) -> serde_json::Value 
                 "type": "object",
                 "properties": {
                     "query": { "type": "string", "description": "Natural-language query describing what you want to do (e.g. 'manage terminal sessions', 'github PR status', 'cross-repo knowledge search')" },
-                    "limit": { "type": "integer", "description": "Maximum number of results, default 10" }
+                    "limit": { "type": "integer", "description": "Maximum number of results, default 10" },
+                    "schema_byte_budget": { "type": "integer", "minimum": 0, "maximum": 65536, "description": "Serialized UTF-8 byte budget for the complete top_schema; default 16384, 0 omits it" }
                 },
                 "required": ["query"]
             }
@@ -809,7 +811,7 @@ pub(super) fn meta_tool_definitions(state: &Arc<AppState>) -> serde_json::Value 
         },
         {
             "name": "call_tool",
-            "description": "Invoke a TUICommander tool by name with arguments. Dispatches to native tools or upstream-proxied tools (`{upstream}__{tool}`). The arguments object must match the tool's inputSchema.\n\nFirst time with a tool: `search_tools(query=\"…\")` → pick a name → `get_tool_schema(tool_name=…)` → `call_tool(tool_name=…, arguments={…})`. After that, call it straight away with the schema you already have; re-fetch it only after a `notifications/tools/list_changed`, which is the one thing that can move it. Never skip discovery for a name you have NOT seen from `search_tools` or `get_tool_schema`: an invented name is a failed call, not a lucky guess.",
+            "description": "Invoke a TUICommander tool by name with arguments. Dispatches to native tools or upstream-proxied tools (`{upstream}__{tool}`). The arguments object must match the tool's inputSchema.\n\nFirst time with a tool: `search_tools(query=\"…\")` → pick a name → use the returned `top_schema` or `get_tool_schema(tool_name=…)` → `call_tool(tool_name=…, arguments={…})`. After that, call it straight away with the schema you already have; re-fetch it only after a `notifications/tools/list_changed`, which is the one thing that can move it. Never skip discovery for a name you have NOT seen from `search_tools` or `get_tool_schema`: an invented name is a failed call, not a lucky guess.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -988,18 +990,20 @@ pub(super) fn searchable_tool_definitions(state: &Arc<AppState>) -> Vec<serde_js
 /// toggle, upstream add/remove, upstream tools/list_changed).
 pub(crate) fn rebuild_tool_search_index(state: &Arc<AppState>) {
     let tools = searchable_tool_definitions(state);
-    let index = crate::tool_search::ToolSearchIndex::build(&tools);
-    *state.mcp.tool_search_index.write() = index;
+    let generation = crate::tool_search::ToolSearchIndex::catalogue_generation(&tools);
+    let mut index = state.mcp.tool_search_index.write();
+    if index.generation() != generation {
+        *index = crate::tool_search::ToolSearchIndex::build(&tools);
+    }
 }
 
 /// Spawn the background task that subscribes to `mcp_tools_changed` and
 /// rebuilds `tool_search_index` on every signal. Also does an initial build
 /// so the index is populated immediately.
 pub(crate) fn spawn_tool_search_index_updater(state: Arc<AppState>) {
-    // Initial build so search_tools works before the first tools_changed signal.
-    rebuild_tool_search_index(&state);
-
+    // Subscribe first so a change during the initial build is not lost.
     let mut rx = state.mcp.tools_changed.subscribe();
+    rebuild_tool_search_index(&state);
     tokio::spawn(async move {
         loop {
             match rx.recv().await {
@@ -1054,7 +1058,24 @@ pub(super) fn handle_search_tools_for_session(
         .take(limit)
         .map(|e| serde_json::json!({ "name": e.name, "summary": e.summary }))
         .collect();
-    serde_json::json!({ "results": ranked, "count": ranked.len() })
+    // Include one complete definition only: never truncate a schema into an
+    // unusable contract. The budget measures its serialized UTF-8 bytes.
+    let budget = args["schema_byte_budget"]
+        .as_u64()
+        .unwrap_or(16384)
+        .min(65536) as usize;
+    let top_schema = ranked
+        .first()
+        .and_then(|entry| entry["name"].as_str())
+        .and_then(|name| index.get_schema(name))
+        .filter(|schema| serde_json::to_vec(schema).is_ok_and(|bytes| bytes.len() <= budget));
+    let mut response = serde_json::json!({
+        "results": ranked, "count": ranked.len(), "catalogue_generation": index.generation()
+    });
+    if let Some(schema) = top_schema {
+        response["top_schema"] = schema.clone();
+    }
+    response
 }
 
 /// Handle `get_tool_schema` meta-tool — exact-name lookup of a tool's full definition.

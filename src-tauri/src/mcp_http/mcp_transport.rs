@@ -1413,7 +1413,9 @@ pub(super) async fn mcp_get(
             tokio::select! {
                 result = tools_rx.recv() => {
                     match result {
-                        Ok(()) => {
+                        Ok(()) | Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
+                            // Publish fresh schemas before telling the client to refetch.
+                            rebuild_tool_search_index(&state);
                             let notification = serde_json::json!({
                                 "jsonrpc": "2.0",
                                 "method": "notifications/tools/list_changed"
@@ -1423,7 +1425,6 @@ pub(super) async fn mcp_get(
                                     .data(serde_json::to_string(&notification).unwrap_or_default())
                             );
                         }
-                        Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
                         Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
                     }
                 }

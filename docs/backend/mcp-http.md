@@ -649,7 +649,7 @@ When `collapse_tools: true` in `config.json` (or via Settings > MCP > TUIC Tools
 
 | Meta-tool | Purpose |
 |-----------|---------|
-| `search_tools` | BM25 search over the full native + upstream tool corpus; returns name/description pairs |
+| `search_tools` | BM25 search over the full native + upstream tool corpus; returns name/summary pairs, an opaque `catalogue_generation`, and an optional complete `top_schema` |
 | `get_tool_schema` | Returns the full `{name, description, inputSchema}` for a specific tool |
 | `call_tool` | Dispatches to the named tool — routes to the native handler or `proxy_tool_call` for `{upstream}__{tool}` names |
 
@@ -677,6 +677,20 @@ once at `initialize`. The precedence runs that way because ego reaches `/mcp`
 through `tuic-bridge`, which opened the transport session under its own name:
 preferring the session made `server/discover` advertise the collapsed surface and
 the very next `tools/list` deliver the full one, for the identical request.
+
+**Schema admission and reuse (#2013-73f9).** Search includes the complete definition of
+its first visible match when the serialized UTF-8 JSON fits `schema_byte_budget`
+(default 16384 bytes, maximum 65536; 0 disables inline schemas). The budget applies
+to the definition, not the whole search response. Oversized schemas are omitted,
+never truncated; select a result and fetch it with `get_tool_schema` instead.
+A client can admit `top_schema` directly and call the tool without a second
+schema-fetch hop. Reuse an admitted definition until `notifications/tools/list_changed`
+or a different `catalogue_generation`. The generation is a content digest of the
+search corpus, not an authorization token. An unchanged rebuild keeps it stable.
+HTTP SSE and MCP-over-ACP refresh the index before forwarding invalidation, including
+lag recovery. Dispatch still checks live permissions and visibility; a cached schema
+never grants access. Clients must implement admission and invalidation themselves;
+server tests are not evidence of a real ego client's hop reduction.
 
 **Filter enforcement.** Both `search_tools` and `call_tool` re-apply the safety filters that the full listing would apply: `disabled_native_tools` is checked up-front in `handle_call_tool`, and upstream allow/deny filters are enforced at both enumeration time (`aggregated_tools`) and dispatch time (`proxy_tool_call`). This is critical under collapse mode: discovery no longer gates dispatch, so an agent that knows a filtered tool name cannot bypass the filter by calling `call_tool` directly. `search_tools` and `get_tool_schema` also reject meta-tool names, and `call_tool` refuses to recurse into itself.
 

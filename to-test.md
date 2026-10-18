@@ -2473,3 +2473,7 @@ Needs an iPhone (iOS 16.4+, 18.4+ preferred), the desktop TUICommander running a
 
 - [ ] After Boss rebuilds/restarts TUIC (#2005-191f), read a large inbox and terminal with `byte_budget=4096`, concatenate chunk strings and parse JSON; verify final-page cursor advancement, scoped compact inventory and explicit expired-token errors. Rust does not hot-reload; no desktop verification instance was started.
 - [ ] After Boss manually rebuilds/restarts, explicitly enable perfDebug and frameWorkload; capture a real long paint/stall, confirm the saved path via eval_js logs, and replay in isolated native WebKit with heartbeat/input and independent backend timings. Synthetic smoke is not the real-stall RED (#1638-c94c). Rust changes do not hot-reload; do not start a second desktop instance.
+
+## MCP inline schemas (2013-73f9) — Rust restart required
+
+- [ ] After Boss loads the rebuilt backend, measure a real ego session before/after: search top_schema admission must remove one discovery hop before its first tool call. Confirm a tools/list_changed notification invalidates admission. Requires the ego client counterpart; no desktop restart was performed by this peer.

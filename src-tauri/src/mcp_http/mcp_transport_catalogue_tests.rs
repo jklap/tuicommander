@@ -2054,7 +2054,79 @@ fn catalogue_schema_reuse_avoids_second_discovery_hop() {
     assert_eq!(first["top_schema"], definition);
     let second = handle_search_tools(&state, &args);
     assert_eq!(second["top_schema"], first["top_schema"]);
-    assert_eq!(second["catalogue_generation"], first["catalogue_generation"]);
+    assert_eq!(
+        second["catalogue_generation"],
+        first["catalogue_generation"]
+    );
     assert!(first["catalogue_generation"].is_string());
-    assert_eq!(handle_get_tool_schema(&state, &serde_json::json!({"tool_name": "needle"})), definition);
+    assert_eq!(
+        handle_get_tool_schema(&state, &serde_json::json!({"tool_name": "needle"})),
+        definition
+    );
+}
+
+/// Catches: schema truncation or character-count budgeting admits an incomplete UTF-8 contract.
+#[test]
+fn catalogue_schema_reuse_budget_counts_complete_utf8_definition() {
+    let state = test_state();
+    let definition = serde_json::json!({"name":"needle", "description":"Needle éé discovery.", "inputSchema":{"type":"object"}});
+    let bytes = serde_json::to_vec(&definition).unwrap().len();
+    *state.mcp.tool_search_index.write() =
+        crate::tool_search::ToolSearchIndex::build(&[definition.clone()]);
+    for budget in [0, bytes - 1] {
+        let result = handle_search_tools(
+            &state,
+            &serde_json::json!({"query":"needle", "schema_byte_budget":budget}),
+        );
+        assert!(result.get("top_schema").is_none());
+        assert_eq!(result["results"][0]["name"], "needle");
+    }
+    let result = handle_search_tools(
+        &state,
+        &serde_json::json!({"query":"needle", "schema_byte_budget":bytes}),
+    );
+    assert_eq!(result["top_schema"], definition);
+    let empty = handle_search_tools(&state, &serde_json::json!({"query":"zzzzabsent"}));
+    assert!(empty.get("top_schema").is_none());
+}
+
+/// Catches: a removed tool keeps its admitted generation or inline schema after invalidation.
+#[test]
+fn catalogue_schema_reuse_generation_changes_with_visibility() {
+    let state = test_state();
+    rebuild_tool_search_index(&state);
+    let before = handle_search_tools(
+        &state,
+        &serde_json::json!({"query":"PTY multiplexer tmux pane lifecycle"}),
+    );
+    assert_eq!(before["top_schema"]["name"], "session");
+    rebuild_tool_search_index(&state);
+    let unchanged = handle_search_tools(
+        &state,
+        &serde_json::json!({"query":"PTY multiplexer tmux pane lifecycle"}),
+    );
+    assert_eq!(
+        before["catalogue_generation"],
+        unchanged["catalogue_generation"]
+    );
+    state
+        .config
+        .write()
+        .disabled_native_tools
+        .push("session".to_owned());
+    rebuild_tool_search_index(&state);
+    let after = handle_search_tools(
+        &state,
+        &serde_json::json!({"query":"PTY multiplexer tmux pane lifecycle"}),
+    );
+    assert_ne!(
+        before["catalogue_generation"],
+        after["catalogue_generation"]
+    );
+    assert_ne!(after["top_schema"]["name"], "session");
+    assert!(
+        handle_get_tool_schema(&state, &serde_json::json!({"tool_name":"session"}))
+            .get("error")
+            .is_some()
+    );
 }

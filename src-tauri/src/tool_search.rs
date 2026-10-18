@@ -7,6 +7,7 @@
 
 use bm25::{Language, SearchEngineBuilder, SearchResult};
 use serde_json::Value;
+use sha2::{Digest, Sha256};
 
 /// A single indexed tool entry.
 #[derive(Debug, Clone)]
@@ -23,6 +24,7 @@ pub struct ToolEntry {
 pub struct ToolSearchIndex {
     engine: bm25::SearchEngine<u32>,
     entries: Vec<ToolEntry>,
+    generation: String,
 }
 
 /// Extract the first sentence from a description string.
@@ -61,7 +63,23 @@ impl ToolSearchIndex {
 
         let engine = SearchEngineBuilder::<u32>::with_corpus(Language::English, corpus).build();
 
-        Self { engine, entries }
+        Self {
+            engine,
+            entries,
+            generation: Self::catalogue_generation(tools),
+        }
+    }
+
+    /// Opaque content identity. Rebuilding an unchanged catalogue preserves admissions.
+    pub fn catalogue_generation(tools: &[Value]) -> String {
+        format!(
+            "{:x}",
+            Sha256::digest(serde_json::to_vec(tools).expect("JSON tool definitions serialize"))
+        )
+    }
+
+    pub fn generation(&self) -> &str {
+        &self.generation
     }
 
     /// Search for tools matching a query string, returning up to `limit` results

@@ -502,8 +502,11 @@ async fn forward(
     loop {
         tokio::select! {
             changed = feeds.tools.recv() => match changed {
-                Ok(()) => notify("notifications/tools/list_changed".to_owned(), None),
-                Err(RecvError::Lagged(_)) => {}
+                Ok(()) | Err(RecvError::Lagged(_)) => {
+                    let Some(state) = state.upgrade() else { return };
+                    super::mcp_transport_catalogue::rebuild_tool_search_index(&state);
+                    notify("notifications/tools/list_changed".to_owned(), None);
+                }
                 Err(RecvError::Closed) => return,
             },
             message = feeds.messages.recv() => match message {
