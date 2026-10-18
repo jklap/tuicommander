@@ -126,3 +126,23 @@
   font-size: 12px;
   color: var(--fg-muted);
 }
+
+.fontSizeControl {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-left: auto;
+  font-variant-numeric: tabular-nums;
+}
+
+.fontSizeControl button {
+  min-width: 44px;
+  min-height: 44px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-tertiary);
+  color: var(--fg-primary);
+  font: inherit;
+}
+
+.fontSizeControl button:disabled { opacity: 0.5; }

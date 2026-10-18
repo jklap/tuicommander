@@ -11,6 +11,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- Set independent mobile Terminal and Chat font sizes in Settings, remembered on this device only (#2023-54c4).
 - Dictate into the mobile Ideas input with the shared composer mic. Speech replaces the selected text without sending to a session or saving the idea.
 - Open desktop Markdown tabs from the mobile session top bar at tablet widths; phones keep the session menu list.
 
