@@ -566,6 +566,7 @@ export function SessionDetailScreen(props: SessionDetailScreenProps) {
 				<IdeasOverlay
 					sessionId={props.session.session_id}
 					repoPath={props.session.cwd}
+					microphoneBlocked={voice.recording() || browserDictating()}
 					onDismiss={() => setIdeasOpen(false)}
 				/>
 			</Show>

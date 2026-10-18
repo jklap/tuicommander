@@ -272,7 +272,7 @@ it.each(["voice call", "terminal dictation"])(
 			fireEvent.click(screen.getByRole("button", { name: "Dictate into draft" }));
 		}
 		fireEvent.click(screen.getByRole("button", { name: "More session actions" }));
-		fireEvent.click(screen.getByRole("button", { name: "Ideas", exact: true }));
+		fireEvent.click(screen.getByRole("button", { name: /^Ideas$/ }));
 		const ideaInput = screen.getByPlaceholderText("Type an idea...");
 		const mic = within(ideaInput.parentElement!).getByRole("button", { name: "Dictate into draft" });
 		expect(mic.hasAttribute("disabled")).toBe(true);

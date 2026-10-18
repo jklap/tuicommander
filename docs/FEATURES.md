@@ -2305,7 +2305,7 @@ Unsupported actions are hidden. Menus close on outside tap or Escape and use
 - Safe-area-inset padding for notched devices
 - `font-variant-emoji: text` on output view — forces Unicode symbols (●, ○, ◉) to render as monochrome text glyphs instead of colorful emoji
 
-- The mobile Ideas overlay uses the same browser dictation hook and mic as the composer. Speech replaces the selection captured at the start of a take; later hypotheses replace only that speech and keep the surrounding idea text. Dictation never saves an idea or sends it to a session. Typing or adding the idea cancels recognition. Empty takes preserve selected text; settings and failure handling match the composer.
+- The mobile Ideas overlay uses the same browser dictation hook and mic as the composer. Speech replaces the selection captured at the start of a take; later hypotheses replace only that speech and keep the surrounding idea text. Dictation never saves an idea or sends it to a session. Typing or adding the idea cancels recognition. Empty takes preserve selected text; settings and failure handling match the composer. Its mic is disabled while a voice call or terminal browser dictation owns the microphone.
 
 ### 18.11 Standalone CSS
 - Mobile human replies can answer an awaiting agent even while its shell remains busy and no question was recognized. Recognized native questions keep their direct answer controls. Rejected replies retain the draft and show the backend reason instead of a generic busy message.

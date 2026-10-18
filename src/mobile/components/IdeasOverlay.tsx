@@ -12,6 +12,7 @@ import { MobileDictationButton } from "./MobileDictationButton";
 interface IdeasOverlayProps {
 	sessionId: string;
 	repoPath: string | null;
+	microphoneBlocked?: boolean;
 	onDismiss: () => void;
 }
 
@@ -20,7 +21,7 @@ export function IdeasOverlay(props: IdeasOverlayProps) {
 	let inputEl: HTMLTextAreaElement | undefined;
 	const browserDictation = useBrowserDictation({
 		sessionId: () => props.sessionId,
-		blocked: () => false,
+		blocked: () => !!props.microphoneBlocked,
 		getDraft: inputText,
 		getSelection: () => ({ start: inputEl?.selectionStart ?? 0, end: inputEl?.selectionEnd ?? 0 }),
 		setDraft: setInputText,
@@ -148,7 +149,7 @@ export function IdeasOverlay(props: IdeasOverlayProps) {
 						}}
 						onKeyDown={handleKeyDown}
 					/>
-					<MobileDictationButton dictation={browserDictation} />
+					<MobileDictationButton dictation={browserDictation} disabled={props.microphoneBlocked} />
 					<button class={styles.submitBtn} onClick={handleSubmit} disabled={!inputText().trim()}>
 						+
 					</button>
