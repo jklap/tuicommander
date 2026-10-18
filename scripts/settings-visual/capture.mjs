@@ -6,9 +6,11 @@ const dir=process.cwd()+'/.tmp/settings-visual/'+(process.env.VISUAL_RUN??'captu
 await mkdir(dir,{recursive:true});
 if(process.platform==='darwin'){
  const lock=spawnSync('ioreg',['-n','Root','-d1','-a'],{encoding:'utf8',timeout:10000});
- if(lock.status===0&&/<key>CGSSessionScreenIsLocked<\/key>\s*<true\/>/.test(lock.stdout)){
+ const state=/<key>CGSSessionScreenIsLocked<\/key>\s*<(true|false)\/>/.exec(lock.stdout??'');
+ const reason=lock.error?'macOS lock probe failed: '+lock.error.message:lock.status!==0?'macOS lock probe failed with status '+lock.status:!state?'macOS lock probe returned no usable lock state':state[1]==='true'?'macOS screen is locked; unlock the display before screenshot or rAF checks':null;
+ if(reason){
   // DEFERRED (2026-10-18) — macOS pauses Chrome rendering while locked; screenshots need an unlocked display.
-  const error='Visual prerequisite unavailable: macOS screen is locked; unlock the display before screenshot or rAF checks. No UI assertion ran.';
+  const error='Visual prerequisite unavailable: '+reason+'. No UI assertion ran.';
   await writeFile(dir+'prerequisite-failure.json',JSON.stringify({error},null,2));
   throw new Error(error);
  }
