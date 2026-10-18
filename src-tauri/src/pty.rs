@@ -2921,7 +2921,11 @@ impl ChunkProcessor {
             // soon as the prompt leaves the screen (see the screen-absence reset
             // above), so this guards one pending prompt, not the whole session.
             if let ParsedEvent::Question { prompt_text, .. } = event {
-                if self.last_question_text.as_deref() == Some(prompt_text.as_str()) {
+                // Native ego awaiting has an empty title, so text absence
+                // cannot retire it. Admit a fresh wait after busy cleared it.
+                if self.last_question_text.as_deref() == Some(prompt_text.as_str())
+                    && !(agent_type.as_deref() == Some("ego") && self.choice_prompt_needs_repaint)
+                {
                     continue;
                 }
                 self.last_question_text = Some(prompt_text.clone());
@@ -2965,8 +2969,26 @@ impl ChunkProcessor {
                                 || options.iter().any(|option| row.contains(&option.label))
                         })
                 });
+                // Ego emits awaiting for each native question. After busy has
+                // retired an answer, scrolling its retained rows is not a new
+                // wait. A fresh protocol question can still restore the same
+                // signature; other agents retain their screen-only recovery.
+                let repaint_can_rearm = agent_type.as_deref() != Some("ego")
+                    || events
+                        .iter()
+                        .rev()
+                        .find_map(|event| match event {
+                            ParsedEvent::Question { confident, .. } => Some(*confident),
+                            ParsedEvent::UserInput { .. } => Some(false),
+                            _ => None,
+                        })
+                        .unwrap_or_else(|| {
+                            silence.lock().awaiting_rank() == Some(EvidenceRank::Protocol)
+                        });
                 if self.last_choice_prompt_sig.as_deref() == Some(sig.as_str())
-                    && !(self.choice_prompt_needs_repaint && dialog_row_repainted)
+                    && !(self.choice_prompt_needs_repaint
+                        && dialog_row_repainted
+                        && repaint_can_rearm)
                 {
                     continue;
                 }

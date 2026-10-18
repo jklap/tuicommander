@@ -1,6 +1,6 @@
 ## ego title and enforced approval parity (2028-6999) — Rust restart required
 
-- [ ] After Boss manually restarts `make dev` or installs `make build`, verify ego question titles exclude skill/provider diagnostics and working rows. Check a default-mode CLI-enforced command approval on desktop/mobile: native keys appear, no opens the explanation prompt, and bare Enter refuses and clears the wait. Replay evidence does not verify updated live UI rendering. The exact historical provider-notice adjacency was not reproduced.
+- [ ] After Boss manually restarts `make dev` or installs `make build`, verify ego question titles exclude skill/provider diagnostics and working rows. Check a default-mode CLI-enforced command approval on desktop/mobile: native keys appear, tapping No opens the explanation prompt without submitting it, and a subsequent bare Enter refuses and clears the wait. Confirm an answered selector stays cleared while its retained rows scroll after protocol busy. Replay evidence does not verify updated live UI rendering. The exact historical provider-notice adjacency was not reproduced.
 
 ## Grok native question parity (2027-7ef3) — Rust restart required
 

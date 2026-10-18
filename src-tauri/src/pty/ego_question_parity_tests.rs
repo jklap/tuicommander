@@ -49,7 +49,7 @@ async fn captured_ego_answered_selector_stays_cleared_after_busy_hook() {
     let mut resumed = false;
     let mut saw_answer = false;
     replay_native_question(
-        "ego-answered-selector-1997.tcap",
+        "ego-selector-retirement-2028.tcap",
         "ego",
         |record, session| {
             if record.direction == crate::pty_capture::CaptureDirection::Input {
@@ -71,6 +71,66 @@ async fn captured_ego_answered_selector_stays_cleared_after_busy_hook() {
         },
     );
     assert!(resumed, "capture must include the answer and busy hook");
+}
+
+/// Catches: fixing retirement by permanently swallowing an identical next question.
+#[test]
+fn ego_question_same_selector_recovers_after_fresh_native_wait() {
+    let capture = crate::pty_capture::decode_capture(&agent_prompt_fixture(
+        "ego-selector-retirement-2028.tcap",
+    ))
+    .unwrap();
+    let (rows, cols) = capture.geometry.unwrap();
+    let sid = "ego-next-identical-question";
+    let (state, silence) = chunk_trace_state(sid);
+    state.config.write().progress_tracking = false;
+    state
+        .grid
+        .vt_log_buffers
+        .get(sid)
+        .unwrap()
+        .lock()
+        .resize(rows, cols);
+    state
+        .session_maps
+        .session_states
+        .get_mut(sid)
+        .unwrap()
+        .agent_type = Some("ego".into());
+    let mut rx = state.event_bus.subscribe();
+    let mut processor = ChunkProcessor::new(None, None);
+    let mut utf8 = Utf8ReadBuffer::new();
+    let mut escapes = EscapeAwareBuffer::new();
+    // Replay through busy, before the old selector disappears. Then replay the
+    // captured native awaiting + selector paint as a controlled next-question
+    // transition. Every external byte comes from the real recording.
+    for index in (0..=30).chain([23, 26]) {
+        let record = &capture.records[index];
+        if record.direction == crate::pty_capture::CaptureDirection::Input {
+            crate::mcp_http::session::apply_input_bookkeeping(
+                &state,
+                sid,
+                std::str::from_utf8(&record.data).unwrap(),
+            );
+        } else {
+            let data = escapes.push(&utf8.push(&record.data));
+            let (clean, _) = crate::state::strip_kitty_sequences(&data);
+            processor.process_chunk(&clean, &silence, sid, &state);
+        }
+        while let Ok(event) = rx.try_recv() {
+            crate::state::tests_support::apply_replay_event(&state, &event);
+        }
+        if index == 30 {
+            let session = state.session_maps.session_states.get(sid).unwrap();
+            assert!(!session.awaiting_input && session.choice_prompt.is_none());
+        }
+    }
+    let session = state.session_maps.session_states.get(sid).unwrap();
+    assert!(session.awaiting_input);
+    assert_eq!(
+        session.choice_prompt.as_ref().unwrap().title,
+        "Which release checks should we run?"
+    );
 }
 
 /// Catches: enforced ego approvals missing their native keys or losing the refusal wait.

@@ -73,23 +73,26 @@ it("answers every tab of a Claude multi-question form, Submit included", async (
 	await waitFor(() => expect(writes).toEqual(["\r"]));
 });
 
-// Catches: opening Grok's recorded z text option also sends Enter, submitting
-// the newly opened composer before the user can type their custom answer.
-it("opens the Grok custom-answer composer without submitting an empty answer", async () => {
-	// Payload observed in grok-native-permission-2027.tcap (record 2).
+// Catches: an extra Enter immediately submits the composer opened by z/n,
+// or leaks into the next question after an immediate numeric answer.
+it.each([
+	{ agent: "grok", key: "z", label: "Type your answer here" },
+	{ agent: "grok", key: "1", label: "Yes" },
+	{ agent: "ego", key: "n", label: "No" },
+])("sends only the immediate $agent answer key $key", async ({ agent, key, label }) => {
+	// Keys observed in grok-native-permission-2027 and ego-enforced-approval-2028.
 	const prompt: ChoicePrompt = {
 		title: "May I run ls?",
 		options: [
-			{ key: "1", label: "Yes", highlighted: true, destructive: false },
-			{ key: "2", label: "No", highlighted: false, destructive: true },
-			{ key: "z", label: "Type your answer here", highlighted: false, destructive: false },
+			{ key, label, highlighted: true, destructive: false },
+			{ key: "2", label: "Alternative", highlighted: false, destructive: false },
 		],
 	};
-	const { container } = render(() => <CommandInput sessionId="disposable" agentType="grok" choicePrompt={prompt} />);
-	await fireEvent.click(buttonFor(container, "Type your answer here"));
+	const { container } = render(() => <CommandInput sessionId="disposable" agentType={agent} choicePrompt={prompt} />);
+	await fireEvent.click(buttonFor(container, label));
 	// Drain the resolved PTY writes, including any unwanted follow-up Enter.
 	await new Promise((resolve) => setTimeout(resolve, 0));
-	expect(writes).toEqual(["z"]);
+	expect(writes).toEqual([key]);
 });
 
 // Catches: sending "10" to ego toggles option 1 instead of option 10,

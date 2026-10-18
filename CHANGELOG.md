@@ -19,6 +19,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Publish typed Settings account enumeration and configured Ego interactive login start/status, with human terminal authentication and separate credential readback (#1790-1011).
 ### Fixed
 
+- Send Grok and ego immediate approval keys without an extra Enter on mobile, and keep answered ego selectors cleared during retirement scrolling (#2027-7ef3, #2028-6999).
+
 - Export CLI-enforced Codex command approvals past command metadata, preserving immediate numeric refusal (#2026-9178).
 
 - Keep ego selector titles free of diagnostics and working rows, and expose default-mode CLI approval controls with the refusal explanation wait (#2028-6999).

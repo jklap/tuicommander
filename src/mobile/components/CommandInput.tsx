@@ -488,8 +488,9 @@ export function CommandInput(props: CommandInputProps) {
 				return;
 			}
 			await sendPtyKey(write, key);
-			// Most raw-mode prompts submit on the numeric key.
-			if (!props.choicePrompt?.dismiss_key) {
+			// Native Grok answers and ego approvals act on the key itself;
+			// an extra Enter would submit their newly opened text composer.
+			if (!props.choicePrompt?.dismiss_key && props.agentType !== "grok" && props.agentType !== "ego") {
 				await write("\r");
 			}
 		} catch (err) {

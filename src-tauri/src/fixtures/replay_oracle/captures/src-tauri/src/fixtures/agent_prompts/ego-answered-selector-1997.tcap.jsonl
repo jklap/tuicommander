@@ -29,8 +29,7 @@
 {"record":29,"event":{"type":"user-input","content":"","line":-1,"_turn_epoch":0}}
 {"record":29,"state":{"shell":1,"agent":"working","awaiting":false,"question":null,"confident":false,"last_question":"","choice_sig":"Which release checks should we run?|1,2","fullscreen":false}}
 {"record":30,"state":{"shell":1,"agent":"working","awaiting":false,"question":null,"confident":false,"last_question":"","choice_sig":"Which release checks should we run?|1,2","fullscreen":false}}
-{"record":32,"event":{"type":"choice-prompt","title":"Which release checks should we run?","options":[{"key":"1","label":"Parser regression Replay the recorded terminal output","highlighted":true,"destructive":false},{"key":"2","label":"Mobile answer controls Verify the mobile question card","highlighted":false,"destructive":false}],"selection_mode":"navigate-enter","dismiss_key":"cancel","_turn_epoch":0}}
-{"record":32,"state":{"shell":1,"agent":"awaiting_input","awaiting":true,"question":"Which release checks should we run?","confident":true,"last_question":"","choice_sig":"Which release checks should we run?|1,2","fullscreen":false}}
+{"record":32,"state":{"shell":1,"agent":"working","awaiting":false,"question":null,"confident":false,"last_question":"","choice_sig":"Which release checks should we run?|1,2","fullscreen":false}}
 {"record":33,"event":{"type":"choice-cleared","_turn_epoch":0}}
 {"record":33,"state":{"shell":1,"agent":"working","awaiting":false,"question":null,"confident":false,"last_question":"","choice_sig":null,"fullscreen":false}}
 {"record":34,"state":{"shell":1,"agent":"working","awaiting":false,"question":null,"confident":false,"last_question":"","choice_sig":null,"fullscreen":false}}
