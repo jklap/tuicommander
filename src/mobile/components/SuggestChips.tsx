@@ -1,4 +1,4 @@
-import { For } from "solid-js";
+import { createMemo, createSignal, For, Show } from "solid-js";
 import { appLogger } from "../../stores/appLogger";
 import { rpc } from "../../transport";
 import { sendCommand } from "../../utils/sendCommand";
@@ -9,21 +9,31 @@ interface SuggestChipsProps {
 	sessionId: string;
 	items: string[];
 	agentType?: string | null;
+	/** Snapshot activity distinguishes a later identical list from a stale poll. */
+	updatedAt?: number;
 }
 
 /** Strip leading "N) " or "N. " numbering from suggest items. */
 const stripNumberPrefix = (text: string): string => text.replace(/^\d+[).]\s*/, "");
 
 export function SuggestChips(props: SuggestChipsProps) {
+	const listKey = createMemo(() => JSON.stringify([props.sessionId, props.updatedAt, props.items]));
+	const [pickedList, setPickedList] = createSignal<string | null>(null);
 	const send = async (text: string) => {
+		// Match desktop: consume the whole list before the first asynchronous write.
+		// The shared submitted-line lifecycle clears backend suggestions on Enter;
+		// keep an unchanged poll from restoring them while that submission is pending.
+		setPickedList(listKey());
+		const sessionId = props.sessionId;
+		const agentType = props.agentType;
 		try {
 			await sendCommand(
-				(data) => retryWrite(() => rpc("write_pty", { sessionId: props.sessionId, data })),
+				(data) => retryWrite(() => rpc("write_pty", { sessionId, data })),
 				text,
-				props.agentType,
+				agentType,
 				undefined,
 				true,
-				props.sessionId,
+				sessionId,
 			);
 		} catch (err) {
 			const msg = err instanceof Error ? err.message : String(err);
@@ -32,14 +42,16 @@ export function SuggestChips(props: SuggestChipsProps) {
 	};
 
 	return (
-		<div class={styles.row}>
-			<For each={props.items}>
-				{(item) => (
-					<button class={styles.chip} onClick={() => send(item)}>
-						{stripNumberPrefix(item)}
-					</button>
-				)}
-			</For>
-		</div>
+		<Show when={pickedList() !== listKey()}>
+			<div class={styles.row}>
+				<For each={props.items}>
+					{(item) => (
+						<button class={styles.chip} onClick={() => send(item)}>
+							{stripNumberPrefix(item)}
+						</button>
+					)}
+				</For>
+			</div>
+		</Show>
 	);
 }

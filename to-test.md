@@ -1,3 +1,7 @@
+## Mobile suggest dismissal (2029-994d)
+
+- [ ] In the updated mobile frontend, tap one suggestion. Confirm all chips disappear immediately, stay hidden through the next session poll, and a later suggestion list (including identical labels) appears. The 390×844 worktree page rendered, but real-backend fetches timed out and direct HTTP returned 401. Before/after tap screenshots are not available; no credentials were read. No Rust restart is required.
+
 ## Generated launch modules — Rust restart required
 
 - [ ] Inspect the launch module switches and additions preview after unlocking the Mac. Browser snapshot confirmed all labels and initial checkbox states; direct Chrome and wrapper screenshots could not complete while the macOS screen was locked.
