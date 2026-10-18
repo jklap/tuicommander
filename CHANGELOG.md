@@ -6,6 +6,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+- Recover modern stateless managed MCP routing from exact live host identity and return bounded missing-context diagnostics instead of blind registration advice (#2008-5317).
+
+- Record bounded body-free runtime MCP call outcomes with separate application, transport and effect observations; do not mark native `error:null` results as failures (#2010-30a7).
+
+- Validate native MCP arguments against advertised action contracts before dispatch; return bounded, value-masked repair details. Progress limits count raw Unicode scalar values consistently across transports (#2007-59f6).
+
+- Include a byte-bounded complete top schema in MCP tool search, with catalogue identity and explicit schema reuse until invalidation (#2013-73f9).
+
+- Publish typed Settings account enumeration and configured Ego interactive login start/status, with human terminal authentication and separate credential readback (#1790-1011).
+### Fixed
+
+- Return the same structured static-validation errors from automation HTTP and MCP calls (#2007-59f6).
+
+- Preserve description-only MCP session input without terminal bytes, and consume ACP mail wake cursors only after an accepted turn (#2007, #2004).
 - Generate configurable launch playbook modules with append-only global and agent additions, explicit all-off controls, child-only guidance and legacy override migration. Effective previews follow the selected machine (#2000-b50f).
 - Keep the mobile Markdown menu list stable during session polls and refresh it in place.
 
@@ -37,6 +51,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Honor an explicitly configured worktree integration base before stale conventional or remote default refs (#1961-bab6).
 
 - Correct Settings accent-action text, compact navigation, wrapped help badges, shortcut groups, and workspace path presentation; hide the desktop-only Local tools card in browser mode (#1945).
+- Add independent durable peer-mail subscriptions with actionable filters, explicit acknowledgement, bounded replay, retention-loss reporting, HTTP SSE and ACP notifications (#2004-4760).
 
 - Keep marker-projected terminal frames incremental: repaint dirty display rows and changed projection slots instead of clearing the whole canvas (#2003-f218).
 - Bound CLI marker planning to 128 rows above the viewport, reuse unchanged row generations, and resolve cold prompt ownership in bounded background steps (#2002-2239).

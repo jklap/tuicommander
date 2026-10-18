@@ -3013,8 +3013,13 @@ It is available on desktop, browser/PWA and headless hosts. The addressed backen
 owns the definitions, history and execution; this route never forwards Run Now
 to a different machine. It shares its input parser and Rust implementation with
 `automation_action` IPC. Success is the JSON value below (no reply wrapper).
-Application errors use HTTP 500 with `{ "error": "message" }`; IPC rejects with
-the identical message. Malformed HTTP JSON/envelopes use Axum extraction errors.
+Static action-schema violations use HTTP 400 with the same `invalid_arguments`
+repair payload as MCP, including bounded, value-masked `violations` and
+`effect=not_started`. Both entry points use the advertised MCP input contract
+before dispatch. Semantic application errors use HTTP 500 with
+`{ "error": "message" }`; IPC rejects with the identical semantic message and
+retains its string-error signature. Malformed HTTP JSON/envelopes use Axum
+extraction errors.
 
 | Action | Input fields besides `action` | Success |
 |---|---|---|
@@ -3379,3 +3384,50 @@ legacy daemons that do not return the bounded envelope.
 
 See [startup workflows](../backend/settings-startup.md#interactive-login) for
 expiry, retained-terminal cleanup, readback and error semantics.
+
+### MCP static repair errors (#2007-59f6)
+
+`POST /mcp` rejects native static input-schema violations before effects with
+`invalid_arguments`, bounded value-masked `violations`, `effect=not_started`, and
+`retryable=false`. Correct the identified JSON-pointer fields before retrying.
+See the native argument repair contract in the MCP backend guide. Progress HTTP
+and IPC use the same raw 500-Unicode-scalar text limit as MCP.
+
+### GET /mcp/audit
+
+Returns a bounded, body-free runtime MCP call outcome projection (100 newest rows,
+1024 retained per instance). Includes call/parent correlation UUIDs, recognized
+operation, target digest, UTF-8 response text bytes, application error and separate
+transport/effect uncertainty. HTTP and ACP tools/call share the instrumentation.
+See [MCP runtime audit](../backend/mcp-http.md#runtime-call-outcome-audit-2010-30a7)
+for measurement, retention, privacy and retry-grouping limits. Reply construction
+does not prove delivery; cancelled/lost replies must not imply no effect.
+
+Modern `/mcp` managed calls may omit `mcp-session-id` while carrying the exact
+host-issued `x-tuic-session` for a live PTY/ACP peer. Internal identity recovery
+adds no legacy response session header. Missing identity returns structured
+`identity_context_required` with `effect=not_started`, `retryable=false` and one
+context-change repair attempt; a request repeated unchanged cannot repair it.
+
+## Durable peer-mail subscriptions
+
+Loopback endpoints use the existing MCP peer identity from `Mcp-Session-Id` and
+respect the `agent` tool enable switch. They do not accept a recipient identity.
+
+| Method | Path | Contract |
+|---|---|---|
+| POST | `/agent/subscriptions/action` | Same `subscribe`, `inbox`, `ack`, `unsubscribe` request and validation as the MCP agent tool |
+| GET | `/agent/subscriptions/{id}/events` | Continuous SSE; one `mail` event per pending batch cursor, with messages, cursor, acknowledged_cursor, missed_count and has_more |
+
+Create with `{"action":"subscribe","subscription_id":"pump","filter":"actionable"}`.
+Process each batch and post `{"action":"ack","subscription_id":"pump","cursor":N}`.
+The filter defaults to actionable; alternatives are all, exit and failure.
+Reconnect replays retained **unacknowledged** batches. `Last-Event-ID` is not an
+acknowledgement. The journal retains 1000 messages per peer across restart;
+matching unacknowledged evictions are explicit in missed_count. Legacy inbox
+reads do not consume this reader. Subscription ACK observes exact live delivery
+IDs without advancing the legacy cursor or acknowledging its loss watermark.
+`byte_budget` and `continuation` are unsupported for subscriptions; acknowledge
+each bounded batch, then read again when `has_more` is true. These endpoints
+require the bound `Mcp-Session-Id`; a stateless `x-tuic-session` alone is not an
+HTTP subscription binding. See [retention and notification semantics](../backend/mcp-http.md#durable-independent-mail-subscriptions).
