@@ -3829,6 +3829,9 @@ impl AppState {
     /// Wire event bus and MCP registry after construction.
     /// Must be called after wrapping in `Arc`.
     pub fn wire_event_bus(self: &Arc<Self>) {
+        let settings_publisher = crate::settings::changes::Publisher::new(self);
+        *self.mcp.upstream_registry.settings_publisher.write() = settings_publisher.clone();
+        *self.mcp.oauth_flow_manager.settings_publisher.write() = settings_publisher;
         self.mcp
             .upstream_registry
             .set_event_bus(self.event_bus.clone());

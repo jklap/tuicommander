@@ -1245,6 +1245,12 @@ Native automation and workflow run bindings also use this transaction through `m
 
 Implemented: opt-in, perfDebug-gated global bounded frame bytes and paint snapshots, rotated instance-local captures, manual debug dump and production grid-paint replay timing. The synthetic smoke fixture checks harness wiring only. Original captured-stall heartbeat/input/backend RED and same-workload GREEN remain open. See docs/backend/stall-journal.md for bounds and privacy.
 
+Dictation corrections use the machine-owned `corrections` Settings collection,
+keyed by heard text. The existing TextCorrector map remains the stored format;
+Settings and legacy transports share locked atomic persistence, runtime adoption
+and value-free refresh hints. Non-dictation builds report unavailable descriptors
+(#1992-d4fa).
+
 MCP lazy discovery returns an optional complete top_schema, bounded by schema_byte_budget (default 16384, maximum 65536 UTF-8 JSON bytes), and catalogue_generation. Clients invalidate admitted schemas on tools/list_changed or changed generation (#2013-73f9).
 
 ## Bounded MCP runtime outcomes (#2010-30a7)

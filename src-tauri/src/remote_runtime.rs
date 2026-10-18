@@ -1265,17 +1265,8 @@ async fn deploy_and_wait(
     else {
         unreachable!("ssh_profile only returns Some for SSH transports")
     };
-    let token = match crate::remote_connection::pairing_token(&connection.id)
-        .map_err(ConnectFailure::error)?
-    {
-        Some(token) => token,
-        None => {
-            let token = uuid::Uuid::new_v4().to_string();
-            crate::remote_connection::set_pairing_token(&connection.id, &token)
-                .map_err(ConnectFailure::error)?;
-            token
-        }
-    };
+    let token = crate::remote_connection::ensure_pairing_token(state, &connection.id)
+        .map_err(ConnectFailure::error)?;
 
     update(state, id, |entry| {
         entry.status = Some(RemoteStatus::Deploying {
