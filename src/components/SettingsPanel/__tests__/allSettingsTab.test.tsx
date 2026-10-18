@@ -58,6 +58,13 @@ it.each(Object.values(settingsCatalogue.fields).filter(hasCatalogueEditor))(
 		);
 		const controls = [...container.querySelectorAll("[data-setting-id]")];
 		expect(controls.every((control) => control.getAttribute("data-setting-id") === field.id)).toBe(true);
+		// Catches: the inspector dropping an owner's numeric limits while retaining its identity.
+		if (!schema.enum && (types.includes("integer") || types.includes("number"))) {
+			const numeric = container.querySelector<HTMLInputElement>("input[type=number]")!;
+			expect(numeric.min).toBe(schema.minimum === undefined ? "" : String(schema.minimum));
+			expect(numeric.max).toBe(schema.maximum === undefined ? "" : String(schema.maximum));
+			if (types.includes("integer")) expect(numeric.step).toBe("1");
+		}
 	},
 );
 
