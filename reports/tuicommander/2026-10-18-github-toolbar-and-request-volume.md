@@ -65,25 +65,34 @@ The poller must publish one parsed PR, and the CI consumer must receive one
 parsed check. The open/reopen workload replays the two calls observed above;
 it is not a simultaneous browser/backend run.
 
-The completed synced-snapshot experiment recorded:
+The completed commit-pinned experiment recorded:
 
 | Phase | Elapsed observation | GraphQL receives | REST receives |
 | --- | ---: | ---: | ---: |
 | Cold start | setup | 2: viewer lookup and batch | 0 |
-| Idle | 60.200973 seconds | 1 additional batch | 0 |
-| Open one PR | 60.201485 seconds | 2 additional: checks and periodic batch | 0 |
+| Idle | 60.201528 seconds | 1 additional batch | 0 |
+| Open one PR | 60.201448 seconds | 2 additional: checks and periodic batch | 0 |
 | Reopen | one action | 1 additional checks query | 0 |
 
 For each of exhausted 403 and 429, on each of REST and GraphQL, the receiver
 observed the rate response, zero immediate retry sends, and one send after
 1.1 seconds with `retry-after: 1`. No real server limit was triggered.
 
-The selected test passed in 124.921 seconds, but its rb wrapper exited 75 because
-the coordinator began a merge in this worktree after sync. `RB_BOX_DIRTY=no`
-refers to the remote box, not the changed local snapshot. These numbers are
-valid receiver evidence for that synced experiment, not a clean validation of
-the later merged tree. The remote result is
-`/Users/stefano.straus/Gits/.tmp/rb/20261018T191803Z-68903`.
+The selected test passed in 124.939 seconds, with 4 minutes 12 seconds of
+compilation. The rb result records
+`source_ref=0b41b53ecd8cf8f0f202e83f16904ff40d81eff7`, `exit=0`, `stale=no`
+and `box_dirty=no`. This is Linux remote evidence, not a native macOS run.
+
+- Command: `RB_REF=0b41b53ecd8cf8f0f202e83f16904ff40d81eff7 build-slot.sh --remote scripts/with-test-tmp.sh cargo nextest run --manifest-path src-tauri/Cargo.toml --lib -E 'test(measure_github_client_fixture_1995)' --run-ignored all --success-output immediate`.
+- Result: `/Users/stefano.straus/Gits/.tmp/rb/20261018T193153Z-63695/result.txt`.
+- Log: `/Users/stefano.straus/Gits/.tmp/tb-github-1995-rust-client-volume-final.log`.
+- Receiver JSON, NDJSON and metadata: retained evidence `backend/final/`.
+
+An earlier experiment passed in 124.921 seconds but its rb wrapper exited 75
+because the coordinator began a local merge after sync. That earlier result
+(`20261018T191803Z-68903`) remains qualified as synced-snapshot evidence. The
+clean commit-pinned run above supersedes that qualification only for its exact
+source commit; it does not remove the whole-app and historical-report limits.
 
 Earlier failures were setup-only compilation against an unavailable `git2`
 crate, then a 120-second harness timeout. The latter could not contain two

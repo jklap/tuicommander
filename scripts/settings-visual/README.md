@@ -2,7 +2,7 @@
 
 Run from a worktree with its own installed dependencies. The fixture mounts the real SettingsPanel, page components, theme JSON and controls. Vite aliases intercept RPC, events and logging before application imports. No native backend, user config or external service is used. Chromium blocks non-local requests.
 
-Requirements: the bundled Chrome for Testing path in `capture.mjs`, Node with WebSocket support, and free localhost port 15391. The server uses `--strictPort`; the runner stops its own Vite and Chrome processes.
+Requirements: the bundled Chrome for Testing path in `capture.mjs`, Node with WebSocket support, free localhost port 15391, and an unlocked macOS display. A locked session pauses Chrome rendering, including headless screenshots and animation-frame checks; DOM access alone is not visual proof. The driver records `prerequisite-failure.json` and refuses capture when the system reports a locked session. Unlock the display before rerunning; never mark that refusal as a visual pass. The server uses `--strictPort`; the runner stops its own Vite and Chrome processes. Chrome diagnostics are retained, and a stalled CDP response has a separate 60-second harness bound.
 
 Run a single regression with the normal build admission wrapper:
 
@@ -20,6 +20,8 @@ Other named regressions:
 Each checks Commander and Paper at 1400x900 and 390x844. Assertions and screenshots go under `.tmp/settings-visual/$VISUAL_RUN/`. Every run asserts shared row/help geometry, compact page selection, repository label order, shortcut spacing, and equal page-header widths. Results include the measured bounding boxes in `geometry-assertions.json` and the per-theme JSON reports. `VISUAL_TEST` adds the named contrast or help regression. The fixture also captures a dynamic plugin page in ready/loading/error/stale-revision states, the AI Chat folder editor, and a custom launcher editor. These are synthetic RPC fixtures, not live service or persistence evidence. `VISUAL_PAGES` restricts a capture to comma-separated tab IDs; `VISUAL_ELEMENTS=1` also crops label/help pairs, agent icons and PR markers.
 
 Before capture, the driver waits for the requested document URL, mounted header, theme identity, body foreground, loaded fonts and painted frames. It also waits for the actual page heading and status badges to acquire their themed foregrounds: root tokens alone can be ready while initial inherited text is still black. Each result records the foregrounds measured before screenshots. Geometry checks cover the shared Sidebar Color row, breadcrumb-to-header spacing, nested MCP card spacing and heading size, and wrapped help adjacency. The color-target geometry check rejects stretched or shrunken swatches, and the upstream add-action check requires an 8px gap from its description. Shortcut key/action boxes are retained for review.
+
+For Settings catalogue parity, use `VISUAL_PAGES=general,all-settings VISUAL_BROWSER=1`. The inspector capture selects `app.shell` and waits for its descriptor-bound input and explicit synthetic owner-read status. Its read-only RPC fixture uses shipped descriptor defaults; mutation is unavailable. `VISUAL_BROWSER=1` keeps `isTauri=false` and does not simulate a native desktop runtime.
 
 The fixture loads Commander and Paper from the shipped palette JSON through the same `loadThemes()` startup boundary as the app. Browser-mode captures must retain `isTauri=false`; Local tools is desktop-only and does not render an empty card. Theme options are synthetic catalogue responses, not live backend evidence.
 
