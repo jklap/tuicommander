@@ -493,8 +493,8 @@ mod tests {
                         .unwrap();
                 }
                 ready.send(()).unwrap();
-                // A dropped reqwest request closes the socket without a server response.
-                socket.read(&mut buf).await.unwrap()
+                // A dropped request closes the socket; the OS may report EOF or a reset.
+                socket.read(&mut buf).await
             });
             let id = uuid::Uuid::new_v4().to_string();
             let fetch_state = state.clone();
@@ -519,12 +519,14 @@ mod tests {
                 .expect("cancel did not settle an established HTTP request")
                 .unwrap();
             assert_eq!(result.unwrap_err(), "HTTP request cancelled");
-            assert_eq!(
-                tokio::time::timeout(std::time::Duration::from_secs(5), server)
-                    .await
-                    .expect("cancel did not close the HTTP connection")
-                    .unwrap(),
-                0
+            let disconnect = tokio::time::timeout(std::time::Duration::from_secs(5), server)
+                .await
+                .expect("cancel did not close the HTTP connection")
+                .unwrap();
+            assert!(
+                matches!(&disconnect, Ok(0))
+                    || matches!(&disconnect, Err(error) if error.kind() == std::io::ErrorKind::ConnectionReset),
+                "expected EOF or connection reset after cancellation, got {disconnect:?}"
             );
             assert!(state.plugin_http_requests.access().is_empty());
         }
