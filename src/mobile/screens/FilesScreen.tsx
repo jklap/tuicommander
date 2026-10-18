@@ -62,7 +62,6 @@ export function FilesScreen(props: FilesScreenProps) {
 	const [error, setError] = createSignal("");
 	// Refusals of a review write (file changed on disk, write failed). Unlike `error` it keeps the document visible.
 	const [notice, setNotice] = createSignal("");
-	const [sendNotice, setSendNotice] = createSignal("");
 	const [writing, setWriting] = createSignal(false);
 	const [editedSinceSend, setEditedSinceSend] = createSignal(false);
 	const [sentCommentIds, setSentCommentIds] = createSignal<Set<string>>(new Set());
@@ -104,7 +103,6 @@ export function FilesScreen(props: FilesScreenProps) {
 		const comments = reviewComments();
 		const currentRequest = requestId;
 		setSendingChanges(true);
-		setSendNotice("");
 		setNotice("");
 		try {
 			const outcome = await rpc<{ typed: boolean; queued: number }>("enqueue_agent_command", {
@@ -117,10 +115,12 @@ export function FilesScreen(props: FilesScreenProps) {
 			if (currentRequest === requestId) {
 				setSentCommentIds(new Set(comments.map((comment) => comment.id)));
 				if (content() === sentContent) setEditedSinceSend(false);
-				setSendNotice(
+				toastsStore.add(
+					t("markdownTab.sentToAgent", "Sent to agent"),
 					outcome.typed
 						? t("markdownTab.sentToAgentNow", "The review request was delivered now.")
 						: t("markdownTab.sentToAgentQueued", "The review request is queued for the agent's next idle window."),
+					"info",
 				);
 			}
 		} catch (err) {
@@ -306,7 +306,6 @@ export function FilesScreen(props: FilesScreenProps) {
 		openedEntry = entry;
 		const currentRequest = ++requestId;
 		setFile(entry.path);
-		setSendNotice("");
 		setEditedSinceSend(false);
 		setSentCommentIds(new Set<string>());
 		setContent("");
@@ -349,7 +348,6 @@ export function FilesScreen(props: FilesScreenProps) {
 
 	function goBack() {
 		requestId++;
-		setSendNotice("");
 		setBusy(false);
 		setError("");
 		setNotice("");
@@ -529,11 +527,6 @@ export function FilesScreen(props: FilesScreenProps) {
 			<Show when={error()}>
 				<p class={styles.error} role="alert">
 					{error()}
-				</p>
-			</Show>
-			<Show when={sendNotice()}>
-				<p class={styles.status} role="status">
-					{sendNotice()}
 				</p>
 			</Show>
 			<Show when={notice()}>

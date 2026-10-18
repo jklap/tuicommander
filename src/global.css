@@ -231,7 +231,6 @@
   --search-match: #ffff0040;
   --search-match-active: #ff8c00b0;
   --search-match-border: #ff8c00;
-  --tweak-highlight: #f5a623;
 
   /* Tab-type colors (shared between TabBar and PaneTree) */
   --tab-diff-rgb: 239, 68, 68;       /* red */

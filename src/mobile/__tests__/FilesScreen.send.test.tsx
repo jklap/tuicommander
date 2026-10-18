@@ -1,7 +1,9 @@
 // @vitest-environment jsdom
 import { cleanup, fireEvent, render, waitFor } from "@solidjs/testing-library";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { toastsStore } from "../../stores/toasts";
 import { rpc } from "../../transport";
+import { MobileToastContainer } from "../components/MobileToastContainer";
 import { FilesScreen } from "../screens/FilesScreen";
 import type { SessionInfo } from "../useSessions";
 
@@ -35,15 +37,22 @@ beforeEach(() => {
 		throw new Error(`Unexpected command ${command}`);
 	});
 });
-afterEach(cleanup);
+afterEach(() => {
+	cleanup();
+	for (const toast of [...toastsStore.toasts]) toastsStore.remove(toast.id);
+	vi.useRealTimers();
+});
 async function open() {
 	const view = render(() => (
-		<FilesScreen
-			sessions={[agent("other"), agent("origin"), agent("foreign", "/elsewhere")]}
-			initialSessionId="origin"
-			initialRepo={{ cwd: "/repo", worktreePath: "/repo" }}
-			initialLink={{ candidate: "review.md" }}
-		/>
+		<>
+			<MobileToastContainer />
+			<FilesScreen
+				sessions={[agent("other"), agent("origin"), agent("foreign", "/elsewhere")]}
+				initialSessionId="origin"
+				initialRepo={{ cwd: "/repo", worktreePath: "/repo" }}
+				initialLink={{ candidate: "review.md" }}
+			/>
+		</>
 	));
 	await waitFor(() => expect(view.getByRole("checkbox")).toBeTruthy());
 	return view;
@@ -64,7 +73,7 @@ it("sends persisted checkbox and tweak edits with the absolute path and comment 
 	expect(view.getByRole("combobox", { name: "Review agent" })).toHaveValue("origin");
 	expect(view.queryByRole("option", { name: "foreign" })).toBeNull();
 	await fireEvent.click(view.getByRole("button", { name: "Send changes to agent" }));
-	await waitFor(() => expect(view.getByRole("status").textContent).toBe("The review request was delivered now."));
+	await waitFor(() => expect(view.getByText("The review request was delivered now.")).toBeTruthy());
 	expect(sends()).toEqual([
 		[
 			"enqueue_agent_command",
@@ -86,7 +95,7 @@ it("sends checkbox-only changes to a picked peer and reports the busy queue outc
 	await fireEvent.change(select, { target: { value: "other" } });
 	await fireEvent.click(view.getByRole("button", { name: "Send changes to agent" }));
 	await waitFor(() =>
-		expect(view.getByRole("status").textContent).toBe("The review request is queued for the agent's next idle window."),
+		expect(view.getByText("The review request is queued for the agent's next idle window.")).toBeTruthy(),
 	);
 	expect(sends()).toHaveLength(1);
 	expect(sends()[0][1]).toEqual({
@@ -151,4 +160,21 @@ it("includes agents launched from a repository subdirectory but excludes nested 
 	await fireEvent.click(await waitFor(() => view.getByRole("checkbox")));
 	expect(await waitFor(() => view.getByRole("combobox", { name: "Review agent" }))).toHaveValue("origin");
 	expect(view.queryByRole("option", { name: "nested" })).toBeNull();
+});
+
+it("removes successful queue feedback after the toast lifetime instead of leaving stale status", async () => {
+	// Catches: a queued review notice remains on screen after transient feedback expires.
+	enqueue = async () => ({ typed: false, queued: 1 });
+	const view = await open();
+	await fireEvent.click(view.getByRole("checkbox"));
+	const send = await waitFor(() => view.getByRole("button", { name: "Send changes to agent" }));
+	vi.useFakeTimers();
+	await fireEvent.click(send);
+	await vi.advanceTimersByTimeAsync(0);
+	const message = "The review request is queued for the agent's next idle window.";
+	expect(view.getByText(message)).toBeTruthy();
+	await vi.advanceTimersByTimeAsync(20_000);
+	expect(view.queryByText(message)).toBeNull();
+	expect(view.queryByText("Sent to agent")).toBeNull();
+	expect(view.getByText("Ship on Friday.")).toBeTruthy();
 });
