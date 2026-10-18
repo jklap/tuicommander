@@ -3311,6 +3311,8 @@ async fn parent_registration_after_spawn_links_existing_child() {
             "action": "spawn",
             "prompt": "hello",
             "binary_path": LONG_LIVED_TEST_BINARY,
+            // cat must read stdin before interpreting the delivered task as a filename.
+            "args": ["-"],
             "cwd": TEST_SPAWN_CWD,
         }),
         Some(parent_mcp),
@@ -3440,6 +3442,8 @@ async fn parent_registration_after_spawn_links_existing_child() {
             "action": "spawn",
             "prompt": "report with agent send",
             "binary_path": LONG_LIVED_TEST_BINARY,
+            // cat must read stdin before interpreting the delivered task as a filename.
+            "args": ["-"],
             "cwd": TEST_SPAWN_CWD,
         }),
         Some(parent_mcp),

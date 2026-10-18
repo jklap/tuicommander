@@ -4841,7 +4841,17 @@ fn messaging_send_requires_sender_registration() {
         }),
         Some("mcp-unknown"),
     );
-    assert!(r["error"].as_str().unwrap().contains("Register first"));
+    assert_eq!(r["code"], "identity_context_required");
+    assert_eq!(r["effect"], "not_started");
+    assert_eq!(r["retryable"], false);
+    assert_eq!(r["repair"]["retry_after_context_change"], true);
+    assert_eq!(r["repair"]["max_attempts"], 1);
+    assert!(
+        state
+            .agent_inbox
+            .get("550e8400-e29b-41d4-a716-446655440a02")
+            .is_none_or(|messages| messages.is_empty())
+    );
 }
 
 #[test]

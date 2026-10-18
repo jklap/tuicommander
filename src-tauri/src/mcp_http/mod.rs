@@ -6664,11 +6664,9 @@ mod tests {
     async fn test_session_input_missing_session_id() {
         let state = test_state();
         let result = call_mcp_tool(&state, "session", serde_json::json!({"action": "input"})).await;
-        assert!(
-            result["error"]
-                .as_str()
-                .unwrap()
-                .contains("requires 'session_id'")
+        assert_eq!(
+            crate::test_support::mcp_argument_constraint(&result, "", "required"),
+            &serde_json::json!(["session_id"])
         );
     }
 
@@ -6700,7 +6698,10 @@ mod tests {
             }),
         )
         .await;
-        assert!(result["error"].as_str().unwrap().contains("'input'"));
+        assert_eq!(
+            crate::test_support::mcp_argument_constraint(&result, "", "anyOf"),
+            &serde_json::json!([{"required":["input"]},{"required":["special_key"]},{"required":["pty_description"]}])
+        );
     }
 
     #[tokio::test]
@@ -6729,11 +6730,9 @@ mod tests {
         let state = test_state();
         let result =
             call_mcp_tool(&state, "session", serde_json::json!({"action": "output"})).await;
-        assert!(
-            result["error"]
-                .as_str()
-                .unwrap()
-                .contains("requires 'session_id'")
+        assert_eq!(
+            crate::test_support::mcp_argument_constraint(&result, "", "required"),
+            &serde_json::json!(["session_id"])
         );
     }
 
@@ -6757,11 +6756,9 @@ mod tests {
         let state = test_state();
         let result =
             call_mcp_tool(&state, "session", serde_json::json!({"action": "resize"})).await;
-        assert!(
-            result["error"]
-                .as_str()
-                .unwrap()
-                .contains("requires 'session_id'")
+        assert_eq!(
+            crate::test_support::mcp_argument_constraint(&result, "", "required"),
+            &serde_json::json!(["session_id"])
         );
     }
 
@@ -6786,11 +6783,9 @@ mod tests {
     async fn test_session_close_missing_session_id() {
         let state = test_state();
         let result = call_mcp_tool(&state, "session", serde_json::json!({"action": "close"})).await;
-        assert!(
-            result["error"]
-                .as_str()
-                .unwrap()
-                .contains("requires 'session_id'")
+        assert_eq!(
+            crate::test_support::mcp_argument_constraint(&result, "", "required"),
+            &serde_json::json!(["session_id"])
         );
     }
 
@@ -6814,11 +6809,9 @@ mod tests {
     async fn test_session_pause_missing_session_id() {
         let state = test_state();
         let result = call_mcp_tool(&state, "session", serde_json::json!({"action": "pause"})).await;
-        assert!(
-            result["error"]
-                .as_str()
-                .unwrap()
-                .contains("requires 'session_id'")
+        assert_eq!(
+            crate::test_support::mcp_argument_constraint(&result, "", "required"),
+            &serde_json::json!(["session_id"])
         );
     }
 
@@ -6842,11 +6835,9 @@ mod tests {
         let state = test_state();
         let result =
             call_mcp_tool(&state, "session", serde_json::json!({"action": "resume"})).await;
-        assert!(
-            result["error"]
-                .as_str()
-                .unwrap()
-                .contains("requires 'session_id'")
+        assert_eq!(
+            crate::test_support::mcp_argument_constraint(&result, "", "required"),
+            &serde_json::json!(["session_id"])
         );
     }
 
@@ -6962,7 +6953,25 @@ mod tests {
             }),
         )
         .await;
-        assert_eq!(result["error"]["code"], "invalid_type", "{result}");
+        let variants = crate::test_support::mcp_argument_constraint(&result, "", "anyOf");
+        let patch = variants
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|variant| variant["oneOf"].as_array())
+            .flatten()
+            .find(|variant| variant["properties"]["action"]["const"] == "patch")
+            .expect("patch repair schema");
+        assert_eq!(
+            patch["required"],
+            serde_json::json!([
+                "action",
+                "target",
+                "store",
+                "expectedRevision",
+                "operations"
+            ])
+        );
         let retired = call_mcp_tool(&state, "config", serde_json::json!({"action":"save"})).await;
         assert!(
             retired["error"].as_str().unwrap().contains("Unknown tool"),
@@ -7005,11 +7014,9 @@ mod tests {
             serde_json::json!({"action": "worktree_list"}),
         )
         .await;
-        assert!(
-            result["error"]
-                .as_str()
-                .unwrap()
-                .contains("requires 'path'")
+        assert_eq!(
+            crate::test_support::mcp_argument_constraint(&result, "", "required"),
+            &serde_json::json!(["path"])
         );
     }
 
@@ -7026,11 +7033,9 @@ mod tests {
             }),
         )
         .await;
-        assert!(
-            result["error"]
-                .as_str()
-                .unwrap()
-                .contains("requires 'branch'")
+        assert_eq!(
+            crate::test_support::mcp_argument_constraint(&result, "", "anyOf"),
+            &serde_json::json!([{"required":["branch"]},{"required":["worktree_path"]}])
         );
     }
 
@@ -7151,37 +7156,30 @@ mod tests {
     async fn test_session_missing_action() {
         let state = test_state();
         let result = call_mcp_tool(&state, "session", serde_json::json!({})).await;
-        assert!(
-            result["error"]
-                .as_str()
-                .unwrap()
-                .contains("Missing 'action'")
+        assert_eq!(
+            crate::test_support::mcp_argument_constraint(&result, "", "required"),
+            &serde_json::json!(["action"])
         );
-        assert!(result["error"].as_str().unwrap().contains("list, create"));
     }
 
     #[tokio::test]
     async fn test_session_unknown_action() {
         let state = test_state();
         let result = call_mcp_tool(&state, "session", serde_json::json!({"action": "bogus"})).await;
-        assert!(
-            result["error"]
-                .as_str()
-                .unwrap()
-                .contains("Unknown action 'bogus'")
-        );
-        assert!(result["error"].as_str().unwrap().contains("session"));
+        let allowed = crate::test_support::mcp_argument_constraint(&result, "/action", "enum");
+        let allowed = allowed.as_array().unwrap();
+        assert!(allowed.contains(&serde_json::json!("list")));
+        assert!(allowed.contains(&serde_json::json!("create")));
+        assert!(!allowed.contains(&serde_json::json!("bogus")));
     }
 
     #[tokio::test]
     async fn test_repo_missing_action() {
         let state = test_state();
         let result = call_mcp_tool(&state, "repo", serde_json::json!({})).await;
-        assert!(
-            result["error"]
-                .as_str()
-                .unwrap()
-                .contains("Missing 'action'")
+        assert_eq!(
+            crate::test_support::mcp_argument_constraint(&result, "", "required"),
+            &serde_json::json!(["action"])
         );
     }
 
@@ -7189,12 +7187,11 @@ mod tests {
     async fn test_repo_unknown_action() {
         let state = test_state();
         let result = call_mcp_tool(&state, "repo", serde_json::json!({"action": "commit"})).await;
-        assert!(
-            result["error"]
-                .as_str()
-                .unwrap()
-                .contains("Unknown action 'commit'")
-        );
+        let allowed = crate::test_support::mcp_argument_constraint(&result, "/action", "enum");
+        let allowed = allowed.as_array().unwrap();
+        assert!(allowed.contains(&serde_json::json!("list")));
+        assert!(allowed.contains(&serde_json::json!("worktree_list")));
+        assert!(!allowed.contains(&serde_json::json!("commit")));
     }
 
     /// Helper: create a temporary git repo with an initial commit for worktree tests.

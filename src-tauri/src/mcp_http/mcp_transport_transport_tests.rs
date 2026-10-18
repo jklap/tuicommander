@@ -436,10 +436,10 @@ fn only_genuinely_blocking_session_and_agent_actions_are_offloaded() {
     for action in ["create", "input", "kill", "close"] {
         assert!(session_action_requires_blocking_pool(action), "{action}");
     }
-    for action in ["register", "list_peers", "inbox", "unknown"] {
+    for action in ["register", "list_peers", "unknown"] {
         assert!(!agent_action_requires_blocking_pool(action), "{action}");
     }
-    for action in ["spawn", "send"] {
+    for action in ["spawn", "send", "inbox", "subscribe", "ack", "unsubscribe"] {
         assert!(agent_action_requires_blocking_pool(action), "{action}");
     }
 }
@@ -3788,10 +3788,9 @@ async fn ui_toast_refuses_an_unknown_urgency_and_emits_nothing() {
             serde_json::json!({ "action": "toast", "title": "t", "urgency": bad }),
         )
         .await;
-        let error = r["error"].as_str().expect("error for a bad urgency");
-        assert!(
-            error.contains("normal, urgent"),
-            "allowed values listed: {error}"
+        assert_eq!(
+            crate::test_support::mcp_argument_constraint(&r, "/urgency", "enum"),
+            &serde_json::json!(["normal", "urgent"])
         );
         assert_eq!(urgency, None, "a refused toast must not reach the bus");
     }
@@ -4672,10 +4671,9 @@ async fn ui_screenshot_requires_id() {
         None,
     )
     .await;
-    let err = r["error"].as_str().expect("should return error");
-    assert!(
-        err.contains("'id'"),
-        "Missing id should mention 'id' in error, got: {err}"
+    assert_eq!(
+        crate::test_support::mcp_argument_constraint(&r, "", "required"),
+        &serde_json::json!(["id"])
     );
 }
 
