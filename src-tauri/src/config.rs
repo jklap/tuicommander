@@ -9991,6 +9991,7 @@ mod tests {
             serde_json::to_value(RepoDefaultsConfig::default()).unwrap()
         );
         let mut expected = serde_json::to_value(AgentsConfig::default()).unwrap();
+        expected["launch_additions_migrated"] = serde_json::json!(true);
         expected["agents"]["codex"] = serde_json::to_value(AgentSettings::default()).unwrap();
         expected["agents"]["codex"]["codex_bypass_migrated"] = serde_json::json!(true);
         expected["agents"]["codex"]["run_configs"] = serde_json::json!([{
