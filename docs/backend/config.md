@@ -1722,7 +1722,7 @@ The shared settings facade assigns a process-local monotonic generation after a 
 
 Frontend readers subscribe once per window and reread their section through non-saving read/apply paths. They advance the acknowledged baseline together with the rendered state, retain dirty fields, report same-field conflicts, cancel obsolete queued writes and discard stale in-flight reads. Reconnect clears generation high-water marks and rereads active sections because a restarted process starts a new counter. Mirrored events retain their connection identity and cannot reload local-machine settings. Failed subscriptions and owner reads retry after one second, with exponential backoff capped at 30 seconds. Disposing a reader or disconnecting its owner cancels pending read retries. A failed subscription does not block initial owner reads. Repository refresh normalizes omitted optional keys before three-way adoption; a valid no-op field commit releases its draft. Desktop and HTTP connection/profile saves share state-bearing publication paths, including a persisted connection deletion whose credential cleanup fails. App-config no-op commits do not publish a generation.
 
-Legacy desktop and HTTP save adapters for notifications, preferences, repository settings/defaults, prompts, agents, keybindings and pane layout use the same publisher without changing owner signatures. State-bearing registration, plugin and upstream save paths also publish. Remaining legacy credential/auth writers without this state context are tracked in #1989-22fe; they do not yet provide complete cross-client invalidation.
+Legacy desktop and HTTP save adapters for notifications, preferences, repository settings/defaults, prompts, agents, keybindings and pane layout use the same publisher without changing owner signatures. State-bearing registration, plugin and upstream save paths also publish. Legacy connection password writes, deployment pairing-token creation and deployment-mode updates also use state-bearing publication paths. Successful vault writes publish after persistence; an existing pairing token and a no-op deployment-mode update do not publish (#1989-22fe).
 
 ### Managed launch journal
 
@@ -1753,3 +1753,26 @@ nullable overrides in `repo-settings.json`: null inherits the current global
 value, true hides the matching PRs, and false explicitly shows them. Settings
 owner transactions preserve unrelated fields, and settings refresh adopts owner
 readback without saving it again. The Rust settings catalogue describes both scopes.
+
+### Dictation correction Settings store
+
+`corrections` is a machine-owned stable-key projection of TextCorrector's
+`dictation-corrections.json` map. `/replacements` has records `{from,to}`, keyed
+by heard text, with revision-checked create, set and remove. The owner retains
+the existing map serialization, strict file reads, advisory locking and atomic
+replacement. Settings and the legacy map writers share that owner; successful
+persistence precedes runtime adoption and value-free change publication. Builds
+without native dictation publish unavailable descriptors rather than a second
+file implementation. See [dictation](dictation.md#settings-correction-owner-1992-d4fa).
+
+### Legacy upstream settings invalidation
+
+Legacy upstream credential save/delete uses the same state-bearing owner adapter
+for IPC and HTTP. It publishes only after the vault write succeeds. DCR metadata
+writes publish after strict config persistence. OAuth exchange, refresh and
+rejected-token cleanup carry weak host-scoped publication authority through the
+existing runtime owners; they do not retain AppState or use a global registry.
+A compound vault/config failure publishes an unapplied generation only after a
+vault write has persisted, including when subsequent config persistence fails
+and the owner attempts rollback. Hints carry only section, generation and
+persistence/apply flags, never credentials or credential-derived hashes.

@@ -1,4 +1,3 @@
 {
-  "dictation.corrections": "Owned outside the catalogue; story 1992-d4fa. TextCorrector owns the persisted replacement map.",
   "transient.repositories.terminal_meta_hotkeys": "Transient repository hotkey override; the existing DEFERRED repoSettings.ts:62 records the absent Rust field. No durable configuration is claimed."
 }

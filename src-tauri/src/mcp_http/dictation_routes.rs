@@ -332,7 +332,11 @@ pub(super) async fn set_correction_map_http(
         return (StatusCode::SERVICE_UNAVAILABLE, "App not initialized").into_response();
     };
     let dictation = app.state::<DictationState>();
-    json_result(dictation::commands::set_correction_map(dictation, body.map))
+    let result = dictation::commands::save_correction_map(&dictation.corrections, body.map);
+    if result.is_ok() {
+        crate::settings::api::publish_change(&state, "corrections", true);
+    }
+    json_result(result)
 }
 
 pub(super) async fn list_audio_devices_http() -> Response {

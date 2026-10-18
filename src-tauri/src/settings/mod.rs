@@ -4,6 +4,7 @@ pub mod agents;
 pub mod catalogue;
 pub mod changes;
 pub mod circleci;
+pub mod corrections;
 pub mod ego;
 mod ego_schema;
 pub mod model;

@@ -1527,7 +1527,10 @@ The configured remote machines and their vault password. The password is write
 only: it goes to the OS credential vault keyed by the connection's UUID and is
 never returned, never written to `connections.json` — `GET .../password` answers
 whether one is stored, not what it is. `POST .../token` trades it for the remote
-daemon's in-memory session token.
+daemon's in-memory session token. Successful password set/clear requests publish
+a value-free `settings-changed` event for `connections` after vault persistence;
+a failed vault write publishes nothing. Deployment pairing-token creation and
+persisted deployment-mode changes invalidate the same Settings section.
 `PUT /config/remote-connections` takes `{ "base": null, "connection": {...} }`
 for a new machine, or the loaded connection as `base` when editing. The server
 merges only changed fields into that connection's latest locked record.
@@ -3384,6 +3387,20 @@ legacy daemons that do not return the bounded envelope.
 
 See [startup workflows](../backend/settings-startup.md#interactive-login) for
 expiry, retained-terminal cleanup, readback and error semantics.
+
+#### Dictation correction Settings records
+
+`POST /settings/action` describes the machine-owned `corrections` store. Get
+`/replacements`, create/remove records keyed by `from`, and set
+`/replacements/<JSON-Pointer-escaped heard text>/to` with `expectedRevision`.
+The same owner backs `PUT /dictation/corrections` and its existing `{map}` body.
+Persistence precedes runtime adoption and value-free `corrections` change hints.
+No microphone is opened. Non-dictation builds describe unavailable fields.
+
+Legacy upstream credential POST/DELETE now shares the IPC state-bearing owner
+adapter and emits value-free `upstreams` Settings generations after persistence.
+Failed validation or vault writes emit no hint; compound durable-vault failures
+emit an unapplied hint so readers reload instead of assuming nothing changed.
 
 ### MCP static repair errors (#2007-59f6)
 

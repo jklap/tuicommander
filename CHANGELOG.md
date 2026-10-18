@@ -36,6 +36,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Publish typed Settings account enumeration and configured Ego interactive login start/status, with human terminal authentication and separate credential readback (#1790-1011).
 ### Fixed
 
+- Refresh Settings readers after legacy upstream credential and OAuth owner writes, including durable partial-vault failures, connection password edits, deployment pairing-token creation and deployment-mode changes (#1989-22fe).
 - Dismiss the mobile suggestion list as soon as a chip is picked, without restoring it from session activity updates; re-arm after the backend clears or replaces the list and show the existing send-failure notice if submission fails (#2029-994d).
 
 - Send Grok and ego immediate approval keys without an extra Enter on mobile, and keep answered ego selectors cleared during retirement scrolling (#2027-7ef3, #2028-6999).
@@ -80,6 +81,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Keep the selected workspace's active tab and pane layout consistent when saved tabs are restored to another workspace by cwd (#1999-95b0).
 ### Added
 
+- Discover and edit dictation correction records through their stable-key Settings owner, with shared atomic persistence and live dictionary refresh (#1992-d4fa).
 - Publish typed Settings account enumeration and configured Ego interactive login start/status, with human terminal authentication and separate credential readback (#1790-1011).
 - Add three guided Smart Prompts for issue-to-draft-PR, incoming PR review and authorized bounded-fix configuration, with prerequisite stops and an end-to-end setup guide; the live GitHub pilot remains pending (#2012-72ff).
 

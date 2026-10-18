@@ -3246,6 +3246,11 @@ only after the final chunk. HTTP MCP-compatible output shares the same boundary.
 
 The debug frame recorder retains bounded real grid arrivals and immutable paint inputs, dumps on a recovered freeze/long paint or on demand, and replays production grid painting with per-frame timings. It is off by default, requires perfDebug, and stores sensitive terminal content separately from the numeric journal. See [Persistent stall evidence](backend/stall-journal.md). The synthetic smoke fixture is not a real-stall RED.
 
+Dictation correction dictionaries are discoverable and editable through the
+shared Settings owner as stable heard-text keys. Revision-checked edits reuse
+TextCorrector persistence and refresh the runtime without microphone access
+(#1992-d4fa).
+
 MCP discovery can include a complete top-match schema within a UTF-8 byte budget; clients can reuse it until catalogue invalidation (#2013-73f9).
 
 ### Runtime MCP outcomes (#2010-30a7)
