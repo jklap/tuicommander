@@ -93,10 +93,12 @@ describe("WorktreeManager", () => {
 		expect(container.querySelector("[class*='panel']")).not.toBeNull();
 	});
 
-	it("shows empty state when no worktrees exist", () => {
+	it("rejects empty Worktrees narration while retaining its filter", () => {
 		worktreeManagerStore.open();
 		const { container } = render(() => <WorktreeManager />);
 		expect(container.querySelector("[class*='empty']")?.textContent).toContain("No worktrees found");
+		expect(container.textContent).not.toContain("Create one from the sidebar");
+		expect(container.querySelector('input[placeholder="Filter worktrees…"]')).not.toBeNull();
 	});
 
 	it("lists worktrees from repositories store", () => {
