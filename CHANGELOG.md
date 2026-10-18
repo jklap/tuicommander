@@ -22,6 +22,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Publish typed Settings account enumeration and configured Ego interactive login start/status, with human terminal authentication and separate credential readback (#1790-1011).
 ### Fixed
 
+- Keep Settings help beside wrapped labels, match narrow plugin header widths across loading states, and align repository color actions (#2046-5c34).
+
 - Return the same structured static-validation errors from automation HTTP and MCP calls (#2007-59f6).
 
 - Preserve description-only MCP session input without terminal bytes, and consume ACP mail wake cursors only after an accepted turn (#2007, #2004).
