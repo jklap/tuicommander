@@ -1,3 +1,6 @@
+## Mobile suggest dismissal (2029-994d)
+
+- [ ] In the updated mobile frontend, tap one suggestion. Confirm all chips disappear immediately, stay hidden through unrelated session activity and the next poll, and a later suggestion list (including identical labels after the backend clear) appears. Disconnect before choosing: exhausted retries must show the existing Send failed notice, not imply success. The 390×844 worktree page rendered, but real-backend fetches timed out and direct HTTP returned 401. Before/after tap screenshots are not available; no credentials were read. No Rust restart is required.
 ## ego title and enforced approval parity (2028-6999) — Rust restart required
 
 - [ ] After Boss manually restarts `make dev` or installs `make build`, verify ego question titles exclude skill/provider diagnostics and working rows. Check a default-mode CLI-enforced command approval on desktop/mobile: native keys appear, tapping No opens the explanation prompt without submitting it, and a subsequent bare Enter refuses and clears the wait. Confirm an answered selector stays cleared while its retained rows scroll after protocol busy. Replay evidence does not verify updated live UI rendering. The exact historical provider-notice adjacency was not reproduced.

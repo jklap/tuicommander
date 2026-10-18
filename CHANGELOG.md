@@ -35,6 +35,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Publish typed Settings account enumeration and configured Ego interactive login start/status, with human terminal authentication and separate credential readback (#1790-1011).
 ### Fixed
 
+- Dismiss the mobile suggestion list as soon as a chip is picked, without restoring it from session activity updates; re-arm after the backend clears or replaces the list and show the existing send-failure notice if submission fails (#2029-994d).
+
 - Send Grok and ego immediate approval keys without an extra Enter on mobile, and keep answered ego selectors cleared during retirement scrolling (#2027-7ef3, #2028-6999).
 
 - Export CLI-enforced Codex command approvals past command metadata, preserving immediate numeric refusal (#2026-9178).
