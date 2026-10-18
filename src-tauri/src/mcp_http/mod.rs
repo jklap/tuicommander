@@ -362,7 +362,10 @@ async fn reconnect_mcp_upstream_http(
 }
 
 /// POST /mcp/upstreams/credential — save an upstream credential to OS keyring.
-async fn save_mcp_upstream_credential_http(Json(body): Json<serde_json::Value>) -> Response {
+async fn save_mcp_upstream_credential_http(
+    State(state): State<Arc<AppState>>,
+    Json(body): Json<serde_json::Value>,
+) -> Response {
     let name = match body.get("name").and_then(|v| v.as_str()) {
         Some(n) => n.to_string(),
         None => return (StatusCode::BAD_REQUEST, "missing 'name'").into_response(),
@@ -384,17 +387,16 @@ async fn save_mcp_upstream_credential_http(Json(body): Json<serde_json::Value>) 
         Some(url) => url.to_string(),
         None => return (StatusCode::BAD_REQUEST, "missing 'url'").into_response(),
     };
-    let result = if body
-        .get("replace")
-        .and_then(|v| v.as_bool())
-        .unwrap_or(false)
-    {
-        crate::mcp_upstream_credentials::save_mcp_upstream_credential_with_replace(
-            name, token, header, url, true,
-        )
-    } else {
-        crate::mcp_upstream_credentials::save_mcp_upstream_credential(name, token, header, url)
-    };
+    let result = crate::mcp_upstream_credentials::save_with_refresh(
+        &state,
+        name,
+        token,
+        header,
+        url,
+        body.get("replace")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false),
+    );
     match result {
         Ok(()) => Json(()).into_response(),
         Err(e) => err_500(&e),
@@ -402,7 +404,10 @@ async fn save_mcp_upstream_credential_http(Json(body): Json<serde_json::Value>) 
 }
 
 /// DELETE /mcp/upstreams/credential — delete an upstream credential from OS keyring.
-async fn delete_mcp_upstream_credential_http(Json(body): Json<serde_json::Value>) -> Response {
+async fn delete_mcp_upstream_credential_http(
+    State(state): State<Arc<AppState>>,
+    Json(body): Json<serde_json::Value>,
+) -> Response {
     let name = match body.get("name").and_then(|v| v.as_str()) {
         Some(n) => n.to_string(),
         None => return (StatusCode::BAD_REQUEST, "missing 'name'").into_response(),
@@ -416,7 +421,7 @@ async fn delete_mcp_upstream_credential_http(Json(body): Json<serde_json::Value>
         Ok(header) => header,
         Err(_) => return (StatusCode::BAD_REQUEST, "invalid header metadata").into_response(),
     };
-    match crate::mcp_upstream_credentials::delete_mcp_upstream_credential(name, header) {
+    match crate::mcp_upstream_credentials::delete_with_refresh(&state, name, header) {
         Ok(()) => Json(()).into_response(),
         Err(e) => err_500(&e),
     }
@@ -5065,7 +5070,8 @@ mod tests {
         );
         let mut replacement =
             serde_json::json!({"name":name,"token":"replacement-http-secret","url":url});
-        let response = save_mcp_upstream_credential_http(Json(replacement.clone())).await;
+        let response =
+            save_mcp_upstream_credential_http(State(test_state()), Json(replacement.clone())).await;
         assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
         assert_eq!(
             crate::mcp_upstream_credentials::read_credential_for_url(name, url)
@@ -5074,7 +5080,8 @@ mod tests {
             Some("original-http-secret")
         );
         replacement["replace"] = serde_json::json!(true);
-        let response = save_mcp_upstream_credential_http(Json(replacement)).await;
+        let response =
+            save_mcp_upstream_credential_http(State(test_state()), Json(replacement)).await;
         assert_eq!(response.status(), StatusCode::OK);
         assert_eq!(
             crate::mcp_upstream_credentials::read_credential_for_url(name, url)
@@ -5089,7 +5096,7 @@ mod tests {
     async fn secret_header_http_credentials_preserve_metadata_and_return_json_unit() {
         let name = "secret-header-http";
         let header = serde_json::json!({"name":"x-api-key", "credential_ref":uuid::Uuid::new_v4().to_string()});
-        let response = save_mcp_upstream_credential_http(Json(
+        let response = save_mcp_upstream_credential_http(State(test_state()), Json(
             serde_json::json!({"name":name,"token":"DUMMY_HTTP_SENTINEL","header":header,"url":"https://example.com/mcp"}),
         ))
         .await;
@@ -5112,9 +5119,10 @@ mod tests {
             .as_deref(),
             Some("DUMMY_HTTP_SENTINEL")
         );
-        let response = delete_mcp_upstream_credential_http(Json(
-            serde_json::json!({"name":name,"header":header}),
-        ))
+        let response = delete_mcp_upstream_credential_http(
+            State(test_state()),
+            Json(serde_json::json!({"name":name,"header":header})),
+        )
         .await;
         assert_eq!(response.status(), StatusCode::OK);
         assert_eq!(

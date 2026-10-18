@@ -2402,7 +2402,7 @@ pub fn run() {
             mcp_upstream_config::reconnect_mcp_upstream,
             mcp_upstream_config::get_mcp_upstream_status,
             mcp_upstream_credentials::commands::save_mcp_upstream_credential,
-            mcp_upstream_credentials::delete_mcp_upstream_credential,
+            mcp_upstream_credentials::commands::delete_mcp_upstream_credential,
             mcp_oauth::commands::start_mcp_upstream_oauth,
             mcp_oauth::commands::mcp_oauth_callback,
             mcp_oauth::commands::cancel_mcp_upstream_oauth,

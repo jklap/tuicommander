@@ -3328,3 +3328,8 @@ expiry, retained-terminal cleanup, readback and error semantics.
 The same owner backs `PUT /dictation/corrections` and its existing `{map}` body.
 Persistence precedes runtime adoption and value-free `corrections` change hints.
 No microphone is opened. Non-dictation builds describe unavailable fields.
+
+Legacy upstream credential POST/DELETE now shares the IPC state-bearing owner
+adapter and emits value-free `upstreams` Settings generations after persistence.
+Failed validation or vault writes emit no hint; compound durable-vault failures
+emit an unapplied hint so readers reload instead of assuming nothing changed.

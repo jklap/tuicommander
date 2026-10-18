@@ -1746,3 +1746,15 @@ replacement. Settings and the legacy map writers share that owner; successful
 persistence precedes runtime adoption and value-free change publication. Builds
 without native dictation publish unavailable descriptors rather than a second
 file implementation. See [dictation](dictation.md#settings-correction-owner-1992-d4fa).
+
+### Legacy upstream settings invalidation
+
+Legacy upstream credential save/delete uses the same state-bearing owner adapter
+for IPC and HTTP. It publishes only after the vault write succeeds. DCR metadata
+writes publish after strict config persistence. OAuth exchange, refresh and
+rejected-token cleanup carry weak host-scoped publication authority through the
+existing runtime owners; they do not retain AppState or use a global registry.
+A compound vault/config failure publishes an unapplied generation only after a
+vault write has persisted, including when subsequent config persistence fails
+and the owner attempts rollback. Hints carry only section, generation and
+persistence/apply flags, never credentials or credential-derived hashes.
