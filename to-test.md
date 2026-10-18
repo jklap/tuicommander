@@ -1,3 +1,6 @@
+## Run-owned launch timeout (2006-f5a1) — Rust restart required
+
+- [ ] After Boss manually restarts `make dev` or installs `make build`, use an isolated run-owned child stalled before its composer is ready. Read its durable launch receipt after 30 seconds: it must report blocked with a delivery-timeout reason and retain one queued prompt and the same child identity. No live desktop restart was performed by this peer.
 ## Guided event configuration (2012-72ff)
 
 - [ ] On a throwaway headless owner or browser-mode instance, send each Configure Smart Prompt to a test agent and verify the step-by-step interview stops on missing owner/profile/GitHub auth/skills and unsupported intake, without saving or launching work. Automated library tests verify the delivered prompt contract, not model compliance.
@@ -2476,6 +2479,7 @@ Needs an iPhone (iOS 16.4+, 18.4+ preferred), the desktop TUICommander running a
 - [ ] After a manual Rust rebuild/restart, answer an ego selector and submit an ordinary prompt: no orange awaiting dot or question sound from the answered selector; a real new question still alerts (#1997-eb30).
 - [ ] After Boss restarts the Rust backend, verify CircleCI Settings discovery (`circleci.token`) and presence-only readback through the shared Settings action. Isolated tests cover set/clear and failures; no production credential test is required (#1991-bd88).
 
+- [ ] After Boss restarts the Rust backend, exercise `agent action=launch` in an isolated throwaway checkout: repeat a key, confirm the same child/name/parent/hold policy, and read its durable `launch_id` receipt. Rust does not hot-reload. Automated targeted transaction tests cover partial-stage retries; this item checks the installed build.
 - [ ] After Boss rebuilds/restarts TUIC (#2005-191f), read a large inbox and terminal with `byte_budget=4096`, concatenate chunk strings and parse JSON; verify final-page cursor advancement, scoped compact inventory and explicit expired-token errors. Rust does not hot-reload; no desktop verification instance was started.
 - [ ] After Boss manually rebuilds/restarts, explicitly enable perfDebug and frameWorkload; capture a real long paint/stall, confirm the saved path via eval_js logs, and replay in isolated native WebKit with heartbeat/input and independent backend timings. Synthetic smoke is not the real-stall RED (#1638-c94c). Rust changes do not hot-reload; do not start a second desktop instance.
 - [ ] After Boss manually restarts `make dev` or rebuilds release, verify a disposable repository with local main/master and a different remote HEAD uses main first, then master when main is absent. Keep the no-remote non-standard-base check above (#1961-bab6). Rust does not hot-reload; do not restart live sessions for this check.

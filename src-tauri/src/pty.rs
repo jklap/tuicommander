@@ -4767,3 +4767,13 @@ where
 
 #[cfg(test)]
 mod tests;
+
+/// Read-only launch receipt evidence. Silence/output movement alone cannot prove
+/// a new agent has reached its native composer.
+pub(crate) fn managed_launch_screen_ready(state: &AppState, session_id: &str) -> bool {
+    state
+        .session_maps
+        .silence_states
+        .get(session_id)
+        .is_some_and(|silence| silence.lock().cached_screen_activity == AgentScreenActivity::Ready)
+}

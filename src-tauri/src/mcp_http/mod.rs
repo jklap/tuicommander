@@ -15,6 +15,7 @@ mod github_pr_action_routes;
 mod github_review_routes;
 mod github_routes;
 mod guards;
+pub(crate) mod launch_transaction;
 mod log_routes;
 pub(crate) mod managed_launch;
 pub(crate) mod mcp_transport;
@@ -1373,6 +1374,7 @@ fn shared_routes() -> Router<Arc<AppState>> {
             post(agent_routes::verify_agent_session_http),
         )
         .route("/agents", get(agent_routes::detect_agents))
+        .route("/agents/launch", post(launch_transaction::http))
         .route(
             "/agents/detect",
             get(agent_routes::detect_agent_binary_http),
