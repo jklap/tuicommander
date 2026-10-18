@@ -5608,3 +5608,71 @@ async fn mcp_outcome_record_covers_collapsed_runtime_calls() {
     );
     assert!(!projection.to_string().contains("PRIVATE_TEXT"));
 }
+
+// Catches: modern managed calls retain their live peer/cwd but lose mail routing
+// when a reconnect has no legacy MCP protocol-session header.
+#[cfg(unix)]
+#[tokio::test]
+async fn managed_reconnect_restores_project_without_identity_guessing() {
+    let state = test_state();
+    let peer = "91136da9-2b9c-4c7f-95a1-d615454ba760";
+    let pty = "1c052428-3a90-4e6c-8c6b-e7e311c546f3";
+    crate::state::tests_support::insert_dummy_session(&state, pty);
+    crate::state::tests_support::set_session_cwd(&state, pty, "/Gits/project-one");
+    state.bind_live_pty(peer, pty);
+    refresh_mcp_session(&state, "old-managed", false, Some(peer));
+    register_peer(&state, TEST_UUID_A, "sender", "sender-protocol");
+    let sent = handle_messaging(
+        &state,
+        &serde_json::json!({
+            "action":"send", "to":peer, "message":"retained mail"
+        }),
+        Some("sender-protocol"),
+    );
+    assert!(sent.get("error").is_none(), "{sent}");
+    // Protocol routing is transient; live session and mailbox ownership survive.
+    state.mcp.sessions.clear();
+    state.mcp.to_session.clear();
+    state.mcp.session_to_mcp.clear();
+    state.peer_agents.clear();
+    let mut headers = HeaderMap::new();
+    headers.insert(TUIC_SESSION_HEADER, peer.parse().unwrap());
+    headers.insert(
+        MCP_PROTOCOL_VERSION_HEADER,
+        MODERN_PROTOCOL_VERSION.parse().unwrap(),
+    );
+    let response = mcp_post(
+        State(state.clone()),
+        ConnectInfo(loopback_addr()),
+        headers,
+        Json(
+            serde_json::json!({"jsonrpc":"2.0","id":1,"method":"tools/call",
+            "params":{"name":"agent","arguments":{"action":"inbox"}}}),
+        ),
+    )
+    .await
+    .into_response();
+    assert!(
+        !response.headers().contains_key(MCP_SESSION_HEADER),
+        "stateless calls must remain stateless on the wire"
+    );
+    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let response: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(response["result"]["isError"], false, "{response}");
+    let inbox: serde_json::Value =
+        serde_json::from_str(response["result"]["content"][0]["text"].as_str().unwrap()).unwrap();
+    assert_eq!(inbox["messages"][0]["id"], sent["message_id"]);
+    let routes = state
+        .mcp
+        .session_to_mcp
+        .get(peer)
+        .expect("recovered routing");
+    let sid = routes.first().unwrap();
+    assert_eq!(
+        resolve_mcp_origin_repo_path(&state, Some(sid)).as_deref(),
+        Some("/Gits/project-one")
+    );
+    assert_eq!(state.live_pty_for_peer(peer).as_deref(), Some(pty));
+}
