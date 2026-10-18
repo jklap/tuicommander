@@ -1744,7 +1744,13 @@ mod session_placement_tests {
                 root_path: {"path":root_path,"workspaces":{"main":{"worktreePath":root_path,"savedTerminals":[
                     {"tuicSession":"caller-peer","name":"Caller","cwd":root_path,"fontSize":14,"agentType":"codex"},
                     {"tuicSession":"sibling-peer","name":"Sibling","cwd":root_path,"fontSize":14,"agentType":"codex"}
-                ]}}},
+                ]},
+                // setWorkspace saves new rows without savedTerminals until a snapshot.
+                // Catches: scanning that absent key with IndexMut inserts null, so
+                // declaring an already-discovered row fails before saving anything.
+                "feature": {"workspaceId":"feature","branchName":"feature","kind":"worktree","worktreePath":worktree},
+                "unrelated": {"workspaceId":"unrelated","branchName":"unrelated"}
+                }},
                 foreign_path: {"path":foreign_path,"workspaces":{}}
             }, "repoOrder":[root_path,foreign_path]
         })).unwrap();
@@ -1785,6 +1791,12 @@ mod session_placement_tests {
         assert_eq!(placed["creator_session"], "caller-pty");
         assert_eq!(placed["workspace_id"], "feature");
         let saved = crate::config::load_repositories();
+        assert!(
+            saved["repos"][root_path]["workspaces"]["unrelated"]
+                .get("savedTerminals")
+                .is_none(),
+            "declaration manufactured a null restore list on an unrelated workspace"
+        );
         assert_eq!(
             saved["repos"][root_path]["workspaces"]["main"]["savedTerminals"][0]["tuicSession"],
             "sibling-peer"
@@ -1817,6 +1829,35 @@ mod session_placement_tests {
             ),
             serde_json::to_value(declared).unwrap()
         );
+        // Adjacent boundaries: a never-discovered target and a target that
+        // already owns a sibling's restore record must keep working too.
+        for target in [
+            None,
+            Some(serde_json::json!({"savedTerminals":[{"tuicSession":"target-sibling"}]})),
+        ] {
+            let expected_count = if target.is_some() { 2 } else { 1 };
+            let mut snapshot = before.clone();
+            let rows = snapshot["repos"][root_path]["workspaces"]
+                .as_object_mut()
+                .unwrap();
+            if let Some(target) = target {
+                rows.insert("feature".into(), target);
+            } else {
+                rows.remove("feature");
+            }
+            crate::config::replace_repositories_for_test(snapshot).unwrap();
+            let result = handle_session(&state, &request, Some("placement-mcp"));
+            assert!(result.get("error").is_none(), "{result}");
+            let snapshot = crate::config::load_repositories();
+            let target = snapshot["repos"][root_path]["workspaces"]["feature"]["savedTerminals"]
+                .as_array()
+                .unwrap();
+            assert_eq!(target.len(), expected_count);
+            assert_eq!(target.last().unwrap()["tuicSession"], "caller-peer");
+            if expected_count > 1 {
+                assert_eq!(target[0]["tuicSession"], "target-sibling");
+            }
+        }
         let restarted = test_state();
         insert_session(&restarted, "restored-pty");
         restarted

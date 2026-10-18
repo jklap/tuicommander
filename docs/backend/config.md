@@ -1240,6 +1240,9 @@ repository delta under the existing cross-process lock. Frontend saves retain
 it. Existing saved terminal records are moved to the declared workspace without
 changing their actual shell cwd. The association survives backend restart; it
 does not turn an externally created worktree into a disposable PTY-owned one.
+New workspace rows can omit `savedTerminals` until the first terminal snapshot.
+Declaration leaves absent restore lists untouched while scanning; it creates an
+array on the target only when moving a saved caller record.
 
 ## Automation Definitions
 
