@@ -184,7 +184,10 @@ async fn idle_ego_pending_probe_still_refuses_suspend_2018() {
     let still_live = state.session_maps.sessions.contains_key(&sid);
     crate::pty::close_pty_core_with_reason(&state, &sid, false, "test_cleanup");
     assert_eq!(result["error"], "Cannot suspend: agent working");
-    assert!(still_live, "an unresolved descendant probe must protect the PTY");
+    assert!(
+        still_live,
+        "an unresolved descendant probe must protect the PTY"
+    );
 }
 
 // Catches: losing a live session when durable storage fails before the close.
