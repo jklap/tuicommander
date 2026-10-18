@@ -46,3 +46,35 @@ processes. `--capture-only` collects images and geometry without running the tes
 assertions. The post-fix operation used that mode as requested for screenshots;
 the coordinator owns the final GREEN run and pixel review. No physical-phone,
 WebKit, clipboard transport or performance claim follows from this fixture.
+
+
+## Wrapped-line correction
+
+The padding correction above fixed containment but still allowed the absolute
+button to cover a long first line. Coordinator pixel review found that overlap.
+The extended regression failed on `2a881325d716e8425ef87f07a8a3ce7ef86d7ead`:
+`mobile-long-code: Copy covers code text`. It measures every rendered code line
+with a DOM Range, not the bounding box of the whole code element.
+
+Copy now occupies its own normal-flow row above the code. The browser lays out
+the actual button height; no guessed top band, width gutter or hover-only reveal
+is needed. This leaves the code's full available width and makes the control
+visible on touch. The existing code inset remains intact.
+
+Use these final captures, not the intermediate images above:
+
+- [Mobile dark](flow/mobile-dark.png)
+- [Mobile light](flow/mobile-light.png)
+- [Desktop narrow dark](flow/desktop-narrow-dark.png)
+- [Mobile long code](flow/mobile-long-code.png)
+- [Desktop long code](flow/desktop-long-code.png)
+- [Final line/control geometry](flow/measurements.json)
+- [Overlapping pre-fix geometry](flow/before-overlap.json)
+
+The button bottom is 342.7890625 px. The first rendered code line starts at
+348.2890625 px on mobile and 347.2890625 px on desktop. No code line intersects
+the control. Short code blocks have equal client/scroll heights of 54 px; long
+mobile and desktop blocks have equal heights of 134 px. Document width stays
+390 px in all five captures. This is native Chromium geometry, not WebKit proof.
+The final operation was a capture-only run; the coordinator owns GREEN assertions
+and pixel inspection under the managed build policy.

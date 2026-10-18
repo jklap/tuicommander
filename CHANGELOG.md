@@ -22,7 +22,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Publish typed Settings account enumeration and configured Ego interactive login start/status, with human terminal authentication and separate credential readback (#1790-1011).
 ### Fixed
 
-- Keep the code Copy control fully inside short fenced answers in desktop and mobile Chat (#2045-848c).
+- Keep the code Copy control inside its own row above fenced answers, without clipping or covering wrapped text in desktop and mobile Chat (#2045-848c).
 
 - Return the same structured static-validation errors from automation HTTP and MCP calls (#2007-59f6).
 

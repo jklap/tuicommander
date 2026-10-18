@@ -21,8 +21,10 @@ MEASURE = """JSON.stringify([...document.querySelectorAll('pre[data-raw-code]')]
  const button = pre.querySelector('[data-copy-code]');
  const rect = element => { const r=element.getBoundingClientRect();return {left:r.left,right:r.right,top:r.top,bottom:r.bottom,height:r.height}; };
  const range=document.createRange();range.selectNodeContents(button);
+ const codeRange=document.createRange();codeRange.selectNodeContents(pre.querySelector('code'));
+ const codeLines=[...codeRange.getClientRects()].map(r=>({left:r.left,right:r.right,top:r.top,bottom:r.bottom}));
  const style=getComputedStyle(button);
- return {pre:rect(pre),button:rect(button),label:rect(range),clientHeight:pre.clientHeight,scrollHeight:pre.scrollHeight,
+ return {pre:rect(pre),button:rect(button),label:rect(range),codeLines,clientHeight:pre.clientHeight,scrollHeight:pre.scrollHeight,
  buttonStyle:{font:style.font,lineHeight:style.lineHeight,padding:style.padding,position:style.position},
  documentWidth:document.documentElement.scrollWidth,viewportWidth:innerWidth};
 }))"""
@@ -73,7 +75,7 @@ def main():
                     break
                 except OSError:
                     time.sleep(.25)
-            for name, query in [('mobile-dark', '?mobile'), ('mobile-light', '?mobile&theme=light'), ('desktop-narrow-dark', ''), ('mobile-long-code', '?mobile&longCode')]:
+            for name, query in [('mobile-dark', '?mobile'), ('mobile-light', '?mobile&theme=light'), ('desktop-narrow-dark', ''), ('mobile-long-code', '?mobile&longCode'), ('desktop-long-code', '?longCode')]:
                 run(['http://127.0.0.1:15970/src/__tests__/browser/sessionChatAppearance.html' + query], optional=True)
                 run(['--', 'eval', READY])
                 run(['--', 'set', 'viewport', '390', '844'])
@@ -112,6 +114,12 @@ def main():
                     failures.append(case['name'] + ': one-line code block has vertical overflow')
                 if block['label']['bottom'] > block['button']['bottom']:
                     failures.append(case['name'] + ': Copy label is clipped')
+                # Catches: a contained Copy button still masks a wrapped code line.
+                button = block['button']
+                if any(button['left'] < line['right'] and button['right'] > line['left']
+                       and button['top'] < line['bottom'] and button['bottom'] > line['top']
+                       for line in block['codeLines']):
+                    failures.append(case['name'] + ': Copy covers code text')
         assert not failures, 'short_code_copy_fits: ' + '; '.join(failures)
         print('PASS: short_code_copy_fits in three presentations plus long-code boundary')
     print(evidence)
