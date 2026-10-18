@@ -100,6 +100,7 @@ Older recorded prompts with a prompt ID also appear when Claude did not record a
 - Press **Enter** to confirm, **Escape** to cancel
 - Explicit custom names persist through reconnects and are never replaced by agent output
 - Spawn-assigned agent labels are base names: an `intent: text (Title)` marker may replace them with the current work phase, even when its text wraps across many terminal rows
+- Mobile CLI also keeps complete `intent:` text visible, rejoins terminal soft wraps, and tints every browser-wrapped row with the same theme warning colour.
 - The canvas keeps `intent:` rows visible with a theme-aware warning tint for ego, Claude and Codex. It removes complete `suggest:` marker rows and their continuation rows from the displayed grid. They occupy no selectable line and are excluded from copied text, including selections that cross scrollback. Suggestion chips remain independent of this projection. When blank separators surround the removed block, one separator remains instead of two adjacent blank lines.
 - Agent terminals show an expandable **Context** bar. It separates the model's current **Intent**, the orchestrator-owned **Assignment**, and the last substantial user **Prompt**. MCP-connected models are instructed to refresh intent at task start and whenever the material work phase changes
 - Captured intent and prompt are recovered when reconnecting to a live session, including an idle agent. **Prompt** retains the most recent submission with at least ten words; shorter follow-ups do not replace it.
