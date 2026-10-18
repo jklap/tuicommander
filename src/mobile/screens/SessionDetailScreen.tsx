@@ -9,7 +9,7 @@ import { CommandInput } from "../components/CommandInput";
 import { CommandWidget } from "../components/CommandWidget";
 import { IdeasOverlay } from "../components/IdeasOverlay";
 import { MobileJumpBottom } from "../components/MobileJumpBottom";
-import { OpenMarkdownMenu } from "../components/OpenMarkdownMenu";
+import { createOpenMarkdownTabs, OpenMarkdownMenu } from "../components/OpenMarkdownMenu";
 import { OutputView } from "../components/OutputView";
 import { SessionHeaderOverlay, type SessionHeaderPanel } from "../components/SessionHeaderOverlay";
 import { SuggestChips } from "../components/SuggestChips";
@@ -79,6 +79,24 @@ export function SessionDetailScreen(props: SessionDetailScreenProps) {
 	});
 	const status = useDebouncedStatus(() => ({ ...props.session, state: sessionState() }));
 	const [moreOpen, setMoreOpen] = createSignal(false);
+	const [wideMarkdown, setWideMarkdown] = createSignal(window.innerWidth >= 768);
+	const [markdownOpen, setMarkdownOpen] = createSignal(false);
+	const markdownTabs = createOpenMarkdownTabs(() => props.session.worktree_path || props.session.cwd);
+	const resizeMarkdown = () => {
+		const wide = window.innerWidth >= 768;
+		if (wide === wideMarkdown()) return;
+		setWideMarkdown(wide);
+		setMarkdownOpen(false);
+		setMoreOpen(false);
+	};
+	window.addEventListener("resize", resizeMarkdown);
+	onCleanup(() => window.removeEventListener("resize", resizeMarkdown));
+	const openMarkdown: Parameters<typeof OpenMarkdownMenu>[0]["onOpen"] = (tab) => {
+		setMarkdownOpen(false);
+		setMoreOpen(false);
+		props.onOpenFileLink?.(tab.absolute_path, undefined, tab.fs_root);
+	};
+
 	const [headerPanel, setHeaderPanel] = createSignal<SessionHeaderPanel | null>(null);
 	const agentType = () => sessionState()?.agent_type;
 	const chat = useSessionChatView({
@@ -285,6 +303,33 @@ export function SessionDetailScreen(props: SessionDetailScreenProps) {
 						<Show when={voice.phase()}> · Voice {voice.phase()}</Show>
 					</span>
 				</button>
+				<Show when={wideMarkdown()}>
+					<div class={styles.markdownDropdown}>
+						<button
+							type="button"
+							class={styles.markdownTrigger}
+							aria-expanded={markdownOpen()}
+							onClick={() => {
+								setMoreOpen(false);
+								setMarkdownOpen((open) => !open);
+							}}
+						>
+							Markdown
+							<svg width="12" height="12" viewBox="0 0 12 12" fill="currentColor" aria-hidden="true">
+								<path d="m2 4 4 4 4-4z" />
+							</svg>
+						</button>
+						<Show when={markdownOpen()}>
+							<div class={`${styles.overflow} ${styles.markdownPopover}`}>
+								<OpenMarkdownMenu
+									cwd={props.session.worktree_path || props.session.cwd}
+									source={markdownTabs}
+									onOpen={openMarkdown}
+								/>
+							</div>
+						</Show>
+					</div>
+				</Show>
 				<chat.Toggle />
 				<Show when={voice.available()}>
 					<button
@@ -350,7 +395,10 @@ export function SessionDetailScreen(props: SessionDetailScreenProps) {
 					class={styles.headerAction}
 					aria-label="More session actions"
 					aria-expanded={moreOpen()}
-					onClick={() => setMoreOpen((open) => !open)}
+					onClick={() => {
+						setMarkdownOpen(false);
+						setMoreOpen((open) => !open);
+					}}
 				>
 					<svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
 						<circle cx="12" cy="5" r="1.8" />
@@ -423,13 +471,13 @@ export function SessionDetailScreen(props: SessionDetailScreenProps) {
 					>
 						Ideas
 					</button>
-					<OpenMarkdownMenu
-						cwd={props.session.worktree_path || props.session.cwd}
-						onOpen={(tab) => {
-							setMoreOpen(false);
-							props.onOpenFileLink?.(tab.absolute_path, undefined, tab.fs_root);
-						}}
-					/>
+					<Show when={!wideMarkdown()}>
+						<OpenMarkdownMenu
+							cwd={props.session.worktree_path || props.session.cwd}
+							source={markdownTabs}
+							onOpen={openMarkdown}
+						/>
+					</Show>
 					<Show when={hasCommands()}>
 						<button
 							type="button"

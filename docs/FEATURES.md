@@ -1,5 +1,7 @@
 # TUICommander — Complete Feature Reference
 
+- Mobile session headers offer an open-Markdown dropdown at widths of 768 px or more. Phones keep the same list in More session actions, with stable in-place refreshes.
+
 - AI Chat tables protect short fields, scroll wide content, toggle exact Markdown source, copy Markdown, and open read-only documents (#1923-c6fb).
 
 - AI Chat uses a compact title picker, labelled overflow actions and one-line process disclosures; model and repository sit below the composer (#1958-b67e).

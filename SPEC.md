@@ -1,5 +1,7 @@
 # TUICommander Specification
 
+- [x] Mobile open Markdown tabs: one shared list in a top-bar dropdown at >=768 px, otherwise in the session menu; unchanged-cwd polls do not reset entries (#2024-9a86, #2025-82cb).
+
 - [x] AI Chat smart tables (layout A): protected short columns, sticky first column, conditional scroll hints, exact-source Markdown toggle/copy and read-only document action (#1923-c6fb).
 
 - [x] AI Chat Tidy layout: single header, conditional tab strip, labelled overflow actions, compact process rows, latest-answer suggestions and untimed history (#1958-b67e).
