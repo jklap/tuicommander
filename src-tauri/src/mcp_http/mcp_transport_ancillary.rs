@@ -1389,10 +1389,15 @@ fn launch_workflow_effect(
         state,
         addr,
         mcp_session_id,
-        &input.agent_type,
-        &format!("Workflow {:?}", package.role),
-        &package.prompt,
-        &worktree,
+        super::managed_launch::Launch {
+            profile: &input.agent_type,
+            name: &format!("Workflow {:?}", package.role),
+            prompt: &package.prompt,
+            workspace: &worktree,
+            owner_scope: &format!("workflow:{}", run.id),
+            idempotency_key: &attempt.id,
+            keep_open: true,
+        },
     );
     if let Some(error) = spawned.get("error").and_then(serde_json::Value::as_str) {
         if let Ok(failed) = store.command(

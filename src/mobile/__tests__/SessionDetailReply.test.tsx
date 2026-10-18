@@ -279,3 +279,33 @@ it("preserves an unsent ego answer when the question card is opened before Send"
 		expect(delivered).toContain(`${answer}\r`);
 	});
 });
+
+// Catches: Chat availability adds a permanent guidance bar beside the header toggle.
+it.each(["claude", "ego"])("renders mobile %s CLI without invented guidance", async (agentType) => {
+	await import("../../stores/dictation");
+	const session: SessionInfo = {
+		session_id: `guidance-${agentType}`,
+		cwd: "/repo",
+		worktree_path: null,
+		worktree_branch: null,
+		state: {
+			agent_type: agentType,
+			awaiting_input: false,
+			rate_limited: false,
+			last_activity_ms: 1,
+		},
+	};
+	const view = render(() => (
+		<SessionDetailScreen
+			subscribeChatWake={() => () => {}}
+			session={session}
+			sessionExists
+			onBack={() => {}}
+			onOpenFiles={() => {}}
+		/>
+	));
+	await new Promise((resolve) => setTimeout(resolve, 0));
+	expect(view.getByRole("button", { name: "CLI" }).getAttribute("aria-pressed")).toBe("true");
+	expect(view.getByRole("button", { name: "Chat" })).not.toBeNull();
+	expect(view.container.textContent).not.toMatch(/Reply below|Switch to CLI|Read file edits in Chat/);
+});

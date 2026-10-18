@@ -381,7 +381,7 @@ export const TIPS: Tip[] = [
 	{
 		feature: "Prompts",
 		description:
-			"Press Cmd+Shift+K to open the Prompts dropdown — 24 built-in context-aware prompts for git, review, PR, and more.",
+			"Open the Prompts dropdown and search Configure for guided issue-to-draft-PR, incoming PR review and authorized bounded-fix setup. The guides verify prerequisites before configuration.",
 		shortcut: `${mod}+Shift+K`,
 	},
 	{
