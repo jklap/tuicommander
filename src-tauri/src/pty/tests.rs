@@ -20,3 +20,5 @@ include!("codex_binding_tests.rs");
 include!("question_parity_tests.rs");
 
 include!("grok_question_parity_tests.rs");
+include!("ego_question_parity_tests.rs");
+include!("codex_question_parity_tests.rs");

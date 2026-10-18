@@ -12055,8 +12055,7 @@ fn captured_codex_request_user_input_reaches_choice_prompt() {
 
     assert!(
         prompts.iter().any(|prompt| {
-            prompt.get("title").and_then(serde_json::Value::as_str)
-                == Some("Pick a color.")
+            prompt.get("title").and_then(serde_json::Value::as_str) == Some("Pick a color.")
                 && prompt["options"].as_array().is_some_and(|options| {
                     options
                         .iter()

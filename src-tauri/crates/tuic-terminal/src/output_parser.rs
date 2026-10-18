@@ -1,4 +1,6 @@
-pub use crate::ego_question::{parse_ego_free_text_question, parse_ego_question};
+pub use crate::ego_question::{
+    parse_ego_approval, parse_ego_free_text_question, parse_ego_question,
+};
 use serde::Serialize;
 
 fn expand_tilde(path: &str) -> String {
@@ -2199,6 +2201,7 @@ pub fn parse_choice_prompt(screen_rows: &[String]) -> Option<ParsedEvent> {
     let mut dismiss_key: Option<String> = None;
     let mut amend_key: Option<String> = None;
     let mut codex_footer = false;
+    let mut codex_approval = false;
 
     // Step 1: skip trailing blanks + optional footer.
     while idx > 0 {
@@ -2210,6 +2213,12 @@ pub fn parse_choice_prompt(screen_rows: &[String]) -> Option<ParsedEvent> {
         if let Some(caps) = FOOTER_RE.captures(&screen_rows[idx - 1]) {
             dismiss_key = Some(caps[1].to_string());
             amend_key = Some(caps[2].to_string());
+            idx -= 1;
+            continue;
+        }
+        if row == "Press enter to confirm or esc to cancel" {
+            dismiss_key = Some("cancel".to_owned());
+            codex_approval = true;
             idx -= 1;
             continue;
         }
@@ -2275,7 +2284,18 @@ pub fn parse_choice_prompt(screen_rows: &[String]) -> Option<ParsedEvent> {
     if idx == 0 {
         return None;
     }
-    let title_row = screen_rows[idx - 1].trim();
+    // The command approval puts Environment, Reason and the command between
+    // its question and options. Its exact footer distinguishes it from the
+    // queued native question panel, whose numbers also submit immediately.
+    let title_row = if codex_approval {
+        screen_rows[..idx]
+            .iter()
+            .rev()
+            .find(|row| row.trim() == "Would you like to run the following command?")?
+            .trim()
+    } else {
+        screen_rows[idx - 1].trim()
+    };
     // A quoted numbered list can include the footer text. Codex's actual
     // request_user_input panel has this heading above the question.
     if codex_footer

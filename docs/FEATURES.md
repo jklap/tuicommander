@@ -887,9 +887,10 @@ Every terminal tab has a stable UUID (`tuicSession`) injected as the `TUIC_SESSI
 
 ### 6.4 Question Detection
 
+- ego question titles exclude preceding diagnostics and working rows. Default-mode command approvals expose native keys and preserve the refusal explanation wait.
 - Grok native Ask and enforced command-approval radio forms export their options, selected state and immediate numeric-answer semantics; the Ask free-text action remains waiting until submission.
 
-- Codex 0.162.1 native panels export their question and options. Mobile opens queued questions with Shift+Left; numeric options submit immediately.
+- Codex 0.162.1 native panels export their question and options. Mobile opens queued questions with Shift+Left; numeric options submit immediately. CLI-enforced command approvals also export their title and options past command metadata.
 - An open Ink selection dialog restores a missing question badge with native hooks enabled, including after a later busy hook; repeated paints do not duplicate the notification.
 - Recognizes interactive prompts (yes/no, multiple choice, numbered options)
 - Tab dot turns orange (pulsing) when awaiting input; sidebar branch icon shows `?` in orange

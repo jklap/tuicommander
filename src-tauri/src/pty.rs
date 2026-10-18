@@ -2717,9 +2717,9 @@ impl ChunkProcessor {
                 crate::output_parser::parse_claude_ask_user_question(screen)
                     .or_else(|| crate::output_parser::parse_choice_prompt(screen))
             } else if agent_type.as_deref() == Some("ego") {
-                crate::output_parser::parse_ego_question(
-                    ego_question_rows.as_deref().unwrap_or(screen),
-                )
+                let rows = ego_question_rows.as_deref().unwrap_or(screen);
+                crate::output_parser::parse_ego_question(rows)
+                    .or_else(|| crate::output_parser::parse_ego_approval(rows))
             } else if agent_type.as_deref() == Some("grok") {
                 crate::output_parser::parse_grok_question(screen)
                     .or_else(|| crate::output_parser::parse_choice_prompt(screen))

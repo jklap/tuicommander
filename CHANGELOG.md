@@ -19,6 +19,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Publish typed Settings account enumeration and configured Ego interactive login start/status, with human terminal authentication and separate credential readback (#1790-1011).
 ### Fixed
 
+- Export CLI-enforced Codex command approvals past command metadata, preserving immediate numeric refusal (#2026-9178).
+
+- Keep ego selector titles free of diagnostics and working rows, and expose default-mode CLI approval controls with the refusal explanation wait (#2028-6999).
+
 - Export Grok native Ask and CLI-enforced approval options, preserving immediate numeric answers and the free-text transition (#2027-7ef3).
 
 - Recognize Codex 0.162.1 native question options and open queued questions with the live-verified Shift+Left key on mobile (#2026-9178).

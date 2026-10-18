@@ -1,5 +1,6 @@
 import { cleanup, fireEvent, render, screen, waitFor } from "@solidjs/testing-library";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { appLogger } from "../../stores/appLogger";
 import { SessionDetailScreen } from "../screens/SessionDetailScreen";
 import type { SessionInfo } from "../useSessions";
 
@@ -16,8 +17,10 @@ vi.mock("../../stores/toasts", () => ({ toastsStore: { add: vi.fn() } }));
 
 // Match the isolated screen's known development warnings; unexpected warnings fail.
 let warnings: ReturnType<typeof vi.spyOn>;
+let errors: ReturnType<typeof vi.spyOn>;
 beforeEach(() => {
 	warnings = vi.spyOn(console, "warn").mockImplementation(() => {});
+	errors = vi.spyOn(appLogger, "error").mockImplementation(() => {});
 });
 afterEach(() => {
 	cleanup();
@@ -27,6 +30,10 @@ afterEach(() => {
 			["[dictation] Failed to get dictation config"],
 		]).toContainEqual(args);
 	}
+	for (const args of errors.mock.calls) {
+		expect(args).toEqual(["dictation", "Failed to get dictation config", expect.any(TypeError)]);
+	}
+	errors.mockRestore();
 	warnings.mockRestore();
 	rpc.mockClear();
 });
