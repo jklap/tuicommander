@@ -2250,7 +2250,11 @@ implementation; stores, schedule rules, aggregates and execution ownership stay
 in Rust. `COMMAND_TABLE.automation_action` maps the same input without renaming
 fields. Route snapshots and registered-route PATCH probes cover this route.
 MCP and CLI use this same action parser, runtime owner and result contract.
-HTTP application error messages match IPC rejections and MCP/CLI errors;
+HTTP and MCP/CLI validate static automation inputs with the same advertised
+schema before dispatch. HTTP returns status 400 with the identical structured
+`invalid_arguments` payload, including bounded, value-masked violations and
+`effect=not_started`. Semantic application error messages still match IPC
+rejections and MCP/CLI errors; IPC retains its string-error signature.
 MCP additionally requires a bound creator identity for creation.
 
 Automation precheck context (#1631-45bf): definitions can opt in with

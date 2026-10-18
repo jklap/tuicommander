@@ -5116,15 +5116,13 @@ async fn background_mode_ui_requests_fail_immediately_when_webview_unloaded() {
     state
         .webview_unloaded
         .store(true, std::sync::atomic::Ordering::Release);
-    for action in ["toast", "tab", "screenshot", "confirm"] {
-        let reply = handle_mcp_tool_call(
-            &state,
-            loopback_addr(),
-            "ui",
-            &serde_json::json!({"action":action}),
-            None,
-        )
-        .await;
+    for input in [
+        serde_json::json!({"action":"toast","title":"Background notice"}),
+        serde_json::json!({"action":"tab","id":"background-tab","title":"Background tab","html":"<p>Test</p>"}),
+        serde_json::json!({"action":"screenshot","id":"background-tab"}),
+        serde_json::json!({"action":"confirm","title":"Background confirmation"}),
+    ] {
+        let reply = handle_mcp_tool_call(&state, loopback_addr(), "ui", &input, None).await;
         assert_eq!(reply, serde_json::json!({"error":"webview_unloaded"}));
     }
 }

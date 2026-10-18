@@ -3003,8 +3003,13 @@ It is available on desktop, browser/PWA and headless hosts. The addressed backen
 owns the definitions, history and execution; this route never forwards Run Now
 to a different machine. It shares its input parser and Rust implementation with
 `automation_action` IPC. Success is the JSON value below (no reply wrapper).
-Application errors use HTTP 500 with `{ "error": "message" }`; IPC rejects with
-the identical message. Malformed HTTP JSON/envelopes use Axum extraction errors.
+Static action-schema violations use HTTP 400 with the same `invalid_arguments`
+repair payload as MCP, including bounded, value-masked `violations` and
+`effect=not_started`. Both entry points use the advertised MCP input contract
+before dispatch. Semantic application errors use HTTP 500 with
+`{ "error": "message" }`; IPC rejects with the identical semantic message and
+retains its string-error signature. Malformed HTTP JSON/envelopes use Axum
+extraction errors.
 
 | Action | Input fields besides `action` | Success |
 |---|---|---|
