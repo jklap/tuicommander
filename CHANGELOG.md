@@ -6,7 +6,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+- Keep the mobile Markdown menu list stable during session polls and refresh it in place.
+
 ### Added
+
+- Open desktop Markdown tabs from the mobile session top bar at tablet widths; phones keep the session menu list.
 
 - Durable keyed managed-child launches across MCP, HTTP and IPC, with explicit workspace, parent, stable name, hold-open policy and retry-safe receipts (#2006-f5a1).
 - Publish typed Settings account enumeration and configured Ego interactive login start/status, with human terminal authentication and separate credential readback (#1790-1011).

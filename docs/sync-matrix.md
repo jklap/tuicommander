@@ -78,7 +78,7 @@ When adding a new `app.emit(event_name, payload)` call, document it here and lis
 
 | Event | Payload | Emitted from | Frontend listener |
 |-------|---------|-------------|-------------------|
-| `open-markdown-tabs-changed` | `{}` | `open_markdown_tabs::publish`: desktop IPC and `/events` SSE after a changed metadata snapshot | `OpenMarkdownMenu` refetches the registered repository list |
+| `open-markdown-tabs-changed` | `{}` | `open_markdown_tabs::publish`: desktop IPC and `/events` SSE after a changed metadata snapshot | `createOpenMarkdownTabs` refetches one session-owned list shared by the mobile menu and wide-screen dropdown |
 | `background-mode-changed` | `{ state: "hidden" \| "unloaded" \| "visible" }` | Rust background lifecycle, desktop + `/events` SSE | `useAppInit.ts` logs desktop state; remote clients may display it |
 | `close-dialog` | `{ kind: "ask" \| "confirm_quit", sessions: number, background_available: boolean }` | Rust background close policy; dual-emit to desktop and `/events` SSE | `useAppInit.ts` presents it on desktop only |
 | `native-notification-click` | `{ kind: "terminal", id }`, `{ kind: "progress", project, ptyId? }`, `{ kind: "aichat", id }`, `{ kind: "automation", id }` or `{ kind: "pr", url }` | `native_notification.rs` when a macOS Notification Center alert is clicked; desktop window only | `useAppInit.ts` → `navigateFromNativeNotice` → terminal, Progress dialog, AI Chat, saved automation run or the PR in the browser |
