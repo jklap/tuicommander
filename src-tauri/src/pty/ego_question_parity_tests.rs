@@ -43,6 +43,36 @@ async fn captured_ego_selector_title_excludes_diagnostics() {
     assert!(!final_awaiting, "answer retracts the native selector");
 }
 
+/// Catches: a scroll-only newline resurrecting answered ego choices after busy.
+#[tokio::test]
+async fn captured_ego_answered_selector_stays_cleared_after_busy_hook() {
+    let mut resumed = false;
+    let mut saw_answer = false;
+    replay_native_question(
+        "ego-answered-selector-1997.tcap",
+        "ego",
+        |record, session| {
+            if record.direction == crate::pty_capture::CaptureDirection::Input {
+                saw_answer |= record.data == b"1\r";
+                return;
+            }
+            resumed |= saw_answer
+                && record
+                    .data
+                    .windows(b"7770;state=busy".len())
+                    .any(|bytes| bytes == b"7770;state=busy");
+            if resumed {
+                assert!(
+                    !session.awaiting_input && session.choice_prompt.is_none(),
+                    "answered selector re-armed after protocol busy: {:?}",
+                    record.data,
+                );
+            }
+        },
+    );
+    assert!(resumed, "capture must include the answer and busy hook");
+}
+
 /// Catches: enforced ego approvals missing their native keys or losing the refusal wait.
 #[tokio::test]
 async fn captured_ego_enforced_approval_reaches_answer_controls() {
