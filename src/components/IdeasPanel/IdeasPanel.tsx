@@ -207,7 +207,7 @@ export const IdeasPanel: Component<IdeasPanelProps> = (props) => {
 
 			<div class={cx(p.content, s.list)}>
 				<Show when={filteredIdeas().length === 0}>
-					<div class={s.empty}>{t("ideasPanel.empty", "No ideas yet. Add one below.")}</div>
+					<div class={s.empty}>{t("ideasPanel.empty", "No ideas yet.")}</div>
 				</Show>
 				<For each={filteredIdeas()}>
 					{(idea) => (
@@ -334,7 +334,7 @@ export const IdeasPanel: Component<IdeasPanelProps> = (props) => {
 					placeholder={
 						editingId()
 							? t("ideasPanel.editPlaceholder", "Edit idea... (Esc to cancel)")
-							: t("ideasPanel.placeholder", "Type an idea and press Enter... (Ctrl+V to paste image)")
+							: t("ideasPanel.placeholder", "New idea…")
 					}
 					value={inputText()}
 					onInput={(e) => setInputText(e.currentTarget.value)}

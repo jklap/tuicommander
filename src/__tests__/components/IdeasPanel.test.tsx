@@ -227,3 +227,13 @@ describe("IdeasPanel — all-repositories toggle", () => {
 		expect(ideasStore.state.ideas).toEqual([]);
 	});
 });
+
+// Catches: permanent usage narration replacing concise state and an actionable input.
+it("rejects empty Ideas narration while retaining the add control", () => {
+	for (const idea of [...ideasStore.state.ideas]) ideasStore.removeIdea(idea.id);
+	const { container, getByTitle } = renderPanel();
+	expect(container.textContent).not.toContain("Add one below");
+	expect(container.textContent).toContain("No ideas yet.");
+	expect(container.querySelector("textarea")?.placeholder).toBe("New idea…");
+	expect(getByTitle("Add idea (Enter)")).not.toBeNull();
+});
