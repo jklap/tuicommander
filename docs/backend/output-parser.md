@@ -442,7 +442,7 @@ Fired when the PTY emits either:
 
 ### ChoicePrompt
 
-Numbered confirmation / multiple-choice menu rendered by Claude Code (`Esc to cancel · Tab to amend`) or an opened Codex `request_user_input` panel (`enter submit   ctrl+] skip   ⌥+↓ main prompt`):
+Numbered confirmation / multiple-choice menu rendered by Claude Code (`Esc to cancel · Tab to amend`) or an opened Codex `request_user_input` panel (`enter submit   ⌃] skip   ⇧→ main prompt`):
 
 ```rust
 ParsedEvent::ChoicePrompt {
@@ -455,7 +455,7 @@ ParsedEvent::ChoicePrompt {
 
 **Detection:**
 - **Footer match** extracts `dismiss_key` / `amend_key` from `Esc to <word>` / `Tab to <word>` (or locale equivalents).
-- **Codex panel** requires its `Queued follow-up inputs` heading near the question. The numbered option key submits immediately; `Ctrl+]` skips and `Alt+Down` returns to the main prompt. The heading guard keeps a quoted menu from becoming an interactive choice.
+- **Codex panel** requires its `Queued follow-up inputs` heading near the question. The numbered option key submits immediately; `Ctrl+]` skips and `Shift+Right` returns to the main prompt. The heading guard keeps a quoted menu from becoming an interactive choice. This supports the installed Codex 0.162.1 format, including imperative titles such as `Pick a color.`; the older footer is not supported.
 - **Option regex** `^\s*(?:[❯›>]\s*)?(\d+)[.)]\s+(.+?)\s*$` — numbered items, optional cursor marker (`❯`, `›`, `>`).
 - **Title heuristics** walk up past blank rows and require either a `?` suffix or a verb prefix (`do you want`, `proceed`, `continue`, `should i`, `confirm`, `apply`, `allow`) to avoid matching Markdown numbered lists.
 - **Minimum two options** required to reduce false positives.
@@ -466,13 +466,13 @@ ParsedEvent::ChoicePrompt {
 
 **Flow:** the payload is stored on `SessionState.choice_prompt` and dispatched via `pluginRegistry.dispatchStructuredEvent("choice-prompt", …)`. Animated status-line updates preserve the prompt and its `awaiting_input` lifecycle; resolution, disappearance, replacement, and PTY exit clear it. A disappearing or resolved dialog emits `choice-cleared` so frontend and plugin consumers do not retain stale state. Single-key replies should go through `sendPtyKey()` in `src/utils/sendCommand.ts`, never raw `text + \r`.
 
-The mobile session header opens a queued Codex question with `Alt+Up`. Before it opens, Codex exposes a waiting signal but not the option labels; after the panel renders, `ChoicePrompt` supplies the title and options to the session list and detail overlay. A free-form answer goes to the opened panel's PTY composer, not the atomic idle-agent submission route.
+The mobile session header opens a queued Codex question with `Shift+Left`. Before it opens, Codex exposes a waiting signal but not the option labels; after the panel renders, `ChoicePrompt` supplies the title and options to the session list and detail overlay. A free-form answer goes to the opened panel's PTY composer, not the atomic idle-agent submission route.
 
 Observed Codex prompt forms and evidence:
 
 | Form | Live evidence | TUIC path |
 |------|---------------|-----------|
-| `request_user_input` choices and `Other` | `codex-request-user-input-20260929.tcap`; `captured_codex_request_user_input_reaches_choice_prompt` replays its rendered screen | A queued waiting signal appears first. `Alt+Up` opens the panel; `parse_choice_prompt` recognizes its `Queued follow-up inputs` heading, title, numbered options, and `ctrl+]` footer. |
+| `request_user_input` choices and `Other` | `codex-native-question-2026.tcap`; `captured_codex_0162_question_reaches_answer_controls` replays input/output through the real accumulator | A queued waiting signal appears first. `Shift+Left` opens the panel; `parse_choice_prompt` recognizes its `Queued follow-up inputs` heading, title, numbered options, and `⌃]` / `⇧→` footer. |
 | Command approval | `codex-0.157.1-approval-cancel.tcap`; `codex_canceled_approval_capture_clears_the_waiting_badge` replays an `Action Required` approval and Esc cancellation | The approval title sets the waiting question; the current screen and cancellation logic in `pty.rs` clear it when Codex returns to its composer. This capture does not establish that the approval uses the queued follow-up panel. |
 
 A distinct plan-question screen has not been captured. If Codex displays one, verify its rendered rows and keys before treating it as either form above.

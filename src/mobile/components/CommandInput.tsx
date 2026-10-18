@@ -32,7 +32,7 @@ interface CommandInputProps {
 	choicePrompt?: ChoicePrompt;
 	/** Native free-text question, opened explicitly by the user. */
 	questionText?: string;
-	/** The Codex question panel has been opened with Alt+Up in this view. */
+	/** The Codex question panel has been opened with Shift+Left in this view. */
 	codexQuestionOpen?: boolean;
 	/** Managed agent waiting for a free-text answer. */
 	managedSession?: boolean;

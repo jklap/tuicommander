@@ -12016,7 +12016,7 @@ fn query_process_stats_empty_input_is_empty() {
 
 #[test]
 fn captured_codex_request_user_input_reaches_choice_prompt() {
-    let bytes = agent_prompt_fixture("codex-request-user-input-20260929.tcap");
+    let bytes = agent_prompt_fixture("codex-native-question-2026.tcap");
     let capture = crate::pty_capture::decode_capture(&bytes).expect("real Codex capture");
     let (rows, cols) = capture.geometry.expect("capture records terminal geometry");
     let sid = "codex-question-capture";
@@ -12056,11 +12056,11 @@ fn captured_codex_request_user_input_reaches_choice_prompt() {
     assert!(
         prompts.iter().any(|prompt| {
             prompt.get("title").and_then(serde_json::Value::as_str)
-                == Some("Boss, scegli rosso o blu?")
+                == Some("Pick a color.")
                 && prompt["options"].as_array().is_some_and(|options| {
                     options
                         .iter()
-                        .any(|option| option["key"] == "2" && option["label"] == "Blu")
+                        .any(|option| option["key"] == "3" && option["label"] == "Blue")
                 })
         }),
         "captured Codex question must reach the mobile choice-prompt state"

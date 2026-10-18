@@ -64,7 +64,7 @@ it("submits a root coordinator's answer atomically from the deep-linked session"
 	);
 });
 
-it("opens a waiting Codex question through the session's PTY", async () => {
+it("opens a waiting Codex 0.162 question with the live-verified Shift+Left key", async () => {
 	const session: SessionInfo = {
 		session_id: "codex-question",
 		cwd: "/repo",
@@ -91,7 +91,7 @@ it("opens a waiting Codex question through the session's PTY", async () => {
 	await waitFor(() =>
 		expect(rpc).toHaveBeenCalledWith("write_pty", {
 			sessionId: "codex-question",
-			data: "\x1b[1;3A",
+			data: "\x1b[1;2D",
 		}),
 	);
 });

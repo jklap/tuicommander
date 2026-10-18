@@ -2180,9 +2180,9 @@ pub fn parse_choice_prompt(screen_rows: &[String]) -> Option<ParsedEvent> {
         // Footer: `Esc to cancel · Tab to amend` style.
         static ref FOOTER_RE: regex::Regex =
             regex::Regex::new(r"^\s*(?:Esc|esc|ESC)\s+to\s+(\S+).*?(?:·|\||•)\s*(?:Tab|tab|TAB)\s+to\s+(\S+)").unwrap();
-        // Codex request_user_input opens with Alt+Up and uses a distinct footer.
+        // Supported Codex 0.162 request_user_input opens with Shift+Left.
         static ref CODEX_FOOTER_RE: regex::Regex =
-            regex::Regex::new(r"(?i)^\s*enter\s+submit\s+ctrl\+\]\s+skip\s+⌥\+↓\s+main prompt\s*$").unwrap();
+            regex::Regex::new(r"(?i)^\s*enter\s+submit\s+⌃\]\s+skip\s+⇧→\s+main prompt\s*$").unwrap();
         // Title sentinel: question mark OR imperative verb. Keeps us off markdown lists.
         static ref TITLE_VERB_RE: regex::Regex =
             regex::Regex::new(r"(?i)^\s*(?:do you want|proceed with|continue|should i|confirm|apply|allow)\b").unwrap();
@@ -2215,7 +2215,7 @@ pub fn parse_choice_prompt(screen_rows: &[String]) -> Option<ParsedEvent> {
         }
         if CODEX_FOOTER_RE.is_match(&screen_rows[idx - 1]) {
             dismiss_key = Some("ctrl+]".to_string());
-            amend_key = Some("alt+down".to_string());
+            amend_key = Some("shift+right".to_string());
             codex_footer = true;
             idx -= 1;
             continue;
@@ -2287,7 +2287,10 @@ pub fn parse_choice_prompt(screen_rows: &[String]) -> Option<ParsedEvent> {
     {
         return None;
     }
-    let title_qualifies = title_row.ends_with('?') || TITLE_VERB_RE.is_match(title_row);
+    // The exact Codex footer plus queued-panel heading is authoritative even
+    // for imperative titles such as the recorded `Pick a color.`.
+    let title_qualifies =
+        codex_footer || title_row.ends_with('?') || TITLE_VERB_RE.is_match(title_row);
     if !title_qualifies {
         return None;
     }

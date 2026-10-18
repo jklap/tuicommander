@@ -158,6 +158,10 @@ For Claude, `awaiting` also covers **MCP elicitation** — the dialog an MCP ser
 
 > **Platform note:** Hook instrumentation is **macOS/Linux only** — it resolves the controlling tty via `ps`/`/dev/tty`, which has no Windows equivalent. On Windows the toggle is hidden and agents keep heuristic detection (no regression).
 
+### Codex native questions
+
+Codex 0.162.1 queues native questions before showing their options. Use **Open Codex question** on mobile, or Shift+Left in the terminal. A numbered key answers once; Ctrl+] skips, and Shift+Right returns to the main prompt. Open questions supply the same title and options to desktop and mobile.
+
 ### Codex terminal Chat
 
 Codex terminals offer **CLI | Chat** after trusted native hooks identify their

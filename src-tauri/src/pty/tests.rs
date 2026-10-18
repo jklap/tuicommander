@@ -16,3 +16,5 @@ include!("screen_tests.rs");
 include!("injection_tests.rs");
 
 include!("codex_binding_tests.rs");
+
+include!("question_parity_tests.rs");
