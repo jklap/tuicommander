@@ -1,13 +1,13 @@
 import {spawn,spawnSync} from 'node:child_process';
 import {createWriteStream} from 'node:fs';
+import {lockProbeFailure} from './lock-probe.mjs';
 import {mkdir,readFile,writeFile,unlink} from 'node:fs/promises';
 const source=new URL('./',import.meta.url).pathname;
 const dir=process.cwd()+'/.tmp/settings-visual/'+(process.env.VISUAL_RUN??'capture')+'/';
 await mkdir(dir,{recursive:true});
 if(process.platform==='darwin'){
  const lock=spawnSync('ioreg',['-n','Root','-d1','-a'],{encoding:'utf8',timeout:10000});
- const state=/<key>CGSSessionScreenIsLocked<\/key>\s*<(true|false)\/>/.exec(lock.stdout??'');
- const reason=lock.error?'macOS lock probe failed: '+lock.error.message:lock.status!==0?'macOS lock probe failed with status '+lock.status:!state?'macOS lock probe returned no usable lock state':state[1]==='true'?'macOS screen is locked; unlock the display before screenshot or rAF checks':null;
+ const reason=lockProbeFailure(lock);
  if(reason){
   // DEFERRED (2026-10-18) — macOS pauses Chrome rendering while locked; screenshots need an unlocked display.
   const error='Visual prerequisite unavailable: '+reason+'. No UI assertion ran.';
