@@ -17,6 +17,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Publish typed Settings account enumeration and configured Ego interactive login start/status, with human terminal authentication and separate credential readback (#1790-1011).
 ### Fixed
 
+- Preserve description-only MCP session input without terminal bytes, and consume ACP mail wake cursors only after an accepted turn (#2007, #2004).
+
 - Correct Settings accent-action text, compact navigation, wrapped help badges, shortcut groups, and workspace path presentation; hide the desktop-only Local tools card in browser mode (#1945).
 - Add independent durable peer-mail subscriptions with actionable filters, explicit acknowledgement, bounded replay, retention-loss reporting, HTTP SSE and ACP notifications (#2004-4760).
 
