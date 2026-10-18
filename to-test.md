@@ -1,3 +1,7 @@
+## Mobile ego slash filtering (2030-84bb) — Rust restart required
+
+- [ ] After Boss manually restarts `make dev` or installs `make build`, open a disposable ego session from the authenticated iPad-size mobile UI. Type `/go` while idle and during a turn; confirm the dropup contains only `/goal`. Finish `/goal`, enter unmatched text, clear the draft and reopen `/`; confirm no old list returns. Repeat single-match completion in Claude and Codex. The real idle ego capture and backend regression do not prove busy-turn browser behavior. The live HTTP backend required login; no credentials were read. Evidence: `reports/tuicommander/img/2026-10-18-2030-login.png` in the orchestrator repository.
+
 ## Generated launch modules — Rust restart required
 
 - [ ] Inspect the launch module switches and additions preview after unlocking the Mac. Browser snapshot confirmed all labels and initial checkbox states; direct Chrome and wrapper screenshots could not complete while the macOS screen was locked.

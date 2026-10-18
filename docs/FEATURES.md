@@ -990,6 +990,7 @@ Every terminal tab has a stable UUID (`tuicSession`) injected as the `TUIC_SESSI
 
 ### 6.12 Slash Menu Detection
 - When the user types `/` in a terminal, `slash_mode` activates and the output parser scans the bottom screen rows for slash command menus
+- Filtered menus with one result replace the previous list. When completion closes or has no matches, the backend retracts the list, including ego exact-command completion.
 - Detection: 2+ consecutive rows starting with `/command` patterns, with `❯` highlight for the selected item
 - Produces `ParsedEvent::SlashMenu { items }` — used by mobile PWA to render a native bottom-sheet overlay
 - `slash_mode` cleared on user-input events and status-line events

@@ -487,7 +487,7 @@ ParsedEvent::SlashMenu {
 }
 ```
 
-Detected by `parse_slash_menu()` when `slash_mode` is active — scans the bottom screen rows for 2+ consecutive `/command` patterns. The `❯` prefix marks the highlighted item.
+Detected by `parse_slash_menu()` only when the input FSM has `slash_mode` active. It scans the bottom screen rows for consecutive `/command` patterns, including a single filtered result. The `❯` prefix marks the highlighted item. When the current screen no longer contains a menu, the PTY processor emits one empty `SlashMenu` to retract the cached list. Exact ego commands close completion without submitting a line; they must not leave the previous list visible.
 
 ## VT100-Aware Parsing
 
@@ -499,7 +499,7 @@ Primary entry point for VT100-aware parsing. Accepts `ChangedRow` vectors from `
 
 ### `parse_slash_menu(screen_rows: &[String]) -> Option<ParsedEvent>`
 
-Scans screen bottom rows (from VtLogBuffer) for slash command menus. Only called when `slash_mode` is active (user typed `/`). Returns `SlashMenu` event with all detected commands.
+Scans screen bottom rows (from VtLogBuffer) for slash command menus. Only called when `slash_mode` is active (user typed `/`). Returns `SlashMenu` with all detected commands, including one result. `None` means no menu on the current screen; the caller retracts any previously published menu. The real `ego-slash-filter-2030.tcap` covers broad completion, `/go` → `/goal`, exact-command closure and unmatched input.
 
 ## Pattern Detection
 

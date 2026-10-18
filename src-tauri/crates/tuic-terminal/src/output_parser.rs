@@ -2084,7 +2084,8 @@ fn dewrap_suggest_keyword(text: &str) -> std::borrow::Cow<'_, str> {
 ///    /clear     Clear conversation history
 /// ```
 ///
-/// Requires at least 2 consecutive matching rows from the bottom of the screen.
+/// Called only while the input FSM is in slash mode. A filtered menu may have
+/// just one matching row at the bottom of the screen.
 /// Highlighted item: detected by `❯` prefix or falls back to first item.
 pub fn parse_slash_menu(screen_rows: &[String]) -> Option<ParsedEvent> {
     lazy_static::lazy_static! {
@@ -2131,7 +2132,7 @@ pub fn parse_slash_menu(screen_rows: &[String]) -> Option<ParsedEvent> {
     // Reverse to restore top-to-bottom order (we scanned bottom-to-top).
     items.reverse();
 
-    if items.len() < 2 {
+    if items.is_empty() {
         return None;
     }
 
@@ -5492,12 +5493,13 @@ Enter to select · ↑/↓ to navigate · Esc to cancel";
     }
 
     #[test]
-    fn test_slash_menu_single_row_not_detected() {
+    fn test_slash_menu_single_filtered_row_detected() {
         let screen = make_screen(&["   /help      Get help with using Claude Code"], 24);
-        assert!(
-            parse_slash_menu(&screen).is_none(),
-            "single row should not trigger menu"
-        );
+        let Some(ParsedEvent::SlashMenu { items }) = parse_slash_menu(&screen) else {
+            panic!("a filtered menu can contain only one command");
+        };
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].command, "/help");
     }
 
     #[test]
