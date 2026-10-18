@@ -6,6 +6,23 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+- Publish typed Settings account enumeration and configured Ego interactive login start/status, with human terminal authentication and separate credential readback (#1790-1011).
+### Fixed
+
+- Honor an explicitly configured worktree integration base before stale conventional or remote default refs (#1961-bab6).
+
+- Correct Settings accent-action text, compact navigation, wrapped help badges, shortcut groups, and workspace path presentation; hide the desktop-only Local tools card in browser mode (#1945).
+
+- Keep marker-projected terminal frames incremental: repaint dirty display rows and changed projection slots instead of clearing the whole canvas (#2003-f218).
+- Bound CLI marker planning to 128 rows above the viewport, reuse unchanged row generations, and resolve cold prompt ownership in bounded background steps (#2002-2239).
+
+- Keep quoted answer markers in Claude and Codex prompt echoes out of the answer gutter and Answers view, including long prompts above the viewport lookback, while preserving blank-separated indented answers (#1389-3a47).
+
+- Keep compact Settings color targets circular and reserve layout space for MCP heading actions (#1945-a78d).
+- Align Settings help badges and row actions, restore the General status/local-tools layout, and correct compact repository navigation and shortcut spacing (#1945-a78d).
+
+- Preserve unrelated repo-root tabs when a worktree is removed or recycled; terminal placement and cleanup follow cwd instead of stale workspace membership (#1999-95b0).
+- Keep the selected workspace's active tab and pane layout consistent when saved tabs are restored to another workspace by cwd (#1999-95b0).
 ### Added
 
 - Publish typed Settings account enumeration and configured Ego interactive login start/status, with human terminal authentication and separate credential readback (#1790-1011).
@@ -60,6 +77,54 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - Restyle Workspace Settings with section cards, aligned terminal and Git fields, and action-first shortcut rows while preserving existing behavior.
 - Bound `tuic bg` completion command labels to one line and 120 characters; keep the full command before job output in the log (#1950-43b7).
+### Fixed
+- Keep the shared desktop CLI/Chat switch above the conversation and preserve line breaks in notice cards (#1969-ac9b).
+- Keep mobile question cards theme-readable and above the terminal key bar, including ego free-text questions (#1973-3d1b).
+- Apply confirmed username and password changes live in headless Settings without reporting a persisted apply failure or restarting the desktop listener; real listener changes keep their restart contract (#1984-3472).
+
+- Prefer local main, then master, then remote HEAD when resolving the worktree base; preserve no-remote repositories with a non-standard base branch (#1961-bab6).
+
+- Preserve unsent mobile answers when opening an ego question card, and exclude startup/help rows from fresh-session free-text questions (#1980-47b7, #1973-3d1b).
+- Preserve original spaces across terminal soft wraps in MCP text, copied selections, ego questions and mobile CLI output; keep hard line breaks (#1977-063c).
+- Preserve Claude /resume session rows and filtered results in mobile CLI output without widening agent-state parsing (#1971-5834).
+- Forward mobile key-bar arrows and Tab to waiting Claude pickers without overwriting the local answer draft (#1972-128e).
+- Route Telegram messages to the latest-connected live AI Chat when no agent has explicitly registered; keep explicit ownership authoritative and preserve in-flight replies when another chat connects (#1983-1b47).
+- Keep Settings contextual help beside its label, including repository scripts and narrow layouts (#1965-d50f).
+- Give Paper semantic branch and PR markers readable theme colors in Settings and the sidebar; keep filled merged badge labels readable independently of accent action colors (#1968-baa4).
+- Use readable identity foregrounds on agent color tiles in Settings (#1967-404e).
+- Restore Settings text, enabled action and tooltip contrast on themed surfaces (#1966-514a).
+- Let gated HTTP and IPC settings edits confirm and commit through the existing human dialog; keep HTTP approvals stable across TCP ports and require approval for tunnel forward-list replacement (#1787-4778).
+- Omit hidden answer markers when copying terminal selections or AI Chat answers, including mobile and the Answers view. (#1963-c7f6)
+- Recognize narrow ego question selectors and multiple-choice dialogs on mobile; show free-text question cards and keep checkbox toggles separate from submission (#1973-3d1b).
+- Restore contextual help for repository Design Mode and automation scripts in Settings (#1946-5de3).
+- Resolve worktree lifecycle bases for repositories without main/master, and explain when no base branch is available (#1961-bab6).
+- Prevent auto-standby from stranding foreground shell jobs; wake the recorded stopped group and retain a full timeout window after remote input, output viewing, or disconnect (#1962-4182).
+- Capture the latest soft-wrapped ego intent during composer repaint, updating the Context bar and tab title; share the intent anchor grammar with row styling (#1964-b32e).
+- Confirm Telegram chat linking, explain start and invalid codes, and clear the consumed Settings hint (#1955-2f43).
+- Recover unconfirmed ego input only from a fresh, stable empty composer; release later queued commands without replaying the uncertain payload (#1957-38c1).
+- Bound raw PTY input waits to two seconds and keep session close independent of blocked writers (#1957-38c1).
+- Expire abandoned urgent-mail notice reservations after 30 seconds so later urgent sends are not suppressed indefinitely (#1957-38c1).
+- Show the ego icon for every ego session, independent of provider, and keep provider text in sidebar tooltips (#1960-51a2).
+- Keep missing Pocket voices visible in Settings with a download action; use the installed same-language default for spoken replies.
+
+- Bind hands-free conversation start/stop to Cmd+Alt+V (Ctrl+Alt+V on Windows/Linux), with user overrides preserved (#1953-3da5).
+
+- Show tab shortcut hints after a 450 ms Cmd-only hold (Ctrl on Windows/Linux), without flashing on normal shortcuts or pointer activity (#1951-8fac).
+
+- Restyle General, Appearance and Notifications with shared Settings cards and labelled control rows, preserving existing actions and audio-device consent (#1937-c2e4).
+
+- Establish the approved wider Settings shell and reusable theme-aware presentation vocabulary (#1936-0caa).
+- Restore the theme-aware intent row highlight for ego, Claude and Codex terminals (#1948-cd16).
+
+- Add explicit addressed Claude model-alias discovery and no-launch typed model saves through settings (#1910-451e).
+
+- Share bundled font and IDE choices with Rust settings owners; add explicit theme/IDE discovery without probing during describe (#1915-d77f).
+
+- Validate keybinding records and bounded pane geometry through shared Rust owners before saving; preserve runtime tab membership and focus (#1914-cdf6).
+- Add explicit voice settings choice refresh and typed owner asset actions; input enumeration failure is unavailable rather than an empty list (#1909-0d24).
+
+- Add explicit owner-backed settings choice refresh; notification output enumeration reports unavailable separately from an empty device list (#1908-c327).
+### Added
 - Show a redacted, memory-only log of the last 20 Telegram events in Settings (#1956-c325).
 
 - Show native terminal ego provider recovery with phase, attempt, next-retry countdown and a Force retry control; notify managed parents on recovery entry and exit (#1902-7010).
