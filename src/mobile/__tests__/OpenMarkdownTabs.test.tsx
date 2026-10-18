@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 
 import { cleanup, fireEvent, render, waitFor } from "@solidjs/testing-library";
-import { onMount } from "solid-js";
+import { createSignal, onMount } from "solid-js";
 import { afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
 import { subscribeEvents } from "../../transport";
 import { OpenMarkdownMenu } from "../components/OpenMarkdownMenu";
@@ -215,4 +215,42 @@ it("reports a failed metadata read and recovers on the next desktop event", asyn
 	events.handlers["open-markdown-tabs-changed"]({});
 	await waitFor(() => expect(view.getByRole("button", { name: "guide.md docs/guide.md" })).toBeTruthy());
 	expect(view.queryByRole("alert")).toBeNull();
+});
+
+// Catches: unchanged-cwd session-state polls resetting the mounted list to Loading.
+it("keeps the open list mounted across two unchanged-cwd session polls", async () => {
+	const [snapshot, setSnapshot] = createSignal(session);
+	const view = render(() => <OpenMarkdownMenu cwd={snapshot().cwd} onOpen={() => {}} />);
+	const entry = await waitFor(() => view.getByRole("button", { name: "guide.md docs/guide.md" }));
+	const reads = rpc.mock.calls.filter(([command]) => command === "list_open_markdown_tabs").length;
+	for (const tick of [2, 3]) {
+		setSnapshot({ ...session, state: { ...session.state!, last_activity_ms: tick } });
+		expect(view.queryByText("Loading…")).toBeNull();
+		expect(view.getByRole("button", { name: "guide.md docs/guide.md" })).toBe(entry);
+		await Promise.resolve();
+	}
+	expect(rpc.mock.calls.filter(([command]) => command === "list_open_markdown_tabs")).toHaveLength(reads);
+});
+
+// Catches: real cwd updates blanking the old list while the replacement is in flight.
+it("replaces changed cwd results in place without an empty frame", async () => {
+	const [cwd, setCwd] = createSignal("/repo");
+	const view = render(() => <OpenMarkdownMenu cwd={cwd()} onOpen={() => {}} />);
+	await waitFor(() => view.getByRole("button", { name: "guide.md docs/guide.md" }));
+	let finish: ((value: typeof tabs) => void) | undefined;
+	rpc.mockImplementationOnce(
+		() =>
+			new Promise<typeof tabs>((resolve) => {
+				finish = resolve;
+			}),
+	);
+	setCwd("/other");
+	try {
+		expect(view.queryByText("Loading…")).toBeNull();
+		expect(view.getByRole("button", { name: "guide.md docs/guide.md" })).toBeTruthy();
+	} finally {
+		finish?.([{ ...tab, title: "other.md" }]);
+	}
+	await waitFor(() => view.getByRole("button", { name: "other.md docs/guide.md" }));
+	expect(view.queryByRole("button", { name: "guide.md docs/guide.md" })).toBeNull();
 });

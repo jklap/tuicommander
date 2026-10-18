@@ -1,4 +1,4 @@
-import { createEffect, createSignal, For, onCleanup, onMount, Show } from "solid-js";
+import { createEffect, createMemo, createSignal, For, onCleanup, onMount, Show } from "solid-js";
 import { rpc, subscribeEvents } from "../../transport";
 import styles from "../screens/SessionDetailScreen.module.css";
 
@@ -11,21 +11,22 @@ export interface OpenMarkdownTab {
 }
 
 export function OpenMarkdownMenu(props: { cwd: string | null; onOpen: (tab: OpenMarkdownTab) => void }) {
+	const cwd = createMemo(() => props.cwd);
 	const [connected, setConnected] = createSignal(false);
 	const [tabs, setTabs] = createSignal<OpenMarkdownTab[]>([]);
 	const [error, setError] = createSignal("");
 	const [loading, setLoading] = createSignal(true);
 	let request = 0;
 	let disposed = false;
-	async function refresh(cwd = props.cwd) {
+	async function refresh(path = cwd()) {
 		const current = ++request;
-		if (!cwd) {
+		if (!path) {
 			setLoading(false);
 			setError("Repository path is unavailable.");
 			return;
 		}
 		try {
-			const result = await rpc<OpenMarkdownTab[]>("list_open_markdown_tabs", { cwd });
+			const result = await rpc<OpenMarkdownTab[]>("list_open_markdown_tabs", { cwd: path });
 			if (disposed || current !== request) return;
 			if (!Array.isArray(result)) throw new Error("Invalid Markdown tab list");
 			setTabs(result);
@@ -39,11 +40,9 @@ export function OpenMarkdownMenu(props: { cwd: string | null; onOpen: (tab: Open
 		}
 	}
 	createEffect(() => {
-		const cwd = props.cwd;
+		const path = cwd();
 		if (connected()) {
-			setTabs([]);
-			setLoading(true);
-			void refresh(cwd);
+			void refresh(path);
 		}
 	});
 	onMount(() => {
