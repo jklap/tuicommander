@@ -4345,6 +4345,63 @@ export const settingsCatalogue = {
       ],
       "confirmationClass": "ordinary"
     },
+    "corrections.replacements.{from}.from": {
+      "id": "corrections.replacements.{from}.from",
+      "store": "corrections",
+      "owner": "machine",
+      "area": "corrections",
+      "group": "replacements",
+      "order": 0,
+      "path": "/replacements/{from}/from",
+      "labelKey": "settings.catalogue.corrections.replacements.{from}.from.label",
+      "helpKey": "settings.catalogue.corrections.replacements.{from}.from.help",
+      "label": "from",
+      "schema": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 256
+      },
+      "nullable": false,
+      "availability": {
+        "status": "available"
+      },
+      "choices": null,
+      "sensitivity": "private",
+      "apply": "live",
+      "effect": "Identifies heard text to replace after transcription.",
+      "operations": [
+        "get"
+      ],
+      "confirmationClass": "ordinary"
+    },
+    "corrections.replacements.{from}.to": {
+      "id": "corrections.replacements.{from}.to",
+      "store": "corrections",
+      "owner": "machine",
+      "area": "corrections",
+      "group": "replacements",
+      "order": 1,
+      "path": "/replacements/{from}/to",
+      "labelKey": "settings.catalogue.corrections.replacements.{from}.to.label",
+      "helpKey": "settings.catalogue.corrections.replacements.{from}.to.help",
+      "label": "to",
+      "schema": {
+        "type": "string"
+      },
+      "nullable": false,
+      "availability": {
+        "status": "available"
+      },
+      "choices": null,
+      "sensitivity": "private",
+      "apply": "live",
+      "effect": "Updates replacement text through the TextCorrector owner.",
+      "operations": [
+        "get",
+        "set"
+      ],
+      "confirmationClass": "ordinary"
+    },
     "ego.auth.{provider}.credential_command": {
       "id": "ego.auth.{provider}.credential_command",
       "store": "ego",
@@ -11773,6 +11830,34 @@ export const settingsCatalogue = {
           "forwards",
           "options"
         ]
+      },
+      "operations": [
+        "get",
+        "create",
+        "remove"
+      ]
+    },
+    {
+      "store": "corrections",
+      "path": "/replacements",
+      "key": "from",
+      "schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "from",
+          "to"
+        ],
+        "properties": {
+          "from": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "to": {
+            "type": "string"
+          }
+        }
       },
       "operations": [
         "get",

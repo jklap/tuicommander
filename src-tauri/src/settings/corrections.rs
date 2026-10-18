@@ -72,7 +72,7 @@ mod owner {
         Ok(owner)
     }
     impl Store for CorrectionsStore {
-        fn id(&self) -> &str {
+        fn id(&self) -> &'static str {
             "corrections"
         }
         fn target(&self) -> Target {
@@ -109,16 +109,23 @@ mod owner {
             })
             .map_err(|_| failure.unwrap_or_else(|| Error::new(self.id(), "store_failed")))
         }
-        async fn apply(&self, _: &CommitReply) -> Result<bool, Failure> {
-            if let Some(live) = &self.live {
-                // Same lock order as the legacy owner: runtime, then file. Read latest
-                // here so delayed apply cannot restore an older committed dictionary.
-                let mut live = live.lock();
-                *live =
-                    TextCorrector::update_file(&self.path, |latest| Ok((latest.clone(), false)))
-                        .map_err(|_| Error::new(self.id(), "apply_failed"))?;
-            }
-            Ok(true)
+        fn apply(
+            &self,
+            _: &CommitReply,
+        ) -> impl std::future::Future<Output = Result<bool, Failure>> + Send {
+            let result = (|| {
+                if let Some(live) = &self.live {
+                    // Same lock order as the legacy owner: runtime, then file. Read latest
+                    // here so delayed apply cannot restore an older committed dictionary.
+                    let mut live = live.lock();
+                    *live = TextCorrector::update_file(&self.path, |latest| {
+                        Ok((latest.clone(), false))
+                    })
+                    .map_err(|_| Error::new(self.id(), "apply_failed"))?;
+                }
+                Ok(true)
+            })();
+            std::future::ready(result)
         }
     }
 
@@ -234,7 +241,7 @@ mod owner {
                             },
                             Edit::Create {
                                 path: "/replacements".into(),
-                                id: "".into(),
+                                id: String::new(),
                                 value: json!({"from":"","to":"bad"})
                             },
                         ]
