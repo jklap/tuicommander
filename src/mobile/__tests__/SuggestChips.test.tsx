@@ -1,18 +1,27 @@
 import { cleanup, fireEvent, render } from "@solidjs/testing-library";
 import { createSignal } from "solid-js";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { appLogger } from "../../stores/appLogger";
+import { setToastBellMirrorResolver, toastsStore } from "../../stores/toasts";
 import { AGENT_ENTER_GAP_MS } from "../../utils/sendCommand";
+import { MobileToastContainer } from "../components/MobileToastContainer";
 import { SuggestChips } from "../components/SuggestChips";
 
 vi.mock("../../transport", () => ({
 	rpc: vi.fn().mockResolvedValue(undefined),
 }));
 
+vi.mock("../../stores/appLogger", () => ({ appLogger: { warn: vi.fn() } }));
+
 import { rpc } from "../../transport";
 
 afterEach(() => {
 	cleanup();
 	vi.clearAllMocks();
+	vi.mocked(rpc).mockReset().mockResolvedValue(undefined);
+	for (const toast of toastsStore.toasts) toastsStore.remove(toast.id);
+	setToastBellMirrorResolver(() => true);
+	vi.useRealTimers();
 });
 
 describe("SuggestChips", () => {
@@ -67,16 +76,17 @@ it("consumes a picked list across stale polls and accepts a later suggestion", a
 	}
 });
 
-// Catches: permanently suppressing identical choices emitted in a later turn.
-it("shows identical suggestions from a newer session snapshot", async () => {
-	const [updatedAt, setUpdatedAt] = createSignal(100);
-	const view = render(() => (
-		<SuggestChips sessionId="s1" items={["Run tests", "Review diff"]} agentType="claude" updatedAt={updatedAt()} />
-	));
+// Catches: permanently suppressing identical choices after the shared backend
+// submission clear removes the previous list and the next turn emits it again.
+it("shows identical suggestions after the backend clears the picked list", async () => {
+	const [items, setItems] = createSignal(["Run tests", "Review diff"]);
+	const view = render(() => <SuggestChips sessionId="s1" items={items()} agentType="claude" />);
 	await fireEvent.click(view.getByRole("button", { name: "Run tests" }));
 	try {
 		expect(view.queryAllByRole("button")).toHaveLength(0);
-		setUpdatedAt(200);
+		setItems([]);
+		expect(view.queryAllByRole("button")).toHaveLength(0);
+		setItems(["Run tests", "Review diff"]);
 		expect(view.getByRole("button", { name: "Run tests" })).toBeTruthy();
 	} finally {
 		await new Promise((r) => setTimeout(r, 2 * AGENT_ENTER_GAP_MS + 20));
@@ -95,4 +105,51 @@ it("does not carry a picked list into a different session", async () => {
 		await new Promise((r) => setTimeout(r, 2 * AGENT_ENTER_GAP_MS + 20));
 	}
 	expect(rpc).toHaveBeenLastCalledWith("write_pty", { sessionId: "s1", data: "\r" });
+});
+
+// F1 catches: unrelated semantic activity or an older snapshot reviving the
+// selected list before the pending first write and its retries have finished.
+it("keeps a picked list consumed when activity snapshots change during submission", async () => {
+	let releaseWrite!: () => void;
+	const pendingWrite = new Promise<void>((resolve) => {
+		releaseWrite = resolve;
+	});
+	vi.mocked(rpc).mockImplementationOnce(() => pendingWrite);
+	const [snapshot, setSnapshot] = createSignal({ items: ["Run tests", "Review diff"], updatedAt: 100 });
+	const view = render(() => <SuggestChips sessionId="s1" agentType="claude" {...snapshot()} />);
+	await fireEvent.click(view.getByRole("button", { name: "Run tests" }));
+	try {
+		expect(view.queryAllByRole("button")).toHaveLength(0);
+		setSnapshot({ items: ["Run tests", "Review diff"], updatedAt: 101 });
+		expect(view.queryAllByRole("button")).toHaveLength(0);
+		setSnapshot({ items: ["Run tests", "Review diff"], updatedAt: 99 });
+		expect(view.queryAllByRole("button")).toHaveLength(0);
+	} finally {
+		releaseWrite();
+		await new Promise((resolve) => setTimeout(resolve, 2 * AGENT_ENTER_GAP_MS + 20));
+	}
+});
+
+// F2 catches: exhausted Ctrl-U retries hiding the list without showing that
+// neither the prompt nor Enter reached the session.
+it("shows a mobile send failure after the first write exhausts retries", async () => {
+	// This boundary asserts the real transient card, not desktop bell persistence.
+	setToastBellMirrorResolver(() => false);
+	vi.useFakeTimers();
+	vi.mocked(rpc).mockRejectedValue(new Error("offline"));
+	const view = render(() => (
+		<>
+			<SuggestChips sessionId="s1" items={["Run tests", "Review diff"]} agentType="claude" />
+			<MobileToastContainer />
+		</>
+	));
+	await fireEvent.click(view.getByRole("button", { name: "Run tests" }));
+	await vi.runAllTimersAsync();
+	expect(rpc).toHaveBeenCalledTimes(3);
+	for (const call of vi.mocked(rpc).mock.calls) {
+		expect(call).toEqual(["write_pty", { sessionId: "s1", data: "\x15" }]);
+	}
+	expect(appLogger.warn).toHaveBeenCalledWith("network", "Failed to send suggest action: offline");
+	expect(view.getByText("Send failed")).toBeTruthy();
+	expect(view.getByText("Could not send command: offline")).toBeTruthy();
 });

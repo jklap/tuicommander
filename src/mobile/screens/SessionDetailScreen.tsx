@@ -566,7 +566,6 @@ export function SessionDetailScreen(props: SessionDetailScreenProps) {
 				<SuggestChips
 					sessionId={props.session.session_id}
 					items={sessionState()!.suggested_actions!}
-					updatedAt={sessionState()?.last_activity_ms}
 					agentType={sessionState()?.agent_type as string | null | undefined}
 				/>
 			</Show>

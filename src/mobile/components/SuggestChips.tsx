@@ -1,5 +1,6 @@
-import { createMemo, createSignal, For, Show } from "solid-js";
+import { createEffect, createMemo, createSignal, For, on, Show } from "solid-js";
 import { appLogger } from "../../stores/appLogger";
+import { toastsStore } from "../../stores/toasts";
 import { rpc } from "../../transport";
 import { sendCommand } from "../../utils/sendCommand";
 import { retryWrite } from "../utils/retryWrite";
@@ -9,21 +10,22 @@ interface SuggestChipsProps {
 	sessionId: string;
 	items: string[];
 	agentType?: string | null;
-	/** Snapshot activity distinguishes a later identical list from a stale poll. */
-	updatedAt?: number;
 }
 
 /** Strip leading "N) " or "N. " numbering from suggest items. */
 const stripNumberPrefix = (text: string): string => text.replace(/^\d+[).]\s*/, "");
 
 export function SuggestChips(props: SuggestChipsProps) {
-	const listKey = createMemo(() => JSON.stringify([props.sessionId, props.updatedAt, props.items]));
-	const [pickedList, setPickedList] = createSignal<string | null>(null);
+	const listKey = createMemo(() => JSON.stringify([props.sessionId, props.items]));
+	const [picked, setPicked] = createSignal(false);
+	// Only removal/replacement of the backend list re-arms it. Unrelated parsed
+	// activity can change last_activity_ms while retaining these same choices.
+	createEffect(on(listKey, () => setPicked(false)));
 	const send = async (text: string) => {
 		// Match desktop: consume the whole list before the first asynchronous write.
 		// The shared submitted-line lifecycle clears backend suggestions on Enter;
 		// keep an unchanged poll from restoring them while that submission is pending.
-		setPickedList(listKey());
+		setPicked(true);
 		const sessionId = props.sessionId;
 		const agentType = props.agentType;
 		try {
@@ -38,11 +40,12 @@ export function SuggestChips(props: SuggestChipsProps) {
 		} catch (err) {
 			const msg = err instanceof Error ? err.message : String(err);
 			appLogger.warn("network", `Failed to send suggest action: ${msg}`);
+			toastsStore.add("Send failed", `Could not send command: ${msg}`, "error", true);
 		}
 	};
 
 	return (
-		<Show when={pickedList() !== listKey()}>
+		<Show when={!picked()}>
 			<div class={styles.row}>
 				<For each={props.items}>
 					{(item) => (

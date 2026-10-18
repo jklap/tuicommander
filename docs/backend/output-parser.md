@@ -359,9 +359,12 @@ One bounded logical line may soft-wrap across terminal rows and may begin with a
 
 **Selection lifecycle:** mobile consumes the displayed chip list before starting
 its asynchronous PTY writes, matching desktop's immediate local dismissal.
-An unchanged session snapshot cannot restore that picked list. The session id,
-items and activity timestamp distinguish later suggestions, including repeated
-labels. Both clients retain the existing shared `record_submitted_line` →
+Snapshots that retain the same session and items cannot restore that picked
+list, even when unrelated parsed activity changes the activity timestamp. A
+removed or replaced backend list re-arms the chips; identical labels can appear
+again after the backend submission clear. Exhausted write retries use the
+existing mobile send-failure toast instead of silently hiding an unsent choice.
+Both clients retain the existing shared `record_submitted_line` →
 `note_submitted_input` backend path: Enter clears the known agent's suggestions
 and advances its turn epoch, so a subsequent poll reads the cleared state.
 No separate mobile backend clear endpoint is used.
