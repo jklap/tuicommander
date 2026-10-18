@@ -793,7 +793,7 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
 	{ tab: "ai-chat", section: "Advanced and diagnostics" },
 	{ tab: "ai-chat", section: "AI Chat" },
 	{ tab: "ai-chat", section: "Agent and model" },
-	{ tab: "ai-chat", section: "Workspace access", label: "Workspace · set in TUICommander" },
+	{ tab: "ai-chat", section: "Workspace access", label: "Workspace" },
 	{ tab: "ai-chat", section: "Workspace access", label: "Root directory", labelKey: "perimeter.label.rootDir" },
 	{ tab: "ai-chat", section: "Workspace access", label: "Root access", labelKey: "perimeter.label.rootAccess" },
 	{ tab: "ai-chat", section: "Workspace access", label: "Read allowlist", labelKey: "perimeter.label.readAllowlist" },

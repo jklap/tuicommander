@@ -46,6 +46,20 @@ function fakeClient(over: Partial<EgoCliClient> = {}): EgoCliClient & { refreshe
 }
 
 describe("AiChatTab", () => {
+	it("keeps model controls without exposing ownership and transport commentary", async () => {
+		const client = fakeClient({
+			providers: async () =>
+				snapshot([provider("anthropic", [model("anthropic/claude-opus-5")])], "anthropic/claude-opus-5"),
+		});
+		const { container } = render(() => <AiChatTab client={client} />);
+		expect(await screen.findByRole("combobox")).toBeTruthy();
+		expect(screen.getByRole("button", { name: "Refresh from providers" })).toBeTruthy();
+		// Catches implementation prose returning beside otherwise functional controls.
+		expect(container.textContent).not.toMatch(
+			/TUICommander owns|stored by ego|re-enumerate its sources|Credential state comes from/,
+		);
+	});
+
 	it("lists every provider ego reported, with its models", async () => {
 		const client = fakeClient({
 			providers: async () =>
@@ -189,7 +203,7 @@ describe("AiChatTab", () => {
 
 		render(() => <AiChatTab client={client} />);
 
-		expect(await screen.findByText(/Name the ego binary in Settings → General/)).toBeTruthy();
+		expect(await screen.findByText(/Set the ego executable in Settings → General/)).toBeTruthy();
 		expect(screen.queryByRole("combobox")).toBeNull();
 	});
 
@@ -204,7 +218,7 @@ describe("AiChatTab", () => {
 
 		expect(await screen.findByText(/could not be started\. Check the path in Settings → General/)).toBeTruthy();
 		expect(screen.getByText(/os error 2/)).toBeTruthy();
-		expect(screen.queryByText(/Name the ego binary/)).toBeNull();
+		expect(screen.queryByText(/Set the ego executable/)).toBeNull();
 	});
 
 	// Catches: isEgoCliError rejecting the HttpRpcError transport.ts throws, so the browser falls back to the raw error string.
@@ -218,7 +232,7 @@ describe("AiChatTab", () => {
 
 		render(() => <AiChatTab client={client} />);
 
-		expect(await screen.findByText(/Name the ego binary in Settings → General/)).toBeTruthy();
+		expect(await screen.findByText(/Set the ego executable in Settings → General/)).toBeTruthy();
 		expect(screen.queryByText(/HttpRpcError/)).toBeNull();
 	});
 
@@ -322,7 +336,7 @@ describe("AiChatTab", () => {
 		render(() => <AiChatTab client={client} />);
 
 		expect(await screen.findByText(/the window has gone away/)).toBeTruthy();
-		expect(screen.queryByText(/Name the ego binary/)).toBeNull();
+		expect(screen.queryByText(/Set the ego executable/)).toBeNull();
 	});
 });
 
@@ -416,6 +430,7 @@ describe("AiChatTab — no ego executable control", () => {
 
 beforeEach(() => {
 	vi.spyOn(appLogger, "error").mockImplementation(() => {});
+	vi.spyOn(appLogger, "warn").mockImplementation(() => {});
 });
 
 afterEach(async () => {
@@ -431,5 +446,10 @@ afterEach(async () => {
 			"Failed to save activity",
 		]).toContain(message);
 	}
+	for (const [source, message] of vi.mocked(appLogger.warn).mock.calls) {
+		expect(source).toBe("config");
+		expect(message).toBe("Settings reload failed");
+	}
+	vi.mocked(appLogger.warn).mockRestore();
 	vi.mocked(appLogger.error).mockRestore();
 });

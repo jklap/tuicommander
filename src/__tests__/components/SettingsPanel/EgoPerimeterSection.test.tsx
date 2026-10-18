@@ -28,7 +28,7 @@ describe("EgoPerimeterSection", () => {
 		const setNetwork = vi.fn(async () => initial);
 		render(() => <EgoPerimeterSection client={client({ perimeter, setRoots, setNetwork })} />);
 		fireEvent.click(await screen.findByRole("button", { name: "How to verify" }));
-		expect(screen.getByText(/Reload from ego reads configuration/)).toBeTruthy();
+		expect(screen.getByText(/Run ego doctor in a terminal and inspect its command-isolation report/)).toBeTruthy();
 		expect(perimeter).toHaveBeenCalledTimes(1);
 		expect(setRoots).not.toHaveBeenCalled();
 		expect(setNetwork).not.toHaveBeenCalled();
@@ -70,8 +70,9 @@ describe("EgoPerimeterSection", () => {
 				/>
 			));
 			expect(await screen.findByText(text)).toBeTruthy();
-			expect(screen.getByText(/Command isolation for spawned processes/)).toBeTruthy();
-			if (execEnforcement === "promptOnly") expect(screen.getByText(/not fully OS-enforced/)).toBeTruthy();
+			expect(screen.getByText(initial.preview)).toBeTruthy();
+			if (execEnforcement === "promptOnly")
+				expect(screen.getByText(/not fully enforced by the operating system/)).toBeTruthy();
 		},
 	);
 

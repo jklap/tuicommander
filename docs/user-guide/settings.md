@@ -31,7 +31,9 @@ groups the pages by task:
 The **AI Chat** page is shown only while **Experimental Features** is on (see
 [AI Chat](#ai-chat)).
 
-On narrow screens, Settings reserves the same scrollbar space on every page, including plugin loading and error states. Help badges follow the final line of wrapped labels, and repository color actions keep the shared right alignment.
+Settings uses short labels and behavior descriptions. Implementation ownership and persistence details stay in the documentation rather than page introductions.
+
+On narrow screens, the page selector truncates long names before its arrow. Settings reserves the same scrollbar space on every page, including plugin loading and error states. Help badges follow the final line of wrapped labels, and repository color actions keep the shared right alignment.
 
 Plugin pages show their source plugin ID below the page title and in the navigation tooltip. The Settings header, navigation and footer stay visible while plugin values load. Loading and read errors appear only inside the native editor; switching pages does not load a plugin iframe. Unloading a plugin removes its page and search entries.
 

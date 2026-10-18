@@ -61,10 +61,7 @@ export const LocalMcpPanel: Component = () => {
 				scope="This machine"
 				breadcrumb="Integrations / MCP"
 			/>
-			<SectionCard
-				title="Server connections"
-				description="Local HTTP API and upstream MCP servers share this machine’s integration settings."
-			>
+			<SectionCard title="Server connections">
 				<div class={s.group}>
 					<p class={s.hint}>
 						{t(
@@ -226,10 +223,6 @@ export const LocalMcpPanel: Component = () => {
 						}}
 					</For>
 				</Show>
-
-				<p class={s.hint} style={{ "margin-top": "16px", color: "var(--text-dimmed)" }}>
-					{t("services.hint.autoSave", "Settings are saved automatically when changed")}
-				</p>
 			</SectionCard>
 		</div>
 	);

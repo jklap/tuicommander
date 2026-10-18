@@ -37,6 +37,7 @@ check('upstream card separated from connection row',rect(card).y-rect(row).botto
  const autoFetch=byText('label','Auto-Fetch Interval');
  if(autoFetch){const control=document.getElementById(autoFetch.htmlFor);if(control){const a=rect(autoFetch),b=rect(control);check('repository label before select',innerWidth>600?a.x<b.x&&a.y<=b.bottom:a.bottom<=b.y,{label:a,control:b});}}
  const select=document.querySelector('select[aria-label="Settings page"]');
+ if(select&&innerWidth<700){const style=getComputedStyle(select);check('compact page selector reserves arrow space',parseFloat(style.paddingInlineEnd)>=32&&style.textOverflow==='ellipsis',{select:rect(select),paddingInlineEnd:style.paddingInlineEnd,textOverflow:style.textOverflow});}
  const expected=new URLSearchParams(location.search).get('tab');
  if(select&&expected)check('compact page agrees with rendered page',select.value===expected,{actual:select.value,expected});
  const heading=byText('h3','Your machines');

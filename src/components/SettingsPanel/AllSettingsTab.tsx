@@ -321,7 +321,7 @@ export const AllSettingsTab: Component<{ initialSetting?: string }> = (props) =>
 			<SettingPageHeader
 				title="All settings"
 				breadcrumb="Application / Expert"
-				description="Typed catalogue fields, including settings without a dedicated page. Existing records use stable keys, never array indexes. Credentials and structured domain records remain in their dedicated editors."
+				description="Settings without a dedicated page."
 				scope="Current instance / machine"
 			/>
 			<SectionCard title="Catalogue inspector">

@@ -1522,7 +1522,7 @@
  .nav > :not(.compactNav):not(.navSearch) { display: none; }
  .nav { overflow: visible; padding: 8px 16px; max-height: none; }
  .compactNav { display: block; }
- .compactNav select { width: 100%; min-height: 44px; }
+ .compactNav select { width: 100%; min-height: 44px; padding-inline-end: 32px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 }
 
 .settingRowText .infoBadge { width: 14px; height: 14px; border: 1px solid var(--fg-muted); background: transparent; font-size: 10px; line-height: 1; }
