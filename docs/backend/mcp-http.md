@@ -2675,7 +2675,9 @@ MCP identity binding, including calls through the IPC MCP bridge.
   `tuic://inbox/subscriptions/<id>` after creating the reader. It sends
   `notifications/resources/updated` only for a new actionable batch cursor or a
   journal error. It also filters the idle-ego wake; routine traffic sends neither
-  a resource update nor a wake. Ack uses the agent tool. Selecting a durable
+  a resource update nor a wake. Ack uses the agent tool. The
+  wake cursor is consumed only after a turn is accepted; a busy/skipped attempt
+  stays eligible when later mail arrives at the same frozen cursor. Selecting a durable
   inbox resource replaces the legacy inbox as the idle-wake source on that ACP
   connection. Explicitly subscribing to `tuic://inbox` still requests its legacy
   unfiltered resource notifications.

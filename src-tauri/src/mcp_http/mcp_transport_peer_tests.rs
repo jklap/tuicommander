@@ -6295,7 +6295,7 @@ fn actionable_subscription_snapshot_overlap_keeps_missed_count_exact() {
                 id: format!("overlap-{index}"),
                 from_tuic_session: "child".into(),
                 from_name: "child".into(),
-                content: format!("RESULT {index}"),
+                content: format!("RESULT {index} {}", "x".repeat(1800)),
                 timestamp: index + 1,
                 delivered_via_channel: false,
             },
@@ -6304,37 +6304,45 @@ fn actionable_subscription_snapshot_overlap_keeps_missed_count_exact() {
     for index in 0..=100 {
         push(index);
     }
-    let (snapshot, _, missed, watermark) = state.read_agent_inbox(TEST_UUID_A, 0, 100, false);
-    assert_eq!(missed, 1);
-    let ids: Vec<_> = snapshot.iter().map(|message| message.id.clone()).collect();
-    let through = snapshot.last().unwrap().timestamp;
+    let page_args = serde_json::json!({"action":"inbox","since":0,"limit":100,"byte_budget":1024});
+    let first = invoke(page_args.clone());
+    let second = invoke(page_args.clone());
+    assert!(
+        first["continuation"].is_string(),
+        "fixture must exercise deferred snapshot ACK"
+    );
+    let finish = |mut page: serde_json::Value| {
+        while page["continuation"].is_string() {
+            let mut args = page_args.clone();
+            args["continuation"] = page["continuation"].clone();
+            page = invoke(args);
+            assert!(page.get("error").is_none(), "{page}");
+        }
+    };
+    let legacy = || invoke(serde_json::json!({"action":"inbox","since":0,"limit":1}));
+    assert_eq!(legacy()["missed_count"], 1);
     let batch =
         invoke(serde_json::json!({"action":"inbox","subscription_id":"overlap","limit":100}));
     let ack = invoke(
         serde_json::json!({"action":"ack","subscription_id":"overlap","cursor":batch["cursor"]}),
     );
     assert!(ack.get("error").is_none(), "{ack}");
-    assert!(
-        state.agent_read_cursor.get(TEST_UUID_A).is_none(),
-        "subscription ACK must not consume the independent legacy cursor"
-    );
     push(101);
     assert_eq!(
-        *state.agent_inbox_evictions.get(TEST_UUID_A).unwrap(),
-        1,
+        legacy()["missed_count"].as_u64().unwrap_or(0),
+        0,
         "evicting subscription-observed mail is not a new loss"
     );
-    state.acknowledge_agent_snapshot(TEST_UUID_A, through, &ids, watermark);
-    state.acknowledge_agent_snapshot(TEST_UUID_A, through, &ids, watermark);
-    assert_eq!(*state.agent_inbox_evictions.get(TEST_UUID_A).unwrap(), 0);
-    // The original snapshot observed 1..100. Evict those and one newer unread
-    // item, then replay the old acknowledgement: its watermark cannot hide loss.
+    finish(first);
     for index in 102..=201 {
         push(index);
     }
-    assert_eq!(*state.agent_inbox_evictions.get(TEST_UUID_A).unwrap(), 1);
-    state.acknowledge_agent_snapshot(TEST_UUID_A, through, &ids, watermark);
-    assert_eq!(*state.agent_inbox_evictions.get(TEST_UUID_A).unwrap(), 1);
+    finish(second);
+    assert_eq!(
+        legacy()["missed_count"],
+        1,
+        "an overlapping old snapshot ACK cannot erase a newer unread loss"
+    );
 }
 
 // Catches: the admitted subscription actions bypass dispatch, remote restrictions,
@@ -6446,6 +6454,7 @@ async fn actionable_subscription_dispatch_preserves_readers_and_loopback_boundar
 }
 
 // Catches: a filtered ACK jumps over an unmatched live message and retracts its wake.
+#[cfg(unix)]
 #[test]
 fn actionable_subscription_filtered_ack_keeps_unobserved_wake_gap() {
     let state = test_state();
@@ -6480,12 +6489,10 @@ fn actionable_subscription_filtered_ack_keeps_unobserved_wake_gap() {
             TEST_UUID_A,
             id,
             timestamp,
-            true,
-            || true,
+            false,
+            || panic!("busy fixture must not attempt a wake"),
         );
     }
-    let before = state.orchestrator_wake_needed_through(TEST_UUID_A);
-    assert_eq!(before, Some(2));
     let batch = invoke(serde_json::json!({"action":"inbox","subscription_id":"exit"}));
     assert_eq!(batch["count"], 1, "{batch}");
     assert_eq!(batch["messages"][0]["id"], "tuic-auto-gap-exit");
@@ -6493,8 +6500,13 @@ fn actionable_subscription_filtered_ack_keeps_unobserved_wake_gap() {
         serde_json::json!({"action":"ack","subscription_id":"exit","cursor":batch["cursor"]}),
     );
     assert!(ack.get("error").is_none(), "{ack}");
-    assert_eq!(state.orchestrator_wake_needed_through(TEST_UUID_A), before);
-    assert!(state.agent_read_cursor.get(TEST_UUID_A).is_none());
+    state.orchestrator_peers.insert(TEST_UUID_A.to_owned());
+    let output = install_completed_agent_submission_probe(&state, TEST_UUID_A, "codex");
+    crate::pty::route_registered_orchestrator_mail(&state, TEST_UUID_A, "unmatched-mail", 1);
+    let notice = output
+        .recv_timeout(std::time::Duration::from_secs(2))
+        .expect("unmatched RESULT must retain its eventual terminal wake");
+    assert!(notice.contains("agent action=inbox"), "{notice:?}");
     let unread = invoke(serde_json::json!({"action":"inbox"}));
     assert_eq!(unread["messages"][0]["id"], "unmatched-mail");
 }

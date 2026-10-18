@@ -46,7 +46,8 @@ pub(crate) struct AcpMcpHost {
 }
 
 /// Given a peer id, start a turn in its conversation if nothing is running.
-type Waker = Arc<dyn Fn(String) + Send + Sync>;
+type WakeResult = std::pin::Pin<Box<dyn std::future::Future<Output = bool> + Send>>;
+type Waker = Arc<dyn Fn(String) -> WakeResult + Send + Sync>;
 
 /// How long a burst of mail is gathered before an idle ego is woken, so ten
 /// messages cost one turn rather than ten.
@@ -67,27 +68,27 @@ impl AcpMcpHost {
     pub(crate) fn new(state: &Arc<AppState>) -> Self {
         let weak = Arc::downgrade(state);
         let wake: Waker = Arc::new(move |peer: String| {
-            let Some(state) = weak.upgrade() else { return };
-            tokio::spawn(async move {
+            let state = weak.upgrade();
+            Box::pin(async move {
+                let Some(state) = state else { return false };
                 match state
                     .acp
                     .wake_idle_peer(&peer, crate::pty::PEER_MAIL_WAKE)
                     .await
                 {
-                    Ok(Some(turn)) => tracing::info!(
-                        source = "acp_mcp",
-                        tuic_session = %peer,
-                        turn = ?turn,
-                        "Woke idle ego for new mail"
-                    ),
-                    Ok(None) => {}
-                    Err(error) => tracing::warn!(
-                        source = "acp_mcp",
-                        tuic_session = %peer,
-                        "Waking ego for new mail failed: {error:?}"
-                    ),
+                    Ok(Some(turn)) => {
+                        tracing::info!(source = "acp_mcp", tuic_session = %peer,
+                            turn = ?turn, "Woke idle ego for new mail");
+                        true
+                    }
+                    Ok(None) => false,
+                    Err(error) => {
+                        tracing::warn!(source = "acp_mcp", tuic_session = %peer,
+                            "Waking ego for new mail failed: {error:?}");
+                        false
+                    }
                 }
-            });
+            })
         });
         Self {
             state: Arc::downgrade(state),
@@ -170,7 +171,7 @@ impl McpOverAcpHost for AcpMcpHost {
         let wake = peer_id.map(|peer| {
             let wake = Arc::clone(&self.wake);
             let peer = peer.to_owned();
-            Box::new(move || wake(peer.clone())) as Box<dyn Fn() + Send>
+            Box::new(move || wake(peer.clone())) as Box<dyn Fn() -> WakeResult + Send>
         });
         let forwarder = tokio::spawn(forward(
             Arc::downgrade(&state),
@@ -515,7 +516,7 @@ async fn forward(
     mut feeds: Feeds,
     subscriptions: Subscriptions,
     notify: McpNotify,
-    wake: Option<Box<dyn Fn() + Send>>,
+    wake: Option<Box<dyn Fn() -> WakeResult + Send>>,
 ) {
     use broadcast::error::RecvError;
     let updated = |uri: &str| {
@@ -618,6 +619,7 @@ async fn forward(
                 let uris: Vec<_> = subscriptions.lock().iter().filter(|uri| subscription_id(uri).is_some()).cloned().collect();
                 woken_subscriptions.retain(|uri, _| uris.contains(uri));
                 let mut unread = false;
+                let mut candidates = Vec::new();
                 if uris.is_empty() {
                     unread = feeds.peer.as_deref().is_some_and(|peer| {
                         inbox_snapshot(&state, Some(peer))["messages"].as_array().is_some_and(|messages| !messages.is_empty())
@@ -628,13 +630,15 @@ async fn forward(
                         let batch = crate::mail_subscriptions::read(&state,peer,&json!({"action":"inbox","subscription_id":subscription_id(&uri)})).await;
                         let cursor = batch["cursor"].as_u64();
                         if crate::mail_subscriptions::pending(&batch) && woken_subscriptions.get(&uri) != Some(&cursor) {
-                            woken_subscriptions.insert(uri,cursor);
+                            candidates.push((uri,cursor));
                             unread = true;
                         }
                     }
                 }
-                if unread && let Some(wake) = &wake {
-                    wake();
+                if unread && let Some(wake) = &wake && wake().await {
+                    // An attempted wake can be skipped while ego is busy. Only
+                    // an accepted turn consumes this frozen batch's wake.
+                    woken_subscriptions.extend(candidates);
                 }
             },
         }
@@ -1053,7 +1057,10 @@ mod tests {
         let host = AcpMcpHost {
             wake: {
                 let woken = Arc::clone(&woken);
-                Arc::new(move |peer| woken.lock().push(peer))
+                Arc::new(move |peer| {
+                    woken.lock().push(peer);
+                    Box::pin(async { true })
+                })
             },
             ..AcpMcpHost::new(&state)
         };
@@ -1161,7 +1168,10 @@ mod tests {
             connections: Mutex::default(),
             wake: {
                 let woken = woken.clone();
-                Arc::new(move |peer| woken.lock().push(peer))
+                Arc::new(move |peer| {
+                    woken.lock().push(peer);
+                    Box::pin(async { true })
+                })
             },
         };
         let (notify, heard) = listener();
@@ -1238,5 +1248,65 @@ mod tests {
             "acknowledged RESULT must not wake after reconnect"
         );
         host.disconnect(&resumed);
+    }
+    // Catches: a skipped busy wake consumes the frozen cursor and suppresses a later accepted turn.
+    #[tokio::test]
+    async fn actionable_subscription_skipped_busy_wake_remains_eligible() {
+        use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+        let state = test_state();
+        let busy = Arc::new(AtomicBool::new(true));
+        let attempts = Arc::new(AtomicUsize::new(0));
+        let accepted = Arc::new(AtomicUsize::new(0));
+        let host = AcpMcpHost {
+            wake: {
+                let busy = busy.clone();
+                let attempts = attempts.clone();
+                let accepted = accepted.clone();
+                Arc::new(move |_| {
+                    attempts.fetch_add(1, Ordering::SeqCst);
+                    let idle = !busy.load(Ordering::SeqCst);
+                    if idle {
+                        accepted.fetch_add(1, Ordering::SeqCst);
+                    }
+                    Box::pin(async move { idle })
+                })
+            },
+            ..AcpMcpHost::new(&state)
+        };
+        let (notify, _) = listener();
+        let id = host.connect(Some(PEER), notify).unwrap();
+        let created = crate::mail_subscriptions::action(
+            &state,
+            PEER,
+            &json!({"action":"subscribe","subscription_id":"busy"}),
+        );
+        assert!(created.get("error").is_none(), "{created}");
+        let uri = "tuic://inbox/subscriptions/busy";
+        host.message(
+            &id,
+            "resources/subscribe".into(),
+            object(json!({"uri":uri})),
+        )
+        .await
+        .unwrap();
+        state.push_agent_inbox(PEER, mail("busy-result", "RESULT while busy"));
+        eventually("first skipped attempt", || {
+            attempts.load(Ordering::SeqCst) == 1
+        })
+        .await;
+        let frozen = read(&host, &id, uri).await;
+        assert_eq!(accepted.load(Ordering::SeqCst), 0);
+        busy.store(false, Ordering::SeqCst);
+        state.push_agent_inbox(PEER, mail("idle-result", "RESULT after idle"));
+        assert_eq!(read(&host, &id, uri).await["cursor"], frozen["cursor"]);
+        eventually("accepted wake after skipped attempt", || {
+            accepted.load(Ordering::SeqCst) == 1
+        })
+        .await;
+        state.push_agent_inbox(PEER, mail("later-result", "RESULT same frozen cursor"));
+        tokio::time::sleep(WAKE_DEBOUNCE + COALESCE).await;
+        assert_eq!(accepted.load(Ordering::SeqCst), 1);
+        assert_eq!(attempts.load(Ordering::SeqCst), 2);
+        host.disconnect(&id);
     }
 }
