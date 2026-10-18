@@ -2038,3 +2038,22 @@ fn instructions_make_no_claim_about_the_user_or_the_platform() {
         }
     }
 }
+
+/// Catches: launch-capable agents receiving conflicting rules twice through MCP.
+#[test]
+fn launch_capable_clients_receive_no_duplicate_playbook() {
+    for name in ["claude-code", "codex", "ego"] {
+        let text = render_mcp_instructions(
+            Some(name),
+            false,
+            (true, true),
+            true,
+            &InstructionContext::default(),
+        );
+        assert!(!text.contains("Required Output Markers"), "{name}: {text}");
+        assert!(!text.contains("**Submit:**"));
+        assert!(!text.contains("## Progress — mandatory"));
+        assert!(!text.contains("never `git worktree add/remove`"));
+        assert!(text.contains("## Multi-Agent Work"));
+    }
+}

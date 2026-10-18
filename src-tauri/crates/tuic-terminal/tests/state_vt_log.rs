@@ -1201,7 +1201,7 @@ mod state {
         }
 
         #[test]
-        fn test_strip_structural_tokens_plain_intent() {
+        fn test_strip_structural_tokens_preserves_plain_intent() {
             let mut line = LogLine {
                 spans: vec![LogSpan {
                     text: "intent: reading the config file".into(),
@@ -1213,10 +1213,7 @@ mod state {
                 partial: false,
             };
             line.strip_structural_tokens();
-            assert!(
-                line.spans.is_empty(),
-                "plain-prefix intent should be stripped entirely"
-            );
+            assert_eq!(line.text(), "intent: reading the config file");
         }
 
         #[test]
@@ -1245,7 +1242,7 @@ mod state {
         fn test_strip_structural_tokens_knows_the_codex_bullets() {
             for text in [
                 "\u{2022} suggest: Run tests | Check logs | Push",
-                "\u{25E6} intent: ricostruisco il modello",
+                "\u{25E6} suggest: Run tests | Check logs | Push",
             ] {
                 let mut line = LogLine {
                     spans: vec![LogSpan {
@@ -1265,8 +1262,7 @@ mod state {
             }
         }
 
-        /// The ack is the agent's own greeting and the user is meant to read it;
-        /// only the marker riding behind it is a wire token.
+        /// Both the greeting and its inline intent stay visible in log output.
         #[test]
         fn test_strip_structural_tokens_keeps_the_ack_sentence() {
             let mut line = LogLine {
@@ -1282,7 +1278,10 @@ mod state {
                 partial: false,
             };
             line.strip_structural_tokens();
-            assert_eq!(line.spans[0].text, "TUICommander v1.7.7 is connected. ");
+            assert_eq!(
+                line.text(),
+                "\u{2022} TUICommander v1.7.7 is connected. intent: fixing the parser (Fix)"
+            );
         }
 
         /// Screen text of a 40-column buffer that received `output`.
@@ -1358,7 +1357,7 @@ mod state {
         }
 
         #[test]
-        fn test_strip_structural_tokens_indented_intent() {
+        fn test_strip_structural_tokens_preserves_indented_intent() {
             let mut line = LogLine {
                 spans: vec![LogSpan {
                     text: "  intent: reading the config file".into(),
@@ -1370,7 +1369,7 @@ mod state {
                 partial: false,
             };
             line.strip_structural_tokens();
-            assert!(line.spans.is_empty(), "indented intent should be stripped");
+            assert_eq!(line.text(), "  intent: reading the config file");
         }
 
         #[test]
@@ -1394,7 +1393,7 @@ mod state {
         }
 
         #[test]
-        fn test_strip_structural_tokens_bullet_intent() {
+        fn test_strip_structural_tokens_preserves_bullet_intent() {
             let mut line = LogLine {
                 spans: vec![LogSpan {
                     text: "⏺ intent: doing something (Task)".into(),
@@ -1406,10 +1405,7 @@ mod state {
                 partial: false,
             };
             line.strip_structural_tokens();
-            assert!(
-                line.spans.is_empty(),
-                "bullet-prefixed intent should be stripped"
-            );
+            assert_eq!(line.text(), "⏺ intent: doing something (Task)");
         }
 
         // ── VtLogBuffer alt-screen ──────────────────────────────────

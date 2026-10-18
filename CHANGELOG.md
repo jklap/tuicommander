@@ -6,13 +6,31 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+- Generate configurable launch playbook modules with append-only global and agent additions, explicit all-off controls, child-only guidance and legacy override migration. Effective previews follow the selected machine (#2000-b50f).
+- Keep the mobile Markdown menu list stable during session polls and refresh it in place.
+
 ### Added
+
+- Set independent mobile Terminal and Chat font sizes in Settings, remembered on this device only (#2023-54c4).
+- Dictate into the mobile Ideas input with the shared composer mic. Speech replaces the selected text without sending to a session or saving the idea.
+- Open desktop Markdown tabs from the mobile session top bar at tablet widths; phones keep the session menu list.
 
 - Durable keyed managed-child launches across MCP, HTTP and IPC, with explicit workspace, parent, stable name, hold-open policy and retry-safe receipts (#2006-f5a1).
 - Publish typed Settings account enumeration and configured Ego interactive login start/status, with human terminal authentication and separate credential readback (#1790-1011).
 ### Fixed
 
 - Serve authenticated Settings actions and the browser Settings bootstrap on headless daemons through shared routes; keep desktop-only upstream OAuth unavailable there (#2014-9d06).
+- Report an idle ego turn as idle even while background processes remain tracked, consistently across desktop, mobile, and `agent ls` (#2018-1885).
+
+- Preserve and tint the complete wrapped intent line in mobile CLI output, including its first row (#2019-7c5d).
+- Keep Settings peer refresh current after no-op edits, omitted repository defaults, transient read failures, and desktop connection/tunnel saves; avoid conflict notices for acknowledged upstream header saves (#1788-2163).
+- Disable Ideas dictation while a voice call or terminal browser dictation owns the microphone (#2022-1b80).
+
+- Mirror bounded browser dictation lifecycle diagnostics with session/take identity to the owner log ring, without transcript content or per-hypothesis logging (#2020-66aa).
+
+- Browser dictation now requests shutdown through the existing cancellation path after a recognition error. “Dictation failed” also stays beside the composer mic, above the mobile keyboard.
+- Float the Chat new-text badge above the composer without reserving a row, and keep full-radius controls pill-shaped instead of elliptical (#2017-b9e0).
+
 - Report stalled parentless automation/workflow initial prompts as blocked after the existing delivery timeout, without dropping or duplicating the queued task (#2006-f5a1).
 - Honor an explicitly configured worktree integration base before stale conventional or remote default refs (#1961-bab6).
 

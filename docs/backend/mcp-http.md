@@ -2388,6 +2388,14 @@ owner; replies contain only token presence. Clearing the stored token does not
 remove `CIRCLE_TOKEN` or the CircleCI CLI configuration. The Git & GitHub page
 continues to show the effective token source. No transport returns the token.
 
+### Machine launch instruction previews
+
+`GET /config/defaults` and `POST /config/defaults` are shared machine routes on
+both the desktop server and `tuic-remote`. The POST previews draft agent settings
+without saving them and uses the same authentication as other machine config routes.
+
+Launch-capable Claude, Codex, Grok, OpenCode, Goose, pi and ego clients receive playbook obligations from generated launch files, not again from MCP initialize instructions. MCP keeps tool discovery and live repository/session/peer state. Unrecognized clients retain the existing MCP marker, submit, worktree and progress fallback.
+
 ### Idempotent managed launch
 
 Prefer `agent action=launch` for a managed worker that needs a selected/new workspace and a durable retry identity. One request composes worktree allocation, named spawn, parent linkage and keep-open policy; unkeyed `spawn` remains compatible. The shared Rust boundary also serves `POST /agents/launch` and `managed_agent_launch` IPC. See [the wire contract](../api/http-api.md#durable-managed-agent-launch). Read by `launch_id` without sending a new prompt.

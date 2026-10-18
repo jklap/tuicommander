@@ -1730,7 +1730,7 @@ pub(crate) fn suspend_refusal(ss: &crate::state::SessionState) -> Option<&'stati
     }
     if ss.agent_type.is_some() {
         let working = matches!(ss.agent_state.as_deref(), Some("working" | "starting"));
-        if ss.background_work || working {
+        if ss.has_pending_background_probe() || ss.background_work || working {
             return Some("agent working");
         }
     } else if ss.shell_state.as_deref() == Some("busy") {
@@ -2230,18 +2230,22 @@ pub(super) fn spawn_with_identity(
                 }
             }
             if let Some(agent_type) = effective_agent_type.as_deref() {
-                launch_args = crate::agent_hook_launch::launch_args(
+                let spawned_child = caller_tuic.is_some() || mcp_session_id.is_some();
+                cmd.env("TUIC_SPAWNED_CHILD", if spawned_child { "1" } else { "0" });
+                launch_args = crate::agent_hook_launch::launch_args_for(
                     agent_type,
                     &binary_path,
                     &launch_args,
                     &crate::config::config_dir(),
                     &attachment_dir,
+                    spawned_child,
                 );
-                crate::launch_instructions::apply_env(
+                crate::launch_instructions::apply_env_for(
                     &mut cmd,
                     agent_type,
                     &launch_args,
                     &crate::config::config_dir(),
+                    spawned_child,
                 );
             }
             let skip_trust_dialog = effective_agent_type

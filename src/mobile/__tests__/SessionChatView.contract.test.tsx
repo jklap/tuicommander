@@ -91,6 +91,13 @@ function mount(host: "desktop" | "mobile") {
 
 // Desktop-only file navigation/search are covered by TerminalChatView.test and chatViewSearch.test.
 describe.each(["desktop", "mobile"] as const)("%s terminal chat contract", (host) => {
+	// Catches: a shared transcript hint prop/default reintroduces invented guidance.
+	it("renders Chat without invented guidance", async () => {
+		const view = mount(host);
+		view.getByText("Chat").click();
+		await waitFor(() => expect(view.container.textContent).toContain("First answer"));
+		expect(view.container.textContent).not.toMatch(/Reply below|Switch to CLI|Read file edits in Chat/);
+	});
 	// Catches: frontend missing-id gate prevents backend-owned binding; epoch reset leaves old prose visible.
 	it("opens Claude without a discovered id and replaces the old epoch on a wake", async () => {
 		const view = mount(host);

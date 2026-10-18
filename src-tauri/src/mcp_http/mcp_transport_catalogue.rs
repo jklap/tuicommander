@@ -200,28 +200,34 @@ pub(super) fn render_mcp_instructions(
     // ── Identity ──────────────────────────────────────────────────────
     out.push_str(&format!("# TUICommander v{ver}\n\n"));
 
-    // ── TUIC protocol (mandatory line markers) ─────────────────────────
-    // Wire-level tokens parsed by the host TUI. Concision rules do NOT apply —
-    // dropping a marker breaks the UI (stale tab title, missing suggestion bar).
-    let (show_intent, show_suggest) = markers;
-    // A spawned child's suggestion buttons are never shown to anyone.
-    let show_suggest = show_suggest && !ctx.spawned_child;
-    out.push_str("## TUIC Protocol — Required Output Markers\n\n");
-    out.push_str("Required for the UI.\n\n");
-    out.push_str(&format!(
+    // Launch-capable harnesses receive the playbook through their native flag.
+    // Do not re-enable disabled modules or deliver a conflicting second copy.
+    let launch_channel = resolve_agent_type(client_name)
+        .is_some_and(|agent| crate::launch_instructions::AGENTS.contains(&agent));
+    if !launch_channel {
+        // ── TUIC protocol (mandatory line markers) ─────────────────────────
+        // Wire-level tokens parsed by the host TUI. Concision rules do NOT apply —
+        // dropping a marker breaks the UI (stale tab title, missing suggestion bar).
+        let (show_intent, show_suggest) = markers;
+        // A spawned child's suggestion buttons are never shown to anyone.
+        let show_suggest = show_suggest && !ctx.spawned_child;
+        out.push_str("## TUIC Protocol — Required Output Markers\n\n");
+        out.push_str("Required for the UI.\n\n");
+        out.push_str(&format!(
         "- `ack` — once per MCP connection/reconnect: start your first message with `TUICommander v{ver} is connected.` Never repeat per turn.\n"
     ));
-    if show_intent {
-        out.push_str("- `intent: <desc> (<title>)` on its own line, at the start of every user task and on each material work-phase change. Describe the work currently in progress in present tense; `<title>` ≤3 words, spaces not hyphens.\n");
+        if show_intent {
+            out.push_str("- `intent: <desc> (<title>)` on its own line, at the start of every user task and on each material work-phase change. Describe the work currently in progress in present tense; `<title>` ≤3 words, spaces not hyphens.\n");
+        }
+        if show_suggest {
+            out.push_str("- `suggest:` — after task done: `suggest: [ A | B | C ]` — bracket the WHOLE list; EXACTLY 3 items separated by `|`, each ≤40 chars.\n");
+        }
+        // Always on: the answers-only view is a per-terminal toggle with no setting
+        // to switch the marker off, and `answersTurn.ts` anchors on a row that
+        // starts with the marker followed by a space.
+        out.push_str("- `💬 ` — prefix every sentence that directly answers the user's question at row start or list-item text start (marker + space). Exclude status, tool and hook/task notices.\n");
+        out.push('\n');
     }
-    if show_suggest {
-        out.push_str("- `suggest:` — after task done: `suggest: [ A | B | C ]` — bracket the WHOLE list; EXACTLY 3 items separated by `|`, each ≤40 chars.\n");
-    }
-    // Always on: the answers-only view is a per-terminal toggle with no setting
-    // to switch the marker off, and `answersTurn.ts` anchors on a row that
-    // starts with the marker followed by a space.
-    out.push_str("- `💬 ` — prefix every sentence that directly answers the user's question at row start or list-item text start (marker + space). Exclude status, tool and hook/task notices.\n");
-    out.push('\n');
 
     // ── Capability map ───────────────────────────────────────────────
     out.push_str(&render_capability_map(
@@ -237,33 +243,38 @@ pub(super) fn render_mcp_instructions(
     // do not. What survives is the pair of rules that no single tool description
     // owns — one forbids a tool that is not ours, the other spans two calls.
     out.push_str("## Tools\n\n");
-    if collapse_tools {
-        out.push_str("Discover/invoke via `search_tools` / `get_tool_schema` / `call_tool`; read their descriptions.\n\n");
-        out.push_str("**Worktrees:** use `repo action=worktree_create`/`worktree_remove` for TUIC tracking/PTY spawn; never `git worktree add/remove`.\n\n");
-        // Kept verbatim in both modes. It is not a restatement of the `session`
-        // description: agents split the text and the Enter into two calls, or
-        // polled after submitting, until this line existed.
-        out.push_str("**Submit:** `call_tool tool_name=session arguments={action:submit,session_id,input}` once; never split text/Enter; never poll.\n\n");
-    } else {
-        out.push_str("Read each tool's description for actions and rules.\n\n");
-        out.push_str("**Worktrees:** use `repo action=worktree_create`/`worktree_remove` for TUIC tracking/PTY spawn; never `git worktree add/remove`.\n\n");
-        out.push_str("**Submit:** `session action=submit session_id=<id> input=<text>` once; never split text/Enter; never poll.\n\n");
+    if launch_channel {
+        out.push_str(if collapse_tools { "Discover/invoke via `search_tools` / `get_tool_schema` / `call_tool`; read their descriptions.\n\n" } else { "Read each tool's description for actions and rules.\n\n" });
     }
+    if !launch_channel {
+        if collapse_tools {
+            out.push_str("Discover/invoke via `search_tools` / `get_tool_schema` / `call_tool`; read their descriptions.\n\n");
+            out.push_str("**Worktrees:** use `repo action=worktree_create`/`worktree_remove` for TUIC tracking/PTY spawn; never `git worktree add/remove`.\n\n");
+            // Kept verbatim in both modes. It is not a restatement of the `session`
+            // description: agents split the text and the Enter into two calls, or
+            // polled after submitting, until this line existed.
+            out.push_str("**Submit:** `call_tool tool_name=session arguments={action:submit,session_id,input}` once; never split text/Enter; never poll.\n\n");
+        } else {
+            out.push_str("Read each tool's description for actions and rules.\n\n");
+            out.push_str("**Worktrees:** use `repo action=worktree_create`/`worktree_remove` for TUIC tracking/PTY spawn; never `git worktree add/remove`.\n\n");
+            out.push_str("**Submit:** `session action=submit session_id=<id> input=<text>` once; never split text/Enter; never poll.\n\n");
+        }
 
-    // ── Progress — an obligation, not a capability ───────────────────
-    // This is the one place the reporting duty is stated as a duty. The tool
-    // description says what the tool does if you call it; nothing there says
-    // you must. The shipped version had only the description, and 39
-    // repositories recorded zero events. Rendered only when the flag is on, so
-    // a listed tool without an obligation and an obligation naming an unlisted
-    // tool are both unreachable.
-    if progress_tracking {
-        out.push_str("## Progress — mandatory\n\n");
-        out.push_str(
-            "Call `progress` to record finished or blocked work; the user reads it later. \
+        // ── Progress — an obligation, not a capability ───────────────────
+        // This is the one place the reporting duty is stated as a duty. The tool
+        // description says what the tool does if you call it; nothing there says
+        // you must. The shipped version had only the description, and 39
+        // repositories recorded zero events. Rendered only when the flag is on, so
+        // a listed tool without an obligation and an obligation naming an unlisted
+        // tool are both unreachable.
+        if progress_tracking {
+            out.push_str("## Progress — mandatory\n\n");
+            out.push_str(
+                "Call `progress` to record finished or blocked work; the user reads it later. \
              `type=done` for finished `intent:` work or work continuing alongside user action; \
              `type=blocked` only when you stop and wait because you need the user.\n\n",
-        );
+            );
+        }
     }
 
     // ── Multi-agent work — what the tool descriptions cannot say ─────

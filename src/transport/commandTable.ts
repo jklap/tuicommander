@@ -744,7 +744,12 @@ export const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 	},
 
 	// --- Config: defaults (Settings "expert mode") ---
-	get_config_defaults: { map: () => ({ method: "GET", path: "/config/defaults" }) },
+	get_config_defaults: {
+		map: (args) =>
+			args.preview
+				? { method: "POST", path: "/config/defaults", body: args.preview }
+				: { method: "GET", path: "/config/defaults" },
+	},
 
 	// --- Config: repo settings ---
 	load_repo_settings: { map: () => ({ method: "GET", path: "/config/repo-settings" }) },

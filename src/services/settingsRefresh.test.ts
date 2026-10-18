@@ -182,3 +182,76 @@ it("new_lifetime_replaces_pending_subscription", async () => {
 	stop();
 	expect(unlisten).toHaveBeenCalledTimes(1);
 });
+
+// Catches: one transient owner read failure leaving a connected IPC window stale forever.
+it("retries a failed read without another generation and cancels retry on disposal", async () => {
+	vi.useFakeTimers();
+	const { appLogger } = await import("../stores/appLogger");
+	const warn = vi.spyOn(appLogger, "warn").mockImplementation(() => {});
+	const f = fixture();
+	const read = vi.fn().mockRejectedValueOnce(new Error("offline")).mockResolvedValue("peer");
+	const apply = vi.fn();
+	const stop = f.coordinator.register({ section: "app", read, apply });
+	try {
+		await flush();
+		await vi.advanceTimersByTimeAsync(1000);
+		expect(apply).toHaveBeenCalledWith("peer");
+		read.mockRejectedValue(new Error("offline"));
+		f.emit("app", 1);
+		await flush();
+		stop();
+		const count = read.mock.calls.length;
+		await vi.advanceTimersByTimeAsync(60000);
+		expect(read).toHaveBeenCalledTimes(count);
+	} finally {
+		stop();
+		warn.mockRestore();
+		vi.useRealTimers();
+	}
+});
+
+// Catches: a failed first subscription preventing reads and all later refreshes until remount.
+it("retries failed subscription while initial owner reads remain independent", async () => {
+	vi.useFakeTimers();
+	const { appLogger } = await import("../stores/appLogger");
+	const warn = vi.spyOn(appLogger, "warn").mockImplementation(() => {});
+	const unlisten = vi.fn();
+	const subscribe = vi.fn().mockRejectedValueOnce(new Error("offline")).mockResolvedValue(unlisten);
+	const coordinator = createSettingsRefreshCoordinator(subscribe);
+	const read = vi.fn().mockResolvedValue("initial");
+	const stop = coordinator.register({ section: "app", read, apply: vi.fn() });
+	try {
+		await flush();
+		expect(read).toHaveBeenCalled();
+		await vi.advanceTimersByTimeAsync(1000);
+		expect(subscribe).toHaveBeenCalledTimes(2);
+		stop();
+		expect(unlisten).toHaveBeenCalledOnce();
+	} finally {
+		stop();
+		warn.mockRestore();
+		vi.useRealTimers();
+	}
+});
+
+// Catches: a disposed coordinator retaining a failed-subscription retry and reopening the event stream.
+it("disposal cancels a pending subscription retry", async () => {
+	vi.useFakeTimers();
+	const { appLogger } = await import("../stores/appLogger");
+	const warn = vi.spyOn(appLogger, "warn").mockImplementation(() => {});
+	const subscribe = vi.fn().mockRejectedValue(new Error("offline"));
+	const coordinator = createSettingsRefreshCoordinator(subscribe);
+	const read = vi.fn().mockResolvedValue("initial");
+	const stop = coordinator.register({ section: "app", read, apply: vi.fn() });
+	try {
+		await flush();
+		expect(subscribe).toHaveBeenCalledOnce();
+		stop();
+		await vi.advanceTimersByTimeAsync(60000);
+		expect(subscribe).toHaveBeenCalledOnce();
+	} finally {
+		stop();
+		warn.mockRestore();
+		vi.useRealTimers();
+	}
+});

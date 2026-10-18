@@ -271,7 +271,7 @@ reached is an error carrying ego's own sentence, never an empty result.
 | `show_native_notification` | `title, body, target` | `()` | macOS desktop-only alert that retains the Notification Center click and emits `native-notification-click` for a terminal or Progress target; browser/remote clients cannot call it |
 | `load_ui_prefs` | -- | `UIPrefsConfig` | Load UI preferences |
 | `save_ui_prefs` | `base, config` | `()` | Save UI preferences |
-| `get_config_defaults` | -- | `ConfigDefaults` | Read-only defaults for Settings "expert mode" |
+| `get_config_defaults` | `preview?: LaunchPreview` | `ConfigDefaults` | Read-only defaults and resolved launch instruction previews; optional draft agent config and global marker flags |
 | `load_repo_settings` | -- | `RepoSettingsMap` | Load per-repo settings |
 | `save_repo_settings` | `base, config` | `()` | Save per-repo settings |
 | `check_has_custom_settings` | `path` | `bool` | Has non-default settings |

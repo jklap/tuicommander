@@ -1399,9 +1399,19 @@ Load/save `UIPrefsConfig`.
 GET /config/defaults
 ```
 
+Both methods are available on the desktop server and the authenticated remote daemon.
+`POST /config/defaults` returns the same shape with launch instruction previews
+for a draft, including module switches and append-only additions in `agents`. The body is `{ "agents": <AgentsConfig>, "intent_tab_title": true,
+"suggest_followups": true }`. Both marker flags are optional; omitted flags use
+the server's current app config. No values are saved. The `launch_instructions`
+section contains a resolved `default_text`, `required_markers`, and an
+`effective_text` map for supported agents. Agent previews follow the same
+override priority, marker flags, and `{VER}` replacement as launches.
+
+
 Read-only. Returns `ConfigDefaults` — see `docs/backend/config.md` → "Config
 Defaults" — for Settings "expert mode": `{ app, notifications, agent_settings,
-repo_defaults, agents, github_accounts, dictation? }`. `dictation` is present only on desktop
+repo_defaults, agents, github_accounts, dictation?, launch_instructions }`. `dictation` is present only on desktop
 builds. `None` fields are omitted (`skip_serializing_if`); a missing key inside
 a present object means `null`.
 
@@ -3265,6 +3275,8 @@ abnormal document's bounded trail uses source `app`, level `warn`, audience
 keeps that report in per-tab session storage until an acknowledged upload. A
 lost acknowledgement can cause a retry; this route does not provide durable
 exactly-once delivery or persist the backend ring across an app restart.
+
+Browser dictation also mirrors at most six content-free lifecycle debug records per take through `POST /logs`. Read them with `GET /logs?source=dictation&level=debug&audience=diagnostic`. Messages start with `Browser dictation lifecycle:`; `data_json` contains `event`, a per-take `sequence`, `sessionId`, `takeId`, recording/discarding flags and the first error code when applicable. Session ID is null for an unbound AI Chat draft. This uses the same bounded, best-effort backend ring, not a persistent event journal.
 
 ### Telegram request streaming (1959-162a)
 

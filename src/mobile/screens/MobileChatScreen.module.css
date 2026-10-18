@@ -28,3 +28,11 @@
 .tableDocument { position: fixed; inset: 0; z-index: 30; background: var(--bg-primary); overflow: auto; padding: 12px; }
 .tableDocument > .header { position: sticky; top: 0; z-index: 2; }
 .tableDocument button { min-height: 44px; }
+
+.reading {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+}
