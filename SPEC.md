@@ -1227,6 +1227,11 @@ MCP, IPC and HTTP. Readback reports stored presence only (`set`, `unset`,
 `unavailable`), never a secret. Git & GitHub keeps its effective-source status;
 removing a stored token leaves environment and CircleCI CLI fallbacks unchanged.
 
+## Durable managed launch (2006-f5a1)
+
+Managed workers can launch through one keyed transaction across MCP, HTTP and IPC. The journal reserves the child identity before workspace or PTY side effects, retains key tombstones, and refuses conflicting reuse. A retry returns the same identity; ambiguous interrupted creation blocks without a replacement or fallback checkout. Existing/new workspaces, a stable name, a registered parent and explicit keep-open policy are supported. Receipts separate prompt transport delivery from model acceptance, require native Ready-screen evidence for ready, and expose warm-artifact state independently. Model/account/brief policy stays outside TUIC.
+
+Native automation and workflow run bindings also use this transaction through `managed_launch`: automation run IDs and workflow attempt IDs provide stable keys, with an in-process run-owner scope when no peer parent exists. No synthetic peer is registered. Run-owned children use the same pinned-name and explicit keep-open path as MCP children; the existing run controller still owns cancellation and completion. The unkeyed public `spawn` compatibility action continues to use the same low-level PTY spawn implementation.
 ## Frame workload evidence (#1638-c94c)
 
 Implemented: opt-in, perfDebug-gated global bounded frame bytes and paint snapshots, rotated instance-local captures, manual debug dump and production grid-paint replay timing. The synthetic smoke fixture checks harness wiring only. Original captured-stall heartbeat/input/backend RED and same-workload GREEN remain open. See docs/backend/stall-journal.md for bounds and privacy.

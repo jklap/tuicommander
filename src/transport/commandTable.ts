@@ -1874,6 +1874,9 @@ export const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 			},
 		}),
 	},
+	managed_agent_launch: {
+		map: (args) => ({ method: "POST", path: "/agents/launch", body: args.request }),
+	},
 	spawn_agent: {
 		map: (args) => {
 			const ptyConfig = isRecord(args.pty_config) ? args.pty_config : {};

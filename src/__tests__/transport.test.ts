@@ -4225,6 +4225,23 @@ it("maps the shared settings envelope unchanged", () => {
 	});
 });
 
+// Catches: browser managed launch bypasses the shared keyed transaction boundary.
+it("maps managed launch unchanged to its shared HTTP boundary", () => {
+	const request = {
+		idempotency_key: "one",
+		parent_session_id: "parent",
+		name: "child",
+		keep_open: true,
+		workspace: { existing_path: "/workspace" },
+		spawn: { prompt: "task" },
+	};
+	expect(mapCommandToHttp("managed_agent_launch", { request })).toEqual({
+		method: "POST",
+		path: "/agents/launch",
+		body: request,
+	});
+});
+
 // Catches: browser dumps failing while desktop IPC persists the same recording.
 it("maps frame workload persistence without changing the recording", () => {
 	expect(mapCommandToHttp("save_frame_workload", { recording: "{}" })).toEqual({
