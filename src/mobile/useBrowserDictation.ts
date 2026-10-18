@@ -48,6 +48,8 @@ export function useBrowserDictation(options: {
 	enabled?: boolean;
 	blocked: Accessor<boolean>;
 	getDraft: Accessor<string>;
+	/** Capture an insertion range for this take; omitted composers keep tail insertion. */
+	getSelection?: Accessor<{ start: number; end: number }>;
 	setDraft: (text: string) => void;
 	onRecording?: (recording: boolean) => void;
 }) {
@@ -141,6 +143,15 @@ export function useBrowserDictation(options: {
 		}
 		if (!Constructor || options.blocked()) return;
 		try {
+			const selection = options.getSelection?.();
+			const draftAtStart = selection ? options.getDraft() : "";
+			const selectedDraft = selection
+				? {
+						prefix: draftAtStart.slice(0, selection.start),
+						text: draftAtStart.slice(selection.start, selection.end),
+						suffix: draftAtStart.slice(selection.end),
+					}
+				: null;
 			const current = new Constructor();
 			recognition = current;
 			discarding = false;
@@ -151,13 +162,21 @@ export function useBrowserDictation(options: {
 			current.interimResults = true;
 			current.onresult = (event) => {
 				if (recognition !== current || discarding) return;
+				const speech = Array.from(event.results, (result) => result[0].transcript.trim())
+					.join(" ")
+					.trim();
+				if (selectedDraft) {
+					const { prefix, text, suffix } = selectedDraft;
+					renderedSpeech = speech
+						? `${prefix && !/\s$/.test(prefix) ? " " : ""}${speech}${suffix && !/^\s/.test(suffix) ? " " : ""}`
+						: "";
+					options.setDraft(prefix + (speech ? renderedSpeech : text) + suffix);
+					return;
+				}
 				const draft = options.getDraft();
 				// Replace the previous hypothesis only while it still owns the draft tail.
 				// Manual composer edits cancel recognition before changing the draft.
 				const base = renderedSpeech && draft.endsWith(renderedSpeech) ? draft.slice(0, -renderedSpeech.length) : draft;
-				const speech = Array.from(event.results, (result) => result[0].transcript.trim())
-					.join(" ")
-					.trim();
 				renderedSpeech = speech ? `${base && !/\s$/.test(base) ? " " : ""}${speech}` : "";
 				options.setDraft(base + renderedSpeech);
 			};

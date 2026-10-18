@@ -797,6 +797,8 @@ Restored dictated drafts stay in the composer without writing to the terminal on
 
 `CommandInput` mounts `useBrowserDictation`, a feature-detected browser interaction hook. Its mic is directly before Send in the existing row; interim hypotheses are replaced and final speech stays in the current draft without focus or automatic Enter. `SessionDetailScreen` excludes server hands-free while browser recognition is pending or active, and `useMobileVoice.recording` blocks browser starts during server arming/recording. Manual typing or keybar text insertion cancels recognition and preserves the edited draft. The mic stays claimed until the browser emits `end`, including after an error; queued results from that recording are ignored. Tap the mic to resume after `end`. Browser errors request cancellation through the same shutdown path as an edit or send. Browser failures are logged as well as toasted; the existing “Dictation failed” label stays beside the mic in the keyboard-visible composer until the next take starts. The hook also stops on send, session end, or unmount. No setting or backend route is added.
 
+`IdeasOverlay` reuses the same hook and `MobileDictationButton`. It supplies an optional `getSelection` accessor, so each take captures its insertion range and replaces only that range as hypotheses change. Empty hypotheses preserve the original selection. Typing and explicit idea submission cancel recognition before changing the draft. Speech updates only the unsaved idea input, never the terminal or idea store. The hook keeps tail insertion for consumers that omit `getSelection`.
+
 ## Tasks board
 
 `Tasks/board/TasksBoard.tsx` renders the provider/core board projection. Each lane
