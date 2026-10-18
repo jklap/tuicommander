@@ -2222,6 +2222,21 @@ serialization regressions cover these shared contracts.
 
 ### MCP Tool: `automations`
 
+Saved run configurations are validated against the same named-profile lookup used
+by the runner. Names are case-insensitive; a bare agent type such as `claude`
+is not a saved profile unless a profile has that name. Create, definition
+updates and re-enabling reject an unresolved name with a repair hint listing
+valid saved profiles. Existing list rows retain invalid definitions, but expose
+`run_config_error` and return `next_run_ms: null` until repaired. A profile can
+be removed after saving; launch checks it again and records a failed run.
+
+Failed runs send the bound creator one `automation_run_failed` inbox message
+with run/definition ids and reason, including pre-spawn failures. The existing
+peer mail route supplies payload-free wakes; SQLite claims the `owner` channel
+before delivery, so repeated publication and restarts do not resend it. A
+missing creator registration leaves delivery unconfirmed; bell behavior stays
+unchanged for definitions without a creator.
+
 The native `automations` tool accepts the same top-level action object as
 `automation_action` IPC and the `input` in `POST /automations/action`.
 Actions include `list`, `get`, `create`, `update`, `pause`, `resume`, `delete`,
@@ -2231,7 +2246,34 @@ with `definition`, `next_run_ms` and `last_status`; create/update return the sav
 definition. Update accepts a full definition (optional id), or id and enabled.
 Errors use `{ "error": "..." }` with the identical backend validation text.
 
-Creation requires a bound agent session. The host sets `created_by_session`;
+A bound agent can create a one-shot in one call:
+
+```json
+{"action":"create","definition":{"name":"Recheck","prompt":"Check again","in_secs":3600,"run_config":"Your saved profile"}}
+```
+
+The host resolves the elapsed delay from its own UTC clock. It defaults repository
+from this caller's live cwd, ACP root or registered project, never another tab.
+`run_config` must be explicit: current caller metadata does not retain the actual
+saved account/model profile. The host never substitutes the agent type's default
+profile. An omitted profile returns `{error,code:"caller_profile_unresolved",field:"run_config"}`.
+Generated IDs combine the name with a SHA-256 hash of caller identity and the
+original request before defaults and clock resolution. Repeating that request
+returns the first saved occurrence, including when caller cwd has changed or is
+no longer available. Concurrent retries share one locked insertion. To create a
+separate identical reminder, supply a new explicit `id`. Explicit-ID duplicates
+still fail. Other defaults are existing workspace,
+enabled=true, grace_secs=43200, overlap=skip and max_duration_secs=3600.
+Create returns the saved fields plus `next_run_ms` and the resolved
+`once_local`/`timezone`; no date, list or get call is needed. `in_secs` must be a
+positive integer and cannot accompany cron or `once_local`. The stored `once_at`
+preserves the exact UTC instant across DST folds. Preserve it for unchanged
+schedule edits, or clear it when changing the schedule. Computed `next_run_ms` is
+read-only and is ignored when a reply is passed to update or preview. The MCP
+schema declares this field as a read-only nullable integer so a saved reply also
+passes the closed-object update/definition-preview property boundary.
+
+MCP creation requires a bound agent session. The host sets `created_by_session`;
 input cannot impersonate a creator, and updates preserve the original creator.
 Pause/resume edit only `enabled` under the store lock. Deleting a definition
 retains run history. `run_now` uses the same runtime owner and refusal rules as

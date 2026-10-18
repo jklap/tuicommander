@@ -918,6 +918,14 @@ completion/maximum-duration handling remain pending; idle is not success.
 
 ### Automation HTTP and IPC parity
 
+Saved run configurations use one case-insensitive named-profile lookup across
+create, update, re-enable, list diagnostics and managed launch. Unresolved
+profiles are rejected with valid-profile repair choices; persisted invalid
+list rows expose `run_config_error` and no next occurrence. Failed agent-created
+runs offer one creator inbox notice through a durable owner-channel claim,
+including failures before session/task binding. Mail acceptance is not proof
+of consumption.
+
 Desktop IPC `automation_action` and desktop/headless HTTP `/automations/action`
 share one Rust action API for list/get/create/update/delete, atomic pause/resume,
 Run Now, paginated retained run history, previews/presets and `24h`/`7d` aggregates.
@@ -1235,6 +1243,18 @@ Typed `set_token` and `clear_token` actions share the existing token owner acros
 MCP, IPC and HTTP. Readback reports stored presence only (`set`, `unset`,
 `unavailable`), never a secret. Git & GitHub keeps its effective-source status;
 removing a stored token leaves environment and CircleCI CLI fallbacks unchanged.
+
+### Automation lean creation (#2001-5c1f)
+
+Bound agents can create with name, prompt, in_secs and an explicit run_config.
+The shared API resolves elapsed delay using the host clock and uses only
+caller-specific repository defaults. Actual saved profile identity is not retained
+in current caller metadata, so missing run_config fails instead of substituting
+an agent-type default. Generated IDs hash caller identity and the original request;
+identical retries atomically reuse the original occurrence. A separate identical
+reminder needs a new explicit id. Schedule choices are exclusive. Create returns the saved definition and next_run_ms; once_local and
+once_at preserve both the selected zone's local display and the exact UTC instant.
+Unbound HTTP/IPC callers still supply explicit definition fields.
 
 ## Durable managed launch (2006-f5a1)
 

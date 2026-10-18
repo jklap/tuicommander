@@ -1138,6 +1138,15 @@ pub(super) fn queue_workflow_coordinator_wake(
         timestamp: now_ms,
         delivered_via_channel: false,
     };
+    queue_peer_notice(state, recipient, message)
+}
+
+/// Host-originated mail shares peer identity locking and payload-free wake routing.
+pub(crate) fn queue_peer_notice(
+    state: &AppState,
+    recipient: &str,
+    message: crate::state::AgentMessage,
+) -> bool {
     let message_id = message.id.clone();
     let timestamp = {
         let _guard = PEER_IDENTITY_BIND_LOCK.lock();

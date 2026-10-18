@@ -3010,6 +3010,19 @@ consumers use the separate session event subscription.
 ### Automations
 
 `POST /automations/action` accepts `{ "input": { "action": "list" } }`.
+
+Saved run configurations are validated against the same named-profile lookup used
+by the runner. Names are case-insensitive; a bare agent type such as `claude`
+is not a saved profile unless a profile has that name. Create, definition
+updates and re-enabling reject an unresolved name with a repair hint listing
+valid saved profiles. Existing list rows retain invalid definitions, but expose
+`run_config_error` and return `next_run_ms: null` until repaired. A profile can
+be removed after saving; launch checks it again and records a failed run.
+
+Failed agent-created runs also offer an `automation_run_failed` creator inbox
+message with `run_id`, `definition_id`, `name` and `reason`, even before spawn.
+The durable `owner` notification channel deduplicates publication; acceptance
+means inbox queued, not read. No creator means the existing bell/alert path.
 Unknown `/automations/*` endpoints return HTTP 404 with a JSON `error`, rather
 than the SPA frontend shell.
 It is available on desktop, browser/PWA and headless hosts. The addressed backend
@@ -3030,7 +3043,7 @@ extraction errors.
 | template | template_id, repository, run_config, optional/null timezone | Fresh unsaved AutomationDefinition with enabled:false; omitted zone uses host local IANA zone |
 | `list` | None | Array of `{definition,next_run_ms,last_status}` |
 | `get` | `id` | Stored definition |
-| `create` | `definition` | Stored definition, including resolved timezone |
+| `create` | `definition`, optionally with `in_secs` instead of an absolute schedule | Stored definition, resolved timezone/local fire time and computed `next_run_ms` |
 | `update` | `definition`, optional `id`; or `id,enabled` | Stored definition |
 | `pause`, `resume` | `id` | `{ok:true}`; atomic enabled-only edit |
 | `delete` | `id` | `{ok:true}`; history retained |
@@ -3044,6 +3057,19 @@ extraction errors.
 | `preset` | `preset`: hourly/daily/weekdays/weekly cadence | `{cron}` |
 
 Definitions use the snake_case storage model, including optional `once_local`.
+Create accepts `in_secs` (positive integer elapsed seconds from the host UTC clock)
+as an alternative to cron and `once_local`; combinations are rejected. Relative
+creation stores the local time in the selected IANA zone and an exact UTC `once_at`
+so a DST fold cannot move the occurrence. Preserve `once_at` for unchanged schedule
+edits; clear it when changing the schedule. `next_run_ms` in create replies is
+computed, not stored; update/preview ignore this read-only field.
+HTTP/IPC callers without bound agent identity supply all normal definition fields.
+Bound MCP callers can omit id, repository, workspace, enabled, grace_secs,
+overlap and max_duration_secs. They must supply the actual saved `run_config`:
+agent-type defaults are not proof of the caller's account/model profile.
+Generated bound creates are idempotent by caller plus original request; identical
+retries return the first saved occurrence without resetting its delay. Supply a
+new explicit id for a separate identical reminder. See the MCP guide for defaults.
 Update replaces only the named definition and rejects a changed id; enabled-only
 update preserves concurrent edits. Supplying both `definition` and `enabled` is
 an error. Create ignores client creator provenance; update preserves it.

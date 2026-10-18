@@ -2943,6 +2943,14 @@ reserves before dispatch and records precheck decisions and launch pointers.
 Precheck stdout never changes the literal prompt. Public execution controls and
 completion/maximum-duration integration remain pending.
 
+### Lean one-shot automation creation
+
+One-shot automation creation accepts `name`, `prompt`, `in_secs` and an explicit
+saved `run_config` from a bound agent. Host-resolved repository defaults and
+returned next-run/local fire times remove clock, list and get lookups. Identical
+caller requests reuse the first saved occurrence; exact UTC storage preserves
+elapsed delays across DST. Unknown caller profile identity fails explicitly.
+
 ### Automations dialog (backend integration pending)
 
 Machine-local scheduled-run editor with search, backend cadence/zone preview,
@@ -3008,6 +3016,11 @@ editors, sanitized descriptions and comments, review threads and summaries,
 cursor pagination, add comment, and declared status actions with rollback.
 Visible details refresh every 60 seconds and preserve expanded sections.
 The Tasks shell and provider registration integrate this component separately.
+
+Saved automation profiles (#2015-bdb3): create/update/re-enable and the runner
+share named-profile resolution. Invalid list rows expose a repair error with no
+next run. Failed agent-created runs notify their creator inbox once, including
+failures before spawn.
 
 Automation agent surface (#1630-cbfa, #1621-5dce): MCP `automations` and
 `tuic automations` share the HTTP/IPC action parser, definition results, schedule
