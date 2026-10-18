@@ -1065,3 +1065,5 @@ target. They are not authorization tokens; endpoint admission is unchanged.
 ### Frame workload evidence
 
 `save_frame_workload(recording: String) -> Result<String, String>` writes bounded schema-v1 live grid workload JSON through the same serialized blocking-pool writer as `POST /debug/frame-workload`. Returns the instance-local capture path. It does not enable capture.
+
+Progress reporting rejects text longer than 500 raw Unicode scalar values before trimming, consistently with HTTP and the native MCP schema (#2007-59f6).

@@ -431,7 +431,6 @@ pub(super) const UI_ACTIONS: &str = "tab, toast, confirm, screenshot";
 pub(super) const TASK_ACTIONS: &str = "get, cancel";
 pub(super) const DEBUG_ACTIONS: &str =
     "agent_detection, logs, sessions, invoke_js, frame_workload_dump, help";
-#[cfg(any(feature = "dictation", test))]
 pub(super) const VOICE_ACTIONS: &str = "speak, stop, status";
 pub(super) const REMOTE_ACTIONS: &str = "preview, update";
 
@@ -517,7 +516,7 @@ pub(super) const NATIVE_TOOL_SUMMARIES: &[(&str, &str)] = &[
 /// and `progress_tracking`. Leaking the raw list to external clients exposes
 /// tool metadata for gated tools.
 pub(super) fn native_tool_definitions() -> serde_json::Value {
-    let defs = serde_json::json!([
+    let mut defs = serde_json::json!([
         crate::automations::mcp::tool_definition(),
         crate::design_mode::mcp::tool_definition(),
         crate::secrets::tool_definition(),
@@ -734,6 +733,10 @@ pub(super) fn native_tool_definitions() -> serde_json::Value {
             }, "required": ["action"] }
         }
     ]);
+
+    for tool in defs.as_array_mut().expect("native tool array") {
+        super::mcp_input_contract::complete_schema(tool);
+    }
 
     // Guard invariant: native tool names must never contain "__" — that prefix
     // is the routing discriminator for upstream proxy tools.

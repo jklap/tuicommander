@@ -3340,3 +3340,11 @@ legacy daemons that do not return the bounded envelope.
 
 See [startup workflows](../backend/settings-startup.md#interactive-login) for
 expiry, retained-terminal cleanup, readback and error semantics.
+
+### MCP static repair errors (#2007-59f6)
+
+`POST /mcp` rejects native static input-schema violations before effects with
+`invalid_arguments`, bounded value-masked `violations`, `effect=not_started`, and
+`retryable=false`. Correct the identified JSON-pointer fields before retrying.
+See the native argument repair contract in the MCP backend guide. Progress HTTP
+and IPC use the same raw 500-Unicode-scalar text limit as MCP.

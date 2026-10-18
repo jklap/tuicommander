@@ -93,7 +93,6 @@ use super::mcp_transport_catalogue::meta_tool_definitions;
 pub(crate) use super::mcp_transport_catalogue::native_tool_catalog;
 #[cfg(test)]
 use super::mcp_transport_catalogue::native_tool_definitions;
-#[cfg(test)]
 pub(crate) use super::mcp_transport_catalogue::rebuild_tool_search_index;
 use super::mcp_transport_catalogue::removed_native_action_replacement;
 #[cfg(test)]
@@ -543,6 +542,9 @@ async fn dispatch_mcp_tool_call_with_context(
             .is_some_and(|id| !id.is_empty() && id.len() <= 128 && !id.contains('/'))
     {
         return serde_json::json!({"error":"connection_id must be a nonempty connection qualifier"});
+    }
+    if let Some(error) = super::mcp_input_contract::validate(name, args) {
+        return error;
     }
     // Resolve client identity at dispatch level — tool handlers get a plain bool
     let is_claude_code = mcp_session_id

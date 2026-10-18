@@ -643,6 +643,39 @@ Async waits remain on their event-driven async handlers. A panicking blocking
 handler becomes a tool error rather than killing the request task; `POST /mcp`
 does not add another blanket wrapper.
 
+### Native argument repair contract (#2007-59f6)
+
+The native tool's advertised `inputSchema` is enforced before dispatch, both for
+direct tools and `call_tool`, on HTTP and MCP-over-ACP. Action enums and standard
+`if`/`then` requirements describe conditional fields (for example `ui tab` needs
+`id`, `title`, and exactly one of `html`/`url`). A local-only JSON Schema validator
+uses those same definitions; validation cannot fetch external schema references.
+Static rejection returns a tool error with:
+
+- `code: "invalid_arguments"`, `outcome: "rejected"`, `effect: "not_started"`;
+- `retryable: false`: do not repeat unchanged arguments;
+- `repair.retry_after_correction: true`: a corrected request may be submitted;
+- at most 16 `violations`, each with JSON-pointer `path`, `schema_path`, the
+  schema `constraint` (limit, required fields or allowed values), and a masked
+  explanation. Input values are not copied into repair errors.
+
+This is not auto-retry advice for permission, configuration or safety refusals.
+Those remain existing refusals, without the static repair marker. Runtime
+preconditions and authorization remain the handler's responsibility; a valid
+schema never grants access or proves an effect completed.
+
+Progress text permits 1..500 Unicode scalar values before trimming, not UTF-8
+bytes, UTF-16 units, or grapheme clusters; whitespace-only text is invalid.
+The shared Progress model enforces the same raw length for HTTP `/progress/report`
+and IPC `report_progress_event`, which retain their typed transport errors.
+
+`src-tauri/src/mcp_http/fixtures/action-input-contract-2007.json` is a local
+consumer contract fixture, not a captured client trace. It covers the audit's
+582/543/502-character retries, the valid boundary, emoji and combining scalars,
+missing titles/text/paths, and an invented action. Ego must validate its admitted
+schema against these cases without a server round trip; that cross-repository
+consumer integration is not proven by TUIC's tests.
+
 ### Lazy Tool Discovery (`collapse_tools`)
 
 When `collapse_tools: true` in `config.json` (or via Settings > MCP > TUIC Tools > "Collapse tools"), the server replaces the full tool list in `tools/list` with three meta-tools (the Speakeasy pattern) plus the compact `progress` tool when enabled:

@@ -17,6 +17,7 @@ mod github_routes;
 mod guards;
 mod log_routes;
 pub(crate) mod managed_launch;
+mod mcp_input_contract;
 pub(crate) mod mcp_transport;
 mod mcp_transport_ancillary;
 #[cfg(test)]

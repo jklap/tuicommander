@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+- Validate native MCP arguments against advertised action contracts before dispatch; return bounded, value-masked repair details. Progress limits count raw Unicode scalar values consistently across transports (#2007-59f6).
+
 - Include a byte-bounded complete top schema in MCP tool search, with catalogue identity and explicit schema reuse until invalidation (#2013-73f9).
 
 - Publish typed Settings account enumeration and configured Ego interactive login start/status, with human terminal authentication and separate credential readback (#1790-1011).
