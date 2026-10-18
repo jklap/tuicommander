@@ -167,6 +167,26 @@ async fn refusal_rules_unchanged() {
     assert_eq!(result, serde_json::json!({"ok": true}));
 }
 
+// Catches: an idle ego becoming suspendable before its descendant probe resolves.
+#[tokio::test]
+async fn idle_ego_pending_probe_still_refuses_suspend_2018() {
+    let root = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+    let _config = crate::config::set_config_dir_override(root.path().into());
+    let state = test_state();
+    let sid = suspend_shell(&state, root.path().to_str().unwrap());
+    {
+        let mut session = state.session_maps.session_states.get_mut(&sid).unwrap();
+        session.agent_type = Some("ego".into());
+        session.background_probe_turn_epoch = Some(session.turn_epoch);
+    }
+
+    let result = suspend(&state, &sid).await;
+    let still_live = state.session_maps.sessions.contains_key(&sid);
+    crate::pty::close_pty_core_with_reason(&state, &sid, false, "test_cleanup");
+    assert_eq!(result["error"], "Cannot suspend: agent working");
+    assert!(still_live, "an unresolved descendant probe must protect the PTY");
+}
+
 // Catches: losing a live session when durable storage fails before the close.
 #[tokio::test]
 async fn suspend_storage_failure_keeps_the_live_pty() {
