@@ -468,6 +468,8 @@ Ego selector recovery accepts both single-answer and checkbox footers, including
 
 Codex native question parsing targets installed 0.162.1: `⌃]` / `⇧→` footer, Shift+Left to open, immediate numeric answers. The queued-panel heading is required; imperative titles are accepted only behind that exact panel shape.
 
+Grok native radio forms require a strict framed Ask or enforced-approval shape. Ask ends with z and a waiting header; enforced approvals carry title, command and scope controls. Numeric keys answer immediately. Selecting z retires choice buttons before publishing a text-only wait.
+
 **Every signal that sets awaiting needs a path that clears it.** The badge is
 `SessionState.awaiting_input`, not an event, and it is sticky by construction —
 whatever sets it owns nothing until something retracts it. These paths clear it:

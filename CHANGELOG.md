@@ -19,6 +19,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Publish typed Settings account enumeration and configured Ego interactive login start/status, with human terminal authentication and separate credential readback (#1790-1011).
 ### Fixed
 
+- Export Grok native Ask and CLI-enforced approval options, preserving immediate numeric answers and the free-text transition (#2027-7ef3).
+
 - Recognize Codex 0.162.1 native question options and open queued questions with the live-verified Shift+Left key on mobile (#2026-9178).
 
 - Report an idle ego turn as idle even while background processes remain tracked, consistently across desktop, mobile, and `agent ls` (#2018-1885).

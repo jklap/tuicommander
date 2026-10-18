@@ -2316,6 +2316,143 @@ pub fn parse_choice_prompt(screen_rows: &[String]) -> Option<ParsedEvent> {
     })
 }
 
+/// Grok's native Ask is a framed radio form, not a numbered Markdown list.
+/// Numeric keys settle immediately; z switches to an in-place text composer.
+pub fn parse_grok_question(screen_rows: &[String]) -> Option<ParsedEvent> {
+    lazy_static::lazy_static! {
+        static ref RADIO_RE: regex::Regex = regex::Regex::new(
+            r"^\s*(?:┃\s*)?([1-9]\d*|z)\s+\(([○●])\)\s+(.+?)\s*$"
+        ).unwrap();
+    }
+    let blank = |row: &str| matches!(row.trim(), "" | "┃");
+    let mut end = screen_rows.len();
+    while end > 0 && blank(&screen_rows[end - 1]) {
+        end -= 1;
+    }
+    let mut first = end;
+    let mut options = Vec::new();
+    let mut free_text = false;
+    while first > 0 {
+        let Some(caps) = RADIO_RE.captures(&screen_rows[first - 1]) else {
+            break;
+        };
+        let key = caps[1].to_owned();
+        let text = caps[3].trim();
+        free_text |= key == "z" && &caps[2] == "●" && text.starts_with('❯');
+        let (label, hint) = text.split_once("  ").map_or((text, None), |(label, hint)| {
+            (label, Some(hint.trim().to_owned()))
+        });
+        options.push(ChoiceOption {
+            key,
+            label: label.to_owned(),
+            highlighted: &caps[2] == "●",
+            destructive: label.eq_ignore_ascii_case("no"),
+            hint,
+        });
+        first -= 1;
+    }
+    options.reverse();
+    let ask = options.last()?.key == "z";
+    let numbered = options.len() - usize::from(ask);
+    if numbered < 2
+        || options[..numbered]
+            .iter()
+            .enumerate()
+            .any(|(index, option)| option.key.parse::<usize>().ok() != Some(index + 1))
+    {
+        return None;
+    }
+    let mut title_end = first;
+    while title_end > 0 && blank(&screen_rows[title_end - 1]) {
+        title_end -= 1;
+    }
+    let title = if ask {
+        let mut title_start = title_end;
+        while title_start > 0 {
+            let row = screen_rows[title_start - 1].trim();
+            if !row.starts_with('┃') || blank(row) {
+                break;
+            }
+            title_start -= 1;
+        }
+        if title_start == title_end
+            || !screen_rows[..title_start].iter().rev().take(4).any(|row| {
+                row.trim()
+                    .strip_prefix('◆')
+                    .is_some_and(|row| row.trim_start().starts_with("Waiting on answers for "))
+            })
+        {
+            return None;
+        }
+        screen_rows[title_start..title_end]
+            .iter()
+            .map(|row| row.trim().trim_start_matches('┃').trim())
+            .collect::<Vec<_>>()
+            .join(" ")
+    } else {
+        // Enforced approvals have a framed title, command and scope controls,
+        // not Ask's waiting header or z option. Their numeric replies are also
+        // immediate (the recorded 4 rejects without an Enter).
+        let scope = screen_rows
+            .get(title_end.checked_sub(1)?)?
+            .trim()
+            .strip_prefix('┃')?
+            .trim();
+        if !scope.starts_with("← → narrow scope") || !scope.ends_with("e edit pattern") {
+            return None;
+        }
+        let header = (0..title_end - 1).rev().find(|&index| {
+            screen_rows[index]
+                .trim()
+                .strip_prefix('┃')
+                .is_some_and(|row| row.trim().starts_with('›'))
+        })?;
+        let command = (header + 1..title_end - 1).find(|&index| {
+            screen_rows[index]
+                .trim()
+                .strip_prefix('┃')
+                .is_some_and(|row| row.trim().starts_with('│'))
+        })?;
+        let title = screen_rows[header..command]
+            .iter()
+            .map(|row| {
+                row.trim()
+                    .trim_start_matches('┃')
+                    .trim()
+                    .trim_start_matches('›')
+                    .trim()
+            })
+            .collect::<Vec<_>>()
+            .join(" ");
+        for option in &mut options {
+            if option.label.ends_with(')')
+                && let Some((label, hint)) = option.label.rsplit_once(" (")
+            {
+                option.hint = Some(hint.trim_end_matches(')').to_owned());
+                option.label = label.to_owned();
+            }
+            option.destructive = option.label.to_ascii_lowercase().starts_with("no,");
+        }
+        title
+    };
+    if free_text {
+        return Some(ParsedEvent::Question {
+            prompt_text: title,
+            confident: true,
+        });
+    }
+    if !options.iter().any(|option| option.highlighted) {
+        options[0].highlighted = true;
+    }
+    Some(ParsedEvent::ChoicePrompt {
+        title,
+        options,
+        selection_mode: None,
+        dismiss_key: None,
+        amend_key: None,
+    })
+}
+
 /// Exclusive end of a Claude multi-question Submit review: the separator row
 /// after the tab bar `← ☒ A  ☒ B  ✔ Submit →`, which Claude draws full-bleed at
 /// column zero like the dialog footer, or the end of the screen.

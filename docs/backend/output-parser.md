@@ -477,6 +477,14 @@ Observed Codex prompt forms and evidence:
 
 A distinct plan-question screen has not been captured. If Codex displays one, verify its rendered rows and keys before treating it as either form above.
 
+### Grok native questions and enforced approvals
+
+Grok Build 1.0.62 Ask forms use framed radio rows such as `1 (○) Red`, with a `Waiting on answers for` header and a final `z` free-text option. Labels and aligned descriptions are exported separately. Numeric keys answer immediately, without Enter. Selecting `z` retires the buttons and keeps a confident text-only question until the text is submitted.
+
+The default-mode enforced command approval is a different radio form: a framed `›` title, `│` command, narrow-scope/edit-pattern controls, and five numeric options. Its selected radio mark is preserved. The captured `4` refuses immediately without Enter; this is not a model permission question. Both forms must be the last content on screen, so answered history below a newer composer cannot restore controls. Existing `Action Required` title detection remains unchanged.
+
+Evidence: `grok-native-colour-2027.tcap`, `grok-native-permission-2027.tcap`, and `grok-enforced-approval-2027.tcap`, replayed through the real accumulator. The short approval capture contains its refusal and settlement; the longer Ask captures reached the tap cap after input because of repeated Kitty image-delete output, as documented in their provenance.
+
 ### SlashMenu
 
 Slash command menu detected from VT100 screen rows:

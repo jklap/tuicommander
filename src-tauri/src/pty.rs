@@ -2720,9 +2720,19 @@ impl ChunkProcessor {
                 crate::output_parser::parse_ego_question(
                     ego_question_rows.as_deref().unwrap_or(screen),
                 )
+            } else if agent_type.as_deref() == Some("grok") {
+                crate::output_parser::parse_grok_question(screen)
+                    .or_else(|| crate::output_parser::parse_choice_prompt(screen))
             } else {
                 crate::output_parser::parse_choice_prompt(screen)
             };
+            // A native radio form can switch to free text without leaving the
+            // question. Retire old buttons before publishing the text-only wait.
+            if matches!(choice, Some(ParsedEvent::Question { .. }))
+                && self.last_choice_prompt_sig.take().is_some()
+            {
+                events.push(ParsedEvent::ChoiceCleared);
+            }
             match choice {
                 Some(evt) => events.push(evt),
                 // Dialog is no longer on screen — retire its dedup signature so the
