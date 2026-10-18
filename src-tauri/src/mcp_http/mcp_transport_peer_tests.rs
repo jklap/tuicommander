@@ -6288,7 +6288,7 @@ fn actionable_subscription_snapshot_overlap_keeps_missed_count_exact() {
         serde_json::json!({"action":"subscribe","subscription_id":"overlap","filter":"all"}),
     );
     assert!(subscribed.get("error").is_none(), "{subscribed}");
-    let push = |index| {
+    let push = |index: u64| {
         state.push_agent_inbox(
             TEST_UUID_A,
             crate::state::AgentMessage {
