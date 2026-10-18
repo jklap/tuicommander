@@ -231,7 +231,6 @@ fn execute_stored_configured(
 ) -> Result<Value, String> {
     let creator = caller.creator(&action)?;
     let validate_profile = |definition: &AutomationDefinition| -> Result<(), String> {
-        definition.validate()?;
         if let Some(profiles) = profiles {
             profiles.require_named_run_config(&definition.run_config)?;
         }

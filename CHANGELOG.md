@@ -6,7 +6,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
-- Reject automation profiles the runner cannot resolve, expose repair hints on invalid list rows, and notify the creator inbox once for failed runs, including pre-spawn failures (#2015-bdb3).
+- Reject automation profiles the runner cannot resolve, preserve host-local timezone defaults on creation, expose repair hints on invalid list rows, and notify the creator inbox once for failed runs, including pre-spawn failures (#2015-bdb3).
 - Create retry-safe one-shot automations with name, prompt, a relative delay and an explicit saved profile; the host resolves caller repository defaults and returns the saved fire time without extra clock/list/get calls (#2001-5c1f).
 ### Fixed
 

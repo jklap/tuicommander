@@ -5,7 +5,19 @@ use std::sync::Arc;
 // Catches: the MCP create path bypassing the validation used by DefinitionStore callers.
 #[tokio::test]
 async fn mcp_create_cannot_skip_definition_validation() {
-    let state = Arc::new(crate::state::tests_support::make_test_app_state());
+    let dir = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+    let _guard = crate::config::set_config_dir_override(dir.path().to_owned());
+    std::fs::write(
+        dir.path().join("agents.json"),
+        serde_json::to_vec(&json!({"agents":{"codex":{"run_configs":[{
+            "name":"codex", "command":"codex"
+        }]}}}))
+        .unwrap(),
+    )
+    .unwrap();
+    let state = Arc::new(crate::state::tests_support::make_test_app_state_in(
+        dir.path(),
+    ));
     state.config.write().disabled_native_tools.clear();
     state
         .mcp

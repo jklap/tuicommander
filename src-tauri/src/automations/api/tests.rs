@@ -445,3 +445,67 @@ async fn automation_list_and_runner_resolve_run_configs_the_same_way() {
         assert!(error.contains("Review profile"));
     }
 }
+
+// Catches: validating a create before the store resolves omitted/empty host-local timezone.
+#[tokio::test]
+async fn create_cron_with_omitted_or_empty_timezone_keeps_host_default() {
+    let dir = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+    let _guard = crate::config::set_config_dir_override(dir.path().to_owned());
+    std::fs::write(
+        dir.path().join("agents.json"),
+        serde_json::to_vec(&saved_profile_config()).unwrap(),
+    )
+    .unwrap();
+    let state = Arc::new(crate::state::tests_support::make_test_app_state_in(
+        dir.path(),
+    ));
+    let host_zone = iana_time_zone::get_timezone()
+        .expect("host must expose an IANA timezone for the local-default contract");
+    for (index, (once, omitted)) in [(false, true), (false, false), (true, true), (true, false)]
+        .into_iter()
+        .enumerate()
+    {
+        let id = format!("local-zone-{index}");
+        let mut input = definition(&id);
+        input["run_config"] = json!("Review profile");
+        if omitted {
+            input.as_object_mut().unwrap().remove("timezone");
+        } else {
+            input["timezone"] = json!("");
+        }
+        if once {
+            input["cron"] = json!("");
+            input["once_local"] = json!("2099-06-15T12:00:00");
+        }
+        let saved = execute(
+            json!({"action":"create", "definition":input}),
+            state.clone(),
+        )
+        .await
+        .expect("create rejected the host-local timezone default before store resolution");
+        assert_eq!(saved["timezone"], host_zone);
+        assert_eq!(DefinitionStore::new().get(&id).unwrap().timezone, host_zone);
+    }
+    let mut explicit = definition("explicit-zone");
+    explicit["run_config"] = json!("Review profile");
+    explicit["timezone"] = json!("Pacific/Auckland");
+    let saved = execute(
+        json!({"action":"create", "definition":explicit}),
+        state.clone(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(saved["timezone"], "Pacific/Auckland");
+    let before = std::fs::read(dir.path().join("automations.json")).unwrap();
+    explicit["id"] = json!("invalid-zone");
+    explicit["timezone"] = json!("Not/AZone");
+    assert!(
+        execute(json!({"action":"create", "definition":explicit}), state)
+            .await
+            .is_err()
+    );
+    assert_eq!(
+        std::fs::read(dir.path().join("automations.json")).unwrap(),
+        before
+    );
+}
