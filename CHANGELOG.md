@@ -19,6 +19,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Publish typed Settings account enumeration and configured Ego interactive login start/status, with human terminal authentication and separate credential readback (#1790-1011).
 ### Fixed
 
+- Keep local HTTP/MCP-spawned agent terminals eligible for Chat; distinguish machine ownership from creation provenance while preserving worker cleanup and notification policy (#2032-8dc3).
+
 - Serve authenticated Settings actions and the browser Settings bootstrap on headless daemons through shared routes; keep desktop-only upstream OAuth unavailable there (#2014-9d06).
 - Report an idle ego turn as idle even while background processes remain tracked, consistently across desktop, mobile, and `agent ls` (#2018-1885).
 
