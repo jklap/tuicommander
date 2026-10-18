@@ -32,4 +32,4 @@
 {"record":32,"state":{"shell":1,"agent":"working","awaiting":false,"question":null,"confident":false,"last_question":"","choice_sig":"Which release checks should we run?|1,2","fullscreen":false}}
 {"record":33,"event":{"type":"choice-cleared","_turn_epoch":0}}
 {"record":33,"state":{"shell":1,"agent":"working","awaiting":false,"question":null,"confident":false,"last_question":"","choice_sig":null,"fullscreen":false}}
-{"ring_len":4515}
+{"ring_len":1666}
