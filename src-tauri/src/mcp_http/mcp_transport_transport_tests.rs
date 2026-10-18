@@ -5709,3 +5709,31 @@ fn managed_reconnect_missing_context_is_bounded_and_never_guesses_a_peer() {
         Some("external-protocol")
     );
 }
+
+// Catches: invalid generated native contracts reject requests before their real handler.
+#[tokio::test]
+async fn native_input_contracts_compile_without_external_resolution() {
+    let state = test_state();
+    for tool in native_tool_definitions().as_array().unwrap() {
+        let name = tool["name"].as_str().unwrap();
+        // Missing mandatory arguments must be an argument/handler rejection,
+        // never an invalid contract or an attempted external schema fetch.
+        let response = post_test_tool_call(
+            state.clone(),
+            "native-contracts",
+            name,
+            serde_json::json!({}),
+        )
+        .await;
+        let text = response["result"]["content"][0]["text"].as_str().unwrap();
+        let result: serde_json::Value = serde_json::from_str(text).unwrap();
+        assert_ne!(result["code"], "invalid_contract", "{name}: {response}");
+    }
+    for (name, args) in [
+        ("session", serde_json::json!({"action":"list"})),
+        ("agent", serde_json::json!({"action":"list_peers"})),
+    ] {
+        let response = post_test_tool_call(state.clone(), "native-contracts", name, args).await;
+        assert_eq!(response["result"]["isError"], false, "{name}: {response}");
+    }
+}

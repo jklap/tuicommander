@@ -4960,3 +4960,64 @@ async fn session_inventory_exposes_activity_timestamp_and_compact_age() {
         "{compact}"
     );
 }
+
+// Catches: pre-dispatch validation rejects description-only updates or writes a dummy Enter.
+#[cfg(unix)]
+#[tokio::test]
+async fn action_validation_description_only_updates_without_pty_input() {
+    let state = test_state();
+    let sid = "description-only";
+    let bytes = install_atomic_submit_test_session(&state, sid);
+    for description in [
+        serde_json::json!("Reviewing results"),
+        serde_json::Value::Null,
+        serde_json::json!("Another task"),
+        serde_json::json!(""),
+    ] {
+        let response = post_test_tool_call(
+            state.clone(),
+            "description-contract",
+            "session",
+            serde_json::json!({"action":"input","session_id":sid,"pty_description":description}),
+        )
+        .await;
+        assert_eq!(response["result"]["isError"], false, "{response}");
+        let listing = handle_mcp_tool_call(
+            &state,
+            loopback_addr(),
+            "session",
+            &serde_json::json!({"action":"list"}),
+            None,
+        )
+        .await;
+        let row = listing
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|row| row["session_id"] == sid)
+            .unwrap();
+        let expected = if description.as_str() == Some("") {
+            serde_json::Value::Null
+        } else {
+            description
+        };
+        assert_eq!(row["pty_description"], expected, "{listing}");
+        assert!(
+            bytes.lock().unwrap().is_empty(),
+            "description updates must not write PTY input"
+        );
+    }
+    for extra in [
+        serde_json::json!({}),
+        serde_json::json!({"pty_description":7}),
+    ] {
+        let mut args = serde_json::json!({"action":"input","session_id":sid});
+        args.as_object_mut()
+            .unwrap()
+            .extend(extra.as_object().unwrap().clone());
+        let response =
+            post_test_tool_call(state.clone(), "description-contract", "session", args).await;
+        assert_eq!(response["result"]["isError"], true, "{response}");
+        assert!(bytes.lock().unwrap().is_empty());
+    }
+}

@@ -2688,3 +2688,6 @@ Controlled replay fixture: the audit's four captured idle notifications yield
 four legacy lifecycle deliveries and zero actionable deliveries. A subsequent
 RESULT produces one matching batch per independent acknowledged reader. This
 measurement is not a claim about product-wide token or latency savings.
+
+`session action=input` also accepts only `pty_description` (string or null).
+This updates or clears the context-bar description without sending PTY bytes.

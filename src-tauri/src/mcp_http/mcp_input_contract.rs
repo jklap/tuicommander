@@ -54,7 +54,7 @@ pub(super) fn complete_schema(tool: &mut Value) {
             required(&["rename"], &["name"]);
             required(&["keep_open"], &["enabled"]);
             required(&["declare_worktree"], &["worktree_path"]);
-            conditions.push(json!({"if":{"properties":{"action":{"const":"input"}},"required":["action"]},"then":{"anyOf":[{"required":["input"]},{"required":["special_key"]}]}}));
+            conditions.push(json!({"if":{"properties":{"action":{"const":"input"}},"required":["action"]},"then":{"anyOf":[{"required":["input"]},{"required":["special_key"]},{"required":["pty_description"]}]}}));
         }
         "agent" => {
             required(&["send"], &["to", "message"]);
@@ -190,14 +190,6 @@ mod tests {
             )
             .is_none()
         );
-    }
-
-    /// Catches: a generated native schema cannot be enforced before dispatch.
-    #[test]
-    fn native_input_contracts_compile_without_external_resolution() {
-        for (name, contract) in CONTRACTS.iter() {
-            assert!(contract.validator.is_ok(), "invalid contract for {name}");
-        }
     }
 
     /// Catches: a client and server disagree on historical bad inputs or Unicode boundaries.
