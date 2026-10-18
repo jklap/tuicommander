@@ -9,7 +9,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Publish typed Settings account enumeration and configured Ego interactive login start/status, with human terminal authentication and separate credential readback (#1790-1011).
 ### Fixed
 
-- Keep Settings peer refresh current after no-op edits, omitted repository defaults, and transient read failures; avoid conflict notices for acknowledged upstream header saves (#1788-2163).
+- Keep Settings peer refresh current after no-op edits, omitted repository defaults, transient read failures, and desktop connection/tunnel saves; avoid conflict notices for acknowledged upstream header saves (#1788-2163).
 
 - Correct Settings accent-action text, compact navigation, wrapped help badges, shortcut groups, and workspace path presentation; hide the desktop-only Local tools card in browser mode (#1945).
 

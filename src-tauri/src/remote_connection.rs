@@ -386,7 +386,9 @@ pub(crate) fn save_connection_record(
     base: Option<RemoteConnection>,
     connection: RemoteConnection,
 ) -> Result<(), String> {
-    upsert_remote_connection(&state.data_dir, base, connection)
+    upsert_remote_connection(&state.data_dir, base, connection)?;
+    crate::settings::api::publish_change(state, "connections", true);
+    Ok(())
 }
 
 /// Publish persisted metadata even if credential cleanup subsequently fails.
@@ -397,7 +399,9 @@ pub(crate) fn delete_connection_record(
 ) -> Result<bool, String> {
     let removed = remove_remote_connection(&state.data_dir, id)?;
     if removed {
-        cleanup(id)?;
+        let cleanup_result = cleanup(id);
+        crate::settings::api::publish_change(state, "connections", cleanup_result.is_ok());
+        cleanup_result?;
     }
     Ok(removed)
 }
@@ -437,7 +441,10 @@ pub async fn delete_remote_connection(
     // first leaves all of it running with no way left to address it.
     crate::remote_runtime::teardown_deleted(state.inner(), &id);
     let _guard = state.connections_lock.lock().await;
-    delete_connection_record(&state, &id, delete_connection_credentials)?;
+    if !delete_connection_record(&state, &id, delete_connection_credentials)? {
+        // Preserve IPC's idempotent credential cleanup even when metadata is already absent.
+        delete_connection_credentials(&id)?;
+    }
     Ok(())
 }
 

@@ -2960,9 +2960,11 @@ fn commit_config_change_locked(
     // There is no competing persisted document in that case, so use the cache as
     // the base rather than dropping those values back to AppConfig::default().
     let latest = if file_exists { latest } else { cached.clone() };
-    let mut next_json = serde_json::to_value(&latest)
+    let previous_json = serde_json::to_value(&latest)
         .map_err(|e| format!("Could not serialize current config: {e}"))?;
+    let mut next_json = previous_json.clone();
     apply_json_merge_delta(&mut next_json, &delta);
+    let settings_changed = next_json != previous_json;
     let next: AppConfig =
         serde_json::from_value(next_json).map_err(|e| format!("Invalid config: {e}"))?;
 
@@ -2990,7 +2992,9 @@ fn commit_config_change_locked(
     // remember to — and the relay toggle silently needing an app restart is
     // exactly what that costs.
     crate::relay_client::notify_config_changed(state);
-    crate::settings::api::publish_change(state, "app", !effects.server_changed);
+    if settings_changed {
+        crate::settings::api::publish_change(state, "app", !effects.server_changed);
+    }
     #[cfg(feature = "desktop")]
     if let Some(app) = state.app_handle.read().as_ref() {
         crate::background_mode::tray::desktop::schedule_sync(app);

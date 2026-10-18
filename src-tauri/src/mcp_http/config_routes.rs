@@ -674,15 +674,9 @@ pub(super) async fn put_remote_connection(
             .into_response();
     }
     let _guard = state.connections_lock.lock().await;
-    match crate::remote_connection::upsert_remote_connection(
-        &state.data_dir,
-        request.base,
-        request.connection,
-    ) {
-        Ok(()) => {
-            crate::settings::api::publish_change(&state, "connections", true);
-            Json(serde_json::json!({"ok": true})).into_response()
-        }
+    match crate::remote_connection::save_connection_record(&state, request.base, request.connection)
+    {
+        Ok(()) => Json(serde_json::json!({"ok": true})).into_response(),
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(serde_json::json!({"error": e})),
@@ -706,35 +700,21 @@ pub(super) async fn delete_remote_connection(
     // takes the poll, the mirror, its rows and the session token with it.
     crate::remote_runtime::teardown_deleted(&state, &id);
     let _guard = state.connections_lock.lock().await;
-    match crate::remote_connection::remove_remote_connection(&state.data_dir, &id) {
-        Ok(true) => {}
-        Ok(false) => {
-            return (
-                StatusCode::NOT_FOUND,
-                Json(serde_json::json!({"error": format!("connection '{id}' not found")})),
-            )
-                .into_response();
-        }
-        Err(e) => {
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({"error": e})),
-            )
-                .into_response();
-        }
-    }
-    // Same reason as the IPC command: the vault key is the connection's UUID, so
-    // a secret left behind belongs to an id nothing can name again.
-    if let Err(e) = crate::remote_connection::set_connection_password(&id, "") {
-        crate::settings::api::publish_change(&state, "connections", false);
-        return (
+    match crate::remote_connection::delete_connection_record(&state, &id, |id| {
+        crate::remote_connection::set_connection_password(id, "")
+    }) {
+        Ok(true) => Json(serde_json::json!({"ok": true})).into_response(),
+        Ok(false) => (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"error": format!("connection '{id}' not found")})),
+        )
+            .into_response(),
+        Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(serde_json::json!({"error": e})),
         )
-            .into_response();
+            .into_response(),
     }
-    crate::settings::api::publish_change(&state, "connections", true);
-    Json(serde_json::json!({"ok": true})).into_response()
 }
 
 /// Store the Basic Auth password for a connection, or forget it when the body

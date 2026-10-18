@@ -18,7 +18,7 @@ pub(crate) fn edited<T: Serialize + DeserializeOwned>(section: &str, base: &T) -
         }
         "agents" => value["hibernate_idle_minutes"] = json!(37),
         "keybindings" => value = json!([{"action":"new-terminal","key":"Ctrl+Shift+C"}]),
-        "pane_layout" => value = json!({"root":null,"groups":{},"activeGroupId":null}),
+        "pane_layout" => value = json!({"groups":{}}),
         _ => panic!("missing settings refresh fixture"),
     }
     serde_json::from_value(value).unwrap()

@@ -27,12 +27,17 @@ fn err_json(status: StatusCode, msg: &str) -> Response {
 pub(crate) fn save_profile(state: &AppState, mut profile: TunnelProfile) -> Result<String, String> {
     profile.validate()?;
     ProfileStore::save(&state.data_dir, &profile).map_err(|e| e.to_string())?;
+    crate::settings::api::publish_change(state, "tunnels", true);
     Ok(profile.id)
 }
 
 pub(crate) fn delete_profile(state: &AppState, id: &str) -> Result<bool, String> {
     state.tunnel_manager.stop_if_running(id);
-    ProfileStore::delete(&state.data_dir, None, id).map_err(|e| e.to_string())
+    let removed = ProfileStore::delete(&state.data_dir, None, id).map_err(|e| e.to_string())?;
+    if removed {
+        crate::settings::api::publish_change(state, "tunnels", true);
+    }
+    Ok(removed)
 }
 
 /// GET /tunnels/profiles — list all saved profiles.
@@ -51,11 +56,8 @@ pub(crate) async fn save_tunnel_profile(
     if let Err(e) = profile.validate() {
         return err_json(StatusCode::BAD_REQUEST, &e);
     }
-    match ProfileStore::save(&state.data_dir, &profile) {
-        Ok(()) => {
-            crate::settings::api::publish_change(&state, "tunnels", true);
-            (StatusCode::OK, Json(serde_json::json!({"id": profile.id}))).into_response()
-        }
+    match save_profile(&state, profile) {
+        Ok(id) => (StatusCode::OK, Json(serde_json::json!({"id": id}))).into_response(),
         Err(e) => err_json(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
     }
 }
@@ -65,13 +67,8 @@ pub(crate) async fn delete_tunnel_profile(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
 ) -> Response {
-    state.tunnel_manager.stop_if_running(&id);
-
-    match ProfileStore::delete(&state.data_dir, None, &id) {
-        Ok(true) => {
-            crate::settings::api::publish_change(&state, "tunnels", true);
-            (StatusCode::OK, Json(serde_json::json!({"deleted": true}))).into_response()
-        }
+    match delete_profile(&state, &id) {
+        Ok(true) => (StatusCode::OK, Json(serde_json::json!({"deleted": true}))).into_response(),
         Ok(false) => err_json(StatusCode::NOT_FOUND, "profile not found"),
         Err(e) => err_json(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
     }
