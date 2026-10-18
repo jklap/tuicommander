@@ -7,15 +7,6 @@
   background: var(--bg-primary);
 }
 
-.hint {
-  flex-shrink: 0;
-  padding: 4px 16px;
-  border-top: 1px solid var(--border);
-  background: var(--bg-secondary);
-  color: var(--fg-muted);
-  font-size: var(--font-xs);
-}
-
 .toggle {
   position: absolute;
   top: 6px;

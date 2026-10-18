@@ -32,7 +32,7 @@ interface CommandInputProps {
 	choicePrompt?: ChoicePrompt;
 	/** Native free-text question, opened explicitly by the user. */
 	questionText?: string;
-	/** The Codex question panel has been opened with Alt+Up in this view. */
+	/** The Codex question panel has been opened with Shift+Left in this view. */
 	codexQuestionOpen?: boolean;
 	/** Managed agent waiting for a free-text answer. */
 	managedSession?: boolean;
@@ -223,6 +223,7 @@ export function CommandInput(props: CommandInputProps) {
 	}
 
 	const browserDictation = useBrowserDictation({
+		sessionId: () => props.sessionId,
 		blocked: () => submitting() || !!props.serverVoiceRecording || props.sessionExists === false,
 		getDraft: () => textareaEl?.value ?? value(),
 		setDraft: (text) => {
@@ -487,8 +488,9 @@ export function CommandInput(props: CommandInputProps) {
 				return;
 			}
 			await sendPtyKey(write, key);
-			// Most raw-mode prompts submit on the numeric key.
-			if (!props.choicePrompt?.dismiss_key) {
+			// Native Grok answers and ego approvals act on the key itself;
+			// an extra Enter would submit their newly opened text composer.
+			if (!props.choicePrompt?.dismiss_key && props.agentType !== "grok" && props.agentType !== "ego") {
 				await write("\r");
 			}
 		} catch (err) {

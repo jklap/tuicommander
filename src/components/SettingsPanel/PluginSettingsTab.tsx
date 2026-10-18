@@ -203,8 +203,8 @@ const PluginField: Component<{
 			setInvalid(false);
 			if (secret() || JSON.stringify(value) !== JSON.stringify(props.value)) {
 				props.onWrite(value);
-				setDirty(false);
 			}
+			setDirty(false);
 		} catch {
 			setInvalid(true);
 		}

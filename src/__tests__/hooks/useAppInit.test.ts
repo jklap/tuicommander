@@ -13,6 +13,7 @@ import { handleIntentEvent, shouldApplyIntentTitle } from "../../components/Term
 import { type AppInitDeps, browserCreatedSessions, initApp } from "../../hooks/useAppInit";
 import { activityStore } from "../../stores/activityStore";
 import { appLogger } from "../../stores/appLogger";
+import { chatViewAvailability } from "../../stores/chatView";
 import { closeDialogStore } from "../../stores/closeDialog";
 import { editorTabsStore } from "../../stores/editorTabs";
 import { globalWorkspaceStore, MANUAL_SCOPE } from "../../stores/globalWorkspace";
@@ -133,6 +134,50 @@ describe("initApp", () => {
 		});
 	});
 
+	// Catches: HTTP/MCP creation being confused with execution on another machine.
+	it("adopts a local MCP-spawned agent without marking its Chat remote", async () => {
+		let created: ((event: { payload: unknown }) => void) | undefined;
+		vi.mocked(listen).mockImplementation(((event: string, handler: (event: { payload: unknown }) => void) => {
+			if (event === "session-created") created = handler;
+			return Promise.resolve(vi.fn());
+		}) as unknown as typeof listen);
+		await initApp(createMockDeps());
+		created!({ payload: { session_id: "local-worker", cwd: "/repo", agent_type: "claude", display_name: "worker" } });
+		const terminal = terminalsStore.get(terminalsStore.getTerminalForSession("local-worker")!);
+		expect(terminal).toMatchObject({ isRemote: false, isExternallyCreated: true });
+		expect(chatViewAvailability(terminal)).toEqual({ available: true });
+	});
+
+	// Catches: startup reconciliation restoring the creation flag as machine ownership.
+	it("keeps local reconnected agents local and configured remote agents remote", async () => {
+		await initApp(
+			createMockDeps({
+				pty: {
+					listActiveSessions: vi.fn().mockResolvedValue([
+						{ session_id: "local-reconnect", cwd: "/repo", is_remote: true, state: { agent_type: "claude" } },
+						{
+							session_id: "remote-reconnect",
+							cwd: "/remote",
+							is_remote: false,
+							connection_id: "saved-host",
+							state: { agent_type: "claude" },
+						},
+					]),
+					close: vi.fn().mockResolvedValue(undefined),
+				},
+			}),
+		);
+		const local = terminalsStore.get(terminalsStore.getTerminalForSession("local-reconnect")!);
+		const remote = terminalsStore.get(terminalsStore.getTerminalForSession("remote-reconnect")!);
+		expect(local).toMatchObject({ isRemote: false, isExternallyCreated: true });
+		expect(chatViewAvailability(local)).toEqual({ available: true });
+		expect(remote?.isRemote).toBe(true);
+		expect(chatViewAvailability(remote)).toEqual({
+			available: false,
+			reason: "The chat view is not available for remote terminals",
+		});
+	});
+
 	it("explains the browser fallback when desktop navigation blocks an external iframe link", async () => {
 		let onBlocked: ((event: { payload: string }) => void) | undefined;
 		vi.mocked(listen).mockImplementation(((event: string, handler: (event: { payload: string }) => void) => {
@@ -145,7 +190,22 @@ describe("initApp", () => {
 		const toast = toastsStore.toasts.find((item) => item.title === "External link blocked");
 		expect(toast?.message).toContain("Open in Browser");
 	});
-	beforeEach(() => {
+	beforeEach(({ task }) => {
+		if (/^(adopts a local MCP-spawned|keeps local reconnected)/.test(task.name)) {
+			vi.spyOn(appLogger, "info").mockImplementation(() => {});
+			vi.spyOn(appLogger, "debug").mockImplementation(() => {});
+			for (const level of ["warn", "error"] as const) {
+				vi.spyOn(appLogger, level).mockImplementation((_source, message) => {
+					expect(message).toMatch(
+						/Failed to save activity|Failed to load themes|Unknown theme|Settings reload failed|Failed to register progress-recorded|Failed to sync native window background|owned by no registered repo/,
+					);
+				});
+			}
+		}
+		if (task.name === "settings sync starts every owner and disposes on re-init and unload") {
+			// resetStores intentionally saves before hydration; capture its expected rejection too.
+			vi.spyOn(appLogger, "error").mockImplementation(() => {});
+		}
 		vi.useFakeTimers();
 		vi.mocked(listen).mockReset().mockResolvedValue(vi.fn());
 		resetStores();
@@ -158,6 +218,55 @@ describe("initApp", () => {
 		vi.useRealTimers();
 		repositoriesStore._testCancelPendingSave();
 		paneLayoutStore._testCancelPendingSave();
+	});
+
+	// Catches: init wiring omitting an owner or re-init retaining its old subscriptions.
+	it("settings sync starts every owner and disposes on re-init and unload", async () => {
+		vi.spyOn(appLogger, "info").mockImplementation(() => {});
+		vi.spyOn(appLogger, "debug").mockImplementation(() => {});
+		const errors = vi.spyOn(appLogger, "error").mockImplementation(() => {});
+		const warnings = vi.spyOn(appLogger, "warn").mockImplementation(() => {});
+		await activityStore.hydrate();
+		const owners = [
+			(await import("../../stores/mcpPopup")).mcpPopupStore,
+			(await import("../../stores/promptLibrary")).promptLibraryStore,
+			(await import("../../stores/repoSettings")).repoSettingsStore,
+			(await import("../../stores/remoteConnections")).remoteConnectionsStore,
+			(await import("../../stores/tunnels")).tunnelsStore,
+			(await import("../../stores/ui")).uiStore,
+			(await import("../../stores/settings")).settingsStore,
+			notificationsStore,
+			(await import("../../stores/repoDefaults")).repoDefaultsStore,
+			(await import("../../stores/keybindings")).keybindingsStore,
+			paneLayoutStore,
+		];
+		const stops = owners.map(() => vi.fn());
+		const starts = owners.map((owner, index) => vi.spyOn(owner, "startRemoteSync").mockReturnValue(stops[index]));
+		const agentStop = vi.fn();
+		const agents = await import("../../stores/agentConfigs");
+		const agentStart = vi.spyOn(agents, "startAgentSettingsSync").mockReturnValue(agentStop);
+		const deps = createMockDeps();
+		const voiceStop = vi.fn();
+		vi.mocked(deps.stores.startDictationSettingsSync).mockReturnValue(voiceStop);
+		await initApp(deps);
+		for (const start of [...starts, agentStart]) expect(start).toHaveBeenCalledTimes(1);
+		for (const stop of [...stops, agentStop, voiceStop]) expect(stop).not.toHaveBeenCalled();
+		await initApp(deps);
+		for (const start of [...starts, agentStart]) expect(start).toHaveBeenCalledTimes(2);
+		for (const stop of [...stops, agentStop, voiceStop]) expect(stop).toHaveBeenCalledTimes(1);
+		window.dispatchEvent(new Event("beforeunload"));
+		for (const stop of [...stops, agentStop, voiceStop]) expect(stop).toHaveBeenCalledTimes(2);
+		activityStore.flushSave();
+		await vi.advanceTimersByTimeAsync(0);
+		const expectedFixtureErrors = [
+			"Failed to save activity",
+			"Failed to load themes from backend",
+			"Failed to register progress-recorded listener",
+			"Failed to sync native window background",
+			'Unknown theme "commander", falling back to commander',
+		];
+		for (const [, message] of [...errors.mock.calls, ...warnings.mock.calls])
+			expect(expectedFixtureErrors).toContain(message);
 	});
 
 	it("logs the navigation type and document start at each initialization", async () => {
@@ -860,7 +969,7 @@ describe("initApp", () => {
 		await initApp(deps);
 
 		const terminal = terminalsStore.getIds().map((id) => terminalsStore.get(id))[0];
-		expect(terminal).toMatchObject({ name: "repo-audit", nameIsCustom: false, isRemote: true });
+		expect(terminal).toMatchObject({ name: "repo-audit", nameIsCustom: false, isExternallyCreated: true });
 
 		const intentTitle = "Fresh audit";
 		expect(
@@ -889,7 +998,7 @@ describe("initApp", () => {
 		terminalsStore.remove(terminal!.id);
 		await initApp(deps);
 		const reconnected = terminalsStore.getIds().map((id) => terminalsStore.get(id))[0];
-		expect(reconnected).toMatchObject({ name: intentTitle, nameIsCustom: false, isRemote: true });
+		expect(reconnected).toMatchObject({ name: intentTitle, nameIsCustom: false, isExternallyCreated: true });
 		expect(
 			shouldApplyIntentTitle({
 				title: "Next audit",
@@ -1088,6 +1197,7 @@ describe("initApp", () => {
 		type SurvivingSession = {
 			session_id: string;
 			cwd: string | null;
+			is_remote?: boolean;
 			state?: { shell_state?: "busy" | "idle"; agent_state?: "working" | "idle"; background_work?: boolean };
 		};
 		let resolveSessions!: (sessions: SurvivingSession[]) => void;
@@ -1111,6 +1221,7 @@ describe("initApp", () => {
 			{
 				session_id: "sess-race",
 				cwd: "/repo",
+				is_remote: true,
 				state: { shell_state: "idle", agent_state: "working", background_work: true },
 			},
 		]);
@@ -1122,6 +1233,7 @@ describe("initApp", () => {
 		expect(new Set(branch?.terminals).size).toBe(1);
 		const terminal = terminalsStore.get(branch!.terminals[0]);
 		expect(terminal?.sessionId).toBe("sess-race");
+		expect(terminal).toMatchObject({ isRemote: false, isExternallyCreated: true });
 		expect(terminal?.shellState).toBe("idle");
 		expect(terminal?.agentState).toBe("working");
 		expect(terminal?.backgroundWork).toBe(true);
@@ -2547,7 +2659,7 @@ describe("initApp", () => {
 				name: "Agent",
 				cwd: "/tmp",
 				awaitingInput: null,
-				isRemote: true,
+				isExternallyCreated: true,
 			});
 			terminalsStore.update(termId, { agentState: "working", backgroundWork: true });
 

@@ -436,10 +436,10 @@ fn only_genuinely_blocking_session_and_agent_actions_are_offloaded() {
     for action in ["create", "input", "kill", "close"] {
         assert!(session_action_requires_blocking_pool(action), "{action}");
     }
-    for action in ["register", "list_peers", "inbox", "unknown"] {
+    for action in ["register", "list_peers", "unknown"] {
         assert!(!agent_action_requires_blocking_pool(action), "{action}");
     }
-    for action in ["spawn", "send"] {
+    for action in ["spawn", "send", "inbox", "subscribe", "ack", "unsubscribe"] {
         assert!(agent_action_requires_blocking_pool(action), "{action}");
     }
 }
@@ -3788,10 +3788,9 @@ async fn ui_toast_refuses_an_unknown_urgency_and_emits_nothing() {
             serde_json::json!({ "action": "toast", "title": "t", "urgency": bad }),
         )
         .await;
-        let error = r["error"].as_str().expect("error for a bad urgency");
-        assert!(
-            error.contains("normal, urgent"),
-            "allowed values listed: {error}"
+        assert_eq!(
+            crate::test_support::mcp_argument_constraint(&r, "/urgency", "enum"),
+            &serde_json::json!(["normal", "urgent"])
         );
         assert_eq!(urgency, None, "a refused toast must not reach the bus");
     }
@@ -4269,26 +4268,24 @@ async fn mcp_codex_spawn_carries_launch_instructions() {
         "MARKERS v{VER}",
     )
     .await;
-    let instructions = format!(
-        "developer_instructions=\"MARKERS v{}\"",
-        env!("CARGO_PKG_VERSION")
-    );
     assert_eq!(
-        argv,
-        [
-            "-c",
-            "check_for_update_on_startup=false",
-            "-c",
-            instructions.as_str(),
-            "resume",
-            "--last",
-            "perform the task"
-        ]
+        &argv[..3],
+        ["-c", "check_for_update_on_startup=false", "-c"]
     );
+    assert_eq!(&argv[4..], ["resume", "--last", "perform the task"]);
+    let parsed: toml::Table = toml::from_str(&argv[3]).unwrap();
+    let text = parsed["developer_instructions"].as_str().unwrap();
+    assert!(text.contains("## TUIC output markers"));
+    assert!(text.contains("## Working with the user"));
+    assert!(
+        !text.contains("## Child agents"),
+        "unparented public spawn is a root"
+    );
+    assert!(text.ends_with(&format!("MARKERS v{}", env!("CARGO_PKG_VERSION"))));
 }
 
 #[cfg(unix)]
-const MOCK_CODEX_ARGV_SCRIPT: &str = "#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$ARGV_OUTPUT.tmp\" && mv \"$ARGV_OUTPUT.tmp\" \"$ARGV_OUTPUT\"\n";
+const MOCK_CODEX_ARGV_SCRIPT: &str = "#!/bin/sh\nprintf '%s\\0' \"$@\" > \"$ARGV_OUTPUT.tmp\" && mv \"$ARGV_OUTPUT.tmp\" \"$ARGV_OUTPUT\"\n";
 
 // Catches: a paused mock writer publishes a partial argv prefix before finishing.
 #[cfg(unix)]
@@ -4301,7 +4298,7 @@ async fn codex_mock_argv_is_published_only_after_writer_finishes() {
     // Override printf to stop after the first argument. stdin releases the writer,
     // so the partial-write window stays open until the test has observed it.
     let script = format!(
-        "printf() {{\n shift\n command printf '%s\\n' \"$1\"\n shift\n command printf ready > \"$ARGV_READY\"\n read -r release\n command printf '%s\\n' \"$@\"\n}}\n{MOCK_CODEX_ARGV_SCRIPT}"
+        "printf() {{\n shift\n command printf '%s\\0' \"$1\"\n shift\n command printf ready > \"$ARGV_READY\"\n read -r release\n command printf '%s\\0' \"$@\"\n}}\n{MOCK_CODEX_ARGV_SCRIPT}"
     );
     let mut writer = std::process::Command::new("/bin/sh")
         .args(["-c", &script, "mock-codex", "--search", "exec", "task"])
@@ -4324,7 +4321,7 @@ async fn codex_mock_argv_is_published_only_after_writer_finishes() {
     assert!(status.success());
     assert_eq!(partial, None, "incomplete argv must not be published");
     let actual = wait_for_file_content_async(&output, std::time::Duration::from_secs(60)).await;
-    assert_eq!(actual, "--search\nexec\ntask\n");
+    assert_eq!(actual, "--search\0exec\0task\0");
 }
 
 #[cfg(unix)]
@@ -4369,7 +4366,7 @@ async fn capture_codex_spawn_with(
         .and_then(|queue| queue.front().map(|injection| injection.text().to_string()));
     let actual = wait_for_file_content_async(&output, std::time::Duration::from_secs(60)).await;
     (
-        actual.lines().map(str::to_string).collect(),
+        actual.split_terminator('\0').map(str::to_string).collect(),
         spawned,
         deferred,
     )
@@ -4672,10 +4669,9 @@ async fn ui_screenshot_requires_id() {
         None,
     )
     .await;
-    let err = r["error"].as_str().expect("should return error");
-    assert!(
-        err.contains("'id'"),
-        "Missing id should mention 'id' in error, got: {err}"
+    assert_eq!(
+        crate::test_support::mcp_argument_constraint(&r, "", "required"),
+        &serde_json::json!(["id"])
     );
 }
 
@@ -5116,15 +5112,13 @@ async fn background_mode_ui_requests_fail_immediately_when_webview_unloaded() {
     state
         .webview_unloaded
         .store(true, std::sync::atomic::Ordering::Release);
-    for action in ["toast", "tab", "screenshot", "confirm"] {
-        let reply = handle_mcp_tool_call(
-            &state,
-            loopback_addr(),
-            "ui",
-            &serde_json::json!({"action":action}),
-            None,
-        )
-        .await;
+    for input in [
+        serde_json::json!({"action":"toast","title":"Background notice"}),
+        serde_json::json!({"action":"tab","id":"background-tab","title":"Background tab","html":"<p>Test</p>"}),
+        serde_json::json!({"action":"screenshot","id":"background-tab"}),
+        serde_json::json!({"action":"confirm","title":"Background confirmation"}),
+    ] {
+        let reply = handle_mcp_tool_call(&state, loopback_addr(), "ui", &input, None).await;
         assert_eq!(reply, serde_json::json!({"error":"webview_unloaded"}));
     }
 }
@@ -5515,4 +5509,330 @@ async fn settings_gated_changed_replay_does_not_persist() {
     for http in [true, false] {
         gated_settings_transport_roundtrip(http, true, true).await;
     }
+}
+
+// Catches: scoped remote inventory is dispatched to the output/submit-only proxy.
+#[tokio::test]
+async fn scoped_remote_session_inventory_does_not_use_the_control_proxy() {
+    let state = test_state();
+    let id = uuid::Uuid::new_v4().to_string();
+    state
+        .remote
+        .force_connected_for_test("mint", "http://127.0.0.1:9", None);
+    crate::remote_mirror::store_seed_for_test(
+        &state,
+        "mint",
+        vec![super::super::types::SessionInfo {
+            session_id: id.clone(),
+            alias: Some("pe-3".into()),
+            ..Default::default()
+        }],
+    );
+    for reference in [
+        format!("mint/{id}"),
+        "mint/pe-3".into(),
+        "pe-3".into(),
+        format!("mint/{}", &id[..8]),
+    ] {
+        let rows = handle_mcp_tool_call(
+            &state,
+            "127.0.0.1:12345".parse().unwrap(),
+            "session",
+            &serde_json::json!({"action":"list", "session_id":reference, "compact":true}),
+            None,
+        )
+        .await;
+        assert!(
+            rows.is_array(),
+            "scoped inventory must return the advertised remote session: {rows}"
+        );
+        assert_eq!(rows.as_array().unwrap().len(), 1);
+        assert_eq!(rows[0]["session_id"], id);
+        assert_eq!(rows[0]["connection_id"], "mint");
+    }
+}
+
+// Catches: a successful rendering result with an explicit null error is treated
+// as an application failure at the tools/call response boundary.
+#[test]
+fn mcp_outcome_record_separates_transport_application_and_effect() {
+    let rendering = serde_json::json!({"state":"rendering","error":null});
+    let response = format_tool_call_result(&rendering, tool_result_is_error(&rendering));
+    assert_eq!(
+        response["isError"], false,
+        "null is not an application error"
+    );
+    let refusal = serde_json::json!({"error":"application refused"});
+    assert!(tool_result_is_error(&refusal));
+    let upstream = mark_upstream_tool_result(serde_json::json!({
+        "isError":true, "content":[{"type":"text","text":"refused"}], "error":null
+    }));
+    assert!(
+        tool_result_is_error(&upstream),
+        "upstream isError stays authoritative"
+    );
+    assert_eq!(
+        format_tool_call_result(&upstream, tool_result_is_error(&upstream))["isError"],
+        true
+    );
+}
+
+// Catches: collapsed calls bypass the runtime audit or expose argument bodies.
+#[tokio::test]
+async fn mcp_outcome_record_covers_collapsed_runtime_calls() {
+    let state = test_state();
+    let result = post_test_tool_call(state.clone(), "audit-contract", "call_tool",
+        serde_json::json!({"tool_name":"progress","arguments":{"type":"done","text":"PRIVATE_TEXT".repeat(100)}})).await;
+    assert_eq!(result["result"]["isError"], true);
+    let Json(projection) = super::super::mcp_call_audit::endpoint(State(state)).await;
+    let row = &projection["records"][0];
+    assert_eq!(row["operation"], "progress");
+    assert_eq!(row["application_error"], true);
+    assert_eq!(row["effect"], "not_started");
+    assert_eq!(
+        row["transport_error"],
+        "unobserved_after_reply_construction"
+    );
+    assert_eq!(
+        row["response_text_bytes"],
+        result["result"]["content"][0]["text"]
+            .as_str()
+            .unwrap()
+            .len()
+    );
+    assert!(!projection.to_string().contains("PRIVATE_TEXT"));
+}
+
+// Catches: modern managed calls retain their live peer/cwd but lose mail routing
+// when a reconnect has no legacy MCP protocol-session header.
+#[cfg(unix)]
+#[tokio::test]
+async fn managed_reconnect_restores_project_without_identity_guessing() {
+    let state = test_state();
+    let peer = "91136da9-2b9c-4c7f-95a1-d615454ba760";
+    let pty = "1c052428-3a90-4e6c-8c6b-e7e311c546f3";
+    crate::state::tests_support::insert_dummy_session(&state, pty);
+    crate::state::tests_support::set_session_cwd(&state, pty, "/Gits/project-one");
+    state.bind_live_pty(peer, pty);
+    refresh_mcp_session(&state, "old-managed", false, Some(peer));
+    register_peer(&state, TEST_UUID_A, "sender", "sender-protocol");
+    let sent = handle_messaging(
+        &state,
+        &serde_json::json!({
+            "action":"send", "to":peer, "message":"retained mail"
+        }),
+        Some("sender-protocol"),
+    );
+    assert!(sent.get("error").is_none(), "{sent}");
+    // Protocol routing is transient; live session and mailbox ownership survive.
+    state.mcp.sessions.clear();
+    state.mcp.to_session.clear();
+    state.mcp.session_to_mcp.clear();
+    state.peer_agents.clear();
+    let mut headers = HeaderMap::new();
+    headers.insert(TUIC_SESSION_HEADER, peer.parse().unwrap());
+    headers.insert(
+        MCP_PROTOCOL_VERSION_HEADER,
+        MODERN_PROTOCOL_VERSION.parse().unwrap(),
+    );
+    let response = mcp_post(
+        State(state.clone()),
+        ConnectInfo(loopback_addr()),
+        headers,
+        Json(
+            serde_json::json!({"jsonrpc":"2.0","id":1,"method":"tools/call",
+            "params":{"name":"agent","arguments":{"action":"inbox"}}}),
+        ),
+    )
+    .await
+    .into_response();
+    assert!(
+        !response.headers().contains_key(MCP_SESSION_HEADER),
+        "stateless calls must remain stateless on the wire"
+    );
+    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let response: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(response["result"]["isError"], false, "{response}");
+    let inbox: serde_json::Value =
+        serde_json::from_str(response["result"]["content"][0]["text"].as_str().unwrap()).unwrap();
+    assert_eq!(inbox["messages"][0]["id"], sent["message_id"]);
+    let routes = state
+        .mcp
+        .session_to_mcp
+        .get(peer)
+        .expect("recovered routing");
+    let sid = routes.first().unwrap();
+    assert_eq!(
+        resolve_mcp_origin_repo_path(&state, Some(sid)).as_deref(),
+        Some("/Gits/project-one")
+    );
+    assert_eq!(state.live_pty_for_peer(peer).as_deref(), Some(pty));
+}
+
+// Catches: an unknown/headerless identity is guessed from a focused project, or
+// unchanged inbox failures suggest a blind retry instead of context recovery.
+#[test]
+fn managed_reconnect_missing_context_is_bounded_and_never_guesses_a_peer() {
+    let state = test_state();
+    let first = handle_messaging(&state, &serde_json::json!({"action":"inbox"}), None);
+    let repeat = handle_messaging(
+        &state,
+        &serde_json::json!({"action":"inbox","byte_budget":4096}),
+        None,
+    );
+    assert_eq!(first, repeat);
+    assert_eq!(first["code"], "identity_context_required");
+    assert_eq!(first["retryable"], false);
+    assert_eq!(first["effect"], "not_started");
+    assert_eq!(first["repair"]["max_attempts"], 1);
+    assert!(state.peer_agents.is_empty());
+    assert!(state.mcp.to_session.is_empty());
+    let mut headers = HeaderMap::new();
+    headers.insert(TUIC_SESSION_HEADER, TEST_UUID_A.parse().unwrap());
+    assert!(
+        super::super::mcp_transport_peer::call_session_context(&state, &headers, true).is_none()
+    );
+    assert!(
+        super::super::mcp_transport_peer::call_session_context(&state, &headers, false).is_none()
+    );
+    headers.insert(MCP_SESSION_HEADER, "external-protocol".parse().unwrap());
+    assert_eq!(
+        super::super::mcp_transport_peer::call_session_context(&state, &headers, true).as_deref(),
+        Some("external-protocol")
+    );
+}
+
+// Catches: invalid generated native contracts reject requests before their real handler.
+#[tokio::test]
+async fn native_input_contracts_compile_without_external_resolution() {
+    let state = test_state();
+    for tool in native_tool_definitions().as_array().unwrap() {
+        let name = tool["name"].as_str().unwrap();
+        // Missing mandatory arguments must be an argument/handler rejection,
+        // never an invalid contract or an attempted external schema fetch.
+        let response = post_test_tool_call(
+            state.clone(),
+            "native-contracts",
+            name,
+            serde_json::json!({}),
+        )
+        .await;
+        let text = response["result"]["content"][0]["text"].as_str().unwrap();
+        let result: serde_json::Value = serde_json::from_str(text).unwrap();
+        assert_ne!(result["code"], "invalid_contract", "{name}: {response}");
+    }
+    for (name, args) in [
+        ("session", serde_json::json!({"action":"list"})),
+        ("agent", serde_json::json!({"action":"list_peers"})),
+    ] {
+        let response = post_test_tool_call(state.clone(), "native-contracts", name, args).await;
+        assert_eq!(response["result"]["isError"], false, "{name}: {response}");
+    }
+}
+
+async fn runtime_audit_projection(state: Arc<AppState>) -> serde_json::Value {
+    use axum::{body::Body, http::Request};
+    use tower::ServiceExt;
+    let response = crate::mcp_http::build_router(state, false, true)
+        .oneshot(
+            Request::get("/mcp/audit")
+                .extension(ConnectInfo(loopback_addr()))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), axum::http::StatusCode::OK);
+    let bytes = axum::body::to_bytes(response.into_body(), 1_000_000)
+        .await
+        .unwrap();
+    serde_json::from_slice(&bytes).unwrap()
+}
+
+// Catches: cancelling real dispatch records rollback/no effect, or leaks body values.
+#[tokio::test]
+async fn mcp_outcome_record_cancelled_call_keeps_unknown_effect_without_bodies() {
+    let state = test_state();
+    let mut events = state.event_bus.subscribe();
+    let call_state = state.clone();
+    let call = tokio::spawn(async move {
+        post_test_tool_call(call_state, "audit-cancel", "ui",
+            serde_json::json!({"action":"confirm","title":"PRIVATE_TITLE","message":"PRIVATE_BODY"})).await
+    });
+    loop {
+        if matches!(
+            events.recv().await.unwrap(),
+            crate::state::AppEvent::McpConfirm { .. }
+        ) {
+            break;
+        }
+    }
+    call.abort();
+    assert!(call.await.unwrap_err().is_cancelled());
+    let projection = runtime_audit_projection(state).await;
+    let row = &projection["records"][0];
+    assert_eq!(row["operation"], "ui.confirm");
+    assert_eq!(row["effect"], "unknown");
+    assert_eq!(row["application_error"], serde_json::Value::Null);
+    assert_eq!(row["transport_error"], "cancelled_before_reply");
+    assert!(!projection.to_string().contains("PRIVATE"));
+}
+
+// Catches: runtime recipient batches collapse targets/calls, or charge Unicode scalars as bytes.
+#[cfg(unix)]
+#[tokio::test]
+async fn mcp_outcome_record_groups_parent_but_preserves_targets_and_utf8_cost() {
+    let state = test_state();
+    let parent = uuid::Uuid::new_v4();
+    let mut costs = Vec::new();
+    for (index, target) in ["recipient-one", "recipient-two"].into_iter().enumerate() {
+        install_atomic_submit_test_session(&state, target);
+        state
+            .session_maps
+            .output_buffers
+            .get(target)
+            .unwrap()
+            .lock()
+            .write("é".as_bytes());
+        let mut headers = HeaderMap::new();
+        headers.insert(MCP_SESSION_HEADER, "audit-parent".parse().unwrap());
+        let response = mcp_post(
+            State(state.clone()),
+            ConnectInfo(loopback_addr()),
+            headers,
+            Json(
+                serde_json::json!({"jsonrpc":"2.0","id":index,"method":"tools/call",
+                "params":{"name":"session","arguments":{"action":"output","session_id":target,"format":"raw"},
+                "_meta":{"tuic/parent_operation_id":parent}}}),
+            ),
+        )
+        .await
+        .into_response();
+        let bytes = axum::body::to_bytes(response.into_body(), 1_000_000)
+            .await
+            .unwrap();
+        let result: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(result["result"]["isError"], false, "{result}");
+        let text = result["result"]["content"][0]["text"].as_str().unwrap();
+        assert!(text.contains('é'), "{result}");
+        assert!(
+            text.len() > text.chars().count(),
+            "fixture must distinguish UTF-8 bytes"
+        );
+        costs.push(text.len());
+    }
+    let projection = runtime_audit_projection(state).await;
+    let rows = projection["records"].as_array().unwrap();
+    assert_eq!(rows.len(), 2);
+    assert_eq!(rows[0]["parent_operation_id"], serde_json::json!(parent));
+    assert_eq!(rows[1]["parent_operation_id"], serde_json::json!(parent));
+    assert_ne!(rows[0]["call_id"], rows[1]["call_id"]);
+    assert_ne!(rows[0]["target_digest"], rows[1]["target_digest"]);
+    for (row, cost) in rows.iter().zip(costs.iter().rev()) {
+        assert_eq!(row["response_text_bytes"], *cost);
+        assert_eq!(row["application_error"], false);
+    }
+    assert!(!projection.to_string().contains("recipient-"));
 }

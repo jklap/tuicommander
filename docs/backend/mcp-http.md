@@ -643,13 +643,46 @@ Async waits remain on their event-driven async handlers. A panicking blocking
 handler becomes a tool error rather than killing the request task; `POST /mcp`
 does not add another blanket wrapper.
 
+### Native argument repair contract (#2007-59f6)
+
+The native tool's advertised `inputSchema` is enforced before dispatch, both for
+direct tools and `call_tool`, on HTTP and MCP-over-ACP. Action enums and standard
+`if`/`then` requirements describe conditional fields (for example `ui tab` needs
+`id`, `title`, and exactly one of `html`/`url`). A local-only JSON Schema validator
+uses those same definitions; validation cannot fetch external schema references.
+Static rejection returns a tool error with:
+
+- `code: "invalid_arguments"`, `outcome: "rejected"`, `effect: "not_started"`;
+- `retryable: false`: do not repeat unchanged arguments;
+- `repair.retry_after_correction: true`: a corrected request may be submitted;
+- at most 16 `violations`, each with JSON-pointer `path`, `schema_path`, the
+  schema `constraint` (limit, required fields or allowed values), and a masked
+  explanation. Input values are not copied into repair errors.
+
+This is not auto-retry advice for permission, configuration or safety refusals.
+Those remain existing refusals, without the static repair marker. Runtime
+preconditions and authorization remain the handler's responsibility; a valid
+schema never grants access or proves an effect completed.
+
+Progress text permits 1..500 Unicode scalar values before trimming, not UTF-8
+bytes, UTF-16 units, or grapheme clusters; whitespace-only text is invalid.
+The shared Progress model enforces the same raw length for HTTP `/progress/report`
+and IPC `report_progress_event`, which retain their typed transport errors.
+
+`src-tauri/src/mcp_http/fixtures/action-input-contract-2007.json` is a local
+consumer contract fixture, not a captured client trace. It covers the audit's
+582/543/502-character retries, the valid boundary, emoji and combining scalars,
+missing titles/text/paths, and an invented action. Ego must validate its admitted
+schema against these cases without a server round trip; that cross-repository
+consumer integration is not proven by TUIC's tests.
+
 ### Lazy Tool Discovery (`collapse_tools`)
 
 When `collapse_tools: true` in `config.json` (or via Settings > MCP > TUIC Tools > "Collapse tools"), the server replaces the full tool list in `tools/list` with three meta-tools (the Speakeasy pattern) plus the compact `progress` tool when enabled:
 
 | Meta-tool | Purpose |
 |-----------|---------|
-| `search_tools` | BM25 search over the full native + upstream tool corpus; returns name/description pairs |
+| `search_tools` | BM25 search over the full native + upstream tool corpus; returns name/summary pairs, an opaque `catalogue_generation`, and an optional complete `top_schema` |
 | `get_tool_schema` | Returns the full `{name, description, inputSchema}` for a specific tool |
 | `call_tool` | Dispatches to the named tool — routes to the native handler or `proxy_tool_call` for `{upstream}__{tool}` names |
 
@@ -677,6 +710,20 @@ once at `initialize`. The precedence runs that way because ego reaches `/mcp`
 through `tuic-bridge`, which opened the transport session under its own name:
 preferring the session made `server/discover` advertise the collapsed surface and
 the very next `tools/list` deliver the full one, for the identical request.
+
+**Schema admission and reuse (#2013-73f9).** Search includes the complete definition of
+its first visible match when the serialized UTF-8 JSON fits `schema_byte_budget`
+(default 16384 bytes, maximum 65536; 0 disables inline schemas). The budget applies
+to the definition, not the whole search response. Oversized schemas are omitted,
+never truncated; select a result and fetch it with `get_tool_schema` instead.
+A client can admit `top_schema` directly and call the tool without a second
+schema-fetch hop. Reuse an admitted definition until `notifications/tools/list_changed`
+or a different `catalogue_generation`. The generation is a content digest of the
+search corpus, not an authorization token. An unchanged rebuild keeps it stable.
+HTTP SSE and MCP-over-ACP refresh the index before forwarding invalidation, including
+lag recovery. Dispatch still checks live permissions and visibility; a cached schema
+never grants access. Clients must implement admission and invalidation themselves;
+server tests are not evidence of a real ego client's hop reduction.
 
 **Filter enforcement.** Both `search_tools` and `call_tool` re-apply the safety filters that the full listing would apply: `disabled_native_tools` is checked up-front in `handle_call_tool`, and upstream allow/deny filters are enforced at both enumeration time (`aggregated_tools`) and dispatch time (`proxy_tool_call`). This is critical under collapse mode: discovery no longer gates dispatch, so an agent that knows a filtered tool name cannot bypass the filter by calling `call_tool` directly. `search_tools` and `get_tool_schema` also reject meta-tool names, and `call_tool` refuses to recurse into itself.
 
@@ -860,7 +907,7 @@ say what was measured, not what the list costs today.
 | Tool | Actions | Default |
 |------|---------|---------|
 | `session` | list, create, submit, input, output, status, wait, resize, rename, close, kill, pause, resume | Enabled |
-| `agent` | spawn, wait, register, list_peers, send, inbox | Enabled |
+| `agent` | spawn, wait, register, list_peers, send, inbox, subscribe, ack, unsubscribe | Enabled |
 | `task` | get, cancel | Enabled |
 | `remote` | preview, update | Enabled |
 | `repo` | list, active, status, branch_integrations, branch_integration, worktree_list, worktree_lifecycle, worktree_create, worktree_remove, orphan_cleanup_answer, branch_delete, progress_list | Enabled |
@@ -2203,7 +2250,11 @@ implementation; stores, schedule rules, aggregates and execution ownership stay
 in Rust. `COMMAND_TABLE.automation_action` maps the same input without renaming
 fields. Route snapshots and registered-route PATCH probes cover this route.
 MCP and CLI use this same action parser, runtime owner and result contract.
-HTTP application error messages match IPC rejections and MCP/CLI errors;
+HTTP and MCP/CLI validate static automation inputs with the same advertised
+schema before dispatch. HTTP returns status 400 with the identical structured
+`invalid_arguments` payload, including bounded, value-masked violations and
+`effect=not_started`. Semantic application error messages still match IPC
+rejections and MCP/CLI errors; IPC retains its string-error signature.
 MCP additionally requires a bound creator identity for creation.
 
 Automation precheck context (#1631-45bf): definitions can opt in with
@@ -2342,6 +2393,10 @@ No live write or desktop-load verification is implied by recorded-fixture tests.
 
 ### Settings cutover (#1787-4778)
 
+`GET /config` and `PUT /config` are registered once in `shared_routes()` for browser Settings hydration, non-saving refresh and legacy owner saves. Their authentication and secret-redacted readback are unchanged.
+
+`POST /settings/action` is registered once in `shared_routes()`, so desktop and headless daemons use the same handler, authentication policy and value-free Settings event publisher. Upstream OAuth startup requires a desktop host; the headless owner returns `unavailable` before upstream lookup or network access.
+
 `settings` replaces the removed MCP `config` tool without an alias. Its schema is generated from Rust action DTOs. `settings_action(request)` and `POST /settings/action` use the same envelope and owner services. Describe has optional area/store/id filters and cursor pagination (1–128 fields). Reads and edits use an explicit target; edits require expectedRevision. Prompts remain available through the stable-ID `prompts` store; get `/prompts` lists id/label/text/pinned records, while keyed leaf reads and create/remove patches retain stable identities. Typed workflows use perform with an explicit machine target and a store-selected operation DTO for github_accounts, ego (also expectedRevision), upstreams, connections, circleci, telegram and voice in dictation builds. Targeted describe/refresh uses target/store/paths through the registered owner resolver. Connection credential reads use /{id}/credential and return separate password/pairingToken presence. Credential writes retire only that runtime and reconnect it only when it was active; an explicit later disconnect retires the queued reconnect. Explicit refresh for ego refreshes the configured owner's provider catalogue; describe never performs a network refresh.
 
 MCP access requires settings_mcp_enabled, enabled only by trusted UI; legacy config enablement grants no settings authority. MCP mutations remain loopback-only. HTTP retains local-or-authenticated access and IPC retains native host trust. Exposure proposals use ui confirm proposalId and an exact replay with approval. Secrets remain write-only. Owner transactions and perform remain unavailable while the native inventory gap ledger is nonempty; describe reports inventoryComplete.
@@ -2384,6 +2439,286 @@ owner; replies contain only token presence. Clearing the stored token does not
 remove `CIRCLE_TOKEN` or the CircleCI CLI configuration. The Git & GitHub page
 continues to show the effective token source. No transport returns the token.
 
+### Machine launch instruction previews
+
+`GET /config/defaults` and `POST /config/defaults` are shared machine routes on
+both the desktop server and `tuic-remote`. The POST previews draft agent settings
+without saving them and uses the same authentication as other machine config routes.
+
+Launch-capable Claude, Codex, Grok, OpenCode, Goose, pi and ego clients receive playbook obligations from generated launch files, not again from MCP initialize instructions. MCP keeps tool discovery and live repository/session/peer state. Unrecognized clients retain the existing MCP marker, submit, worktree and progress fallback.
+
+### Idempotent managed launch
+
+Prefer `agent action=launch` for a managed worker that needs a selected/new workspace and a durable retry identity. One request composes worktree allocation, named spawn, parent linkage and keep-open policy; unkeyed `spawn` remains compatible. The shared Rust boundary also serves `POST /agents/launch` and `managed_agent_launch` IPC. See [the wire contract](../api/http-api.md#durable-managed-agent-launch). Read by `launch_id` without sending a new prompt.
+
+A SQLite journal reserves identity before side effects and uses revision compare-and-swap to prevent concurrent checkpoint owners from both creating resources. An app-scoped async mutex serializes launch mutations; filesystem/process work remains on the existing allocation/spawn paths. A lost reply reuses the child. An uncertain interrupted side effect blocks instead of retrying or changing checkout. Native session/prompt state determines delivery and readiness, never output movement alone. The existing spawn name pinning and managed idle-close exemption are reused. Routing, account choice and local brief rules are not TUIC policy.
+
+Native automation and workflow run bindings also use this transaction through `managed_launch`: automation run IDs and workflow attempt IDs provide stable keys, with an in-process run-owner scope when no peer parent exists. No synthetic peer is registered. Run-owned children use the same pinned-name and explicit keep-open path as MCP children; the existing run controller still owns cancellation and completion. The unkeyed public `spawn` compatibility action continues to use the same low-level PTY spawn implementation. The existing 30-second deferred-prompt watchdog also applies to parentless run-owned children: a timeout reports blocked, retains the queued prompt and never creates a replacement.
+
+### Compact inventories and byte-bounded response snapshots
+
+`session action=list session_id=<address>` resolves one session through the same
+address resolver as other session actions. `agent action=list_peers to=<address>`
+uses the send recipient resolver; `connection_id` or `connection/peer` selects a
+remote owner. Missing or ambiguous targets return errors, not empty success.
+Both inventories accept `compact=true`. Rows keep identity/address fields,
+`state`, `activity_age_ms`, and `omitted_fields`. Unknown state is `"unknown"`;
+unknown activity age is `null`, never zero. The omitted-field list names removed
+fields. A failed remote inventory remains an error or `connection_errors`, not
+proof that no peers exist. Activity age comes from the backend session snapshot;
+a peer without a live terminal has unknown state and age.
+
+For `agent action=inbox` and `session action=output`, set
+`byte_budget=4096` (integer range 1024–65536) to request an immutable snapshot:
+
+```json
+{"encoding":"json-text","chunk":"...","offset":0,"total_bytes":49162,"continuation":"opaque token","omitted_fields":[],"expires_after_seconds":300}
+```
+
+The budget counts **UTF-8 bytes of the compact JSON page object**, including its
+escaped `chunk` and all page-envelope fields. It excludes JSON-RPC, MCP content
+blocks, HTTP headers, and transport framing. Even one oversized item is split;
+UTF-8 codepoints stay whole. Concatenate decoded `chunk` strings in page order,
+then parse the resulting JSON to obtain the original response. No fields or
+retained text are removed. `total_bytes` and `offset` refer to that reconstructed
+JSON text, not the escaped page object. `continuation=null` marks the final page.
+
+Repeat the same action, target and connection with the returned `continuation`.
+A continuation defaults to a 4096-byte budget if `byte_budget` is omitted. Tokens
+are bound to the inbox owner or output caller and operation/target; changed
+window arguments do not recapture the snapshot. Repeating a page is safe.
+Snapshots expire 300 seconds after capture, on restart, or when the shared cache
+needs space (128 snapshots, 32 MiB of serialized snapshot text). Invalid,
+foreign, expired or evicted tokens fail explicitly with `restart_required` when
+applicable. Start a new read; do not treat the error as an empty result.
+
+The inbox read cursor advances only when the final chunk is returned. A partial
+or abandoned read does not consume mail or its eviction count. Final-page replay
+does not acknowledge later evictions again. Explicit `since=0` remains replay,
+and cursor advancement remains monotonic. Concurrent new mail stays unread;
+concurrent terminal output does not alter an existing snapshot. Inbox retention
+loss is still reported as `missed_count`; expired terminal retention is still
+reported by the existing output-window metadata. A captured snapshot remains
+readable even if its source ring rolls over. The byte bound cannot recover data
+already lost before capture.
+
+Without `byte_budget` or a token, existing response shapes and cursor behavior
+stay unchanged. Errors remain errors; an error detail that itself exceeds the
+budget becomes `response_error_exceeds_byte_budget` with an explicit omission.
+The shared native handlers own validation and paging. MCP, the IPC MCP bridge,
+and HTTP `format=mcp|mcp_raw` use those handlers; the remote output proxy forwards
+byte budgets and tokens without rewriting the bounded envelope.
+
+Fixture provenance: `src-tauri/src/fixtures/mcp-output-2005.txt` captures the
+49,162-byte response cited in the 2026-10-17 MCP usage audit, coordinator transcript
+result line 168437. It is historical terminal text, not a current-state assertion.
+`src-tauri/src/fixtures/mcp-inbox-2005.txt` captures the audit's 49,609-byte inbox
+response, private TUIC transcript result line 3239. The regression also covers
+multibyte and escaped oversized inbox content.
+
+#### Review clarifications: loss watermarks, wait and local continuation scope
+
+All inbox readers use one delivery-gate acknowledgement boundary. A captured
+byte snapshot records the monotonic eviction watermark at capture time. Final
+completion acknowledges only the previously unacknowledged part of that range.
+Two overlapping snapshots cannot subtract the same historical missed count
+from later losses. An ordinary inbox read advances that same watermark; there
+is no separate byte-page read cursor or client acknowledgement protocol.
+
+`agent action=wait` is **not byte-bounded**. Supplying `byte_budget` or
+`continuation` to wait returns `wait_byte_budget_unsupported` before registering
+a waiter or consuming mail. Use byte-budgeted inbox reads for bounded payloads.
+The existing wait claims and acknowledges mail before its response is returned.
+Adding deferred completion to it would create another acknowledgement model;
+wait paging must instead use the shared subscription/ack reconciliation tracked
+by #2004-4760. This story does not claim to reduce the audit's 14,763-byte wait
+response maximum.
+
+A daemon must support the byte-page envelope to serve a byte-budgeted remote
+output request. The desktop proxy rejects unpaged legacy-daemon responses and
+pages that exceed the requested compact-JSON budget. It does not pass through
+an oversized legacy body merely because `exited` is present. Update an
+incompatible daemon; do not retry without a budget unless unbounded output is
+actually desired.
+
+Full session inventory exposes known `last_activity_ms` from the backend
+snapshot. Compact projection derives `activity_age_ms` from that timestamp;
+a missing or zero timestamp remains unknown. An exact registered local peer
+name is resolved before interpreting a slash as a connection qualifier. With
+an explicit connection selected, a daemon-local slash-containing name remains
+a name unless it carries that same connection prefix.
+
+Inbox tokens are scoped to the bound peer identity. Local native MCP output tokens
+are scoped to their MCP session and target; proxied remote output uses the
+owning daemon's HTTP scope. HTTP MCP-compatible output and the
+IPC MCP passthrough intentionally share the local `ipc` continuation scope for
+the same target: either local-user transport can resume a token issued by the
+other. Tokens are opaque snapshot references, **not authorization credentials**;
+normal endpoint admission and the local OS-user trust boundary still apply.
+
 ### Frame workload dump
 
 The loopback-only `debug action=frame_workload_dump` schedules the enabled frontend recorder dump. Like `invoke_js`, read `eval_js` logs for completion; submission does not prove frontend liveness. `POST /debug/frame-workload` and desktop `save_frame_workload` share the bounded writer. See [stall evidence](stall-journal.md).
+
+## Runtime call outcome audit (#2010-30a7)
+
+`GET /mcp/audit` returns at most 100 newest completed/cancelled `tools/call`
+observations from an instance-local 1024-record memory ring. `retained`, `evicted`,
+`capacity` and `limit` describe retention. Restart clears the ring. HTTP and ACP
+both enter `mcp_post`, so a collapsed call is one runtime ingress record, not an
+extra inferred hop. Existing inbox-read audit records are unchanged.
+
+Each row has a server `call_id`, optional UUID `client_call_id` and
+`parent_operation_id`, catalogue-recognized native `operation`, optional SHA-256
+`target_digest`, start time, `response_text_bytes`, `application_error`,
+`transport_error` and `effect`. Unknown/upstream tool names are digested. Arguments,
+response bodies, arbitrary metadata and error messages are never retained.
+The target digest covers the first string target among `to`, `session_id`, `path`,
+`worktree_path`, `id`, including the field name and a NUL separator. It is a grouping
+key, not authorization or anonymization against a known-value dictionary.
+
+Clients may supply UUIDs in `params._meta["tuic/call_id"]` and
+`params._meta["tuic/parent_operation_id"]`; invalid values are omitted. Use a new
+call UUID per attempt and a common parent UUID for one intent. Different target
+hashes in a batch are distinct operations, not evidence of retries. Neither a
+shared parent nor a repeated target proves an attempt is a retry.
+
+Text cost is the sum of UTF-8 byte lengths of top-level MCP `content` blocks whose
+`type` is `text`, after response formatting. It excludes JSON escaping, envelopes,
+resources, images and transport overhead. A native `error:null` is not an
+application error; upstream `isError` is preserved. Error text is not copied.
+Only explicit native `effect=not_started|completed` is retained; other effects
+remain `unknown`, including application refusals without an effect contract.
+A cancelled dispatch has unknown application outcome, no observed response bytes,
+`transport_error=cancelled_before_reply` and unknown effect. A constructed reply
+has `transport_error=unobserved_after_reply_construction`: this does not prove
+client delivery or absence of a lost reply, and is never rollback evidence.
+
+The projection counts actual MCP ingress, not all Codex model custom calls.
+Client-side correlation/captured traces are needed to identify Codex attempts that
+never reached MCP or whose replies were lost. Do not evaluate transcript JavaScript
+to derive call counts. No OTel exporter is enabled by this feature.
+
+## Managed stateless reconnect context (#2008-5317)
+
+A modern `tools/call` without `mcp-session-id` can recover mail/project routing
+from an exact host-issued `x-tuic-session` only when that peer has a live PTY or
+ACP root. The internal `managed-call:<peer>` routing key is not a wire protocol
+session: the response does not introduce a legacy session header. Existing
+binding ownership, sibling-bridge policy and replacement migration remain the
+only identity mutation seams. Project resolution still follows the live binding;
+it never uses the focused repository, a display name or an invented path.
+
+An unknown/headerless peer receives `code=identity_context_required`,
+`effect=not_started`, `retryable=false` and bounded repair guidance. Managed
+callers must reconnect using host context; external callers initialize and then
+register on that protocol session. `repair.max_attempts=1` and
+`retry_after_context_change=true` prohibit an unchanged retry policy; the client
+must enforce that bound. Server diagnostics alone do not prove ego compliance.
+An external caller without a project still receives the Progress core's explicit
+`project_required` error, never a guessed project.
+
+## Durable independent mail subscriptions
+
+`agent action=subscribe subscription_id=pump filter=actionable` creates a reader
+owned by the bound peer identity. Repeating it resumes the same reader. Use a
+separate ID for each pump or watcher. The filter is immutable: `actionable`
+(default) excludes routine TUIC lifecycle/idle notices; `all` includes them;
+`exit` selects exits, including failed exits; `failure` selects nonzero exits
+and prompt-delivery failures. Peer messages, including `BLOCKED` and `RESULT`,
+remain actionable regardless of their wording. Unknown system notices fail open
+as actionable. No model-side lifecycle classification is needed.
+
+Read with `agent action=inbox|wait subscription_id=pump [limit=1..100]`.
+The reply contains `messages`, `count`, `cursor`, `acknowledged_cursor`,
+`missed_count`, and `has_more`. A filtered wait returns only for matching mail
+or matching retention loss. Routine traffic does not end the wait. For a
+continuous background consumer, use the HTTP event stream below or subscribe
+to the ACP resource; the consumer does not need a model-driven wait loop.
+Subscription batches do not use the legacy byte pager: `byte_budget` and
+`continuation` are rejected before either reader is consumed. Use `has_more`
+after explicit ACK to request the next bounded batch. Wait retains its separate
+lease path and also rejects byte paging.
+
+After processing a batch, call `agent action=ack subscription_id=pump
+cursor=<returned cursor>`. Reads do **not** acknowledge. A pending batch's message
+range is frozen until acknowledgement, so a retry cannot expand it to include
+new results. A changed limit takes effect after the pending batch is acknowledged. Acknowledgement is durable and idempotent. Read again after ack
+when `has_more` is true. A reconnect under the same peer identity and reader ID
+resumes after its acknowledged cursor. Reclaim the same explicit peer UUID when
+registering a new headerless MCP connection. Changing UUID does not migrate
+subscription cursors; legacy `replaces` still migrates the legacy inbox only.
+
+Delivery is **at least once until acknowledgement**, not exactly-once execution.
+If processing succeeds but ack does not reach the server, the retained batch is
+replayed. Deduplicate external effects by message ID. Acknowledged results do
+not replay. Concurrent readers must use distinct subscription IDs; sharing an ID
+means sharing its acknowledgement. Subscriptions never acknowledge another
+subscriber or advance the legacy inbox cursor. Explicit subscription ACKs mark
+exact matching live message IDs as observed under the same recipient delivery
+gate as legacy snapshot ACKs. This prevents a later FIFO eviction from counting
+already-delivered mail as lost. It does not acknowledge the legacy loss watermark;
+only the legacy snapshot ACK settles that snapshot's loss count. Filtered gaps
+remain unobserved and cannot clear unrelated wake evidence.
+
+The SQLite journal (`<config dir>/mail-subscriptions.db`, with WAL sidecars)
+retains the newest **1000 messages per recipient** across process restart. This
+is a message-count bound, not a byte budget or an unlimited result archive.
+Every common inbox insertion is journaled before its change notification,
+including forwarded peer mail. Retention is independent of the legacy
+100-message FIFO and lifecycle coalescing. `missed_count` counts matching
+unacknowledged events evicted since the reader started or last acknowledged the
+gap. Filtered routine evictions do not wake an actionable reader. A new reader
+starts at the oldest retained position and does not claim historical losses
+before its creation. Acknowledging the returned gap cursor clears the reported
+loss. Loss accounting can be conservative when an ACK is delayed until its
+offered batch is below the retention floor: already-processed evictions can
+remain in `missed_count` until a later gap ACK clears the aggregate. This does
+not discard additional mail. A journal append failure is logged and makes subscription reads fail
+explicitly for the lifetime of that process rather than claiming an empty inbox.
+Legacy in-memory mail delivery remains available.
+
+Each peer may keep 32 reader IDs (1–64 ASCII letters, digits, `_` or `-`).
+`agent action=unsubscribe subscription_id=pump` removes a reader, not retained
+mail. The journal and cursors are not removed by MCP disconnect or peer
+retirement. Legacy calls without `subscription_id` retain their existing
+`since`/`next_since` semantics and notifications; `since` is rejected for a
+subscription. No new Tauri command is needed: peer actions still require the
+MCP identity binding, including calls through the IPC MCP bridge.
+
+### Continuous HTTP and ACP notifications
+
+- `POST /agent/subscriptions/action`: accepts the same `subscribe`, `inbox`,
+  `ack`, and `unsubscribe` payload as the agent tool.
+- `GET /agent/subscriptions/{id}/events`: SSE `mail` events carry bounded batches
+  with `id: <cursor>`; keep-alive comments carry no mail. A connection emits an
+  unacknowledged batch once. Ack through the action endpoint advances it to the
+  next batch. Reconnect replays an unacknowledged retained batch. `Last-Event-ID`
+  does not acknowledge processing; only explicit ack does. Stream errors emit
+  `event: error` and close. Both endpoints require loopback, an enabled `agent`
+  tool, and `Mcp-Session-Id` bound to the reader's peer. Body fields cannot select
+  another peer. They use the same service and validation as MCP tools.
+- On MCP over ACP, subscribe/read resource
+  `tuic://inbox/subscriptions/<id>` after creating the reader. It sends
+  `notifications/resources/updated` only for a new actionable batch cursor or a
+  journal error. It also filters the idle-ego wake; routine traffic sends neither
+  a resource update nor a wake. Ack uses the agent tool. The
+  wake cursor is consumed only after a turn is accepted; a busy/skipped attempt
+  stays eligible when later mail arrives at the same frozen cursor. Selecting a durable
+  inbox resource replaces the legacy inbox as the idle-wake source on that ACP
+  connection. Explicitly subscribing to `tuic://inbox` still requests its legacy
+  unfiltered resource notifications.
+- HTTP MCP `/mcp`, its SSE/streamable response transport, and the local IPC MCP
+  bridge expose the same agent actions. The new HTTP SSE endpoint supplies
+  continuous durable-mail notifications; ordinary GET `/mcp` and the legacy
+  `tuic://inbox` resource are not silently reinterpreted as filtered readers.
+
+Controlled replay fixture: the audit's four captured idle notifications yield
+four legacy lifecycle deliveries and zero actionable deliveries. A subsequent
+RESULT produces one matching batch per independent acknowledged reader. This
+measurement is not a claim about product-wide token or latency savings.
+
+`session action=input` also accepts only `pty_description` (string or null).
+This updates or clears the context-bar description without sending PTY bytes.
+
+Managed `agent action=launch` uses the same advertised pre-dispatch static contract as other native actions. Discovery includes the disjoint receipt-read and creation forms, exclusive workspace shapes, and nested spawn argument types. Invalid calls return structured `invalid_arguments` with `effect=not_started` before the launch journal or PTY is touched.

@@ -380,6 +380,32 @@ async fn request_session_token(
     Ok(token.to_string())
 }
 
+/// State-bearing owner path shared by IPC and HTTP. Callers hold connections_lock.
+pub(crate) fn save_connection_record(
+    state: &crate::AppState,
+    base: Option<RemoteConnection>,
+    connection: RemoteConnection,
+) -> Result<(), String> {
+    upsert_remote_connection(&state.data_dir, base, connection)?;
+    crate::settings::api::publish_change(state, "connections", true);
+    Ok(())
+}
+
+/// Publish persisted metadata even if credential cleanup subsequently fails.
+pub(crate) fn delete_connection_record(
+    state: &crate::AppState,
+    id: &str,
+    cleanup: impl FnOnce(&str) -> Result<(), String>,
+) -> Result<bool, String> {
+    let removed = remove_remote_connection(&state.data_dir, id)?;
+    if removed {
+        let cleanup_result = cleanup(id);
+        crate::settings::api::publish_change(state, "connections", cleanup_result.is_ok());
+        cleanup_result?;
+    }
+    Ok(removed)
+}
+
 // ---------------------------------------------------------------------------
 // Tauri commands
 // ---------------------------------------------------------------------------
@@ -400,7 +426,7 @@ pub async fn save_remote_connection(
     connection: RemoteConnection,
 ) -> Result<(), String> {
     let _guard = state.connections_lock.lock().await;
-    upsert_remote_connection(&state.data_dir, base, connection)
+    save_connection_record(&state, base, connection)
 }
 
 #[cfg(feature = "desktop")]
@@ -415,10 +441,11 @@ pub async fn delete_remote_connection(
     // first leaves all of it running with no way left to address it.
     crate::remote_runtime::teardown_deleted(state.inner(), &id);
     let _guard = state.connections_lock.lock().await;
-    remove_remote_connection(&state.data_dir, &id)?;
-    // The vault entry outlives connections.json unless this runs: the id is a
-    // fresh UUID every time, so a forgotten secret is unreachable and permanent.
-    delete_connection_credentials(&id)
+    if !delete_connection_record(&state, &id, delete_connection_credentials)? {
+        // Preserve IPC's idempotent credential cleanup even when metadata is already absent.
+        delete_connection_credentials(&id)?;
+    }
+    Ok(())
 }
 
 #[cfg(feature = "desktop")]
@@ -813,5 +840,81 @@ mod tests {
             saved[0].auto_update,
             "an unchanged stale field must not revert another writer"
         );
+    }
+}
+
+#[cfg(test)]
+mod refresh_review_tests {
+    use super::*;
+
+    // Catches: desktop owner writes persisting records without waking peer settings readers.
+    #[test]
+    fn connection_owner_save_and_delete_wake_settings_readers() {
+        let state = crate::state::tests_support::make_test_app_state();
+        let mut events = state.event_bus.subscribe();
+        let connection = RemoteConnection::new_ssh("fixture", "not-contacted.example", "fixture");
+        save_connection_record(&state, None, connection.clone()).unwrap();
+        let notice = events.try_recv().expect("connection save did not publish");
+        assert!(
+            matches!(notice, crate::state::AppEvent::SettingsChanged(ref change) if change.section == "connections" && change.persisted && change.applied)
+        );
+        delete_connection_record(&state, &connection.id, |_| Ok(())).unwrap();
+        let notice = events
+            .try_recv()
+            .expect("connection delete did not publish");
+        assert!(
+            matches!(notice, crate::state::AppEvent::SettingsChanged(ref change) if change.section == "connections" && change.persisted && change.applied)
+        );
+        assert!(
+            RemoteConnectionStore::load(&state.data_dir)
+                .unwrap()
+                .is_empty()
+        );
+    }
+    // Catches: a failed save or missing delete advertising a durable connection change.
+    #[test]
+    fn failed_connection_writes_do_not_wake_settings_readers() {
+        let state = crate::state::tests_support::make_test_app_state();
+        let mut events = state.event_bus.subscribe();
+        let mut connection =
+            RemoteConnection::new_ssh("fixture", "not-contacted.example", "fixture");
+        connection.name.clear();
+        assert!(save_connection_record(&state, None, connection).is_err());
+        assert!(
+            !delete_connection_record(&state, "missing", |_| panic!(
+                "missing record has no credentials to delete"
+            ))
+            .unwrap()
+        );
+        assert!(events.try_recv().is_err());
+    }
+
+    // Catches: credential cleanup failure hiding an already persisted metadata deletion.
+    #[test]
+    fn connection_cleanup_failure_still_wakes_readers_as_unapplied() {
+        let state = crate::state::tests_support::make_test_app_state();
+        let connection = RemoteConnection::new_ssh("fixture", "not-contacted.example", "fixture");
+        save_connection_record(&state, None, connection.clone()).unwrap();
+        let mut events = state.event_bus.subscribe();
+        assert!(
+            delete_connection_record(
+                &state,
+                &connection.id,
+                |_| Err("cleanup unavailable".into())
+            )
+            .is_err()
+        );
+        assert!(
+            RemoteConnectionStore::load(&state.data_dir)
+                .unwrap()
+                .is_empty()
+        );
+        let event = events
+            .try_recv()
+            .expect("persisted deletion needs an invalidation");
+        assert!(
+            matches!(event, crate::state::AppEvent::SettingsChanged(ref change) if change.section == "connections" && change.persisted && !change.applied)
+        );
+        assert!(events.try_recv().is_err());
     }
 }

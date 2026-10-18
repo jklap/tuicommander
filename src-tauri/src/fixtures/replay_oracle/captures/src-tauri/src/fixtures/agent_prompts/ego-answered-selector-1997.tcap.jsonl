@@ -22,14 +22,14 @@
 {"record":23,"event":{"type":"question","prompt_text":"","confident":true,"_turn_epoch":0}}
 {"record":23,"state":{"shell":1,"agent":"awaiting_input","awaiting":true,"question":"","confident":true,"last_question":"","choice_sig":null,"fullscreen":false}}
 {"record":24,"state":{"shell":1,"agent":"awaiting_input","awaiting":true,"question":"","confident":true,"last_question":"","choice_sig":null,"fullscreen":false}}
-{"record":26,"event":{"type":"choice-prompt","title":"εgo: ego 0.1.0 · openrouter/openai/gpt-6.1-sol mode default (default) · sandbox off (flags) Ctrl+B backgrounds · Esc interrupts · Enter queues · Up recalls Ctrl+Enter steers · Ctrl+S draft · Option+P models · /help Which release checks should we run?","options":[{"key":"1","label":"Parser regression Replay the recorded terminal output","highlighted":true,"destructive":false},{"key":"2","label":"Mobile answer controls Verify the mobile question card","highlighted":false,"destructive":false}],"selection_mode":"navigate-enter","dismiss_key":"cancel","_turn_epoch":0}}
-{"record":26,"state":{"shell":1,"agent":"awaiting_input","awaiting":true,"question":"εgo: ego 0.1.0 · openrouter/openai/gpt-6.1-sol mode default (default) · sandbox off (flags) Ctrl+B backgrounds · Esc interrupts · Enter queues · Up recalls Ctrl+Enter steers · Ctrl+S draft · Option+P models · /help Which release checks should we run?","confident":true,"last_question":"","choice_sig":"εgo: ego 0.1.0 · openrouter/openai/gpt-6.1-sol mode default (default) · sandbox off (flags) Ctrl+B backgrounds · Esc interrupts · Enter queues · Up recalls Ctrl+Enter steers · Ctrl+S draft · Option+P models · /help Which release checks should we run?|1,2","fullscreen":false}}
-{"record":28,"state":{"shell":1,"agent":"awaiting_input","awaiting":true,"question":"εgo: ego 0.1.0 · openrouter/openai/gpt-6.1-sol mode default (default) · sandbox off (flags) Ctrl+B backgrounds · Esc interrupts · Enter queues · Up recalls Ctrl+Enter steers · Ctrl+S draft · Option+P models · /help Which release checks should we run?","confident":true,"last_question":"","choice_sig":"εgo: ego 0.1.0 · openrouter/openai/gpt-6.1-sol mode default (default) · sandbox off (flags) Ctrl+B backgrounds · Esc interrupts · Enter queues · Up recalls Ctrl+Enter steers · Ctrl+S draft · Option+P models · /help Which release checks should we run?|1,2","fullscreen":false}}
+{"record":26,"event":{"type":"choice-prompt","title":"Which release checks should we run?","options":[{"key":"1","label":"Parser regression Replay the recorded terminal output","highlighted":true,"destructive":false},{"key":"2","label":"Mobile answer controls Verify the mobile question card","highlighted":false,"destructive":false}],"selection_mode":"navigate-enter","dismiss_key":"cancel","_turn_epoch":0}}
+{"record":26,"state":{"shell":1,"agent":"awaiting_input","awaiting":true,"question":"Which release checks should we run?","confident":true,"last_question":"","choice_sig":"Which release checks should we run?|1,2","fullscreen":false}}
+{"record":28,"state":{"shell":1,"agent":"awaiting_input","awaiting":true,"question":"Which release checks should we run?","confident":true,"last_question":"","choice_sig":"Which release checks should we run?|1,2","fullscreen":false}}
 {"record":29,"event":{"type":"protocol-question-cleared"}}
 {"record":29,"event":{"type":"user-input","content":"","line":-1,"_turn_epoch":0}}
-{"record":29,"state":{"shell":1,"agent":"working","awaiting":false,"question":null,"confident":false,"last_question":"","choice_sig":"εgo: ego 0.1.0 · openrouter/openai/gpt-6.1-sol mode default (default) · sandbox off (flags) Ctrl+B backgrounds · Esc interrupts · Enter queues · Up recalls Ctrl+Enter steers · Ctrl+S draft · Option+P models · /help Which release checks should we run?|1,2","fullscreen":false}}
-{"record":30,"state":{"shell":1,"agent":"working","awaiting":false,"question":null,"confident":false,"last_question":"","choice_sig":"εgo: ego 0.1.0 · openrouter/openai/gpt-6.1-sol mode default (default) · sandbox off (flags) Ctrl+B backgrounds · Esc interrupts · Enter queues · Up recalls Ctrl+Enter steers · Ctrl+S draft · Option+P models · /help Which release checks should we run?|1,2","fullscreen":false}}
-{"record":32,"state":{"shell":1,"agent":"working","awaiting":false,"question":null,"confident":false,"last_question":"","choice_sig":"εgo: ego 0.1.0 · openrouter/openai/gpt-6.1-sol mode default (default) · sandbox off (flags) Ctrl+B backgrounds · Esc interrupts · Enter queues · Up recalls Ctrl+Enter steers · Ctrl+S draft · Option+P models · /help Which release checks should we run?|1,2","fullscreen":false}}
+{"record":29,"state":{"shell":1,"agent":"working","awaiting":false,"question":null,"confident":false,"last_question":"","choice_sig":"Which release checks should we run?|1,2","fullscreen":false}}
+{"record":30,"state":{"shell":1,"agent":"working","awaiting":false,"question":null,"confident":false,"last_question":"","choice_sig":"Which release checks should we run?|1,2","fullscreen":false}}
+{"record":32,"state":{"shell":1,"agent":"working","awaiting":false,"question":null,"confident":false,"last_question":"","choice_sig":"Which release checks should we run?|1,2","fullscreen":false}}
 {"record":33,"event":{"type":"choice-cleared","_turn_epoch":0}}
 {"record":33,"state":{"shell":1,"agent":"working","awaiting":false,"question":null,"confident":false,"last_question":"","choice_sig":null,"fullscreen":false}}
 {"record":34,"state":{"shell":1,"agent":"working","awaiting":false,"question":null,"confident":false,"last_question":"","choice_sig":null,"fullscreen":false}}
@@ -43,16 +43,16 @@
 {"record":45,"state":{"shell":1,"agent":"working","awaiting":false,"question":null,"confident":false,"last_question":"","choice_sig":null,"fullscreen":false}}
 {"record":47,"state":{"shell":1,"agent":"working","awaiting":false,"question":null,"confident":false,"last_question":"","choice_sig":null,"fullscreen":false}}
 {"record":48,"event":{"type":"shell-state","state":"idle","agent_type":"ego"}}
-{"record":48,"state":{"shell":2,"agent":"working","awaiting":false,"question":null,"confident":false,"last_question":"","choice_sig":null,"fullscreen":false}}
-{"record":50,"state":{"shell":2,"agent":"working","awaiting":false,"question":null,"confident":false,"last_question":"","choice_sig":null,"fullscreen":false}}
-{"record":52,"state":{"shell":2,"agent":"working","awaiting":false,"question":null,"confident":false,"last_question":"","choice_sig":null,"fullscreen":false}}
-{"record":53,"state":{"shell":2,"agent":"working","awaiting":false,"question":null,"confident":false,"last_question":"","choice_sig":null,"fullscreen":false}}
-{"record":55,"state":{"shell":2,"agent":"working","awaiting":false,"question":null,"confident":false,"last_question":"","choice_sig":null,"fullscreen":false}}
-{"record":56,"state":{"shell":2,"agent":"working","awaiting":false,"question":null,"confident":false,"last_question":"","choice_sig":null,"fullscreen":false}}
-{"record":57,"state":{"shell":2,"agent":"working","awaiting":false,"question":null,"confident":false,"last_question":"","choice_sig":null,"fullscreen":false}}
-{"record":59,"state":{"shell":2,"agent":"working","awaiting":false,"question":null,"confident":false,"last_question":"","choice_sig":null,"fullscreen":false}}
-{"record":60,"state":{"shell":2,"agent":"working","awaiting":false,"question":null,"confident":false,"last_question":"","choice_sig":null,"fullscreen":false}}
-{"record":62,"state":{"shell":2,"agent":"working","awaiting":false,"question":null,"confident":false,"last_question":"","choice_sig":null,"fullscreen":false}}
+{"record":48,"state":{"shell":2,"agent":"idle","awaiting":false,"question":null,"confident":false,"last_question":"","choice_sig":null,"fullscreen":false}}
+{"record":50,"state":{"shell":2,"agent":"idle","awaiting":false,"question":null,"confident":false,"last_question":"","choice_sig":null,"fullscreen":false}}
+{"record":52,"state":{"shell":2,"agent":"idle","awaiting":false,"question":null,"confident":false,"last_question":"","choice_sig":null,"fullscreen":false}}
+{"record":53,"state":{"shell":2,"agent":"idle","awaiting":false,"question":null,"confident":false,"last_question":"","choice_sig":null,"fullscreen":false}}
+{"record":55,"state":{"shell":2,"agent":"idle","awaiting":false,"question":null,"confident":false,"last_question":"","choice_sig":null,"fullscreen":false}}
+{"record":56,"state":{"shell":2,"agent":"idle","awaiting":false,"question":null,"confident":false,"last_question":"","choice_sig":null,"fullscreen":false}}
+{"record":57,"state":{"shell":2,"agent":"idle","awaiting":false,"question":null,"confident":false,"last_question":"","choice_sig":null,"fullscreen":false}}
+{"record":59,"state":{"shell":2,"agent":"idle","awaiting":false,"question":null,"confident":false,"last_question":"","choice_sig":null,"fullscreen":false}}
+{"record":60,"state":{"shell":2,"agent":"idle","awaiting":false,"question":null,"confident":false,"last_question":"","choice_sig":null,"fullscreen":false}}
+{"record":62,"state":{"shell":2,"agent":"idle","awaiting":false,"question":null,"confident":false,"last_question":"","choice_sig":null,"fullscreen":false}}
 {"record":63,"event":{"type":"shell-state","state":"busy","agent_type":"ego"}}
 {"record":63,"event":{"type":"intent","text":"Reply only OK, no question.","title":"εgo","_turn_epoch":0}}
 {"record":63,"event":{"type":"user-input","content":"","line":-1,"_turn_epoch":0}}
@@ -67,13 +67,13 @@
 {"record":75,"state":{"shell":1,"agent":"working","awaiting":false,"question":null,"confident":false,"last_question":"","choice_sig":null,"fullscreen":false}}
 {"record":77,"state":{"shell":1,"agent":"working","awaiting":false,"question":null,"confident":false,"last_question":"","choice_sig":null,"fullscreen":false}}
 {"record":78,"event":{"type":"shell-state","state":"idle","agent_type":"ego"}}
-{"record":78,"state":{"shell":2,"agent":"working","awaiting":false,"question":null,"confident":false,"last_question":"","choice_sig":null,"fullscreen":false}}
-{"record":79,"state":{"shell":2,"agent":"working","awaiting":false,"question":null,"confident":false,"last_question":"","choice_sig":null,"fullscreen":false}}
-{"record":81,"state":{"shell":2,"agent":"working","awaiting":false,"question":null,"confident":false,"last_question":"","choice_sig":null,"fullscreen":false}}
-{"record":82,"state":{"shell":2,"agent":"working","awaiting":false,"question":null,"confident":false,"last_question":"","choice_sig":null,"fullscreen":false}}
-{"record":84,"state":{"shell":2,"agent":"working","awaiting":false,"question":null,"confident":false,"last_question":"","choice_sig":null,"fullscreen":false}}
-{"record":85,"state":{"shell":2,"agent":"working","awaiting":false,"question":null,"confident":false,"last_question":"","choice_sig":null,"fullscreen":false}}
-{"record":87,"state":{"shell":2,"agent":"working","awaiting":false,"question":null,"confident":false,"last_question":"","choice_sig":null,"fullscreen":false}}
-{"record":88,"state":{"shell":2,"agent":"working","awaiting":false,"question":null,"confident":false,"last_question":"","choice_sig":null,"fullscreen":false}}
-{"record":90,"state":{"shell":2,"agent":"working","awaiting":false,"question":null,"confident":false,"last_question":"","choice_sig":null,"fullscreen":false}}
+{"record":78,"state":{"shell":2,"agent":"idle","awaiting":false,"question":null,"confident":false,"last_question":"","choice_sig":null,"fullscreen":false}}
+{"record":79,"state":{"shell":2,"agent":"idle","awaiting":false,"question":null,"confident":false,"last_question":"","choice_sig":null,"fullscreen":false}}
+{"record":81,"state":{"shell":2,"agent":"idle","awaiting":false,"question":null,"confident":false,"last_question":"","choice_sig":null,"fullscreen":false}}
+{"record":82,"state":{"shell":2,"agent":"idle","awaiting":false,"question":null,"confident":false,"last_question":"","choice_sig":null,"fullscreen":false}}
+{"record":84,"state":{"shell":2,"agent":"idle","awaiting":false,"question":null,"confident":false,"last_question":"","choice_sig":null,"fullscreen":false}}
+{"record":85,"state":{"shell":2,"agent":"idle","awaiting":false,"question":null,"confident":false,"last_question":"","choice_sig":null,"fullscreen":false}}
+{"record":87,"state":{"shell":2,"agent":"idle","awaiting":false,"question":null,"confident":false,"last_question":"","choice_sig":null,"fullscreen":false}}
+{"record":88,"state":{"shell":2,"agent":"idle","awaiting":false,"question":null,"confident":false,"last_question":"","choice_sig":null,"fullscreen":false}}
+{"record":90,"state":{"shell":2,"agent":"idle","awaiting":false,"question":null,"confident":false,"last_question":"","choice_sig":null,"fullscreen":false}}
 {"ring_len":4515}

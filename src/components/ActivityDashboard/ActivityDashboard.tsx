@@ -313,9 +313,6 @@ export const ActivityDashboard: Component<ActivityDashboardProps> = (props) => {
 
 			<div class={s.footer}>
 				<span>{terminals().length} terminal(s)</span>
-				<Show when={!props.embedded}>
-					<span class={s.footerHint}>Click to switch • Esc to close</span>
-				</Show>
 			</div>
 		</>
 	);

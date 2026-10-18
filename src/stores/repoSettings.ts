@@ -214,6 +214,13 @@ function fromWire(repos: Record<string, Record<string, unknown>>): Record<string
 	return out;
 }
 
+/** Use the same defaults for the acknowledged baseline, local intent and peer snapshots. */
+function normalizedWire(repos: Record<string, Record<string, unknown>>) {
+	return {
+		repos: Object.fromEntries(Object.entries(fromWire(repos)).map(([path, entry]) => [path, toSnakeKeys(entry)])),
+	};
+}
+
 /**
  * Per-field resolution of the three-tier chain (per-repo > .tuic.json > global).
  * One resolver per effective field, each reading only the signals its own field
@@ -285,7 +292,7 @@ function createRepoSettingsStore() {
 							Object.entries(state.settings).map(([path, value]) => [path, toSnakeKeys(value)]),
 						),
 					};
-					const merged = repoSettingsWriter.adopt(remote ?? { repos: {} }, local);
+					const merged = repoSettingsWriter.adopt(normalizedWire(remote?.repos ?? {}), local);
 					setState("settings", reconcile(fromWire(merged.value.repos as Record<string, Record<string, unknown>>)));
 					reportSettingsConflicts(merged.conflicts);
 				},
@@ -322,7 +329,7 @@ function createRepoSettingsStore() {
 						const repos: Record<string, unknown> = {};
 						for (const [path, entry] of Object.entries(parsed)) repos[path] = toSnakeKeys(entry);
 						const current = (await invoke<{ repos: Record<string, unknown> }>("load_repo_settings")) ?? { repos: {} };
-						repoSettingsWriter.loaded(current);
+						repoSettingsWriter.loaded(normalizedWire(current.repos as Record<string, Record<string, unknown>>));
 						await repoSettingsWriter.save({ repos: { ...current.repos, ...repos } });
 					} catch {
 						/* ignore corrupt legacy data */
@@ -331,7 +338,7 @@ function createRepoSettingsStore() {
 				}
 
 				const loaded = await invoke<{ repos?: Record<string, Record<string, unknown>> }>("load_repo_settings");
-				repoSettingsWriter.loaded({ repos: loaded?.repos ?? {} });
+				repoSettingsWriter.loaded(normalizedWire(loaded?.repos ?? {}));
 				if (loaded?.repos) {
 					setState("settings", fromWire(loaded.repos));
 				}

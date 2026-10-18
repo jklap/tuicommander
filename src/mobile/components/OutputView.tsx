@@ -1,6 +1,8 @@
 import { createEffect, createMemo, createSignal, For, type JSX, onCleanup, onMount, Show } from "solid-js";
+import { INTENT_HIGHLIGHT_RE } from "../../components/Terminal/suggestOverlay";
 import { appLogger } from "../../stores/appLogger";
 import { type PtySubscription, subscribePty } from "../../transport";
+import { mobileFontSizes } from "../mobileFontSize";
 import { recordMobileSocketState } from "../resumeTrail";
 import {
 	groupLineBlocks,
@@ -45,6 +47,7 @@ export function OutputView(props: OutputViewProps) {
 	const [subscribeError, setSubscribeError] = createSignal<string | null>(null);
 	const [loadingOlder, setLoadingOlder] = createSignal(false);
 	let containerEl: HTMLDivElement | undefined;
+	let textEl: HTMLPreElement | undefined;
 	let unsubscribe: PtySubscription | null = null;
 	// When the user scrolls up manually, stop auto-scrolling until they
 	// return to the bottom.
@@ -53,6 +56,29 @@ export function OutputView(props: OutputViewProps) {
 	// DEFERRED (2026-10-12) — live-tail eviction needs source cursor metadata to
 	// advance this boundary correctly; chrome filtering makes row counts unsafe.
 	let oldestLoadedOffset = 0;
+
+	// Capture the visible row before changing metrics. CSS rewraps the log locally;
+	// resizing the shared PTY would also change the desktop terminal's columns.
+	createEffect(() => {
+		const size = mobileFontSizes.terminal();
+		if (!containerEl || !textEl) return;
+		const viewport = containerEl;
+		const top = viewport.getBoundingClientRect().top;
+		const anchor = [...textEl.querySelectorAll<HTMLElement>(`.${styles.line}`)].find(
+			(line) => line.getBoundingClientRect().bottom > top,
+		);
+		const offset = anchor ? anchor.getBoundingClientRect().top - top : 0;
+		const follow = !userScrolledUp;
+		textEl.style.fontSize = `${size}px`;
+		const frame = requestAnimationFrame(() => {
+			if (follow) scrollToBottom();
+			else if (anchor?.isConnected) {
+				viewport.scrollTop += anchor.getBoundingClientRect().top - top - offset;
+				lastScrollTop = viewport.scrollTop;
+			}
+		});
+		onCleanup(() => cancelAnimationFrame(frame));
+	});
 
 	/** Fetch initial log lines + screen rows via HTTP; returns the total_lines offset for WS catch-up. */
 	async function fetchInitialOutput(): Promise<number> {
@@ -339,11 +365,14 @@ export function OutputView(props: OutputViewProps) {
 			else if (char === "\t") indent += 8 - (indent % 8);
 			else break;
 		}
+		const isIntent = INTENT_HIGHLIGHT_RE.test(text.replaceAll("\uFE0E", ""));
+		const marker = isIntent ? "intent" : undefined;
+		const lineClass = isIntent ? `${styles.line} ${styles.intent}` : styles.line;
 		const wrapStyle = indent ? { "--wrap-indent": `${indent}ch` } : undefined;
 		const links = detectOutputLinks(text).filter((link) => link.kind === "web" || props.onOpenFileLink);
 		if (links.length === 0) {
 			return (
-				<div class={styles.line} style={wrapStyle}>
+				<div class={lineClass} style={wrapStyle} data-terminal-marker={marker}>
 					{styledRange(line, 0, text.length)}
 				</div>
 			);
@@ -372,7 +401,7 @@ export function OutputView(props: OutputViewProps) {
 		}
 		parts.push(...styledRange(line, offset, text.length));
 		return (
-			<div class={styles.line} style={wrapStyle}>
+			<div class={lineClass} style={wrapStyle} data-terminal-marker={marker}>
 				{parts}
 			</div>
 		);
@@ -386,7 +415,7 @@ export function OutputView(props: OutputViewProps) {
 			<Show when={loadingOlder()}>
 				<div class={styles.loadingOlder}>Loading older output...</div>
 			</Show>
-			<pre class={styles.text}>
+			<pre ref={textEl} class={styles.text}>
 				<For each={lineBlocks()}>
 					{(block) => {
 						return block.type === "table" ? (
