@@ -72,10 +72,9 @@ impl ToolSearchIndex {
 
     /// Opaque content identity. Rebuilding an unchanged catalogue preserves admissions.
     pub fn catalogue_generation(tools: &[Value]) -> String {
-        format!(
-            "{:x}",
-            Sha256::digest(serde_json::to_vec(tools).expect("JSON tool definitions serialize"))
-        )
+        hex::encode(Sha256::digest(
+            serde_json::to_vec(tools).expect("JSON tool definitions serialize"),
+        ))
     }
 
     pub fn generation(&self) -> &str {
