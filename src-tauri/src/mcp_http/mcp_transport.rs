@@ -248,6 +248,10 @@ fn upstream_tool_result(value: &serde_json::Value) -> Option<&serde_json::Value>
         .and_then(|object| object.get(UPSTREAM_TOOL_RESULT_MARKER))
 }
 
+fn tool_result_is_error(result: &serde_json::Value) -> bool {
+    result.get("error").is_some()
+}
+
 /// Produce the JSON-RPC `result` for a `tools/call` response.
 ///
 /// A successful upstream call already speaks the MCP CallToolResult contract,
@@ -1228,7 +1232,7 @@ pub(super) async fn mcp_post(
                     }
                 })
                 .await;
-                let is_error = result.get("error").is_some();
+                let is_error = tool_result_is_error(&result);
                 (result, is_error)
             } else {
                 let result = Box::pin(handle_mcp_tool_call_with_context(
@@ -1240,7 +1244,7 @@ pub(super) async fn mcp_post(
                     managed_parent_cwd.as_deref(),
                 ))
                 .await;
-                let is_error = result.get("error").is_some();
+                let is_error = tool_result_is_error(&result);
                 (result, is_error)
             };
             let mut tool_result = format_tool_call_result(&result, is_error);

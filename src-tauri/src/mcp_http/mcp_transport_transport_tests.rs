@@ -5557,3 +5557,14 @@ async fn scoped_remote_session_inventory_does_not_use_the_control_proxy() {
         assert_eq!(rows[0]["connection_id"], "mint");
     }
 }
+
+// Catches: a successful rendering result with an explicit null error is treated
+// as an application failure at the tools/call response boundary.
+#[test]
+fn mcp_outcome_record_separates_transport_application_and_effect() {
+    let rendering = serde_json::json!({"state":"rendering","error":null});
+    let response = format_tool_call_result(&rendering, tool_result_is_error(&rendering));
+    assert_eq!(response["isError"], false, "null is not an application error");
+    let refusal = serde_json::json!({"error":"application refused"});
+    assert!(tool_result_is_error(&refusal));
+}
