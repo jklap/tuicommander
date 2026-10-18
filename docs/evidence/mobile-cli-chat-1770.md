@@ -60,3 +60,11 @@ and successful harness logs remain under `~/Gits/.tmp/results/nw-mobile-visual*`
 
 The 2,000-entry first-open/resume phone measurement remains open. No application
 code or tests changed, and no extra application suite was run for this audit.
+
+
+## Code Copy correction — 2026-10-19
+
+Coordinator pixel inspection of the first captures found the code Copy control
+clipped by a one-line answer block. Story #2045-848c records the browser RED,
+CSS cause and correction. Use the [corrected captures](chat-code-copy-2045/README.md)
+for the final layout review; the earlier images above retain the defect evidence.

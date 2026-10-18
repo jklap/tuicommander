@@ -188,7 +188,7 @@ Copy buttons use a single unwrapped line, including in the full app shell.
 `Transcript` interprets complete ACP answer text as it streams: it hides the
 connection acknowledgement, shows a declared intent as status, and offers
 bracketed `suggest:` items as prompt buttons. Markdown examples stay literal.
-Messages, tool output and code blocks have copy actions. The transcript has
+Messages, tool output and code blocks have copy actions. Terminal Chat preserves fenced-code padding inside highlighted answers so the Copy control fits even a single-line block. The transcript has
 text selection and find/select-all/clear shortcuts. Find selects phrases across
 inline Markdown within each block, skips collapsed disclosure bodies, and closes
 on Escape from the input or navigation buttons. Local file paths use the
