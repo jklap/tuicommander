@@ -166,7 +166,7 @@ describe("RemoteConnectionEditor", () => {
 		expect(actions.addConnection).not.toHaveBeenCalled();
 	});
 
-	it("editing a live connection disconnects it first and keeps its fields; a saved Yes becomes accept-new", async () => {
+	it("editing a live connection disconnects it first and keeps its fields, a saved host-key Yes included", async () => {
 		statuses["machine-1"] = { status: "connected" };
 		const onClose = vi.fn();
 		const { container, getByText } = render(() => (
@@ -191,7 +191,8 @@ describe("RemoteConnectionEditor", () => {
 			transport: {
 				type: "Ssh",
 				remote_daemon_port: 9876,
-				ssh: { host: "builder.local", compression: false, strict_host_key_checking: "AcceptNew" },
+				// Never downgraded to accept-new: the runtime honours a stored Yes.
+				ssh: { host: "builder.local", compression: false, strict_host_key_checking: "Yes" },
 			},
 		});
 		expect(actions.setPassword).not.toHaveBeenCalled();

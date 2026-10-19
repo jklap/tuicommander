@@ -23,14 +23,6 @@ export interface SshConnectionFieldsProps {
 	value: SshConnectionParams;
 	onChange: (patch: Partial<SshConnectionParams>) => void;
 	/**
-	 * `"enforced-accept-new"` for a Remote Server connection: the tunnel TUIC
-	 * opens on the user's behalf always runs with `accept-new`
-	 * (`remote_runtime::ssh_profile`), so offering `Yes` there would be a
-	 * choice the runtime silently ignores. A tunnel profile honours both values
-	 * and keeps the selectable default.
-	 */
-	hostKeyChecking?: "selectable" | "enforced-accept-new";
-	/**
 	 * Settings-catalogue id of the `SshConnectionParams` object being edited,
 	 * e.g. `tunnels.profiles.{id}.ssh` or
 	 * `connections.connections.{id}.transport.ssh`. Each control is tagged
@@ -92,8 +84,6 @@ export const SshConnectionFields: Component<SshConnectionFieldsProps> = (props) 
 
 	const group = () => (props.fieldClass ? `${s.group} ${props.fieldClass}` : s.group);
 	const settingId = (field: keyof SshConnectionParams) => `${props.settingIdPrefix}.${field}`;
-
-	const hostKeyEnforced = () => props.hostKeyChecking === "enforced-accept-new";
 
 	const parseNumber = (value: string, fallback: number): number => {
 		const parsed = Number.parseInt(value, 10);
@@ -197,23 +187,14 @@ export const SshConnectionFields: Component<SshConnectionFieldsProps> = (props) 
 					<label class={s.label}>StrictHostKeyChecking</label>
 					<Select
 						data-setting-id={settingId("strict_host_key_checking")}
-						value={hostKeyEnforced() ? "AcceptNew" : props.value.strict_host_key_checking}
-						disabled={hostKeyEnforced()}
+						value={props.value.strict_host_key_checking}
 						onChange={(e) => props.onChange({ strict_host_key_checking: e.currentTarget.value as "Yes" | "AcceptNew" })}
 					>
 						<option value="AcceptNew">AcceptNew</option>
-						<Show when={!hostKeyEnforced()}>
-							<option value="Yes">Yes</option>
-						</Show>
+						<option value="Yes">Yes</option>
 					</Select>
 				</div>
 			</div>
-			<Show when={hostKeyEnforced()}>
-				<p class={s.hint} style={{ margin: 0 }}>
-					A remote server's tunnel is opened on your behalf, so it always accepts a new host's key on first contact and
-					refuses a changed one (accept-new).
-				</p>
-			</Show>
 
 			<label class={s.toggle}>
 				<input
