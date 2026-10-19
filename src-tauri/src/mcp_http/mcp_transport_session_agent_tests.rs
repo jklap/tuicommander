@@ -672,6 +672,92 @@ async fn mobile_http_reply_answers_confident_question_with_automated_mail_queued
     assert_eq!(state.pending_injections.get(session_id).unwrap().len(), 1);
 }
 
+// Catches: an explicit phone answer requiring confirmed idle while ego waits in BUSY.
+#[cfg(unix)]
+#[tokio::test]
+async fn mobile_reply_while_awaiting_input_reaches_the_agent() {
+    use tower::ServiceExt;
+
+    let state = test_state();
+    let session_id = "waiting-phone-question";
+    let bytes = install_atomic_submit_test_session(&state, session_id);
+    // Native ego questions hold BUSY while awaiting the human (1973 captures).
+    // No recognized title or picker is required for an explicit human reply.
+    {
+        let mut session = state
+            .session_maps
+            .session_states
+            .get_mut(session_id)
+            .unwrap();
+        session.agent_type = Some("ego".into());
+        session.awaiting_input = true;
+    }
+    state
+        .session_maps
+        .shell_states
+        .get(session_id)
+        .unwrap()
+        .store(crate::pty::SHELL_BUSY, std::sync::atomic::Ordering::Release);
+    state.session_maps.silence_states.insert(
+        session_id.into(),
+        Arc::new(parking_lot::Mutex::new(crate::pty::SilenceState::new())),
+    );
+    state
+        .pending_injections
+        .entry(session_id.to_string())
+        .or_default()
+        .push_back(crate::state::PendingInjection::notice("automated mail"));
+
+    let automated = handle_session_submit(
+        &state,
+        &serde_json::json!({"session_id": session_id, "input": "agent answer"}),
+        false,
+    )
+    .await;
+    assert_eq!(automated["submitted"], false);
+    assert!(bytes.lock().unwrap().is_empty());
+
+    let mut request = axum::http::Request::post(format!("/sessions/{session_id}/submit"))
+        .header("content-type", "application/json")
+        .body(axum::body::Body::from(r#"{"input":"Boss answer"}"#))
+        .unwrap();
+    request
+        .extensions_mut()
+        .insert(axum::extract::ConnectInfo(loopback_addr()));
+    let app = super::super::build_router(Arc::clone(&state), false, true);
+    let call = tokio::spawn(async move { app.oneshot(request).await.unwrap() });
+
+    tokio::time::timeout(std::time::Duration::from_secs(20), async {
+        loop {
+            if bytes.lock().unwrap().last() == Some(&b'\r') {
+                break;
+            }
+            assert!(!call.is_finished(), "reply returned before writing");
+            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .expect("phone answer did not reach the PTY");
+    state
+        .session_maps
+        .output_buffers
+        .get(session_id)
+        .unwrap()
+        .lock()
+        .write(b"child moved");
+
+    let response = call.await.unwrap();
+    assert_eq!(response.status(), axum::http::StatusCode::OK);
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let receipt: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(receipt["submitted"], true);
+    assert_eq!(receipt["acknowledged"], true);
+    assert_eq!(bytes.lock().unwrap().as_slice(), b"\x15Boss answer\r");
+    assert_eq!(state.pending_injections.get(session_id).unwrap().len(), 1);
+}
+
 #[cfg(unix)]
 #[test]
 fn session_input_remains_a_raw_write_only_compatibility_surface() {
@@ -3225,6 +3311,8 @@ async fn parent_registration_after_spawn_links_existing_child() {
             "action": "spawn",
             "prompt": "hello",
             "binary_path": LONG_LIVED_TEST_BINARY,
+            // cat must read stdin before interpreting the delivered task as a filename.
+            "args": ["-"],
             "cwd": TEST_SPAWN_CWD,
         }),
         Some(parent_mcp),
@@ -3354,6 +3442,8 @@ async fn parent_registration_after_spawn_links_existing_child() {
             "action": "spawn",
             "prompt": "report with agent send",
             "binary_path": LONG_LIVED_TEST_BINARY,
+            // cat must read stdin before interpreting the delivered task as a filename.
+            "args": ["-"],
             "cwd": TEST_SPAWN_CWD,
         }),
         Some(parent_mcp),
@@ -4664,4 +4754,346 @@ fn crit1358_handle_session_has_no_fire_and_forget_suspend() {
         None,
     );
     assert!(result.get("ok").is_none(), "got {result}");
+}
+
+// Catches: the waiting-human exception bypassing draft, picker, ownership or write-safety guards.
+#[cfg(unix)]
+#[tokio::test]
+async fn mobile_waiting_reply_preserves_composer_safety_guards() {
+    use tower::ServiceExt;
+    for (case, reason) in [
+        ("draft", "partial_composer"),
+        ("picker", "selection_required"),
+        ("uncertain", "agent_not_ready"),
+        ("foreground", "agent_not_ready"),
+        ("working", "agent_not_ready"),
+    ] {
+        let state = test_state();
+        let sid = "guarded-human-reply";
+        let bytes = install_atomic_submit_test_session(&state, sid);
+        {
+            let mut session = state.session_maps.session_states.get_mut(sid).unwrap();
+            session.agent_type = Some("ego".into());
+            session.awaiting_input = case != "working";
+            session.foreground_input_blocked = case == "foreground";
+            if case == "picker" {
+                session.choice_prompt = Some(serde_json::from_value(serde_json::json!({
+                    "title": "Which checks?",
+                    "options": [{"key":"1", "label":"Parser", "highlighted":true, "destructive":false}, {"key":"2", "label":"Mobile", "highlighted":false, "destructive":false}]
+                })).unwrap());
+            }
+        }
+        state
+            .session_maps
+            .shell_states
+            .get(sid)
+            .unwrap()
+            .store(crate::pty::SHELL_BUSY, std::sync::atomic::Ordering::Release);
+        if case == "draft" {
+            let mut buffer = crate::input_line_buffer::InputLineBuffer::new();
+            buffer.feed("Existing human draft");
+            state
+                .session_maps
+                .input_buffers
+                .insert(sid.into(), parking_lot::Mutex::new(buffer));
+        }
+        if case == "uncertain" {
+            state
+                .session_maps
+                .silence_states
+                .get(sid)
+                .unwrap()
+                .lock()
+                .injection_delivery_uncertain = true;
+        }
+        let mut request = axum::http::Request::post(format!("/sessions/{sid}/submit"))
+            .header("content-type", "application/json")
+            .body(axum::body::Body::from(r#"{"input":"Boss answer"}"#))
+            .unwrap();
+        request
+            .extensions_mut()
+            .insert(axum::extract::ConnectInfo(loopback_addr()));
+        let response = super::super::build_router(Arc::clone(&state), false, true)
+            .oneshot(request)
+            .await
+            .unwrap();
+        assert_eq!(
+            response.status(),
+            axum::http::StatusCode::CONFLICT,
+            "{case}"
+        );
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let receipt: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(receipt["reason"], reason, "{case}: {receipt}");
+        assert_eq!(receipt["submitted"], false);
+        assert!(
+            bytes.lock().unwrap().is_empty(),
+            "{case} wrote rejected text"
+        );
+        if case == "picker" {
+            assert!(receipt["detail"].as_str().unwrap().contains("selection"));
+        }
+    }
+}
+
+/// Catches losing a separator in the actual MCP screen and finalized-history reads.
+#[test]
+fn softwrap_1977_session_output_preserves_recorded_spaces() {
+    let state = test_state();
+    let sid = "softwrap-1977".to_string();
+    let capture = crate::pty_capture::decode_capture(include_bytes!(
+        "../fixtures/agent_prompts/softwrap-spaces-1977-24.tcap"
+    ))
+    .unwrap();
+    let (rows, cols) = capture.geometry.unwrap();
+    let mut vt = crate::state::VtLogBuffer::new(rows, cols, 100);
+    let mut raw = Vec::new();
+    for record in capture.records {
+        raw.extend_from_slice(&record.data);
+        vt.process(&record.data);
+    }
+    let expected = String::from_utf8(raw).unwrap().replace("\r\n", "\n");
+    state
+        .grid
+        .vt_log_buffers
+        .insert(sid.clone(), parking_lot::Mutex::new(vt));
+    for scroll in [false, true] {
+        if scroll {
+            state
+                .grid
+                .vt_log_buffers
+                .get(&sid)
+                .unwrap()
+                .lock()
+                .process(b"\r\n1\r\n2\r\n3\r\n4\r\n5\r\n6\r\n7\r\n8");
+        }
+        let response = handle_session(
+            &state,
+            &serde_json::json!({"action": "output", "session_id": sid}),
+            None,
+        );
+        let data = response["data"].as_str().expect("MCP text output");
+        assert!(data.starts_with(&expected), "scroll={scroll}: {data:?}");
+    }
+}
+
+// Catches: a lost launch reply creates a second PTY when the same key is retried.
+#[cfg(unix)]
+#[tokio::test]
+async fn lost_launch_reply_reuses_the_same_child() {
+    let state = test_state();
+    let parent = "550e8400-e29b-41d4-a716-446655440b01";
+    register_peer(&state, parent, "orchestrator", "mcp-orch");
+    let workspace = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap();
+    let request = serde_json::json!({
+        "action": "launch", "idempotency_key": "lost-reply", "parent_session_id": parent,
+        "name": "stable-child", "keep_open": true,
+        "workspace": {"existing_path": workspace},
+        "spawn": {"prompt": "hello", "binary_path": "/bin/sh",
+                  "args": ["-c", "exec cat", "{prompt}"]}
+    });
+    let first = crate::mcp_http::mcp_transport::handle_mcp_tool_call_with_context(
+        &state,
+        "127.0.0.1:0".parse().unwrap(),
+        "agent",
+        &request,
+        Some("mcp-orch"),
+        None,
+    )
+    .await;
+    assert!(first.get("error").is_none(), "launch failed: {first}");
+    let second = crate::mcp_http::mcp_transport::handle_mcp_tool_call_with_context(
+        &state,
+        "127.0.0.1:0".parse().unwrap(),
+        "agent",
+        &request,
+        Some("mcp-orch"),
+        None,
+    )
+    .await;
+    assert_eq!(first["launch_id"], second["launch_id"]);
+    assert_eq!(first["session_id"], second["session_id"]);
+    assert_eq!(
+        state.session_maps.sessions.len(),
+        1,
+        "retry must not create a second PTY"
+    );
+    let child = first["session_id"].as_str().unwrap();
+    assert_eq!(
+        state
+            .session_maps
+            .session_parent
+            .get(child)
+            .unwrap()
+            .value(),
+        parent
+    );
+    assert!(state.keep_open_sessions.contains(child));
+    assert_eq!(
+        state
+            .session_maps
+            .sessions
+            .get(child)
+            .unwrap()
+            .lock()
+            .display_name
+            .as_deref(),
+        Some("stable-child")
+    );
+    handle_session(
+        &state,
+        &serde_json::json!({"action":"kill", "session_id":child}),
+        None,
+    );
+}
+
+// Catches: output chunks recapture a moving ring instead of completing the retained snapshot.
+#[test]
+fn budgeted_terminal_output_snapshot_survives_concurrent_output() {
+    let state = test_state();
+    let sid = "budget-output";
+    let source = "界\"\n".repeat(9000);
+    let mut ring = crate::OutputRingBuffer::new(100000);
+    ring.write(source.as_bytes());
+    state
+        .session_maps
+        .output_buffers
+        .insert(sid.into(), parking_lot::Mutex::new(ring));
+    let original = session_output(
+        &state,
+        &serde_json::json!({"action":"output","session_id":sid,"format":"raw","from_byte":0,"limit":100000}),
+    );
+    let mut args = serde_json::json!({"action":"output","session_id":sid,"format":"raw","from_byte":0,"limit":100000,"byte_budget":4096});
+    let mut text = String::new();
+    loop {
+        let page = session_output(&state, &args);
+        assert!(serde_json::to_vec(&page).unwrap().len() <= 4096);
+        text.push_str(page["chunk"].as_str().unwrap());
+        if page["continuation"].is_null() {
+            break;
+        }
+        state
+            .session_maps
+            .output_buffers
+            .get(sid)
+            .unwrap()
+            .lock()
+            .write(b"new output");
+        args["continuation"] = page["continuation"].clone();
+    }
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&text).unwrap(),
+        original
+    );
+    let missing = handle_session(
+        &state,
+        &serde_json::json!({"action":"list","session_id":"absent","compact":true}),
+        None,
+    );
+    assert!(missing.get("error").is_some());
+}
+
+// Catches: live inventory drops the backend activity timestamp and leaves compact activity unknown.
+#[tokio::test]
+async fn session_inventory_exposes_activity_timestamp_and_compact_age() {
+    let state = test_state();
+    let created = handle_session(&state, &serde_json::json!({"action":"create"}), None);
+    if created.get("error").is_some() {
+        return;
+    }
+    let id = created["session_id"].as_str().unwrap();
+    state.session_maps.session_states.insert(
+        id.into(),
+        crate::state::SessionState {
+            last_activity_ms: 1,
+            ..Default::default()
+        },
+    );
+    let full = handle_session(
+        &state,
+        &serde_json::json!({"action":"list","session_id":id}),
+        None,
+    );
+    let compact = handle_session(
+        &state,
+        &serde_json::json!({"action":"list","session_id":id,"compact":true}),
+        None,
+    );
+    handle_session(
+        &state,
+        &serde_json::json!({"action":"kill","session_id":id}),
+        None,
+    );
+    assert_eq!(full[0]["last_activity_ms"], 1);
+    assert!(
+        compact[0]["activity_age_ms"]
+            .as_u64()
+            .is_some_and(|age| age > 0),
+        "{compact}"
+    );
+}
+
+// Catches: pre-dispatch validation rejects description-only updates or writes a dummy Enter.
+#[cfg(unix)]
+#[tokio::test]
+async fn action_validation_description_only_updates_without_pty_input() {
+    let state = test_state();
+    let sid = "description-only";
+    let bytes = install_atomic_submit_test_session(&state, sid);
+    for description in [
+        serde_json::json!("Reviewing results"),
+        serde_json::Value::Null,
+        serde_json::json!("Another task"),
+        serde_json::json!(""),
+    ] {
+        let response = post_test_tool_call(
+            state.clone(),
+            "description-contract",
+            "session",
+            serde_json::json!({"action":"input","session_id":sid,"pty_description":description}),
+        )
+        .await;
+        assert_eq!(response["result"]["isError"], false, "{response}");
+        let listing = handle_mcp_tool_call(
+            &state,
+            loopback_addr(),
+            "session",
+            &serde_json::json!({"action":"list"}),
+            None,
+        )
+        .await;
+        let row = listing
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|row| row["session_id"] == sid)
+            .unwrap();
+        let expected = if description.as_str() == Some("") {
+            serde_json::Value::Null
+        } else {
+            description
+        };
+        assert_eq!(row["pty_description"], expected, "{listing}");
+        assert!(
+            bytes.lock().unwrap().is_empty(),
+            "description updates must not write PTY input"
+        );
+    }
+    for extra in [
+        serde_json::json!({}),
+        serde_json::json!({"pty_description":7}),
+    ] {
+        let mut args = serde_json::json!({"action":"input","session_id":sid});
+        args.as_object_mut()
+            .unwrap()
+            .extend(extra.as_object().unwrap().clone());
+        let response =
+            post_test_tool_call(state.clone(), "description-contract", "session", args).await;
+        assert_eq!(response["result"]["isError"], true, "{response}");
+        assert!(bytes.lock().unwrap().is_empty());
+    }
 }

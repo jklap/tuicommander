@@ -40,6 +40,23 @@ describe("reconcileTerminalOwnership", () => {
 		repositoriesStore.setActiveWorkspace(path, branch);
 	};
 
+	// Catches: root discovery fallback keeps a coordinator under the selected linked checkout.
+	it("parks a misfiled root tab until its root workspace is discovered", () => {
+		testInScope(() => {
+			addRepoWithBranch("/Gits/alpha", "feature", "/Gits/alpha__wt/feature");
+			const id = terminalsStore.add(makeTerminal({ cwd: "/Gits/alpha" }));
+			terminalsStore.setRepoPath(id, "/Gits/alpha");
+			repositoriesStore.addTerminalToWorkspace("/Gits/alpha", "feature", id);
+			reconcile(id);
+			expect(repositoriesStore.findOwnerForTerminal(id)).toBeNull();
+			expect(globalWorkspaceStore.getScopeMembers(MANUAL_SCOPE)).toContain(id);
+			repositoriesStore.setWorkspace("/Gits/alpha", "main", { worktreePath: "/Gits/alpha" });
+			reconcile(id);
+			expect(repositoriesStore.findOwnerForTerminal(id)?.workspaceId).toBe("main");
+			expect(globalWorkspaceStore.getScopeMembers(MANUAL_SCOPE)).not.toContain(id);
+		});
+	});
+
 	it("re-homes a parked terminal once the repo owning its cwd is registered", () => {
 		testInScope(() => {
 			addRepoWithBranch("/Gits/alpha", "main");

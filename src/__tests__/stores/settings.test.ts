@@ -84,6 +84,58 @@ describe("settingsStore", () => {
 		);
 	});
 
+	// Catches: new expert resource fields disappearing at the store/save boundary.
+	it("hydrates_and_saves_resource_limits_without_overwriting_a_remote_background_leaf", async () => {
+		mockInvoke.mockResolvedValueOnce({
+			index_memory_budget_mb: 128,
+			attachment_max_bytes: 2048,
+			background: { webview_unload_minutes: 15, tray_icon: "always" },
+		});
+		await store.hydrate();
+		expect(store.state.indexMemoryBudgetMb).toBe(128);
+		expect(store.state.attachmentMaxBytes).toBe(2048);
+		expect(store.state.webviewUnloadMinutes).toBe(15);
+		mockInvoke.mockImplementation(async (command) =>
+			command === "load_config"
+				? { background: { webview_unload_minutes: 15, tray_icon: "never", hide_dock_icon: false } }
+				: undefined,
+		);
+		store.setIndexMemoryBudgetMb(0);
+		store.setAttachmentMaxBytes(4096);
+		store.setWebviewUnloadMinutes(0);
+		await vi.runAllTimersAsync();
+		expect(mockInvoke).toHaveBeenCalledWith(
+			"save_config",
+			expect.objectContaining({
+				config: expect.objectContaining({
+					index_memory_budget_mb: 0,
+					attachment_max_bytes: 4096,
+					background: { webview_unload_minutes: 0, tray_icon: "never", hide_dock_icon: false },
+				}),
+			}),
+		);
+	});
+
+	// Catches: NaN/fractional/negative inputs entering a whole-number resource setting.
+	it.each([-1, 0.5, Number.NaN, Number.POSITIVE_INFINITY, Number.MAX_SAFE_INTEGER + 1])(
+		"rejects invalid resource limit %s",
+		(value) => {
+			const before = [
+				store.state.indexMemoryBudgetMb,
+				store.state.attachmentMaxBytes,
+				store.state.webviewUnloadMinutes,
+			];
+			store.setIndexMemoryBudgetMb(value);
+			store.setAttachmentMaxBytes(value);
+			store.setWebviewUnloadMinutes(value);
+			expect([
+				store.state.indexMemoryBudgetMb,
+				store.state.attachmentMaxBytes,
+				store.state.webviewUnloadMinutes,
+			]).toEqual(before);
+		},
+	);
+
 	// Catches: hydration silently turns a persisted beta channel back into stable.
 	it.each(["beta", "stable", "nightly"])("keeps the saved %s update channel", async (channel) => {
 		mockInvoke.mockResolvedValueOnce({ update_channel: channel });
@@ -751,7 +803,8 @@ describe("settingsStore", () => {
 			});
 		});
 
-		it("setPrHideDrafts updates state", () => {
+		it("setPrHideDrafts updates state", async () => {
+			await hydrateStore();
 			testInScope(() => {
 				store.setPrHideDrafts(true);
 				expect(store.state.prHideDrafts).toBe(true);
@@ -773,14 +826,16 @@ describe("settingsStore", () => {
 			});
 		});
 
-		it("setPrHideConflicting updates state", () => {
+		it("setPrHideConflicting updates state", async () => {
+			await hydrateStore();
 			testInScope(() => {
 				store.setPrHideConflicting(true);
 				expect(store.state.prHideConflicting).toBe(true);
 			});
 		});
 
-		it("setPrHideCiFailing updates state", () => {
+		it("setPrHideCiFailing updates state", async () => {
+			await hydrateStore();
 			testInScope(() => {
 				store.setPrHideCiFailing(true);
 				expect(store.state.prHideCiFailing).toBe(true);
@@ -872,7 +927,7 @@ describe("settingsStore", () => {
 		expect(mockInvoke).toHaveBeenCalledWith("save_config", {
 			base: { background: { hide_dock_icon: false, webview_unload_minutes: 25 } },
 			config: expect.objectContaining({
-				background: { hide_dock_icon: true, tray_icon: "background_only", webview_unload_minutes: 25 },
+				background: { hide_dock_icon: true, webview_unload_minutes: 25 },
 			}),
 		});
 	});

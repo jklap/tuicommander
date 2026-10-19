@@ -40,7 +40,7 @@ async fn committed_24h_session_duration_reads_back_unchanged() {
         .unwrap();
     let caller = super::policy::Caller::native();
     assert_eq!(
-        super::policy_tests::answer(state, caller.clone(), id.clone(), true).await["confirmed"],
+        super::policy_tests::answer(state.clone(), caller.clone(), id.clone(), true).await["confirmed"],
         json!(true)
     );
     let result = service.execute_as(request, &caller, Some(&id)).await;

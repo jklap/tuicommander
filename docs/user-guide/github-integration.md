@@ -328,3 +328,16 @@ Use **Follow task** in an item detail to follow comments locally; use **Unfollow
 GitHub provides a full normal-comment count, so an increase is detected even beyond the first page. Jira and GitLab provide paged comment entries: newly observed comments notify when their creation time is newer than the prior baseline, or when a previously unseen comment ID shares its latest timestamp. Unloaded pages, unseen review sources and items that are not refreshed cannot produce a notice. Editing a comment or loading older history does not notify. No Linear provider is shipped, so it is not covered.
 
 GitHub logins created before Projects v2 support must sign in again to consent to `read:project`. Existing credentials are not upgraded automatically; a Projects read can return `INSUFFICIENT_SCOPES` until reauthorization.
+
+## Setup through Settings MCP
+
+After you enable the Settings MCP tool in trusted UI, an assistant can discover the published GitHub owner actions. Cloud setup uses device login; you authenticate on GitHub, and the assistant follows the returned flow state and poll interval. Enterprise PAT setup verifies the host/account before storage. A pending or expired flow is not a connected account. [Settings startup workflows](../backend/settings-startup.md#github) documents `list_accounts` for stable account IDs and credential presence, plus `/auth/source` for current credential provenance. Enumeration never returns token values or proves a live account login.
+
+## Persistent PR visibility filters
+
+Global `pr_hide_drafts`, `pr_hide_conflicting` and `pr_hide_ci_failing` values
+persist in `config.json` and default to false (show all). Each repository stores
+nullable overrides in `repo-settings.json`: null inherits the current global
+value, true hides the matching PRs, and false explicitly shows them. Settings
+owner transactions preserve unrelated fields, and settings refresh adopts owner
+readback without saving it again. The Rust settings catalogue describes both scopes.

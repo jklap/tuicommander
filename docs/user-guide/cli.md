@@ -137,6 +137,17 @@ arguments exit 2 before connecting. Managed callers send `$TUIC_SESSION` for
 peer binding; callers outside TUICommander register an external identity for
 that invocation.
 
+### Workflow actions
+
+`tuic workflow [<json>|-]` calls the grouped `workflow` MCP tool. Use a typed action envelope:
+
+```bash
+tuic workflow '{"action":"story","input":{"action":"list_plans"}}'
+tuic workflow '{"action":"run","input":{"action":"get","run_id":"run-id"}}'
+```
+
+The other actions are `proposal_create`, `report` and `launch`, each with its typed payload under `input`. Proposal creation requires the run's active bound coordinator and a stable `proposalKey`; retries return the same story. Ordinary story creation is not a substitute. Managed callers retain their caller binding. `tuic story` still calls the shared story service with `--project` support; `tuic automations` still calls the separate scheduler and works when `workflow` is disabled. The old workflow MCP names remain available until the catalogue cutover; they are not CLI aliases. Reconnect after installing the updated backend to discover the new tool.
+
 Register an existing local directory directly through MCP:
 
 ```bash
@@ -391,3 +402,7 @@ Automation templates (#1622-be11): the shared automation action accepts
 repository, run_config and optional timezone (host local by default).
 Drafts have fresh ids and start disabled; no definition or run is created until
 an explicit create action. These actions match across HTTP, IPC, MCP and CLI.
+
+### Design Mode through MCP UI actions
+
+Use `tuic mcp ui '{"action":"design_start","session_id":"<terminal>","url":"http://localhost:3000"}'` to start Design Mode. Browser commands use `design_stop`, `design_reload`, `design_navigate`, `design_screenshot`, `design_errors` or `design_eval` with `repo_path` from the lifecycle result; `design_navigate` also needs `url`, and `design_eval` needs `script`. `design_status` lists bindings for an armed caller. Caller ownership and extension host grants still apply. The old `tuic mcp design_mode` entry remains until the explicit catalogue cutover in story 2068; no client migration is required yet.

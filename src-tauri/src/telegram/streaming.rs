@@ -377,7 +377,6 @@ impl Runtime {
     }
 
     pub(super) async fn stream_tick(&mut self) {
-        let registered = self.registered_peer().map(str::to_owned);
         for i in 0..self.requests.len() {
             if self.requests[i].completed.is_some() {
                 self.reaction(i).await;
@@ -386,9 +385,6 @@ impl Runtime {
             let state = self.state.clone();
             let claimed: Vec<_> = self.requests.iter().filter_map(|r| r.turn).collect();
             let request = &mut self.requests[i];
-            if registered.as_deref() != Some(&request.peer) {
-                request.failed = true;
-            }
             let read = state
                 .agent_read_cursor
                 .get(&request.peer)

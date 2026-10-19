@@ -1,6 +1,7 @@
 import { batch, untrack } from "solid-js";
 import { createStore, produce } from "solid-js/store";
 import type { AgentType } from "../agents";
+import type { ChoicePrompt } from "../mobile/useSessions";
 import { rpc } from "../transport";
 import { getRepoConnection, setSessionConnectionLookup } from "../transportRuntime";
 import type { TerminalMatch } from "../types";
@@ -75,9 +76,11 @@ export interface TerminalData {
 	 * home as soon as a repo claims the path.
 	 */
 	repoPath: string | null;
-	/** Backend-authored worktree placement, independent of the shell cwd. */
+	/** Legacy backend placement metadata; never overrides cwd for tab placement or cleanup. */
 	placementPath?: string | null;
 	awaitingInput: AwaitingInputType;
+	questionText?: string | null;
+	choicePrompt?: ChoicePrompt | null;
 	awaitingInputConfident: boolean; // High-confidence detection — don't clear on idle→busy
 	activity: boolean;
 	unseen: boolean; // Terminal completed work while user wasn't viewing it
@@ -108,7 +111,8 @@ export interface TerminalData {
 	agentIntent: string | null; // LLM-declared intent via intent: token
 	currentTask: string | null; // Current agent task from status-line parsing (e.g. "Reading files")
 	activeSubTasks: number; // Count of running sub-agents/background tasks from ›› status line
-	isRemote: boolean; // Created via HTTP/MCP (not locally by the UI)
+	isRemote: boolean; // Runs on a configured remote connection, not merely created through HTTP/MCP
+	isExternallyCreated: boolean; // Created via HTTP/MCP; owns cleanup, tab decoration and completion policy
 	exactAgentSessionId?: string | null; // Live backend hook evidence, never restored from persistence
 	agentSessionId: string | null; // Discovered agent session ID for exact resume (claude, gemini, codex, grok)
 	tuicSession: string | null; // Stable tab UUID — injected as TUIC_SESSION env var, persists across restarts
@@ -160,6 +164,7 @@ type TerminalCreateData = Omit<
 	| "currentTask"
 	| "activeSubTasks"
 	| "isRemote"
+	| "isExternallyCreated"
 	| "agentSessionId"
 	| "exactAgentSessionId"
 	| "tuicSession"
@@ -185,6 +190,7 @@ type TerminalCreateData = Omit<
 	tuicSession?: string | null;
 	alias?: string | null;
 	isRemote?: boolean;
+	isExternallyCreated?: boolean;
 	nameIsCustom?: boolean;
 	nameFromSpawn?: boolean;
 	agentType?: AgentType | null;
@@ -495,6 +501,7 @@ function createTerminalsStore() {
 				currentTask: null,
 				activeSubTasks: 0,
 				isRemote: false,
+				isExternallyCreated: false,
 				agentSessionId: null,
 				tuicSession: null,
 				suggestedActions: null,
@@ -553,6 +560,7 @@ function createTerminalsStore() {
 				currentTask: null,
 				activeSubTasks: 0,
 				isRemote: false,
+				isExternallyCreated: false,
 				agentSessionId: null,
 				tuicSession: null,
 				suggestedActions: null,

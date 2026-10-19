@@ -18,7 +18,7 @@ exclude = ["patches/wayland-scanner"]
 resolver = "2"
 
 [workspace.package]
-version = "1.8.0"
+version = "2.0.0"
 
 [package]
 name = "tuicommander"
@@ -52,6 +52,17 @@ debug = "line-tables-only"
 # the 25 GiB of debug objects, so stripping them would force a full dependency
 # rebuild (whisper.cpp/cmake included) to reclaim under 2% of the tree.
 [profile.dev.package."*"]
+opt-level = 1
+
+# Test inherits dev, including the O1 override for non-workspace dependencies.
+# Keep workspace test rebuilds fast without changing dev or release builds.
+[profile.test]
+opt-level = 0
+debug = 0
+
+# The full-corpus history replays run near the 120s harness bound at O0.
+# Keep the root test crate at O0; optimize the grid adapter and replay oracle.
+[profile.test.package.tuic-terminal]
 opt-level = 1
 
 [profile.release]
@@ -133,7 +144,7 @@ workspace = true
 
 [lib]
 name = "tuicommander_lib"
-# Desktop-only: the bin links the lib as rlib (main.rs → tuicommander_lib::run()).
+# Desktop-only: the bin links the lib as rlib (main.rs → tuicommander_lib::run(context)).
 # staticlib/cdylib are only needed for mobile (iOS/Android) — dropping them makes
 # the huge lib compile once instead of three times. Re-add if mobile is planned.
 crate-type = ["rlib"]
@@ -186,6 +197,7 @@ tauri-plugin-opener = { version = "2", optional = true }
 serde = { version = "1", features = ["derive", "rc"] }
 serde_json = "1"
 schemars = { version = "1", features = ["derive"] }
+jsonschema = { version = "0.59", default-features = false }
 unicode-width = "0.2"
 # Goose stores its MCP extensions in YAML. Deprecated upstream.
 serde_yaml = "0.9"
@@ -330,6 +342,8 @@ desktop = [
 # Native speech is opt-in for Cargo dev/test builds. Tauri dev/release builds
 # enable it through tauri.conf.json.
 dictation = ["desktop", "dep:tuic-dictation"]
+# Opt-in generated-command IPC tests use Tauri's mock runtime, never a desktop app.
+settings-ipc-test = ["desktop", "tauri/test"]
 
 # GPU features for Linux builds (macOS always has Metal via target dep; Windows
 # is CPU-only — the whisper.cpp Vulkan backend's vulkan-shaders-gen sub-build is

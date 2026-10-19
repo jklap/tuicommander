@@ -5,7 +5,19 @@ use std::sync::Arc;
 // Catches: the MCP create path bypassing the validation used by DefinitionStore callers.
 #[tokio::test]
 async fn mcp_create_cannot_skip_definition_validation() {
-    let state = Arc::new(crate::state::tests_support::make_test_app_state());
+    let dir = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+    let _guard = crate::config::set_config_dir_override(dir.path().to_owned());
+    std::fs::write(
+        dir.path().join("agents.json"),
+        serde_json::to_vec(&json!({"agents":{"codex":{"run_configs":[{
+            "name":"codex", "command":"codex"
+        }]}}}))
+        .unwrap(),
+    )
+    .unwrap();
+    let state = Arc::new(crate::state::tests_support::make_test_app_state_in(
+        dir.path(),
+    ));
     state.config.write().disabled_native_tools.clear();
     state
         .mcp
@@ -162,6 +174,12 @@ fn mcp_automation_tool_is_discoverable_with_all_definition_actions() {
         .iter()
         .find(|tool| tool["name"] == "automations")
         .unwrap();
+    let definition = &tool["inputSchema"]["properties"]["definition"];
+    assert_eq!(
+        definition["required"],
+        json!(["name", "prompt", "run_config"])
+    );
+    assert_eq!(definition["properties"]["in_secs"]["minimum"], 1);
     assert_eq!(
         tool["inputSchema"]["properties"]["action"]["enum"],
         json!([
@@ -182,7 +200,8 @@ fn mcp_automation_tool_is_discoverable_with_all_definition_actions() {
             "templates",
             "template",
             "worktree_preview",
-            "cleanup_worktree"
+            "cleanup_worktree",
+            "help"
         ])
     );
 }
@@ -221,4 +240,62 @@ fn mcp_precheck_context_opt_in_round_trips_and_can_be_disabled() {
     );
     let saved = super::mcp::execute(&store, json!({"action":"get","id":"context"}), None);
     assert_eq!(saved["precheck"]["inject_output"], false);
+}
+
+// Catches: additionalProperties=false rejecting the computed field in a saved
+// create reply reused as an update or definition-preview request.
+#[test]
+fn mcp_create_reply_satisfies_update_definition_schema() {
+    let dir = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+    let store = super::definitions::DefinitionStore::at_path(dir.path().join("automations.json"));
+    let tool = super::mcp::tool_definition();
+    let schema = &tool["inputSchema"]["properties"]["definition"];
+    assert_eq!(schema["additionalProperties"], false);
+    for enabled in [true, false] {
+        let mut input = definition(if enabled {
+            "schema-enabled"
+        } else {
+            "schema-paused"
+        });
+        input["enabled"] = json!(enabled);
+        let mut saved = super::mcp::execute(
+            &store,
+            json!({"action":"create","definition":input}),
+            Some("creator"),
+        );
+        let fields = saved.as_object().expect("saved create definition");
+        for required in schema["required"].as_array().unwrap() {
+            assert!(fields.contains_key(required.as_str().unwrap()));
+        }
+        // Validate the schema's closed-object property boundary against the real
+        // reply, including host-owned fields rather than a hand-built fixture.
+        for field in fields.keys() {
+            assert!(
+                schema["properties"].get(field).is_some(),
+                "create reply field {field} is rejected by the published update schema"
+            );
+        }
+        let next_schema = &schema["properties"]["next_run_ms"];
+        assert_eq!(next_schema["type"], json!(["integer", "null"]));
+        assert_eq!(next_schema["readOnly"], true);
+        assert!(if enabled {
+            saved["next_run_ms"].is_i64()
+        } else {
+            saved["next_run_ms"].is_null()
+        });
+        saved["prompt"] = json!("Edited saved reply");
+        let preview = super::mcp::execute(
+            &store,
+            json!({"action":"preview_definition","definition":saved}),
+            Some("creator"),
+        );
+        assert!(preview.get("error").is_none(), "{preview}");
+        let updated = super::mcp::execute(
+            &store,
+            json!({"action":"update","definition":saved}),
+            Some("creator"),
+        );
+        assert_eq!(updated["prompt"], "Edited saved reply");
+        assert!(updated.get("next_run_ms").is_none());
+    }
 }

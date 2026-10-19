@@ -27,6 +27,7 @@ pub(crate) mod background_mode;
 #[cfg(test)]
 mod background_mode_tests;
 pub(crate) mod launch_instructions;
+pub(crate) mod mail_subscriptions;
 pub(crate) mod prompt_receipt;
 pub(crate) mod session_resume;
 pub(crate) mod session_wake;
@@ -35,6 +36,7 @@ pub mod work_items;
 pub use tuic_core::app_instance;
 pub(crate) mod app_logger;
 pub(crate) mod changelog;
+mod frame_workload;
 mod stall_journal;
 pub(crate) use tuic_terminal::chrome;
 pub(crate) mod circleci;
@@ -135,6 +137,7 @@ pub(crate) use tuic_terminal::output_parser;
 pub(crate) use tuic_terminal::output_watchers;
 #[cfg(feature = "desktop")]
 mod panel_window;
+mod plugin_content;
 pub(crate) mod plugin_credentials;
 pub(crate) mod plugin_exec;
 pub(crate) mod plugin_fs;
@@ -1559,7 +1562,7 @@ fn release_webview_document_resources(state: &AppState, webview_label: &str) {
 
 #[cfg(feature = "desktop")]
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
-pub fn run() {
+pub fn run(mut context: tauri::Context<tauri::Wry>) {
     // Must run before the first `config::config_dir()` read (below) — see
     // `app_instance::select_app_instance_from_env` for why this exists: a
     // debug/test build launched with `TUIC_APP_INSTANCE=<id>` gets its own
@@ -1743,7 +1746,6 @@ pub fn run() {
     }
     let startup_background =
         themes::window_background::resolve(&themes::load_themes(&themes_dir), &config.theme);
-    let mut context = tauri::generate_context!();
     for window in &mut context.config_mut().app.windows {
         window.background_color = Some(tauri::window::Color(
             startup_background[0],
@@ -2132,6 +2134,7 @@ pub fn run() {
             pty::terminal_request_frame,
             pty::ack_terminal_frame,
             frontend_liveness::frontend_heartbeat,
+            frame_workload::save_frame_workload,
             pty::terminal_exit_alt_screen,
             pty::terminal_scroll,
             pty::terminal_scroll_to_offset,
@@ -2177,6 +2180,7 @@ pub fn run() {
             agent_hook_launch::prepare_agent_launch_args,
             agent::detect_all_agent_binaries,
             agent::spawn_agent,
+            mcp_http::launch_transaction::managed_agent_launch,
             agent_session::discover_agent_session,
             agent_session::verify_agent_session,
             agent_session::claude_project_dir,
@@ -2386,11 +2390,11 @@ pub fn run() {
             config::load_app_config,
             save_app_config,
             boot_commands::load_notification_config_async,
-            config::save_notification_config,
+            settings::legacy::save_notification_config,
             boot_commands::load_ui_prefs_async,
-            config::save_ui_prefs,
+            settings::legacy::save_ui_prefs,
             boot_commands::load_repo_settings_async,
-            config::save_repo_settings,
+            settings::legacy::save_repo_settings,
             config::set_branch_label,
             config::load_repo_local_config,
             config::save_repo_local_config,
@@ -2400,21 +2404,21 @@ pub fn run() {
             mcp_upstream_config::reconnect_mcp_upstream,
             mcp_upstream_config::get_mcp_upstream_status,
             mcp_upstream_credentials::commands::save_mcp_upstream_credential,
-            mcp_upstream_credentials::delete_mcp_upstream_credential,
+            mcp_upstream_credentials::commands::delete_mcp_upstream_credential,
             mcp_oauth::commands::start_mcp_upstream_oauth,
             mcp_oauth::commands::mcp_oauth_callback,
             mcp_oauth::commands::cancel_mcp_upstream_oauth,
             config::check_has_custom_settings,
             boot_commands::load_repo_defaults_async,
-            config::save_repo_defaults,
+            settings::legacy::save_repo_defaults,
             boot_commands::load_repositories_async,
             config::save_repositories,
             config::list_stale_temp_repository_candidates,
             config::repair_stale_temp_repositories,
             config::load_pane_layout,
-            config::save_pane_layout,
+            settings::legacy::save_pane_layout,
             boot_commands::load_prompt_library_async,
-            config::save_prompt_library,
+            settings::legacy::save_prompt_library,
             boot_commands::load_notes_async,
             config::save_notes,
             config::save_note_image,
@@ -2424,9 +2428,9 @@ pub fn run() {
             boot_commands::load_activity_async,
             config::save_activity,
             boot_commands::load_keybindings_async,
-            config::save_keybindings,
+            settings::legacy::save_keybindings,
             boot_commands::load_agents_config_async,
-            config::save_agents_config,
+            settings::legacy::save_agents_config,
             config::get_config_defaults,
             agent_hook_commands::set_agent_hook_instrumentation,
             agent_hook_commands::get_agent_hook_state,
@@ -2489,6 +2493,7 @@ pub fn run() {
             plugins::uninstall_plugin,
             plugins::register_loaded_plugin,
             plugin_settings::plugin_settings_action,
+            settings::api::settings_action,
             plugins::unregister_loaded_plugin,
             plugins::set_plugin_output_watchers,
             plugin_fs::plugin_read_file,
@@ -3717,7 +3722,7 @@ mod tests {
     fn boot_takes_only_the_env_github_token_and_defers_the_rest() {
         let source = include_str!("lib.rs");
         let desktop_run = source
-            .split("pub fn run()")
+            .split("pub fn run(")
             .nth(1)
             .expect("desktop run function")
             .split("fn build_connect_url")
@@ -3764,7 +3769,7 @@ mod tests {
     #[test]
     fn every_boot_path_writes_the_launch_assets_through_the_shared_helper() {
         let source = include_str!("lib.rs");
-        for entry in ["pub fn run()", "pub async fn run_remote("] {
+        for entry in ["pub fn run(", "pub async fn run_remote("] {
             let body = source
                 .split(entry)
                 .nth(1)
@@ -3783,7 +3788,7 @@ mod tests {
     fn desktop_setup_reuses_the_config_loaded_at_process_start() {
         let source = include_str!("lib.rs");
         let desktop_run = source
-            .split("pub fn run()")
+            .split("pub fn run(")
             .nth(1)
             .expect("desktop run function")
             .split("fn build_connect_url")

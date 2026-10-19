@@ -141,6 +141,7 @@ export async function runAppBootstrap(options: AppBootstrapOptions): Promise<voi
 			startAutoFetch,
 			startPrNotificationTimer: prNotificationsStore.startFocusTimer,
 			loadFontFromConfig: settingsStore.loadFontFromConfig,
+			startDictationSettingsSync: () => dictationStore.startRemoteSync(),
 			refreshDictationConfig: () =>
 				dictationStore.refreshConfig().then(() => {
 					if (!dictationStore.state.enabled) return;

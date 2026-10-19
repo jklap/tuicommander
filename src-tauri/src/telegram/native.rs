@@ -98,6 +98,9 @@ pub(crate) fn start(state: &Arc<AppState>) {
     tokio::spawn(async move {
         let sid = format!("telegram:{}", uuid::Uuid::new_v4());
         loop {
+            // The owner also observes cross-process setup edits through revision.
+            // Do not tie catalogue visibility to network health or registration.
+            let _ = state.mcp.tools_changed.send(());
             let revision = super::settings::revision(&paths);
             let config = match super::Config::load(&paths) {
                 Ok(Some(config)) => config,

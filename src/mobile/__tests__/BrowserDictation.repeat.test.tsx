@@ -4,7 +4,7 @@ import { CommandInput } from "../components/CommandInput";
 
 vi.mock("../../stores/appLogger", async (importOriginal) => {
 	const original = await importOriginal<typeof import("../../stores/appLogger")>();
-	return { ...original, appLogger: { ...original.appLogger, warn: vi.fn() } };
+	return { ...original, appLogger: { ...original.appLogger, warn: vi.fn(), info: vi.fn() } };
 });
 
 vi.mock("../../transport", async (importOriginal) => ({
@@ -32,7 +32,7 @@ class Recognition {
 		if (Recognition.failStart) throw new Error("start refused");
 	}
 	stop() {}
-	abort() {}
+	abort = vi.fn();
 	result(transcript: string) {
 		this.onresult?.({ results: [{ 0: { transcript }, isFinal: true }] });
 	}
@@ -79,6 +79,37 @@ it.each(["draft edit", "aborted", "network"])("waits for end after %s before dic
 	expect(draft.value).toBe(reason === "draft edit" ? "edited second third" : "first second third");
 });
 
+// Catches: onerror latches discarding without ending the service, so every later
+// result is ignored and neither the mic nor a draft edit can request an abort.
+it.each(["aborted", "network", "no-speech"])(
+	"finishes a failed %s take before inserting the next transcript",
+	(error) => {
+		const draft = mount();
+		const first = start();
+		first.onerror?.({ error });
+		// We own requesting shutdown; the browser owns when shutdown completes.
+		expect(first.abort).toHaveBeenCalledOnce();
+		expect(screen.getByRole("status").textContent).toBe("Dictation failed");
+		first.result("discarded");
+		expect(draft.value).toBe("");
+		first.onend?.();
+		start().result("retry succeeded");
+		expect(screen.queryByRole("status")).toBeNull();
+		expect(draft.value).toBe("retry succeeded");
+	},
+);
+
+// Catches: an empty successful take leaves ownership behind despite its end.
+it("inserts the next transcript after an empty take ends", () => {
+	const draft = mount();
+	const first = start();
+	first.result("");
+	first.onend?.();
+	start().result("retry succeeded");
+	expect(screen.queryByRole("status")).toBeNull();
+	expect(draft.value).toBe("retry succeeded");
+});
+
 // Catches: normal completion retains the old recognizer or its draft tail.
 it("dictates three times after result then end without duplicating earlier speech", () => {
 	const draft = mount();
@@ -98,6 +129,7 @@ it("dictates again after a synchronous start failure without waiting for end", (
 	start();
 	Recognition.failStart = false;
 	start().result("retry succeeded");
+	expect(screen.queryByRole("status")).toBeNull();
 	expect(draft.value).toBe("retry succeeded");
 });
 

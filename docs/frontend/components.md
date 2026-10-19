@@ -188,7 +188,7 @@ Copy buttons use a single unwrapped line, including in the full app shell.
 `Transcript` interprets complete ACP answer text as it streams: it hides the
 connection acknowledgement, shows a declared intent as status, and offers
 bracketed `suggest:` items as prompt buttons. Markdown examples stay literal.
-Messages, tool output and code blocks have copy actions. The transcript has
+Messages, tool output and code blocks have copy actions. Chat preserves fenced-code padding inside highlighted answers and places Copy in a normal-flow row above the code, so the control neither clips nor covers wrapped text. The transcript has
 text selection and find/select-all/clear shortcuts. Find selects phrases across
 inline Markdown within each block, skips collapsed disclosure bodies, and closes
 on Escape from the input or navigation buttons. Local file paths use the
@@ -211,6 +211,15 @@ events, so another window or a phone sees the same order and cancellations.
 
 ## Mobile Screens (`src/mobile/`)
 
+`useSessionChatView` offers the existing header CLI / Chat switch for Claude, Grok, Codex and ego through the same supported-adapter predicate as desktop. `chat_view_snapshot` owns transcript binding; a refusal returns to CLI with its reason. The shared transcript does not replace the mounted terminal, composer, keyboard bar or native question controls.
+
+`SessionDetailScreen` replaces its state with each complete WebSocket or polled
+session snapshot, except polls whose `last_activity_ms` is older than the applied
+state. Equal timestamps remain replaceable; this field is not a protocol revision.
+Omitted optional fields mean cleared state, not missing deltas.
+A fresh poll can therefore retire a stale socket's agent identity and question,
+return Chat to CLI, and route the composer to the remaining shell after agent exit.
+
 Mobile connection presentation follows `useSessions`, not the independent version poll. Recovery increments a root revision consumed by Files, Chat settings, Activity, Settings and Progress discovery. Failed Files reads retry without replacing unsaved edits. During an outage, tab views stay mounted but hidden so contradictory empty/setup errors do not replace the shared connection banner. Mobile Chat hydrates settings quietly and does not infer missing ego configuration from an unsuccessful read.
 
 `OpenMarkdownMenu` adds a scrollable Markdown section to session overflow.
@@ -222,6 +231,9 @@ session mounted and opens `FilesScreen` with the entry’s original checkout roo
 scrolled up or touching the output, it retains the loaded rows instead of
 evicting the content being read. Older-history pages extend that reading window.
 The next log update after following resumes restores the 500-line tail.
+The backend preserves the full Claude `/resume` modal in both the initial HTTP
+screen and log-WebSocket frames, including session rows and no-match results;
+the mobile view does not reconstruct the picker from transcript text.
 
 Terminal ego single-choice questions use the header question action to toggle the existing `ChoicePromptOverlay`. Full titles and option labels wrap within its scrollable overlay. Opening is explicit; the terminal keeps its full height. The composer uses the backend navigation selection mode and its existing in-flight guard to submit only once.
 
@@ -240,7 +252,7 @@ the backend list and card order remain unchanged. Closing search clears the quer
 Waiting sessions sort above idle agents and shells without changing order within each
 group. The new-session sheet chooses an agent and repository, then opens the new
 session after `spawn_agent` succeeds. The question counter opens the first waiting
-session; each banner shows its session name and repository.
+session from the AWAITING tile, without a duplicate app-bar count; each banner shows its session name and repository.
 Each session card uses separate buttons to open or kill the session. Both have
 accessible names, and the kill button has a 44 px hit area. The list reserves
 space below its last card so the floating new-session button cannot cover it.
@@ -265,6 +277,8 @@ resolved path. HTTP(S) output links open outside the PWA.
 Markdown images in the Files viewer resolve relative to their source file and
 load through the authenticated `/fs/markdown-image` route.
 
+`FilesScreen` receives the existing mobile session list and the originating session ID from `MobileApp`. Its Markdown review controls select a live agent in the owning repository and call `enqueue_agent_command` over HTTP. Desktop and mobile use `buildMarkdownReviewPrompt` for the same path, checkbox, and tweak-comment contract. Successful sends clear only the acknowledged review state; failed sends remain retryable.
+
 The embedded Progress list clamps long messages to four lines until More is
 pressed. Activity presents local 24-hour times, minute durations, and singular
 block counts. Mobile Settings shows app/server versions and a persistent Dark
@@ -284,6 +298,9 @@ a queued agent message can look like prompt input. A Tab request from the
 composer or keybar accepts one strict extension of a nonempty local draft.
 Explicit keybar Up/Down accepts one history replacement after its PTY write is
 acknowledged, including an empty line, and updates the edit delta baseline.
+When a managed agent awaits an answer without parsed choices, keybar Tab and
+Up/Down still go to the PTY so an open picker can navigate. These keys do not
+import history into the local answer draft.
 Typing, sending, Escape, or a failed write cancels the request. A history response
 arriving before the HTTP acknowledgement is dropped, causing a missed recall.
 Because snapshots have no causal request ID, an unrelated delayed snapshot after
@@ -392,7 +409,7 @@ label row above its pages, and the configured repositories follow under
   - **Smart Prompts** (`SmartPromptsTab`)
 - **Integrations**
   - **MCP** (`LocalMcpPanel` + `UpstreamMcpPanel`) — HTTP API server status, TUIC tools, upstream MCP servers
-  - **Remote Access** (`RemoteAccessPanel`) — Remote access, Tailscale HTTPS, QR/connect URL, cloud relay
+  - **Remote Access** (`RemoteAccessPanel`) — Remote access, Tailscale HTTPS, QR/connect URL, cloud relay; local IP discovery failures stay inline with retry while the remaining controls stay available
   - **Remote Machines** (`RemoteMachinesTab`) — `tuic-remote` connections
   - **Plugins** (`PluginsTab`) — Plugin management, enable/disable, log viewer
 - **Repositories**
@@ -698,6 +715,13 @@ system and never turns an absent provider value into zero.
 | Project Progress | Command palette / bell | `progressStore.toggle()` |
 | Worktree Manager | `Cmd+Shift+W` | `worktreeManagerStore.toggle()` |
 
+Dashboard row navigation uses the shared `navigateToTerminal` path. It opens the
+manual Global Workspace for parked sessions before activating their content,
+leaves that workspace for a repository session that is not a member, and focuses
+its existing pane group when present. Undocked terminals use the full-page overlay
+without changing the split layout being left. Existing tab/session bindings are
+preserved. Notification and detached-dashboard navigation use the same path.
+
 Activity Dashboard uses a 500px inline overlay and the same compact row layout
 in its detached window. On startup and reopening, saved detached geometry cannot
 make the Activity window larger than its 550×650 default; smaller saved sizes
@@ -776,11 +800,15 @@ The Precheck section includes a default-off stdout context checkbox. It edits
 `precheck.inject_output` through the existing store and shared save API, without
 changing prompt text. Disabling and re-enabling the precheck resets the flag.
 
+The mobile session header uses a handset icon and Start/Stop voice call labels for the two-way voice control. The phone More menu uses the same Start/Stop voice call labels. The composer dictation button keeps its microphone icon.
+
 ### Mobile composer browser dictation
 
 Restored dictated drafts stay in the composer without writing to the terminal on mount. Send or the first edit reconciles the saved text with the current PTY input line through the existing delta path. Later edits use the local baseline so delayed terminal echoes do not replay text.
 
-`CommandInput` mounts `useBrowserDictation`, a feature-detected browser interaction hook. Its mic is directly before Send in the existing row; interim hypotheses are replaced and final speech stays in the current draft without focus or automatic Enter. `SessionDetailScreen` excludes server hands-free while browser recognition is pending or active, and `useMobileVoice.recording` blocks browser starts during server arming/recording. Manual typing or keybar text insertion cancels recognition and preserves the edited draft. The mic stays claimed until the browser emits `end`, including after an error; queued results from that recording are ignored. Tap the mic to resume after `end`. Browser failures are logged as well as toasted. The hook also stops on send, session end, or unmount. No setting or backend route is added.
+`CommandInput` mounts `useBrowserDictation`, a feature-detected browser interaction hook. Its mic is directly before Send in the existing row; interim hypotheses are replaced and final speech stays in the current draft without focus or automatic Enter. `SessionDetailScreen` excludes server hands-free while browser recognition is pending or active, and `useMobileVoice.recording` blocks browser starts during server arming/recording. Manual typing or keybar text insertion cancels recognition and preserves the edited draft. The mic stays claimed until the browser emits `end`, including after an error; queued results from that recording are ignored. Tap the mic to resume after `end`. Browser errors request cancellation through the same shutdown path as an edit or send. Browser failures are logged as well as toasted; the existing “Dictation failed” label stays beside the mic in the keyboard-visible composer until the next take starts. The hook also stops on send, session end, or unmount. No setting or backend route is added. Bounded lifecycle diagnostics use source `dictation`, level `debug`: start attempt, first result, first error with code, abort request, end and ownership release. Each record includes the captured session ID, a random take ID and a per-take sequence number, not transcript text. The sequence preserves event order even if uploads arrive out of order. Unbound AI Chat drafts use a null session ID. At most six records are emitted per take; they reach the owner through the existing log route.
+
+`IdeasOverlay` reuses the same hook and `MobileDictationButton`. `SessionDetailScreen` passes its existing voice-call and terminal-dictation recording signals to block the Ideas hook and disable its mic while either owns the microphone. It supplies an optional `getSelection` accessor, so each take captures its insertion range and replaces only that range as hypotheses change. Empty hypotheses preserve the original selection. Typing and explicit idea submission cancel recognition before changing the draft. Speech updates only the unsaved idea input, never the terminal or idea store. The hook keeps tail insertion for consumers that omit `getSelection`.
 
 ## Tasks board
 
@@ -833,6 +861,8 @@ FileBrowserPanel subscribes to successful folder-drop completion and routes it t
 
 `SettingsPrimitives.tsx` provides SettingPageHeader, SectionCard, SettingRow, StatusSummary, ListRow, EmptyState and DangerZone. These components render caller-owned content only. SettingRow reuses SettingField label and descriptive IDs, including field errors; controls remain the existing UI Input/Select/Textarea components. SectionCard and DangerZone titles are understood by the static Settings search extractor and render h3 anchors. Existing field consumers retain their stacked layout unless they opt into row presentation.
 
+Settings integration keeps `SettingsPanel` as the page-selection owner. Search catalogue reads do not mount page consumers; plugin `describe` supplies navigation and search while scoped `get` starts only when the editor mounts. Search reveals expert keys before the next-frame scroll without persisting Expert Mode. Section links preserve retired-tab mappings, ignore missing anchors and cancel scheduled work on close. `pluginSettingsTab.test.tsx`, `settingsPanelSearch.test.tsx`, `settingsPanelExpert.test.tsx` and `DeepLinkSection.test.tsx` cover these shared boundaries, including local loading/errors and removal during pending plugin reads. No global save transaction or status inference belongs in the shell.
+
 The Pocket Voice picker includes installed and downloadable catalogue voices for the active language. A missing configured voice stays selected with a Not Downloaded label and an adjacent Download row.
 
 Terminal ego provider recovery: the tab replaces its busy animation with a
@@ -841,3 +871,9 @@ backend recovery snapshot exists; its one-second display timer stops on unmount.
 The component displays phase, attempt, next-time and a zero-clamped countdown,
 with a single-flight Force retry button using the shared backend retry transaction.
 A non-empty composer refuses the retry; the status bar displays the error.
+
+Voice correction controls carry `corrections.replacements.{from}.from` and
+`corrections.replacements.{from}.to` catalogue identities. Import, add and remove
+retain the existing TextCorrector workflow; export does not change settings.
+
+Desktop `TerminalChatView` renders active native questions from the existing session lifecycle store below the shared transcript. `ChoicePromptOverlay` has an embedded layout; desktop and mobile share `sendNativeChoice` for agent-specific PTY keys. Compose drafts and ACP interaction state are not involved.

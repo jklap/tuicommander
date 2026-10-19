@@ -8,7 +8,6 @@ use tauri::Emitter;
 use super::mcp_transport::insert_optional_value;
 use super::mcp_transport::run_blocking_handler;
 use super::mcp_transport::to_json_or_error;
-use super::mcp_transport_catalogue::CONFIG_ACTIONS;
 use super::mcp_transport_catalogue::DEBUG_ACTIONS;
 use super::mcp_transport_catalogue::REMOTE_ACTIONS;
 use super::mcp_transport_catalogue::REPO_ACTIONS;
@@ -20,7 +19,6 @@ use super::mcp_transport_peer::PEER_IDENTITY_BIND_LOCK;
 use super::mcp_transport_session_agent::handle_session;
 use super::mcp_transport_session_agent::require_action;
 use super::mcp_transport_session_agent::require_path;
-use super::mcp_transport_session_agent::require_string;
 
 pub(super) async fn handle_remote_update(
     state: &Arc<AppState>,
@@ -229,23 +227,31 @@ async fn handle_worktree_with_caller(
             if let Err(e) = validate_mcp_repo_path(&path) {
                 return e;
             }
-            let mut wts = match crate::worktree::get_worktree_paths(path.clone()) {
-                Ok(wts) => wts,
-                Err(e) => return serde_json::json!({"error": e}),
+            let inventory_path = path.clone();
+            let mut wts = match tokio::task::spawn_blocking(move || {
+                crate::worktree::get_worktree_paths(inventory_path)
+            })
+            .await
+            {
+                Ok(Ok(wts)) => wts,
+                Ok(Err(error)) => return serde_json::json!({"error": error}),
+                Err(error) => {
+                    return serde_json::json!({"error": format!("worktree inventory task failed: {error}")});
+                }
             };
-            // Same source as the sidebar's lifecycleStatus (get_repo_summary /
-            // get_repo_diff_stats): inspect_workspace_lifecycle, fanned out per
-            // worktree on the blocking pool so the async worker isn't parked on
-            // the git subprocesses each inspection runs.
+            // Keep full, fresh checkout safety fields, but share the sidebar's
+            // ref-keyed merge proofs instead of rerunning every integration read.
+            // GitHub evidence is cache-only here; monitoring fills it separately.
             let mut lifecycle_handles = Vec::with_capacity(wts.len());
-            for workspace_id in wts.keys().cloned().collect::<Vec<_>>() {
+            for (workspace_id, workspace) in &wts {
+                let workspace_id = workspace_id.clone();
+                let workspace = workspace.clone();
                 let base_repo = path.clone();
-                let proof_state = Arc::clone(state);
                 lifecycle_handles.push(tokio::task::spawn_blocking(move || {
-                    let lifecycle = crate::worktree::inspect_workspace_lifecycle(
-                        &proof_state,
+                    let lifecycle = tuic_git::worktree::inspect_workspace_listing_with_pr(
                         std::path::Path::new(&base_repo),
-                        &workspace_id,
+                        &workspace,
+                        crate::worktree::merged_github_pr_proves_tip_cached,
                     );
                     (workspace_id, lifecycle)
                 }));
@@ -507,130 +513,6 @@ async fn handle_worktree_with_caller(
         }
         other => serde_json::json!({"error": format!(
             "Unknown action '{}' for tool 'repo'. Available: {}", other, REPO_ACTIONS
-        )}),
-    }
-}
-
-pub(super) fn handle_config(
-    state: &Arc<AppState>,
-    addr: SocketAddr,
-    args: &serde_json::Value,
-) -> serde_json::Value {
-    let action = match require_action(args, "config", CONFIG_ACTIONS) {
-        Ok(a) => a,
-        Err(e) => return e,
-    };
-    match action {
-        "get" => {
-            let config = state.config.read().clone();
-            let mut json = to_json_or_error(config);
-            if let Some(services) = json.pointer_mut("/services") {
-                if let Some(auth) = services.pointer_mut("/auth")
-                    && let Some(o) = auth.as_object_mut()
-                {
-                    o.remove("password_hash");
-                    o.remove("session_token");
-                }
-                if let Some(push) = services.pointer_mut("/push")
-                    && let Some(o) = push.as_object_mut()
-                {
-                    o.remove("vapid_private_key");
-                }
-                if let Some(relay) = services.pointer_mut("/relay")
-                    && let Some(o) = relay.as_object_mut()
-                {
-                    o.remove("token");
-                }
-            }
-            json
-        }
-        "save" => {
-            if !addr.ip().is_loopback() {
-                return serde_json::json!({"error": "Config save is restricted to localhost connections"});
-            }
-            let request: crate::config::ConfigSaveRequest<crate::config::AppConfig> =
-                match serde_json::from_value(args.clone()) {
-                    Ok(request) => request,
-                    Err(error) => {
-                        return serde_json::json!({"error": format!("Invalid config save request: {error}")});
-                    }
-                };
-            match crate::config::commit_config_save(state, request.base, request.config) {
-                Ok(effects) => {
-                    if effects.tools_changed {
-                        let _ = state.mcp.tools_changed.send(());
-                    }
-                    if effects.server_changed {
-                        super::restart_after_server_settings_change(
-                            state,
-                            "remote-access configuration changed over MCP",
-                        );
-                    }
-                    serde_json::json!({"ok": true})
-                }
-                Err(e) => serde_json::json!({"error": e}),
-            }
-        }
-        "list_prompts" => {
-            let lib = crate::config::load_prompt_library();
-            serde_json::json!({
-                "prompts": lib.prompts.iter().map(|p| serde_json::json!({
-                    "id": p.id, "label": p.label, "pinned": p.pinned,
-                })).collect::<Vec<_>>()
-            })
-        }
-        "load_prompt" => {
-            let id = match require_string(args, "id") {
-                Ok(s) => s,
-                Err(e) => return e,
-            };
-            let lib = crate::config::load_prompt_library();
-            match lib.prompts.iter().find(|p| p.id == id) {
-                Some(p) => to_json_or_error(p.clone()),
-                None => serde_json::json!({"error": format!("Prompt not found: {id}")}),
-            }
-        }
-        "save_prompt" => {
-            if !addr.ip().is_loopback() {
-                return serde_json::json!({"error": "Prompt save is restricted to localhost connections"});
-            }
-            let id = match require_string(args, "id") {
-                Ok(s) => s.to_string(),
-                Err(e) => return e,
-            };
-            let label = match require_string(args, "label") {
-                Ok(s) => s.to_string(),
-                Err(e) => return e,
-            };
-            let text = match require_string(args, "text") {
-                Ok(s) => s.to_string(),
-                Err(e) => return e,
-            };
-            let pinned = args
-                .get("pinned")
-                .and_then(|v| v.as_bool())
-                .unwrap_or(false);
-            let mut lib = crate::config::load_prompt_library();
-            let base = lib.clone();
-            if let Some(existing) = lib.prompts.iter_mut().find(|p| p.id == id) {
-                existing.label = label;
-                existing.text = text;
-                existing.pinned = pinned;
-            } else {
-                lib.prompts.push(crate::config::PromptEntry {
-                    id,
-                    label,
-                    text,
-                    pinned,
-                });
-            }
-            match crate::config::save_prompt_library(base, lib) {
-                Ok(()) => serde_json::json!({"ok": true}),
-                Err(e) => serde_json::json!({"error": e}),
-            }
-        }
-        other => serde_json::json!({"error": format!(
-            "Unknown action '{}' for tool 'config'. Available: {}", other, CONFIG_ACTIONS
         )}),
     }
 }
@@ -1068,6 +950,71 @@ pub(super) fn handle_voice(
     })
 }
 
+/// The grouped wire contract reuses the service inputs and their owners.
+#[derive(serde::Deserialize, schemars::JsonSchema)]
+#[serde(tag = "action", rename_all = "snake_case", deny_unknown_fields)]
+enum WorkflowAction {
+    Story {
+        input: crate::stories::StoryAction,
+    },
+    Run {
+        input: Box<crate::workflows::RunAction>,
+    },
+    ProposalCreate {
+        input: WorkflowStoryCreateInput,
+    },
+    Report {
+        input: crate::workflows::AttemptReport,
+    },
+    Launch {
+        input: WorkflowLaunchInput,
+    },
+}
+
+pub(super) fn workflow_action_schema() -> serde_json::Value {
+    let generator = schemars::generate::SchemaSettings::draft2020_12()
+        .with(|settings| settings.inline_subschemas = true)
+        .into_generator();
+    let mut schema = serde_json::to_value(generator.into_root_schema_for::<WorkflowAction>())
+        .expect("workflow input schema");
+    schema.as_object_mut().unwrap().remove("$schema");
+    schema
+}
+
+pub(super) fn handle_workflow(
+    state: &Arc<AppState>,
+    addr: SocketAddr,
+    args: &serde_json::Value,
+    mcp_session_id: Option<&str>,
+) -> serde_json::Value {
+    let action: WorkflowAction = match serde_json::from_value(args.clone()) {
+        Ok(action) => action,
+        Err(error) => {
+            return serde_json::json!({"error": format!("invalid workflow action: {error}")});
+        }
+    };
+    match action {
+        WorkflowAction::Story { input } => {
+            handle_story(state, &serde_json::json!({"input":input}), mcp_session_id)
+        }
+        WorkflowAction::Run { input } => {
+            handle_workflow_run(state, &serde_json::json!({"input":input}), mcp_session_id)
+        }
+        WorkflowAction::ProposalCreate { input } => {
+            handle_workflow_story_create(state, &serde_json::json!({"input":input}), mcp_session_id)
+        }
+        WorkflowAction::Report { input } => {
+            handle_workflow_report(state, &serde_json::json!({"input":input}), mcp_session_id)
+        }
+        WorkflowAction::Launch { input } => handle_workflow_launch(
+            state,
+            addr,
+            &serde_json::json!({"input":input}),
+            mcp_session_id,
+        ),
+    }
+}
+
 pub(super) fn handle_story(
     state: &Arc<AppState>,
     args: &serde_json::Value,
@@ -1113,7 +1060,7 @@ pub(super) fn handle_workflow_run(
     ))
 }
 
-#[derive(serde::Deserialize)]
+#[derive(serde::Deserialize, serde::Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct WorkflowStoryCreateInput {
     pub(super) run_id: String,
@@ -1264,6 +1211,15 @@ pub(super) fn queue_workflow_coordinator_wake(
         timestamp: now_ms,
         delivered_via_channel: false,
     };
+    queue_peer_notice(state, recipient, message)
+}
+
+/// Host-originated mail shares peer identity locking and payload-free wake routing.
+pub(crate) fn queue_peer_notice(
+    state: &AppState,
+    recipient: &str,
+    message: crate::state::AgentMessage,
+) -> bool {
     let message_id = message.id.clone();
     let timestamp = {
         let _guard = PEER_IDENTITY_BIND_LOCK.lock();
@@ -1291,7 +1247,7 @@ pub(super) fn queue_workflow_coordinator_wake(
     true
 }
 
-#[derive(serde::Deserialize)]
+#[derive(serde::Deserialize, serde::Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct WorkflowLaunchInput {
     pub(super) run_id: String,
@@ -1515,10 +1471,15 @@ fn launch_workflow_effect(
         state,
         addr,
         mcp_session_id,
-        &input.agent_type,
-        &format!("Workflow {:?}", package.role),
-        &package.prompt,
-        &worktree,
+        super::managed_launch::Launch {
+            profile: &input.agent_type,
+            name: &format!("Workflow {:?}", package.role),
+            prompt: &package.prompt,
+            workspace: &worktree,
+            owner_scope: &format!("workflow:{}", run.id),
+            idempotency_key: &attempt.id,
+            keep_open: true,
+        },
     );
     if let Some(error) = spawned.get("error").and_then(serde_json::Value::as_str) {
         if let Ok(failed) = store.command(
@@ -2092,7 +2053,8 @@ pub(super) async fn handle_confirm(
             .read()
             .disabled_native_tools
             .iter()
-            .any(|tool| tool == "settings");
+            .any(|tool| tool == "settings")
+            && state.config.read().settings_mcp_enabled;
         let caller = crate::settings::policy::Caller::mcp(addr, connection.to_owned(), enabled);
         return super::confirm_settings(state, &caller, id, mcp_session_id).await;
     }
@@ -2471,6 +2433,15 @@ pub(super) fn handle_debug_unified(
         Err(e) => return e,
     };
     match action {
+        "frame_workload_dump" => {
+            if !addr.ip().is_loopback() {
+                return serde_json::json!({"error": "frame_workload_dump is restricted to localhost connections"});
+            }
+            super::log_routes::eval_debug_script(
+                state,
+                "return window.__TUIC__.frameWorkload.dump('mcp-manual')",
+            )
+        }
         "invoke_js" => {
             if !addr.ip().is_loopback() {
                 return serde_json::json!({"error": "invoke_js is restricted to localhost connections"});
@@ -2489,6 +2460,7 @@ pub(super) fn handle_debug_unified(
                 "agent_detection": "Agent detection pipeline diagnostics. Optional session_id (omit for all sessions).",
                 "logs": "App log entries (info/warn/error mirrored from JS). Params: level, source, limit (default 50).",
                 "sessions": "All PTY sessions with pid, cwd, foreground process info.",
+                "frame_workload_dump": "Persist enabled frame recorder; async result in eval_js logs. Requires responsive desktop JS.",
                 "invoke_js": "Execute JS in the main WebView (localhost only). Use `return expr` for output. Result + captured console output logged as source='eval_js'. Read via logs(source='eval_js', limit=1)."
             },
             "invoke_js_guide": {

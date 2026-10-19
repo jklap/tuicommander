@@ -57,6 +57,7 @@ const GroupSettingsItem: Component<{
 					}
 				>
 					<Input
+						data-setting-id="repositories_registration.groups.{id}.name"
 						class={s.groupNameInput}
 						aria-label={`Group name: ${props.group.name}`}
 						aria-invalid={!!nameError()}
@@ -73,6 +74,7 @@ const GroupSettingsItem: Component<{
 					/>
 				</Show>
 				<button
+					data-non-setting="Create or remove a stable repository group through its owner"
 					class={s.groupDeleteBtn}
 					onClick={() => repositoriesStore.deleteGroup(props.group.id)}
 					title={t("groups.btn.deleteGroup", "Delete group")}
@@ -85,6 +87,7 @@ const GroupSettingsItem: Component<{
 				<div class={s.groupNameError}>{nameError()}</div>
 			</Show>
 			<ColorSwatchPicker
+				settingId="repositories_registration.groups.{id}.color"
 				color={props.group.color}
 				presets={DEFAULT_COLOR_PRESETS}
 				onChange={(c) => repositoriesStore.setGroupColor(props.group.id, c)}
@@ -99,14 +102,10 @@ export const AppearanceTab: Component = () => {
 
 	return (
 		<div class={`${s.section} ${s.applicationPage}`}>
-			<SettingPageHeader
-				title="Appearance"
-				breadcrumb="Application / Appearance"
-				description="Tabs, chat presentation and repository groups."
-				scope="Application"
-			/>
+			<SettingPageHeader title="Appearance" breadcrumb="Application / Appearance" scope="Application defaults" />
 			<SectionCard title={t("appearance.heading.tabs", "Tabs")}>
 				<SettingSelect
+					settingId="app.split_tab_mode"
 					row
 					label={t("appearance.label.splitTabMode", "Split Tab Mode")}
 					value={settingsStore.state.splitTabMode}
@@ -121,6 +120,7 @@ export const AppearanceTab: Component = () => {
 				/>
 
 				<SettingSelect
+					settingId="app.tab_ordering_mode"
 					row
 					label={t("appearance.label.tabOrderingMode", "Tab Ordering")}
 					value={settingsStore.state.tabOrderingMode}
@@ -139,6 +139,7 @@ export const AppearanceTab: Component = () => {
 				/>
 
 				<SettingToggle
+					settingId="app.tab_cycling_all_types"
 					row
 					checked={settingsStore.state.tabCyclingAllTypes}
 					onChange={(v) => settingsStore.setTabCyclingAllTypes(v)}
@@ -150,6 +151,7 @@ export const AppearanceTab: Component = () => {
 				/>
 
 				<SettingToggle
+					settingId="app.tab_tree_enabled"
 					row
 					checked={settingsStore.state.tabTreeEnabled}
 					onChange={(v) => settingsStore.setTabTreeEnabled(v)}
@@ -161,6 +163,7 @@ export const AppearanceTab: Component = () => {
 				/>
 
 				<SettingSlider
+					settingId="app.max_tab_name_length"
 					row
 					label={t("appearance.label.maxTabNameLength", "Max Tab Name Length")}
 					value={settingsStore.state.maxTabNameLength}
@@ -172,6 +175,7 @@ export const AppearanceTab: Component = () => {
 			</SectionCard>
 			<SectionCard title={t("appearance.heading.chat", "Chat")}>
 				<SettingToggle
+					data-non-setting="Client-local new-text indicator preference; no backend owner"
 					row
 					checked={transcriptPreferences.enabled()}
 					onChange={(value) => transcriptPreferences.setEnabled(value)}
@@ -183,6 +187,7 @@ export const AppearanceTab: Component = () => {
 				/>
 
 				<SettingToggle
+					settingId="app.chat_mute_intermediate_text"
 					row
 					checked={settingsStore.state.chatMuteIntermediateText}
 					onChange={(v) => settingsStore.setChatMuteIntermediateText(v)}
@@ -205,6 +210,7 @@ export const AppearanceTab: Component = () => {
 				<For each={groups()}>{(group) => <GroupSettingsItem group={group} />}</For>
 
 				<button
+					data-non-setting="Create or remove a stable repository group through its owner"
 					class={s.groupsAddBtn}
 					onClick={() => repositoriesStore.createGroup(t("groups.defaultGroupName", "New Group"))}
 				>
@@ -213,7 +219,11 @@ export const AppearanceTab: Component = () => {
 			</SectionCard>
 			<SectionCard title={t("appearance.heading.layout", "Layout")}>
 				<div class={s.group}>
-					<button class={s.testBtn} onClick={() => uiStore.resetLayout()}>
+					<button
+						data-non-setting="Reset panel geometry through the existing UI layout owner"
+						class={s.testBtn}
+						onClick={() => uiStore.resetLayout()}
+					>
 						{t("appearance.btn.resetLayout", "Reset Panel Sizes")}
 					</button>
 					<p class={s.hint}>{t("appearance.hint.resetLayout", "Reset sidebar and panel widths to default values")}</p>

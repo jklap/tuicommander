@@ -29,7 +29,9 @@ pub(crate) enum AutomationAction {
         id: String,
     },
     Create {
-        definition: AutomationDefinition,
+        definition: Value,
+        #[serde(skip)]
+        idempotent: bool,
     },
     Update {
         id: Option<String>,
@@ -116,8 +118,18 @@ pub(crate) async fn execute_as(
     state: Arc<AppState>,
     caller: Caller,
 ) -> Result<Value, String> {
-    let action = parse(input)?;
+    let mut action = parse(input)?;
     caller.creator(&action)?;
+    if let AutomationAction::Create {
+        definition,
+        idempotent,
+    } = &mut action
+        && let Caller::Agent(Some(creator)) = &caller
+        && definition.get("id").is_none()
+    {
+        super::create::assign_retry_id(definition, creator)?;
+        *idempotent = true;
+    }
     if let AutomationAction::RunNow { id } = action {
         return value(AutomationRuntime::run_now(&state, &id).await?);
     }
@@ -137,19 +149,53 @@ pub(crate) async fn execute_as(
         .map_err(|error| format!("Automation cleanup task failed: {error}"))?;
     }
     tokio::task::spawn_blocking(move || {
-        execute_stored_as(
-            &DefinitionStore::new(),
+        let definitions = DefinitionStore::new();
+        if let AutomationAction::Create {
+            definition,
+            idempotent,
+        } = &mut action
+        {
+            if *idempotent {
+                // A retry returns the original occurrence even if caller cwd or
+                // launch settings are no longer available to resolve defaults.
+                if let Some(saved) = definitions
+                    .load()?
+                    .definitions
+                    .into_iter()
+                    .find(|saved| definition["id"].as_str() == Some(saved.id.as_str()))
+                {
+                    if saved.created_by_session.as_deref()
+                        != match &caller {
+                            Caller::Agent(session) => session.as_deref(),
+                            Caller::Client => None,
+                        }
+                    {
+                        return Err("Automation id already exists".into());
+                    }
+                    return create_reply(saved, Utc::now());
+                }
+            }
+            super::create::apply_caller_defaults(definition, &state, &caller)?;
+        }
+        execute_stored_configured(
+            &definitions,
             &RunStore::open()?,
             action,
             Utc::now(),
             caller,
+            Some(&crate::config::load_agents_config()),
         )
     })
     .await
     .map_err(|error| format!("Automation task failed: {error}"))?
 }
 
-pub(crate) fn parse(input: Value) -> Result<AutomationAction, String> {
+pub(crate) fn parse(mut input: Value) -> Result<AutomationAction, String> {
+    // Create replies include a read-only next occurrence; round-tripping a saved
+    // definition into update/preview must not persist that computed metadata.
+    if let Some(definition) = input.get_mut("definition").and_then(Value::as_object_mut) {
+        definition.remove("next_run_ms");
+    }
     serde_json::from_value(input).map_err(|error| format!("Invalid automation action: {error}"))
 }
 
@@ -163,6 +209,7 @@ pub(crate) fn execute_stored(
     execute_stored_as(definitions, runs, action, now, Caller::Client)
 }
 
+#[cfg(test)]
 pub(crate) fn execute_stored_as(
     definitions: &DefinitionStore,
     runs: &RunStore,
@@ -170,7 +217,25 @@ pub(crate) fn execute_stored_as(
     now: DateTime<Utc>,
     caller: Caller,
 ) -> Result<Value, String> {
+    execute_stored_configured(definitions, runs, action, now, caller, None)
+}
+
+/// Pure snapshot tests omit ambient agent settings; every live transport supplies them.
+fn execute_stored_configured(
+    definitions: &DefinitionStore,
+    runs: &RunStore,
+    action: AutomationAction,
+    now: DateTime<Utc>,
+    caller: Caller,
+    profiles: Option<&crate::config::AgentsConfig>,
+) -> Result<Value, String> {
     let creator = caller.creator(&action)?;
+    let validate_profile = |definition: &AutomationDefinition| -> Result<(), String> {
+        if let Some(profiles) = profiles {
+            profiles.require_named_run_config(&definition.run_config)?;
+        }
+        Ok(())
+    };
     match action {
         AutomationAction::List {} => {
             let mut items = Vec::new();
@@ -186,7 +251,13 @@ pub(crate) fn execute_stored_as(
                     .history(Some(&definition.id), 1, 0)?
                     .first()
                     .map(|run| run.status);
-                items.push(json!({"definition": definition, "next_run_ms": next.map(|t| t.timestamp_millis()), "last_status": last}));
+                let profile_error = profiles.and_then(|profiles| {
+                    profiles
+                        .require_named_run_config(&definition.run_config)
+                        .err()
+                });
+                let next = next.filter(|_| profile_error.is_none());
+                items.push(json!({"definition": definition, "next_run_ms": next.map(|t| t.timestamp_millis()), "last_status": last, "run_config_error": profile_error}));
             }
             Ok(Value::Array(items))
         }
@@ -203,14 +274,14 @@ pub(crate) fn execute_stored_as(
             timezone.as_deref(),
         )?),
         AutomationAction::Get { id } => value(definitions.get(&id)?),
-        AutomationAction::Create { definition } => {
-            let id = definition.id.clone();
-            actions::execute(
-                definitions,
-                DefinitionAction::Create { definition },
-                creator,
-            )?;
-            value(definitions.get(&id)?)
+        AutomationAction::Create {
+            definition,
+            idempotent,
+        } => {
+            let definition = super::create::resolve(definition, now)?;
+            validate_profile(&definition)?;
+            let saved = actions::create_saved(definitions, definition, creator, idempotent)?;
+            create_reply(saved, now)
         }
         AutomationAction::Update {
             id,
@@ -218,6 +289,7 @@ pub(crate) fn execute_stored_as(
             enabled,
         } => match (definition, enabled) {
             (Some(definition), None) => {
+                validate_profile(&definition)?;
                 let id = id.unwrap_or_else(|| definition.id.clone());
                 actions::execute(
                     definitions,
@@ -231,6 +303,9 @@ pub(crate) fn execute_stored_as(
             }
             (None, Some(enabled)) => {
                 let id = id.ok_or("Automation update requires id")?;
+                if enabled {
+                    validate_profile(&definitions.get(&id)?)?;
+                }
                 definitions.set_enabled(&id, enabled)?;
                 value(definitions.get(&id)?)
             }
@@ -240,6 +315,7 @@ pub(crate) fn execute_stored_as(
             actions::execute(definitions, DefinitionAction::Pause { id }, None)
         }
         AutomationAction::Resume { id } => {
+            validate_profile(&definitions.get(&id)?)?;
             actions::execute(definitions, DefinitionAction::Resume { id }, None)
         }
         AutomationAction::Delete { id } => {
@@ -281,6 +357,17 @@ pub(crate) fn execute_stored_as(
         AutomationAction::RunNow { .. } => Err("Run Now requires the runtime owner".into()),
     }
 }
+fn create_reply(saved: AutomationDefinition, now: DateTime<Utc>) -> Result<Value, String> {
+    let next = if saved.enabled {
+        saved.schedule()?.next_after(now)?
+    } else {
+        None
+    };
+    let mut reply = value(&saved)?;
+    reply["next_run_ms"] = json!(next.map(|time| time.timestamp_millis()));
+    Ok(reply)
+}
+
 fn cursor(runs: &RunStore, id: &str) -> Result<Option<DateTime<Utc>>, String> {
     runs.scheduled_cursor(id)?
         .map(|millis| {

@@ -485,7 +485,19 @@ mod tests {
             let server = tokio::spawn(async move {
                 let (mut socket, _) = listener.accept().await.unwrap();
                 let mut buf = [0; 4096];
-                socket.read(&mut buf).await.unwrap();
+                let mut request = Vec::new();
+                while !request.ends_with(b"\r\n\r\n") {
+                    let received = socket.read(&mut buf).await.unwrap();
+                    assert!(
+                        received > 0,
+                        "client disconnected before sending HTTP headers"
+                    );
+                    request.extend_from_slice(&buf[..received]);
+                    assert!(
+                        request.len() <= 16 * 1024,
+                        "unexpectedly large request headers"
+                    );
+                }
                 if body_phase {
                     socket
                         .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 100\r\n\r\nx")
@@ -493,8 +505,8 @@ mod tests {
                         .unwrap();
                 }
                 ready.send(()).unwrap();
-                // A dropped reqwest request closes the socket without a server response.
-                socket.read(&mut buf).await.unwrap()
+                // A dropped request closes the socket; the OS may report EOF or a reset.
+                socket.read(&mut buf).await
             });
             let id = uuid::Uuid::new_v4().to_string();
             let fetch_state = state.clone();
@@ -519,12 +531,14 @@ mod tests {
                 .expect("cancel did not settle an established HTTP request")
                 .unwrap();
             assert_eq!(result.unwrap_err(), "HTTP request cancelled");
-            assert_eq!(
-                tokio::time::timeout(std::time::Duration::from_secs(5), server)
-                    .await
-                    .expect("cancel did not close the HTTP connection")
-                    .unwrap(),
-                0
+            let disconnect = tokio::time::timeout(std::time::Duration::from_secs(5), server)
+                .await
+                .expect("cancel did not close the HTTP connection")
+                .unwrap();
+            assert!(
+                matches!(&disconnect, Ok(0))
+                    || matches!(&disconnect, Err(error) if error.kind() == std::io::ErrorKind::ConnectionReset),
+                "expected EOF or connection reset after cancellation, got {disconnect:?}"
             );
             assert!(state.plugin_http_requests.access().is_empty());
         }

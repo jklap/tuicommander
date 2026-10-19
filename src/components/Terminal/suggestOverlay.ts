@@ -4,6 +4,8 @@ import intentMarker from "../../../src-tauri/crates/tuic-terminal/src/intent_mar
 export interface RowSnapshot {
 	text: string;
 	isWrapped: boolean;
+	/** Map a text boundary to its real terminal cell (wide/combining glyphs). */
+	endColumn?: (offset: number) => number;
 }
 
 /** Re-declared here instead of imported: keeps the helper self-contained and
@@ -21,6 +23,13 @@ const INTENT_RE = /^intent:\s+\S/;
  * block on an indented mention would swallow the block's closing bracket.
  */
 export const INTENT_HIGHLIGHT_RE = new RegExp(`${intentMarker.anchor}[\\t ]+`);
+/** Same title boundary as Rust capture; rendering never invents a second delimiter. */
+const INTENT_TITLE_RE = new RegExp(intentMarker.title);
+/** Boundary excludes the trailing prose consumed to reject an unfinished later group. */
+export function intentTitleEnd(body: string): number | undefined {
+	const title = INTENT_TITLE_RE.exec(body);
+	return title ? title[1].length + title[2].length + 2 : undefined;
+}
 /**
  * The answer marker an agent prefixes to every sentence that directly answers
  * the user (💬). Matched on row text, which carries no escape sequences — bold,
@@ -36,7 +45,7 @@ export const OUTPUT_ROW_RE = /^(?:\s*[●⏺]|•)/;
 /** A continuation row of an answer: indented under the agent's bullet. */
 const ANSWER_CONTINUATION_RE = /^ {2,}\S/;
 /** A user prompt row; an indented one still ends the answer. */
-const PROMPT_ROW_RE = /^\s*❯/;
+export const PROMPT_ROW_RE = /^\s*[❯›]/;
 /** A fenced code block delimiter. Inside a fence a bullet, marker or prompt glyph is content. */
 const FENCE_RE = /^\s*```/;
 /** A list item, table row or quotation belongs to the answer above it. */
@@ -44,6 +53,39 @@ const ANSWER_STRUCTURE_RE = /^ {2,}(?:[-*+•] |\d+[.)] |\||>)/;
 /** Codex's indented turn-duration footer is terminal status, not answer prose. */
 const CODEX_FOOTER_RE =
 	/^\s*Worked for \d+(?:\.\d+)?(?:ms|[smh])(?:\s+\d+(?:\.\d+)?(?:ms|[smh]))*(?:\s*•\s*\d{1,2}:\d{2})?\s*$/;
+
+/** A new output, prompt, status or protocol row cannot belong to an answer. */
+function isAnswerBoundary(text: string): boolean {
+	return (
+		OUTPUT_ROW_RE.test(text) ||
+		PROMPT_ROW_RE.test(text) ||
+		CODEX_FOOTER_RE.test(text) ||
+		SUGGEST_ANCHOR_RE.test(text) ||
+		INTENT_HIGHLIGHT_RE.test(text)
+	);
+}
+
+/**
+ * First output row after a user prompt. Claude echoes pasted hard lines with
+ * indentation, so indentation alone cannot identify output. An agent bullet,
+ * a column-zero marker, or a blank-separated marker starts output. A marker
+ * embedded in uninterrupted pasted prose stays in the prompt. Soft wraps never
+ * start a new block.
+ */
+export function promptEnd(start: number, totalRows: number, getRow: (i: number) => RowSnapshot | null): number {
+	let next = start + 1;
+	for (; next < totalRows; next++) {
+		const row = getRow(next);
+		if (!row) break;
+		if (
+			!row.isWrapped &&
+			(OUTPUT_ROW_RE.test(row.text) ||
+				(ANSWER_MARKER_RE.test(row.text) && (/^\S/.test(row.text) || getRow(next - 1)?.text.trim() === "")))
+		)
+			break;
+	}
+	return next;
+}
 
 /**
  * Last row of the answer that starts at `start` (a row matching
@@ -101,8 +143,7 @@ export function answerExtent(
 		if (inFence) {
 			inFence = !FENCE_RE.test(row.text);
 		} else {
-			if (OUTPUT_ROW_RE.test(row.text) || PROMPT_ROW_RE.test(row.text) || CODEX_FOOTER_RE.test(row.text)) break;
-			if (SUGGEST_ANCHOR_RE.test(row.text) || INTENT_HIGHLIGHT_RE.test(row.text)) break;
+			if (isAnswerBoundary(row.text)) break;
 			inFence = FENCE_RE.test(row.text);
 		}
 		last = i;
@@ -225,6 +266,8 @@ export function isSuggestBlock(
 export interface OverlayBlock {
 	row: number;
 	kind: "suggest" | "continuation" | "intent" | "answer";
+	/** Present only when ordinary prose shares the final intent row. */
+	endColumn?: number;
 }
 
 /**
@@ -250,10 +293,27 @@ export function planSuggestOverlay(
 	const answerMarkers = new Set<number>();
 	const blocks: OverlayBlock[] = [];
 	const parts: string[] = [];
+	let lastAnswerEnd: number | undefined;
+	let inFence = false;
 	for (let row = firstRow; row < totalRows; row++) {
 		const snapshot = getRow(row);
 		if (!snapshot) continue;
 		const text = snapshot.text;
+
+		// answerExtent owns fences inside marked answers. Standalone examples
+		// reach this scan instead, and their protocol-looking text is literal too.
+		if (!snapshot.isWrapped && FENCE_RE.test(text)) {
+			inFence = !inFence;
+			lastAnswerEnd = undefined;
+			continue;
+		}
+		if (inFence) continue;
+
+		if (!snapshot.isWrapped && PROMPT_ROW_RE.test(text)) {
+			lastAnswerEnd = undefined;
+			row = promptEnd(row, totalRows, getRow) - 1;
+			continue;
+		}
 
 		if (SUGGEST_ANCHOR_RE.test(text) && isSuggestBlock(row, totalRows, getRow)) {
 			blocks.push({ row, kind: "suggest" });
@@ -278,23 +338,76 @@ export function planSuggestOverlay(
 			// The whole answer, not only its marker row. A wrapped row is never a
 			// line start, so an emoji the wrap happens to land on is not a marker.
 			const last = answerExtent(row, totalRows, getRow, (marker) => answerMarkers.add(marker));
+			// Answer extraction keeps separate list scopes and excludes unmarked
+			// paragraphs. The gutter instead joins confirmed answer sections across
+			// their blank separators and indented headings. A later answer must
+			// close the gap: trailing blanks/prose never inherit the gutter.
+			if (lastAnswerEnd !== undefined) {
+				let gap = lastAnswerEnd + 1;
+				for (; gap < row; gap++) {
+					const between = getRow(gap);
+					if (!between) break;
+					if (between.text.trim() === "") continue;
+					if (
+						!between.isWrapped &&
+						(!ANSWER_CONTINUATION_RE.test(between.text) ||
+							isAnswerBoundary(between.text) ||
+							ANSWER_STRUCTURE_RE.test(between.text))
+					)
+						break;
+				}
+				if (gap === row) {
+					for (gap = lastAnswerEnd + 1; gap < row; gap++) {
+						blocks.push({ row: gap, kind: "answer" });
+						parts.push(`a${gap}`);
+					}
+				}
+			}
+			lastAnswerEnd = last;
 			for (; row <= last; row++) {
 				blocks.push({ row, kind: "answer" });
 				parts.push(`a${row}`);
 			}
 			row = last;
 		} else if (INTENT_HIGHLIGHT_RE.test(text)) {
-			// Ink also hard-wraps with cursor moves and indentation, without isWrapped.
-			for (; ; row++) {
-				blocks.push({ row, kind: "intent" });
-				parts.push(`i${row}`);
-				if (row + 1 >= totalRows) break;
-				const next = getRow(row + 1);
-				if (!next || next.text.trim() === "") break;
-				if (next.isWrapped) continue;
-				if (!ANSWER_CONTINUATION_RE.test(next.text)) break;
-				if (OUTPUT_ROW_RE.test(next.text) || ANSWER_MARKER_RE.test(next.text) || PROMPT_ROW_RE.test(next.text)) break;
-				if (SUGGEST_ANCHOR_RE.test(next.text) || INTENT_HIGHLIGHT_RE.test(next.text)) break;
+			// Choose the title over a whole soft-wrapped logical line, never a
+			// physical fragment that happens to close an earlier aside.
+			let body = "";
+			let prefix = INTENT_HIGHLIGHT_RE.exec(text)![0].length;
+			const extent: { row: number; snapshot: RowSnapshot; start: number; prefix: number }[] = [];
+			let boundary: number | undefined;
+			for (;;) {
+				const current = getRow(row)!;
+				extent.push({ row, snapshot: current, start: body.length, prefix });
+				body += current.text.slice(prefix);
+				prefix = 0;
+				const next = row + 1 < totalRows ? getRow(row + 1) : null;
+				if (next?.isWrapped) {
+					row++;
+					continue;
+				}
+				boundary = intentTitleEnd(body);
+				if (boundary !== undefined || !next || next.text.trim() === "") break;
+				// Ink also hard-wraps with cursor moves and indentation.
+				if (
+					!ANSWER_CONTINUATION_RE.test(next.text) ||
+					FENCE_RE.test(next.text) ||
+					isAnswerBoundary(next.text) ||
+					ANSWER_MARKER_RE.test(next.text)
+				)
+					break;
+				body += " ";
+				row++;
+			}
+			for (const part of extent) {
+				if (boundary !== undefined && part.start >= boundary) break;
+				const end = boundary === undefined ? undefined : boundary - part.start + part.prefix;
+				const partial = end !== undefined && part.snapshot.text.slice(end).trim() !== "";
+				const endColumn = partial ? (part.snapshot.endColumn?.(end!) ?? end!) : undefined;
+				blocks.push(
+					endColumn === undefined ? { row: part.row, kind: "intent" } : { row: part.row, kind: "intent", endColumn },
+				);
+				parts.push(`i${part.row}${endColumn === undefined ? "" : `:${endColumn}`}`);
 			}
 		}
 	}
@@ -316,23 +429,35 @@ function overlayDiv(top: number, height: number, background: string): HTMLDivEle
 	return div;
 }
 
+/** Shared desktop/mobile answer gutter; no background tint or speech-bubble glyph. */
+export const ANSWER_RULE_SHADOW = "inset 3px 0 0 var(--answer-rule)";
+
 /**
  * Replace the contents of `container` with one absolutely positioned strip per
  * answer row: a transparent strip with a solid gutter bar. Intent rows get a
  * theme-aware tint; omitted suggest rows get no strip.
  */
-export function paintOverlayBlocks(container: HTMLElement, blocks: readonly OverlayBlock[], cellHeight: number): void {
+export function paintOverlayBlocks(
+	container: HTMLElement,
+	blocks: readonly OverlayBlock[],
+	cellHeight: number,
+	cellWidth?: number,
+): void {
 	container.textContent = "";
 	for (const block of blocks) {
 		if (block.row < 0) continue;
 		if (block.kind === "intent") {
 			const div = overlayDiv(block.row * cellHeight, cellHeight, "var(--warning)");
 			div.dataset.terminalMarker = "intent";
+			if (block.endColumn !== undefined && cellWidth !== undefined) {
+				div.style.right = "auto";
+				div.style.width = `${block.endColumn * cellWidth}px`;
+			}
 			div.style.opacity = "0.12";
 			container.appendChild(div);
 		} else if (block.kind === "answer") {
 			const div = overlayDiv(block.row * cellHeight, cellHeight, "transparent");
-			div.style.boxShadow = "inset 3px 0 0 var(--answer-rule)";
+			div.style.boxShadow = ANSWER_RULE_SHADOW;
 			container.appendChild(div);
 		}
 	}

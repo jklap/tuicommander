@@ -7,22 +7,27 @@ import { presentAutomationNotice } from "../services/automationNotifications";
 import { persistBackgroundSnapshot } from "../services/backgroundSnapshot";
 import { listenForNativeNoticeClicks } from "../services/nativeNotificationNavigation";
 import { activityStore } from "../stores/activityStore";
+import { startAgentSettingsSync } from "../stores/agentConfigs";
 import { appLogger } from "../stores/appLogger";
 import { type CloseRequest, closeDialogStore } from "../stores/closeDialog";
 import { editorTabsStore } from "../stores/editorTabs";
 import { githubStore } from "../stores/github";
 import { globalWorkspaceStore, MANUAL_SCOPE } from "../stores/globalWorkspace";
+import { keybindingsStore } from "../stores/keybindings";
 import { mdTabsStore, resolveRepoForCwd } from "../stores/mdTabs";
 import { notificationsStore } from "../stores/notifications";
 import { paneLayoutStore } from "../stores/paneLayout";
 import { type ProgressRecordedPayload, progressStore } from "../stores/progress";
+import { promptLibraryStore } from "../stores/promptLibrary";
 import { remoteConnectionsStore } from "../stores/remoteConnections";
+import { repoDefaultsStore } from "../stores/repoDefaults";
 import { repoSettingsStore } from "../stores/repoSettings";
 import { placementWorkspaceFor, repositoriesStore, resolveRepoOwner, resolveRepoPathFor } from "../stores/repositories";
 import { settingsStore } from "../stores/settings";
 import { reconcileTerminalOwnership } from "../stores/terminalOwnership";
 import { terminalsStore } from "../stores/terminals";
 import { toastsStore } from "../stores/toasts";
+import { tunnelsStore } from "../stores/tunnels";
 import { uiStore } from "../stores/ui";
 import { workflowRunSignals } from "../stores/workflowRunSignals";
 import { applyAppTheme, listenForThemeChanges, loadThemes } from "../themes";
@@ -121,6 +126,7 @@ export interface AppInitDeps {
 				display_name_is_custom?: boolean;
 				display_name_from_spawn?: boolean;
 				is_remote?: boolean;
+				connection_id?: string | null;
 				parent_session?: string | null;
 				state?: {
 					shell_state?: "busy" | "idle";
@@ -149,6 +155,7 @@ export interface AppInitDeps {
 		startPrNotificationTimer: () => void;
 		loadFontFromConfig: () => void;
 		refreshDictationConfig: () => Promise<void>;
+		startDictationSettingsSync: () => () => void;
 		startUserActivityListening: () => void;
 	};
 	applyPlatformClass: () => string;
@@ -227,7 +234,7 @@ function collectTerminalSnapshots(): Map<string, Map<string, SavedTerminal[]>> {
 
 /** Attach a backend PTY session to the best matching repo/branch.
  * Remote sessions may use a cwd below a repo or outside every configured repo,
- * so reconnect must use the same ancestor matching and active-branch fallback
+ * so reconnect must use the same cwd-based repository/workspace matching
  * as the live session-created path. */
 function assignSessionToRepoBranch(
 	sessionId: string,
@@ -272,6 +279,7 @@ function assignSessionToRepoBranch(
 	// is still reachable (the session exists, reconcile re-homes it on registration)
 	// and consolidation is opt-in, so this waits for a real report rather than a
 	// speculative change to what the badge counts.
+	terminalsStore.setRepoPath(terminalId, null);
 	globalWorkspaceStore.promote(terminalId, MANUAL_SCOPE);
 
 	// Which repo the user would have to register to fix this. Without it the
@@ -326,8 +334,22 @@ function assignSessionToRepoBranch(
 	}
 }
 
+let settingsSyncGeneration = 0;
+const settingsSyncStops = new Set<() => void>();
+function stopSettingsSync(): void {
+	for (const stop of settingsSyncStops) stop();
+	settingsSyncStops.clear();
+}
+
 /** App initialization: hydrate stores, reconnect PTY sessions, restore state */
 export async function initApp(deps: AppInitDeps) {
+	const settingsGeneration = ++settingsSyncGeneration;
+	stopSettingsSync();
+	window.removeEventListener("beforeunload", stopSettingsSync);
+	window.addEventListener("beforeunload", stopSettingsSync, { once: true });
+	function ownSettingsSync(start: () => () => void): void {
+		if (settingsGeneration === settingsSyncGeneration) settingsSyncStops.add(start());
+	}
 	listenForWorkItemMcpRequests();
 	const navigation = performance.getEntriesByType("navigation")[0] as PerformanceNavigationTiming | undefined;
 	appLogger.info(
@@ -406,6 +428,22 @@ export async function initApp(deps: AppInitDeps) {
 		deps.setStatusInfo("Warning: store(s) failed to load");
 	}
 
+	const { mcpPopupStore } = await import("../stores/mcpPopup");
+	for (const start of [
+		() => mcpPopupStore.startRemoteSync(),
+		() => promptLibraryStore.startRemoteSync(),
+		() => repoSettingsStore.startRemoteSync(),
+		() => remoteConnectionsStore.startRemoteSync(),
+		() => tunnelsStore.startRemoteSync(),
+		() => uiStore.startRemoteSync(),
+		startAgentSettingsSync,
+		() => settingsStore.startRemoteSync(),
+		() => notificationsStore.startRemoteSync(),
+		() => repoDefaultsStore.startRemoteSync(),
+		() => keybindingsStore.startRemoteSync(),
+	])
+		ownSettingsSync(start);
+
 	// Remote machines, at startup rather than when the Settings panel opens.
 	// Hydration used to be owned by RemoteMachinesPanel, so until the user walked
 	// into Settings the store was empty and nothing else could tell a live machine
@@ -453,6 +491,7 @@ export async function initApp(deps: AppInitDeps) {
 
 	// Restore pane layout from disk (terminal tabs will be re-linked during terminal restore)
 	await paneLayoutStore.loadFromDisk();
+	ownSettingsSync(() => paneLayoutStore.startRemoteSync());
 
 	// Remove splash screen now that stores are hydrated — prevents flash of empty
 	// state (e.g. "Add Repository" button) before persisted repos have loaded.
@@ -711,6 +750,7 @@ export async function initApp(deps: AppInitDeps) {
 		const id = terminalsStore.add(
 			{
 				sessionId: session_id,
+				tuicSession: tuic_session ?? null,
 				fontSize: saved?.fontSize ?? deps.getDefaultFontSize(),
 				name:
 					display_name ||
@@ -723,7 +763,8 @@ export async function initApp(deps: AppInitDeps) {
 				nameFromSpawn: Boolean(display_name),
 				cwd: cwd ?? null,
 				awaitingInput: null,
-				isRemote: true,
+				isRemote: false,
+				isExternallyCreated: true,
 				agentType: parsedAgentType,
 				ptyDescription: null,
 				parentSession: parent_session ?? null,
@@ -782,13 +823,7 @@ export async function initApp(deps: AppInitDeps) {
 		if (event.payload.__tuic_origin !== undefined) return;
 		const record = event.payload.record;
 		const id = adoptSuspendedSession(record, deps.getDefaultFontSize());
-		assignSessionToRepoBranch(
-			record.session_id,
-			id,
-			record.worktree?.path ?? record.cwd,
-			deps.registerRepo,
-			deps.refreshAllBranchStats,
-		);
+		assignSessionToRepoBranch(record.session_id, id, record.cwd, deps.registerRepo, deps.refreshAllBranchStats);
 	}).catch((err) => appLogger.error("app", "Failed to register session-suspended listener", err));
 
 	listen<{ session_id: string; alias: string; __tuic_origin?: unknown }>("term-alias-assigned", (event) => {
@@ -943,12 +978,12 @@ export async function initApp(deps: AppInitDeps) {
 
 		remoteSessionTabs.delete(session_id);
 
-		// Countdown + auto-remove is only for MCP-spawned (remote) tabs. Locally-created
+		// Countdown + auto-remove is only for HTTP/MCP-created tabs. UI-created
 		// tabs are managed by Terminal.tsx's pty-exit handler — applying the rename
-		// here would leave the name stuck forever because the ticker's isRemote
-		// guard aborts on the first tick and the setTimeout's isRemote guard skips removal.
+		// here would leave the name stuck forever because the ticker's isExternallyCreated
+		// guard aborts on the first tick and the setTimeout's isExternallyCreated guard skips removal.
 		const t0 = terminalsStore.get(termId);
-		if (!t0?.isRemote) return;
+		if (!t0?.isExternallyCreated) return;
 		// A suspended tab ended its PTY on purpose and must stay, restorable.
 		if (isSuspendingOrSuspended(termId)) return;
 
@@ -969,7 +1004,7 @@ export async function initApp(deps: AppInitDeps) {
 		const ticker = setInterval(() => {
 			remaining--;
 			const t = terminalsStore.get(termId);
-			if (!t?.isRemote || remaining <= 0) {
+			if (!t?.isExternallyCreated || remaining <= 0) {
 				clearInterval(ticker);
 				return;
 			}
@@ -981,7 +1016,7 @@ export async function initApp(deps: AppInitDeps) {
 			const t = terminalsStore.get(termId);
 			// Only remove if the tab still exists and is still the remote tab for this
 			// session (user may have closed it manually or re-used the slot).
-			if (t?.isRemote) {
+			if (t?.isExternallyCreated) {
 				appLogger.info("app", `Auto-removing remote tab ${termId} for closed session ${session_id}`);
 				terminalsStore.remove(termId);
 			}
@@ -1040,7 +1075,8 @@ export async function initApp(deps: AppInitDeps) {
 		terminalsStore.remove(id);
 	}
 
-	// Re-adopt surviving PTY sessions or start fresh
+	// Re-adopt surviving PTY sessions or start fresh. `is_remote` records launch
+	// provenance; only `connection_id` identifies execution on another machine.
 	if (survivingSessions.length > 0) {
 		appLogger.info("app", `PTY reconnect: found ${survivingSessions.length} surviving session(s)`);
 		for (const session of survivingSessions) {
@@ -1055,7 +1091,8 @@ export async function initApp(deps: AppInitDeps) {
 						name: session.display_name || terminalsStore.nextDefaultName(),
 						nameIsCustom: session.display_name_is_custom ?? false,
 						ptyDescription: session.pty_description ?? null,
-						isRemote: session.is_remote ?? false,
+						isRemote: Boolean(session.connection_id),
+						isExternallyCreated: session.is_remote ?? false,
 						agentType: parseAgentType(session.state?.agent_type),
 						cwd: session.cwd,
 						awaitingInput: null,
@@ -1076,13 +1113,14 @@ export async function initApp(deps: AppInitDeps) {
 					: currentRevision === 0);
 			terminalsStore.update(id, {
 				...(canApplySnapshotShell && session.state?.shell_state ? { shellState: session.state.shell_state } : {}),
-				...(session.is_remote !== undefined ? { isRemote: session.is_remote } : {}),
+				isRemote: Boolean(session.connection_id),
+				...(session.is_remote !== undefined ? { isExternallyCreated: session.is_remote } : {}),
 				...(session.display_name_is_custom !== undefined ? { nameIsCustom: session.display_name_is_custom } : {}),
 				// Only the row survives a reload, and only the backend knows where the
 				// name came from: every OSC/intent title is synced back as non-custom.
 				nameFromSpawn: session.display_name_from_spawn === true,
 				parentSession: session.parent_session ?? null,
-				placementPath: session.worktree_path ?? null,
+				placementPath: null,
 				...(session.tuic_session ? { tuicSession: session.tuic_session } : {}),
 				...(session.state?.agent_type !== undefined ? { agentType: parseAgentType(session.state.agent_type) } : {}),
 				// The Context bar mounts once intent or prompt is known. Waiting for the
@@ -1101,13 +1139,7 @@ export async function initApp(deps: AppInitDeps) {
 			});
 			if (session.is_remote) remoteSessionTabs.set(session.session_id, id);
 
-			assignSessionToRepoBranch(
-				session.session_id,
-				id,
-				session.worktree_path ?? session.cwd,
-				deps.registerRepo,
-				deps.refreshAllBranchStats,
-			);
+			assignSessionToRepoBranch(session.session_id, id, session.cwd, deps.registerRepo, deps.refreshAllBranchStats);
 		}
 		terminalsStore.setActive(terminalsStore.getIds()[0]);
 	}
@@ -1146,13 +1178,7 @@ export async function initApp(deps: AppInitDeps) {
 		});
 		for (const record of Object.values(records ?? {})) {
 			const id = adoptSuspendedSession(record, deps.getDefaultFontSize());
-			assignSessionToRepoBranch(
-				record.session_id,
-				id,
-				record.worktree?.path ?? record.cwd,
-				deps.registerRepo,
-				deps.refreshAllBranchStats,
-			);
+			assignSessionToRepoBranch(record.session_id, id, record.cwd, deps.registerRepo, deps.refreshAllBranchStats);
 		}
 	} catch (error) {
 		appLogger.error("app", "Failed to restore suspended sessions", error);
@@ -1194,7 +1220,9 @@ export async function initApp(deps: AppInitDeps) {
 	deps.stores.loadFontFromConfig();
 
 	// Load dictation config from disk
-	deps.stores.refreshDictationConfig();
+	void deps.stores.refreshDictationConfig().then(() => {
+		ownSettingsSync(deps.stores.startDictationSettingsSync);
+	});
 
 	// Start tracking user activity (click/keydown) for PR display timeouts
 	deps.stores.startUserActivityListening();

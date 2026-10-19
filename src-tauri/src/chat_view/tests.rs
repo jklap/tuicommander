@@ -258,6 +258,7 @@ fn view_reads_a_grok_transcript_and_resets_when_the_agent_changes() {
 
     let epoch = view.log.epoch;
     view.rebind_to(Bound {
+        export: None,
         path: claude,
         agent: Agent::Claude,
     });

@@ -87,6 +87,15 @@ function extractCommandTableCommands(transportSource = readRepoFile("src/transpo
 }
 
 describe("COMMAND_TABLE source scan", () => {
+	it("catches launch preview drafts being dropped by the HTTP defaults mapping", () => {
+		const preview = { agents: { agents: { claude: { suggest_followups: false } } }, intent_tab_title: false };
+		expect(mapCommandToHttp("get_config_defaults", { preview })).toMatchObject({
+			method: "POST",
+			path: "/config/defaults",
+			body: preview,
+		});
+	});
+
 	it("finds space-indented commands without treating a nested object key as a command", () => {
 		const source = `const COMMAND_TABLE = {
   first_command: { map: () => ({ body: {
@@ -813,6 +822,7 @@ describe("transport", () => {
 				["disarm_hands_free_dictation", {}, "POST", "/dictation/hands-free/disarm"],
 				["get_relay_status", {}, "GET", "/system/relay-status"],
 				["get_config_defaults", {}, "GET", "/config/defaults"],
+				["get_config_defaults", { preview: { agents: { agents: {} } } }, "POST", "/config/defaults"],
 				["check_update_channel", { channel: "nightly" }, "GET", "/system/check-update?channel=nightly"],
 				["get_session_shell_family", { sessionId: "s1" }, "GET", "/sessions/s1/shell-family"],
 			])("maps %s to %s %s", (command, args, method, path) => {
@@ -4220,5 +4230,41 @@ it("maps_tasks_comment_comparison_without_reshaping", () => {
 		method: "POST",
 		path: "/tasks/compare-comments",
 		body: input,
+	});
+});
+
+// Catches: IPC settings envelopes acquiring a different HTTP wrapper.
+it("maps the shared settings envelope unchanged", () => {
+	const request = { action: "describe", limit: 1 };
+	expect(mapCommandToHttp("settings_action", { request })).toEqual({
+		method: "POST",
+		path: "/settings/action",
+		body: request,
+	});
+});
+
+// Catches: browser managed launch bypasses the shared keyed transaction boundary.
+it("maps managed launch unchanged to its shared HTTP boundary", () => {
+	const request = {
+		idempotency_key: "one",
+		parent_session_id: "parent",
+		name: "child",
+		keep_open: true,
+		workspace: { existing_path: "/workspace" },
+		spawn: { prompt: "task" },
+	};
+	expect(mapCommandToHttp("managed_agent_launch", { request })).toEqual({
+		method: "POST",
+		path: "/agents/launch",
+		body: request,
+	});
+});
+
+// Catches: browser dumps failing while desktop IPC persists the same recording.
+it("maps frame workload persistence without changing the recording", () => {
+	expect(mapCommandToHttp("save_frame_workload", { recording: "{}" })).toEqual({
+		method: "POST",
+		path: "/debug/frame-workload",
+		body: { recording: "{}" },
 	});
 });

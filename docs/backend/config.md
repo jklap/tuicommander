@@ -173,7 +173,7 @@ This guard covers unit tests only. Integration tests under `src-tauri/tests/`
 compile the library without `cfg(test)`, and `make dev` is not a test at all —
 both isolate with `TUIC_APP_INSTANCE=<id>` as described above.
 
-The `plugins/` subdirectory holds external plugin packages. Version 1.7.7
+The `plugins/` subdirectory holds external plugin packages. Version 2.0.0
 externalizes Plan Tracker and Stories Ticker by seeding `plugins/plan/` and
 `plugins/stories-ticker/` once. The root marker
 `.externalized-plan-stories-v1` records completion: existing packages are never
@@ -312,7 +312,7 @@ needs an app restart is what that costs.
 | `font_size` | `u16` | `14` | Terminal font size |
 | `theme` | `String` | `"commander"` | Terminal theme. An empty or unknown key falls back to `commander` (`DEFAULT_THEME`, `src/stores/settings.ts`) |
 | `ide` | `String` | `""` | IDE for "Open in..." |
-| `ego_executable` | `String` | `""` | Absolute path to the one ego binary this host may launch for ACP. Read at each connect, so a correction takes effect without a restart. Empty means ACP is not configured here and every connect is refused. No ACP command carries it: a connect supplies a working directory and nothing else, so no request can choose which binary runs. It is edited in `Settings > General` and written through `save_config` like any other field |
+| `ego_executable` | `String` | `""` | Absolute path to the one ego binary this host may launch for ACP or read for terminal Chat transcript exports. Terminal Chat requires local transcript v1 support (`ego export SESSION --format transcript --after SEQ`). Read at each ACP connect or Chat binding, so a correction takes effect without a restart. Empty means ACP is not configured and terminal ego Chat is unavailable. No ACP command carries it: a connect supplies a working directory and nothing else, so no request can choose which binary runs. It is edited in `Settings > General` and written through `save_config` like any other field |
 | `ai_chat_workspace` | `String` | `""` | Absolute directory every AI Chat conversation runs in. Empty means the home directory of the host that runs ego. A missing directory is created at connect; a relative path or an uncreatable one is refused with a message naming this setting. Conversations and peer identities are keyed by this path, so changing it starts from a fresh conversation list. Edited in `Settings > General > AI Chat workspace`, which refuses a non-absolute path |
 | `ego_profile` | `String` | `""` | Optional name of an ego user-config profile for AI Chat ACP launches. Empty omits `--profile`; a nonempty valid name adds `--profile <name>` after the repository root. Names with whitespace, control characters, a leading dash, or more than 64 UTF-8 bytes are refused before launch. TUICommander does not copy profile policy into ACP requests. When `.tuic.json` selects a repo profile, this explicit selection is also its non-relaxable ACP `ceilingProfile`. |
 | `ai_chat_sessions` | `Map<String, String>` | `{}` | Last selected ego session ID per repository root. The AI Chat panel saves it through the shared serialized config update path and uses it to load the previous conversation after restart. |
@@ -907,7 +907,7 @@ The settings owner exposes `/root` as a structured bounded geometry value. Group
 
 The `ego` entry supports optional `ego_mode` (`plan|default|edits|auto|yolo`) and `ego_sandbox` (`ro|workspace`). Missing values add no flags. The shared Rust launch translator injects `--mode` and `--sandbox` for terminal and MCP launches (including `run` and `resume`), replacing corresponding raw overrides before `--`. Administrative subcommands (including `mcp-server`) and ACP are excluded. The prompt separator `--` and its full suffix stay unchanged, even after a raw option without a value. An invalid saved ego choice is ignored for that field only; the valid sibling choice and other agents' settings remain intact. These choices apply only to new launches and do not rewrite ego configuration.
 
-`agents.json` may contain `launch_instructions: string` at the top level (the text for every agent) and in each agent entry (an override for that agent). Absent means the shipped default; an empty string turns the launch instructions off. See the user guide, "Launch Instructions".
+`agents.json` stores `launch_instructions: string` as user additions at global and agent level. The composer emits enabled modules, global additions, then agent additions. Empty additions add nothing. `launch_modules` maps stable module IDs (`markers`, `working_with_user`, `waiting`, `git_worktree`, `process_safety`, `children`) to booleans; missing means enabled. Effective flags are global AND per-agent. `launch_instructions_disabled` suppresses modules and additions at either scope. `launch_additions_migrated` records the one-time conversion of legacy replacements: exact marker-default copies are removed, real custom text is retained, and empty replacements become explicit off. Migration runs inside the existing agents-file update lock. Root and child launch files are separate; only child files contain Children. See the user guide, "Launch Instructions".
 
 Each agent entry may contain `native_status_signals: boolean`. For Claude and Codex, an absent value means `true`; `false` disables launch argument injection. `hook_instrumentation` controls only explicit global installation and remains off when absent.
 
@@ -1035,7 +1035,7 @@ config.json written before the field existed — see
 | `repo_defaults` | `RepoDefaultsConfig` | `RepoDefaultsConfig::default()` — what a `repo-defaults.json`-less install loads |
 | `agents` | `AgentsConfig` | `AgentsConfig::default()` — `AgentsConfig`-level fields such as `headless_agent` |
 | `github_accounts` | `GitHubAccountRegistry` | `GitHubAccountRegistry::default()` — `{ "accounts": [] }`, the same shape as `github_accounts.json`; Settings shows the "Add another GitHub account" entry point in basic mode only when accounts exist |
-| `launch_instructions` | `LaunchInstructionsDefaults` | `{ default_text, required_markers }`: the shipped launch-instruction text (`{VER}` unexpanded) and the marker tokens the Settings editor warns about |
+| `launch_instructions` | `LaunchInstructionsDefaults` | `{ default_text, required_markers, effective_text }`: the composed global text, marker tokens recognized by TUIC, and per-agent effective text; `{VER}` is resolved to the running version |
 | `dictation` | `DictationConfig` | Desktop builds only — absent under `--no-default-features` (`tuic-remote`), where `mod dictation` does not compile and the route is not registered |
 
 Fields marked `skip_serializing_if = "Option::is_none"` are omitted when
@@ -1044,7 +1044,13 @@ Fields marked `skip_serializing_if = "Option::is_none"` are omitted when
 the config files; `settingsExpert.ts` reads a leaf missing from a present
 object as the default `null`.
 
-**Command:** `get_config_defaults()`. HTTP: `GET /config/defaults` (see `docs/api/http-api.md`).
+**Command:** `get_config_defaults(preview?)`. HTTP: `GET /config/defaults`, or
+`POST /config/defaults` with a read-only launch preview draft (see `docs/api/http-api.md`).
+The `launch_instructions` section includes resolved `default_text`, `required_markers`
+and an `effective_text` map keyed by agent. Settings sends its current agent edits
+and local global marker flags for previews, so debounced saves do not leave the
+preview behind. Remote previews use that machine's saved global marker flags.
+This request does not save config or rewrite launch files.
 
 ## Cache Files
 
@@ -1234,6 +1240,9 @@ repository delta under the existing cross-process lock. Frontend saves retain
 it. Existing saved terminal records are moved to the declared workspace without
 changing their actual shell cwd. The association survives backend restart; it
 does not turn an externally created worktree into a disposable PTY-owned one.
+New workspace rows can omit `savedTerminals` until the first terminal snapshot.
+Declaration leaves absent restore lists untouched while scanning; it creates an
+array on the target only when moving a saved caller record.
 
 ## Automation Definitions
 
@@ -1416,14 +1425,18 @@ with unavailable status in builds without native dictation.
 The checked-in `src/generated/settingsCatalogue.ts` is generated by the
 `settings::catalogue::tests::generated_typescript_matches_native_catalogue` test with
 `TUIC_UPDATE_SETTINGS_CATALOGUE=1`. Without that variable, the test rejects drift.
-These are internal definitions; the existing configuration transports still serve
-clients until the later settings cutover.
+MCP settings, IPC settings_action and POST /settings/action share these definitions
+and typed owner services. Existing UI-specific configuration routes remain available.
 
 `src-tauri/src/settings/inventory-gaps.json` records untyped, external-owner,
 credential and dynamic-choice gaps by store, pointer and assigned implementation
-step. Inline gaps such as tunnel forward records join that ledger at registration.
+step. Inline schema gaps also join that ledger at registration. Tunnel forwards
+are one atomic list setting at `/profiles/{id}/forwards`: get reads the list and
+set replaces it completely. Each item must match `ForwardSpec` and pass the
+existing profile validator. No record IDs or numeric-index edits are exposed;
+the persisted tunnel TOML format is unchanged.
 An ownerless gap fails registration. `Catalogue::require_complete_inventory()`
-rejects every open gap and is a mandatory gate for the later transport cutover.
+rejects every open gap before settings transactions or typed workflows.
 Owner adapters must resolve their entries rather than reclassifying settings as
 runtime exclusions. Plugin schema registration must also fail closed.
 
@@ -1509,7 +1522,11 @@ tool-list notices and listener restart requests. Runtime effects run after file
 locks are released. Replies distinguish persisted data from applied effects;
 scheduled desktop listener restarts remain `applied:false` pending readback, and a
 headless listener change reports persisted-but-unavailable application instead of
-claiming a live rebind. Effect failure returns `apply_failed`, `persisted:true` and
+claiming a live rebind. Username and password-hash edits do not require a listener
+restart: Basic Auth and the login endpoint read the committed config on each
+request, and credential changes invalidate cached authentication failures. These
+credential-only commits report `applied:true` in desktop and headless builds.
+Effect failure returns `apply_failed`, `persisted:true` and
 recovery guidance; retrying the old mutation conflicts. Failed persistence updates
 neither the cache nor effect subscribers. The later refresh step owns publication
 of `settings-changed` events.
@@ -1615,9 +1632,10 @@ Loaded plugins with registered settings appear under Settings > Integrations. Se
 
 ## Settings owner cutover prerequisites (#1787-4778)
 
-The general MCP cutover remains blocked by the owner gaps in
-`src-tauri/src/settings/inventory-gaps.json`. The existing `config` tool remains
-available until those prerequisites are resolved.
+The owner gap ledger is empty. MCP `settings` replaces `config` without an alias.
+The shared facade registers repository presentation, keybindings and pane geometry
+owners and routes typed credential/workflow actions. A future gap blocks transactions
+and workflows until its owner resolves it.
 
 The connections settings owner retains each removed record until its apply phase.
 Its removal callback receives that record, not only an id. Runtime teardown can
@@ -1644,6 +1662,10 @@ Hibernation requires an idle agent and a verified resume session in its saved pr
 The normal Rust suspension path persists `reason: "idle_hibernate"` before ending the PTY. Opening the tab, submitting input or sending peer mail uses the shared wake path. Storage or resume-verification failures leave the live session intact.
 
 Tasks notice policy and per-item follow/comment baselines are JSON values in `ui-prefs.json`'s existing `tasks_view_preferences` map. Reserved keys are `tasks:notification-policy` and `tasks:follow:<provider/account/item identity>`. No new configuration file or provider polling is used. Missing policy means disabled. These are host UI preferences, not provider subscriptions.
+
+## MCP settings authority (#1787-4778)
+
+`settings_mcp_enabled` defaults to false, independent of the legacy config tool state. Only trusted Settings UI enables it; it is excluded from the writable settings catalogue. Native tool defaults disable settings and debug. App/owner adapters keep weak host references so the persistent facade cannot retain its AppState after shutdown.
 
 ## Explicit settings choice discovery (#1908-c327)
 
@@ -1696,3 +1718,64 @@ recovery. Bearer rotation validates the proposed config through the upstream own
 before writing the vault. An existing custom `Authorization` header conflicts with bearer
 auth; rejection preserves the saved config and credentials. Only the changed enabled
 upstream reconnects. No credential value is returned.
+
+### Settings change generations
+
+The shared settings facade assigns a process-local monotonic generation after a durable transaction or owner workflow, including vault-only writes and persisted apply failures. It returns the generation in the receipt and dual-emits `settings-changed` with `{section, generation, persisted, applied}`. Existing AppConfig saves use the same publisher. The event contains no setting values, credential keys or secret-derived hashes. Owner CAS revisions retain their existing meaning; the generation is only an invalidation cursor and is not persisted.
+
+Frontend readers subscribe once per window and reread their section through non-saving read/apply paths. They advance the acknowledged baseline together with the rendered state, retain dirty fields, report same-field conflicts, cancel obsolete queued writes and discard stale in-flight reads. Reconnect clears generation high-water marks and rereads active sections because a restarted process starts a new counter. Mirrored events retain their connection identity and cannot reload local-machine settings. Failed subscriptions and owner reads retry after one second, with exponential backoff capped at 30 seconds. Disposing a reader or disconnecting its owner cancels pending read retries. A failed subscription does not block initial owner reads. Repository refresh normalizes omitted optional keys before three-way adoption; a valid no-op field commit releases its draft. Desktop and HTTP connection/profile saves share state-bearing publication paths, including a persisted connection deletion whose credential cleanup fails. App-config no-op commits do not publish a generation.
+
+Legacy desktop and HTTP save adapters for notifications, preferences, repository settings/defaults, prompts, agents, keybindings and pane layout use the same publisher without changing owner signatures. State-bearing registration, plugin and upstream save paths also publish. Legacy connection password writes, deployment pairing-token creation and deployment-mode updates also use state-bearing publication paths. Successful vault writes publish after persistence; an existing pairing token and a no-op deployment-mode update do not publish (#1989-22fe).
+
+### Managed launch journal
+
+`managed-launches.sqlite` in the app data directory retains managed launch identities and request digests. It does not store prompt or environment bodies. Records remain as idempotency tombstones across process restarts; they do not imply the PTY survived. Use the same `launch_id` to inspect an old launch, never a new key to retry an uncertain creation.
+## Catalogue-backed Settings controls
+
+Native Settings controls carry stable catalogue IDs. `settingsCatalogue.ts` is generated by the Rust catalogue test, not edited by hand. Shared selects consume Rust enum values; descriptor keys supply label/help lookup. The All settings inspector uses `settings_action` with explicit target, concrete JSON pointer and owner CAS revision. Each edit is one field, not a cross-store save. String arrays use typed rows; credentials and structured records retain domain workflows.
+
+`settingsControlExclusions.json` records outside-catalogue controls. `settingsCatalogueExclusions.json` records per-ID read-only, derived, legacy and separately controlled fields. Source extraction checks both inventory directions, including platform/expert branches and finite sound rows. Runtime renderer tests check descriptor identities and callbacks. These checks do not establish live runtime convergence by themselves.
+
+While a frontend keybinding sync lifetime is active, it publishes its current plugin action IDs through `publish_plugin_keybinding_actions` on `settings_action`. Registration, unload and reconnect update the process-local list; discovery combines it with built-ins. Before publication, choices are unavailable rather than falsely empty. Publishing does not save overrides or emit a durable settings change.
+
+### Startup owner boundaries
+
+[Settings startup workflows](settings-startup.md) documents the published configuration/authentication boundary. App launch preferences select the configured Ego executable, profile and workspace; Ego owns its user/profile configuration. A GitHub environment, OAuth or PAT credential source is provenance, not a writable PAT field. A settings generation is not a CAS revision, and successful persistence is not proof that a runtime effect applied.
+
+Settings startup publishes `list_accounts` for GitHub metadata/presence and Ego
+`begin_login`/`login_status`. Ego login uses the configured executable/workspace
+and base credential owner, never a caller-selected program or profile. Its
+tracked terminal is human-operated; termination and handle expiry are not
+credential success. See [interactive login](settings-startup.md#interactive-login).
+
+## Persistent PR visibility filters
+
+Global `pr_hide_drafts`, `pr_hide_conflicting` and `pr_hide_ci_failing` values
+persist in `config.json` and default to false (show all). Each repository stores
+nullable overrides in `repo-settings.json`: null inherits the current global
+value, true hides the matching PRs, and false explicitly shows them. Settings
+owner transactions preserve unrelated fields, and settings refresh adopts owner
+readback without saving it again. The Rust settings catalogue describes both scopes.
+
+### Dictation correction Settings store
+
+`corrections` is a machine-owned stable-key projection of TextCorrector's
+`dictation-corrections.json` map. `/replacements` has records `{from,to}`, keyed
+by heard text, with revision-checked create, set and remove. The owner retains
+the existing map serialization, strict file reads, advisory locking and atomic
+replacement. Settings and the legacy map writers share that owner; successful
+persistence precedes runtime adoption and value-free change publication. Builds
+without native dictation publish unavailable descriptors rather than a second
+file implementation. See [dictation](dictation.md#settings-correction-owner-1992-d4fa).
+
+### Legacy upstream settings invalidation
+
+Legacy upstream credential save/delete uses the same state-bearing owner adapter
+for IPC and HTTP. It publishes only after the vault write succeeds. DCR metadata
+writes publish after strict config persistence. OAuth exchange, refresh and
+rejected-token cleanup carry weak host-scoped publication authority through the
+existing runtime owners; they do not retain AppState or use a global registry.
+A compound vault/config failure publishes an unapplied generation only after a
+vault write has persisted, including when subsequent config persistence fails
+and the owner attempts rollback. Hints carry only section, generation and
+persistence/apply flags, never credentials or credential-derived hashes.

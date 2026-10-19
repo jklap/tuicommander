@@ -1,4 +1,5 @@
 import { fireEvent, render } from "@solidjs/testing-library";
+import { createSignal } from "solid-js";
 import { describe, expect, it, vi } from "vitest";
 import { SettingButton } from "../../../components/SettingsPanel/fields/SettingButton";
 import { SettingList } from "../../../components/SettingsPanel/fields/SettingList";
@@ -7,6 +8,18 @@ import { SettingStatus } from "../../../components/SettingsPanel/fields/SettingS
 import { SectionCard, SettingPageHeader } from "../../../components/SettingsPanel/SettingsPrimitives";
 
 describe("shared Settings layout slots", () => {
+	it("omits the subtitle element when optional copy is removed", () => {
+		// Catches: an optional subtitle leaving an empty paragraph after page navigation.
+		const [description, setDescription] = createSignal<string>();
+		const view = render(() => <SettingPageHeader title="General" description={description()} />);
+		const header = view.getByRole("heading", { name: "General" }).closest("header")!;
+		expect(header.querySelector("p")).toBeNull();
+		setDescription("Subtitle");
+		expect(header.querySelector("p")?.textContent).toBe("Subtitle");
+		setDescription(undefined);
+		expect(header.querySelector("p")).toBeNull();
+	});
+
 	it("keeps a card action inside its named section instead of losing the action", () => {
 		// Catches: SectionCard drops its actions prop, leaving callers to invent floating footers.
 		const click = vi.fn();

@@ -172,19 +172,19 @@ async fn reconnects_with_identical_instructions_show_one_row_stable_across_reads
     assert_eq!(served_texts(&state), first, "a second read must not append");
 }
 
-// Catches: building the instructions before the `x-tuic-session` identity is bound, so a
-// spawned child still gets the `suggest:` rule through the real initialize path.
+// Catches: launch-capable roots or children receiving duplicate playbook markers
+// through the real initialize path.
 #[cfg(unix)]
 #[tokio::test]
-async fn initialize_omits_suggest_for_a_spawned_child_and_keeps_it_for_a_root() {
+async fn initialize_omits_duplicate_launch_markers_for_roots_and_children() {
     let root_state = test_state();
     let root = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
     insert_managed_test_session(&root_state, TEST_UUID_A, root.path().to_str().unwrap());
     post_fresh_initialize(&root_state).await;
     let root_text = served_texts(&root_state).join("\n");
     assert!(
-        root_text.contains("`suggest:`"),
-        "root lost suggest: {root_text}"
+        !root_text.contains("`suggest:`"),
+        "launch-capable root received duplicate suggest: {root_text}"
     );
 
     let child_state = test_state();
@@ -200,8 +200,8 @@ async fn initialize_omits_suggest_for_a_spawned_child_and_keeps_it_for_a_root() 
         "child kept suggest: {child_text}"
     );
     assert!(
-        child_text.contains("`ack`"),
-        "child lost the ack rule: {child_text}"
+        !child_text.contains("`ack`"),
+        "launch-capable child received duplicate ack: {child_text}"
     );
 }
 
@@ -4841,7 +4841,17 @@ fn messaging_send_requires_sender_registration() {
         }),
         Some("mcp-unknown"),
     );
-    assert!(r["error"].as_str().unwrap().contains("Register first"));
+    assert_eq!(r["code"], "identity_context_required");
+    assert_eq!(r["effect"], "not_started");
+    assert_eq!(r["retryable"], false);
+    assert_eq!(r["repair"]["retry_after_context_change"], true);
+    assert_eq!(r["repair"]["max_attempts"], 1);
+    assert!(
+        state
+            .agent_inbox
+            .get("550e8400-e29b-41d4-a716-446655440a02")
+            .is_none_or(|messages| messages.is_empty())
+    );
 }
 
 #[test]
@@ -5944,7 +5954,12 @@ async fn ego_child_without_session_header_binds_through_process_ancestry() {
             .success()
     );
     let mut parent = std::process::Command::new(&holder)
-        .args(["-c", "env -u TUIC_SESSION sleep 60 & echo $! $$; wait"])
+        // Publish the PIDs from the scrubbed child, after `env` has exec'd it.
+        // An absent environment during exec is not proof that scrubbing finished.
+        .args([
+            "-c",
+            "env -u TUIC_SESSION \"$0\" -c 'echo \"$$ $PPID\"; exec sleep 60' & wait",
+        ])
         .env("TUIC_SESSION", TEST_UUID_A)
         .stdout(std::process::Stdio::piped())
         .spawn()
@@ -5960,13 +5975,8 @@ async fn ego_child_without_session_header_binds_through_process_ancestry() {
         Some(TEST_UUID_A.to_string()),
         "fixture: the launching process must hold the identity and be readable"
     );
-    // `env` still holds the variable until it has exec'd into `sleep`.
-    let bridge_n: u32 = bridge_pid.parse().unwrap();
-    while crate::process_env::read_process_env_var(bridge_n, "TUIC_SESSION").is_some() {
-        std::thread::sleep(std::time::Duration::from_millis(10));
-    }
     assert_eq!(
-        crate::process_env::read_process_env_var(bridge_n, "TUIC_SESSION"),
+        crate::process_env::read_process_env_var(bridge_pid.parse().unwrap(), "TUIC_SESSION"),
         None,
         "fixture: the stand-in bridge must not hold the identity itself"
     );
@@ -5997,4 +6007,516 @@ async fn ego_child_without_session_header_binds_through_process_ancestry() {
     let _ = parent.kill();
     let _ = parent.wait();
     assert_eq!(bound, vec![TEST_UUID_A.to_string()]);
+}
+
+// Catches: one oversized UTF-8 inbox item bypasses the byte bound or consumes unread text.
+#[test]
+fn oversized_mcp_item_respects_byte_budget_and_continues() {
+    let state = test_state();
+    register_peer(&state, TEST_UUID_A, "budget", "mcp-budget");
+    let content = "界\"\n".repeat(9000);
+    state.push_agent_inbox(
+        TEST_UUID_A,
+        crate::state::AgentMessage {
+            id: "large".into(),
+            from_tuic_session: "lead".into(),
+            from_name: "lead".into(),
+            content: content.clone(),
+            timestamp: 1000,
+            delivered_via_channel: false,
+        },
+    );
+    let mut args = serde_json::json!({"action":"inbox", "byte_budget":4096});
+    let mut text = String::new();
+    let mut pages = 0;
+    loop {
+        let page = handle_messaging(&state, &args, Some("mcp-budget"));
+        let bytes = serde_json::to_vec(&page).unwrap().len();
+        assert!(bytes <= 4096, "oversized inbox response: {bytes} bytes");
+        text.push_str(page["chunk"].as_str().unwrap());
+        pages += 1;
+        if page["continuation"].is_null() {
+            break;
+        }
+        assert_eq!(
+            state
+                .agent_read_cursor
+                .get(TEST_UUID_A)
+                .map(|v| *v)
+                .unwrap_or(0),
+            0
+        );
+        if pages == 1 {
+            state.push_agent_inbox(
+                TEST_UUID_A,
+                crate::state::AgentMessage {
+                    id: "new".into(),
+                    from_tuic_session: "lead".into(),
+                    from_name: "lead".into(),
+                    content: "new mail".into(),
+                    timestamp: 2000,
+                    delivered_via_channel: false,
+                },
+            );
+        }
+        args["continuation"] = page["continuation"].clone();
+    }
+    let result: serde_json::Value = serde_json::from_str(&text).unwrap();
+    assert_eq!(result["messages"][0]["content"], content);
+    assert_eq!(*state.agent_read_cursor.get(TEST_UUID_A).unwrap(), 1000);
+    assert!(pages > 1);
+    let next = handle_messaging(
+        &state,
+        &serde_json::json!({"action":"inbox"}),
+        Some("mcp-budget"),
+    );
+    assert_eq!(next["count"], 1);
+    assert_eq!(next["messages"][0]["id"], "new");
+}
+
+// Catches: compact scoped lookup turns unknown state or an unresolved recipient into idle/empty success.
+#[test]
+fn compact_inventory_keeps_unknown_state_and_scoped_recipient_errors() {
+    let state = test_state();
+    register_peer(&state, TEST_UUID_A, "one", "mcp-one");
+    register_peer(&state, TEST_UUID_B, "two", "mcp-two");
+    let result = handle_messaging(
+        &state,
+        &serde_json::json!({"action":"list_peers","to":"one","compact":true}),
+        Some("mcp-one"),
+    );
+    assert_eq!(result["peers"].as_array().unwrap().len(), 1);
+    assert_eq!(result["peers"][0]["tuic_session"], TEST_UUID_A);
+    assert_eq!(result["peers"][0]["state"], "unknown");
+    assert!(result["peers"][0]["activity_age_ms"].is_null());
+    assert!(
+        result["peers"][0]["omitted_fields"]
+            .as_array()
+            .unwrap()
+            .contains(&serde_json::json!("orchestrator"))
+    );
+    let missing = handle_messaging(
+        &state,
+        &serde_json::json!({"action":"list_peers","to":"missing"}),
+        Some("mcp-one"),
+    );
+    assert!(missing.get("error").is_some());
+}
+
+// Catches: two snapshot acknowledgements subtract the same historical loss count from newer losses.
+#[test]
+fn overlapping_inbox_snapshots_do_not_erase_new_eviction_losses() {
+    for legacy_first in [false, true] {
+        let state = test_state();
+        register_peer(&state, TEST_UUID_A, "overlap", "mcp-overlap");
+        let push = |index: usize| {
+            state.push_agent_inbox(
+                TEST_UUID_A,
+                crate::state::AgentMessage {
+                    id: format!("message-{index}"),
+                    from_tuic_session: "lead".into(),
+                    from_name: "lead".into(),
+                    content: "x".repeat(1800),
+                    timestamp: index as u64 + 1,
+                    delivered_via_channel: false,
+                },
+            );
+        };
+        for index in 0..105 {
+            push(index);
+        }
+        let args = serde_json::json!({"action":"inbox","limit":1,"since":0,"byte_budget":1024});
+        let first_a = handle_messaging(&state, &args, Some("mcp-overlap"));
+        let first_b = handle_messaging(&state, &args, Some("mcp-overlap"));
+        let finish = |mut page: serde_json::Value| {
+            while !page["continuation"].is_null() {
+                let mut request = args.clone();
+                request["continuation"] = page["continuation"].clone();
+                page = handle_messaging(&state, &request, Some("mcp-overlap"));
+                assert!(page.get("error").is_none(), "{page}");
+            }
+        };
+        if legacy_first {
+            let legacy = handle_messaging(
+                &state,
+                &serde_json::json!({"action":"inbox","limit":1}),
+                Some("mcp-overlap"),
+            );
+            assert_eq!(legacy["missed_count"], 5);
+        } else {
+            finish(first_a.clone());
+        }
+        // The first eviction is the message acknowledged by A; the other two are unread losses.
+        for index in 105..108 {
+            push(index);
+        }
+        if legacy_first {
+            finish(first_a);
+        }
+        finish(first_b);
+        let next = handle_messaging(
+            &state,
+            &serde_json::json!({"action":"inbox","limit":1}),
+            Some("mcp-overlap"),
+        );
+        assert_eq!(
+            next["missed_count"], 2,
+            "B must not erase losses that occurred after capture"
+        );
+    }
+}
+
+// Catches: unsupported wait budgets are silently ignored after the wait consumes the oversized mail.
+#[tokio::test]
+async fn agent_wait_rejects_byte_budget_before_consuming_mail() {
+    let state = test_state();
+    register_peer(&state, TEST_UUID_A, "wait-budget", "mcp-wait-budget");
+    state.push_agent_inbox(
+        TEST_UUID_A,
+        crate::state::AgentMessage {
+            id: "wait-large".into(),
+            from_tuic_session: "lead".into(),
+            from_name: "lead".into(),
+            content: "x".repeat(2000),
+            timestamp: 1000,
+            delivered_via_channel: false,
+        },
+    );
+    let result = handle_agent_wait(
+        &state,
+        &serde_json::json!({"action":"wait","byte_budget":1024}),
+        Some("mcp-wait-budget"),
+    )
+    .await;
+    assert_eq!(result["error"], "wait_byte_budget_unsupported");
+    let unread = handle_messaging(
+        &state,
+        &serde_json::json!({"action":"inbox"}),
+        Some("mcp-wait-budget"),
+    );
+    assert_eq!(unread["messages"][0]["id"], "wait-large");
+}
+
+// Catches: routine lifecycle mail wakes a result subscriber, or a legacy reader
+// consumes another subscriber's RESULT. Fixture is audit transcript lines 2241/2249.
+#[tokio::test]
+async fn actionable_subscription_isolates_cursors_and_wakes_once() {
+    let state = test_state();
+    apply_initialize_identity(&state, "subscription-test", Some(TEST_UUID_A));
+    for id in ["pump", "watcher"] {
+        let reply = handle_messaging(
+            &state,
+            &serde_json::json!({
+                "action":"subscribe", "subscription_id":id, "filter":"actionable"
+            }),
+            Some("subscription-test"),
+        );
+        assert_eq!(
+            reply["subscription_id"], id,
+            "independent durable subscription: {reply}"
+        );
+    }
+    let fixture: Vec<serde_json::Value> =
+        serde_json::from_str(include_str!("fixtures/actionable-lifecycle-mail.json")).unwrap();
+    for m in fixture {
+        state.push_agent_inbox(
+            TEST_UUID_A,
+            crate::state::AgentMessage {
+                id: m["id"].as_str().unwrap().into(),
+                from_tuic_session: m["from_tuic_session"].as_str().unwrap().into(),
+                from_name: m["from_name"].as_str().unwrap().into(),
+                content: m["content"].as_str().unwrap().into(),
+                timestamp: m["timestamp"].as_u64().unwrap(),
+                delivered_via_channel: false,
+            },
+        );
+    }
+    let request = serde_json::json!({"action":"wait", "subscription_id":"pump", "timeout_ms":1});
+    let quiet = handle_agent_wait(&state, &request, Some("subscription-test")).await;
+    assert_eq!(
+        quiet["timed_out"], true,
+        "lifecycle-only traffic must not wake: {quiet}"
+    );
+    state.push_agent_inbox(
+        TEST_UUID_A,
+        crate::state::AgentMessage {
+            id: "subscription-result".into(),
+            from_tuic_session: "child".into(),
+            from_name: "child".into(),
+            content: "RESULT captured mail replay complete".into(),
+            timestamp: 1791910429394,
+            delivered_via_channel: false,
+        },
+    );
+    let legacy = handle_messaging(
+        &state,
+        &serde_json::json!({"action":"inbox"}),
+        Some("subscription-test"),
+    );
+    assert_eq!(legacy["count"], 5);
+    let result = handle_agent_wait(&state, &request, Some("subscription-test")).await;
+    assert_eq!(result["messages"].as_array().unwrap().len(), 1);
+    assert_eq!(result["messages"][0]["id"], "subscription-result");
+    let cursor = result["cursor"].clone();
+    // Disconnect before ack: the batch remains recoverable, not silently consumed.
+    let retry = handle_messaging(
+        &state,
+        &serde_json::json!({"action":"inbox", "subscription_id":"pump"}),
+        Some("subscription-test"),
+    );
+    assert_eq!(retry["messages"], result["messages"]);
+    let ack = handle_messaging(
+        &state,
+        &serde_json::json!({"action":"ack", "subscription_id":"pump", "cursor":cursor}),
+        Some("subscription-test"),
+    );
+    assert!(ack.get("error").is_none(), "{ack}");
+    let quiet = handle_agent_wait(&state, &request, Some("subscription-test")).await;
+    assert_eq!(
+        quiet["timed_out"], true,
+        "acknowledged RESULT must not wake twice"
+    );
+    let watcher = handle_messaging(
+        &state,
+        &serde_json::json!({"action":"inbox", "subscription_id":"watcher"}),
+        Some("subscription-test"),
+    );
+    assert_eq!(
+        watcher["messages"], result["messages"],
+        "pump must not consume watcher mail"
+    );
+}
+
+// Catches: a durable subscription ACK fails to settle the same delivery owners
+// as a paged snapshot, or overlapping ACKs erase newer unread-loss accounting.
+#[test]
+fn actionable_subscription_snapshot_overlap_keeps_missed_count_exact() {
+    let state = test_state();
+    register_peer(&state, TEST_UUID_A, "overlap", "mcp-overlap");
+    let invoke = |args| handle_messaging(&state, &args, Some("mcp-overlap"));
+    let subscribed = invoke(
+        serde_json::json!({"action":"subscribe","subscription_id":"overlap","filter":"all"}),
+    );
+    assert!(subscribed.get("error").is_none(), "{subscribed}");
+    let push = |index: u64| {
+        state.push_agent_inbox(
+            TEST_UUID_A,
+            crate::state::AgentMessage {
+                id: format!("overlap-{index}"),
+                from_tuic_session: "child".into(),
+                from_name: "child".into(),
+                content: format!("RESULT {index} {}", "x".repeat(1800)),
+                timestamp: index + 1,
+                delivered_via_channel: false,
+            },
+        )
+    };
+    for index in 0..=100 {
+        push(index);
+    }
+    let page_args = serde_json::json!({"action":"inbox","since":0,"limit":100,"byte_budget":1024});
+    let first = invoke(page_args.clone());
+    let second = invoke(page_args.clone());
+    assert!(
+        first["continuation"].is_string(),
+        "fixture must exercise deferred snapshot ACK"
+    );
+    let finish = |mut page: serde_json::Value| {
+        while page["continuation"].is_string() {
+            let mut args = page_args.clone();
+            args["continuation"] = page["continuation"].clone();
+            page = invoke(args);
+            assert!(page.get("error").is_none(), "{page}");
+        }
+    };
+    let legacy = || invoke(serde_json::json!({"action":"inbox","since":0,"limit":1}));
+    assert_eq!(legacy()["missed_count"], 1);
+    let batch =
+        invoke(serde_json::json!({"action":"inbox","subscription_id":"overlap","limit":100}));
+    let ack = invoke(
+        serde_json::json!({"action":"ack","subscription_id":"overlap","cursor":batch["cursor"]}),
+    );
+    assert!(ack.get("error").is_none(), "{ack}");
+    push(101);
+    assert_eq!(
+        legacy()["missed_count"].as_u64().unwrap_or(0),
+        0,
+        "evicting subscription-observed mail is not a new loss"
+    );
+    finish(first);
+    for index in 102..=201 {
+        push(index);
+    }
+    finish(second);
+    assert_eq!(
+        legacy()["missed_count"],
+        1,
+        "an overlapping old snapshot ACK cannot erase a newer unread loss"
+    );
+}
+
+// Catches: the admitted subscription actions bypass dispatch, remote restrictions,
+// or accidentally enter the legacy pager and consume a different reader.
+#[tokio::test]
+async fn actionable_subscription_dispatch_preserves_readers_and_loopback_boundary() {
+    let state = test_state();
+    register_peer(&state, TEST_UUID_A, "dispatch", "mcp-sub-dispatch");
+    for args in [
+        serde_json::json!({"action":"subscribe","subscription_id":"dispatch"}),
+        serde_json::json!({"action":"ack","subscription_id":"dispatch","cursor":0}),
+        serde_json::json!({"action":"unsubscribe","subscription_id":"dispatch"}),
+    ] {
+        let denied = handle_mcp_tool_call(
+            &state,
+            "192.0.2.1:1234".parse().unwrap(),
+            "agent",
+            &args,
+            Some("mcp-sub-dispatch"),
+        )
+        .await;
+        assert_eq!(
+            denied["error"], "Inter-agent messaging is restricted to localhost connections",
+            "{denied}"
+        );
+    }
+    let subscribed = handle_mcp_tool_call(
+        &state,
+        loopback_addr(),
+        "agent",
+        &serde_json::json!({"action":"subscribe","subscription_id":"dispatch"}),
+        Some("mcp-sub-dispatch"),
+    )
+    .await;
+    assert_eq!(subscribed["subscription_id"], "dispatch", "{subscribed}");
+    state.push_agent_inbox(
+        TEST_UUID_A,
+        crate::state::AgentMessage {
+            id: "dispatch-result".into(),
+            from_tuic_session: "child".into(),
+            from_name: "child".into(),
+            content: "RESULT dispatch".into(),
+            timestamp: 1,
+            delivered_via_channel: false,
+        },
+    );
+    for paging in [
+        serde_json::json!({"byte_budget":1024}),
+        serde_json::json!({"continuation":"not-a-legacy-token"}),
+    ] {
+        let mut args = serde_json::json!({"action":"inbox","subscription_id":"dispatch"});
+        args.as_object_mut()
+            .unwrap()
+            .extend(paging.as_object().unwrap().clone());
+        let refused = handle_mcp_tool_call(
+            &state,
+            loopback_addr(),
+            "agent",
+            &args,
+            Some("mcp-sub-dispatch"),
+        )
+        .await;
+        assert_eq!(
+            refused["error"], "subscription_byte_budget_unsupported",
+            "{refused}"
+        );
+        assert_eq!(refused["effect"], "not_started");
+        // HTTP/ACP service calls reject the same options before journal effects.
+        assert_eq!(
+            crate::mail_subscriptions::action(&state, TEST_UUID_A, &args),
+            refused
+        );
+    }
+    assert!(state.agent_read_cursor.get(TEST_UUID_A).is_none());
+    let batch = handle_mcp_tool_call(
+        &state,
+        loopback_addr(),
+        "agent",
+        &serde_json::json!({"action":"inbox","subscription_id":"dispatch"}),
+        Some("mcp-sub-dispatch"),
+    )
+    .await;
+    assert_eq!(batch["messages"][0]["id"], "dispatch-result", "{batch}");
+    assert_eq!(batch["acknowledged_cursor"], 0);
+    let ack = handle_mcp_tool_call(
+        &state,
+        loopback_addr(),
+        "agent",
+        &serde_json::json!({"action":"ack","subscription_id":"dispatch","cursor":batch["cursor"]}),
+        Some("mcp-sub-dispatch"),
+    )
+    .await;
+    assert_eq!(ack["acknowledged"], true, "{ack}");
+    let legacy = handle_messaging(
+        &state,
+        &serde_json::json!({"action":"inbox"}),
+        Some("mcp-sub-dispatch"),
+    );
+    assert_eq!(legacy["messages"][0]["id"], "dispatch-result");
+    let removed = handle_mcp_tool_call(
+        &state,
+        loopback_addr(),
+        "agent",
+        &serde_json::json!({"action":"unsubscribe","subscription_id":"dispatch"}),
+        Some("mcp-sub-dispatch"),
+    )
+    .await;
+    assert_eq!(removed["removed"], true, "{removed}");
+}
+
+// Catches: a filtered ACK jumps over an unmatched live message and retracts its wake.
+#[cfg(unix)]
+#[test]
+fn actionable_subscription_filtered_ack_keeps_unobserved_wake_gap() {
+    let state = test_state();
+    register_peer(&state, TEST_UUID_A, "gap", "mcp-sub-gap");
+    let invoke = |args| handle_messaging(&state, &args, Some("mcp-sub-gap"));
+    assert!(
+        invoke(serde_json::json!({"action":"subscribe","subscription_id":"exit","filter":"exit"}))
+            .get("error")
+            .is_none()
+    );
+    for (id, from_name, content, timestamp) in [
+        ("unmatched-mail", "child", "RESULT not an exit", 1),
+        (
+            "tuic-auto-gap-exit",
+            "tuic",
+            r#"{"type":"state_change","state":"exited","exit_code":0}"#,
+            2,
+        ),
+    ] {
+        state.push_agent_inbox(
+            TEST_UUID_A,
+            crate::state::AgentMessage {
+                id: id.into(),
+                from_tuic_session: "child".into(),
+                from_name: from_name.into(),
+                content: content.into(),
+                timestamp,
+                delivered_via_channel: false,
+            },
+        );
+        state.assign_orchestrator_delivery_with_wake_attempt(
+            TEST_UUID_A,
+            id,
+            timestamp,
+            false,
+            || panic!("busy fixture must not attempt a wake"),
+        );
+    }
+    let batch = invoke(serde_json::json!({"action":"inbox","subscription_id":"exit"}));
+    assert_eq!(batch["count"], 1, "{batch}");
+    assert_eq!(batch["messages"][0]["id"], "tuic-auto-gap-exit");
+    let ack = invoke(
+        serde_json::json!({"action":"ack","subscription_id":"exit","cursor":batch["cursor"]}),
+    );
+    assert!(ack.get("error").is_none(), "{ack}");
+    state.orchestrator_peers.insert(TEST_UUID_A.to_owned());
+    let output = install_completed_agent_submission_probe(&state, TEST_UUID_A, "codex");
+    crate::pty::route_registered_orchestrator_mail(&state, TEST_UUID_A, "unmatched-mail", 1);
+    let notice = output
+        .recv_timeout(std::time::Duration::from_secs(2))
+        .expect("unmatched RESULT must retain its eventual terminal wake");
+    assert!(notice.contains("agent action=inbox"), "{notice:?}");
+    let unread = invoke(serde_json::json!({"action":"inbox"}));
+    assert_eq!(unread["messages"][0]["id"], "unmatched-mail");
 }

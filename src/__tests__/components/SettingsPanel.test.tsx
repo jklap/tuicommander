@@ -1,10 +1,11 @@
 import { fireEvent, render } from "@solidjs/testing-library";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { mockInvoke } from "../mocks/tauri";
 
 vi.mock("../../stores/settings", () => ({
 	settingsStore: {
 		state: {
+			customLaunchers: [],
 			ide: "vscode",
 			font: "JetBrains Mono",
 			defaultFontSize: 12,
@@ -90,6 +91,7 @@ vi.mock("../../stores/repoSettings", () => ({
 }));
 
 import { SettingsPanel } from "../../components/SettingsPanel/SettingsPanel";
+import { appLogger } from "../../stores/appLogger";
 import { settingsStore } from "../../stores/settings";
 
 /** Nav items keyed by the group label row above them, in rendered order. */
@@ -111,6 +113,14 @@ function navGroups(container: HTMLElement): Record<string, string[]> {
 describe("SettingsPanel", () => {
 	beforeEach(() => {
 		vi.clearAllMocks();
+		vi.spyOn(appLogger, "error").mockImplementation(() => {});
+	});
+
+	afterEach(() => {
+		for (const [source, message] of vi.mocked(appLogger.error).mock.calls) {
+			expect([source, message]).toEqual(["config", "ego perimeter request failed"]);
+		}
+		vi.mocked(appLogger.error).mockRestore();
 	});
 
 	it("does not render when visible=false", () => {
@@ -226,10 +236,10 @@ describe("SettingsPanel", () => {
 	it("puts every global page under its task group, one direct item each", () => {
 		const { container } = render(() => <SettingsPanel visible={true} onClose={() => {}} />);
 		expect(navGroups(container)).toEqual({
-			Application: ["General", "Appearance", "Notifications"],
+			Application: ["General", "All settings (Expert)", "Appearance", "Notifications"],
 			Workspace: ["Terminal", "Keyboard Shortcuts", "Git & GitHub"],
 			AI: ["Agents", "Voice", "Smart Prompts"],
-			Integrations: ["MCP", "Remote Access", "Remote Machines", "Telegram", "Plugins"],
+			Integrations: ["MCP", "Remote Access", "Remote Machines", "Telegram", "Manage plugins"],
 			REPOSITORIES: ["Alpha", "Beta"],
 		});
 	});

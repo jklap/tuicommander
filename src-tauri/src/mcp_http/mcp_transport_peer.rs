@@ -195,10 +195,7 @@ pub(super) fn link_pending_children_to_parent(
         }
     }
     if let Some((_, missed)) = state.agent_inbox_evictions.remove(&pending_parent) {
-        *state
-            .agent_inbox_evictions
-            .entry(parent_tuic_session.to_string())
-            .or_default() += missed;
+        state.add_inbox_evictions(parent_tuic_session, missed);
     }
 
     children.len()
@@ -738,6 +735,46 @@ pub(super) fn managed_parent_cwd_from_header(
         .and_then(|session| session.lock().cwd.clone())
 }
 
+/// A modern call has no protocol session on the wire. A live host-owned peer
+/// still has one authoritative identity; use an internal routing key only for
+/// that exact peer, never infer identity from a name or a repository path.
+pub(super) fn call_session_context(
+    state: &AppState,
+    headers: &HeaderMap,
+    modern: bool,
+) -> Option<String> {
+    if let Some(sid) = headers
+        .get(MCP_SESSION_HEADER)
+        .and_then(|value| value.to_str().ok())
+    {
+        return Some(sid.to_owned());
+    }
+    if !modern {
+        return None;
+    }
+    let peer = headers
+        .get(super::mcp_transport::TUIC_SESSION_HEADER)
+        .and_then(|value| value.to_str().ok())
+        .filter(|peer| is_valid_uuid(peer))?;
+    if state.live_pty_for_peer(peer).is_none() && state.acp.peer_root(peer).is_none() {
+        return None;
+    }
+    Some(format!("managed-call:{peer}"))
+}
+
+/// Missing identity is not an argument typo. Repeating unchanged inbox/register
+/// calls cannot repair host context; callers must stop until that context changes.
+fn missing_identity_context(mcp_session_id: Option<&str>) -> serde_json::Value {
+    serde_json::json!({
+        "error": "You are not registered. Managed callers must reconnect with their host-issued identity; external callers must initialize then register with that protocol session.",
+        "code": "identity_context_required", "effect": "not_started", "retryable": false,
+        "context": {"protocol_session_present": mcp_session_id.is_some()},
+        "repair": {"retry_after_context_change":true, "max_attempts":1,
+            "managed":"Reconnect with the host-issued x-tuic-session; do not invent an identity or project.",
+            "external":"Initialize, then register on that protocol session; supply an authoritative path only when known."}
+    })
+}
+
 /// Refresh a protocol session and re-assert its PTY identity on every request.
 /// Both maps are in-memory and disappear on a TUIC restart; a long-lived bridge
 /// may keep its old MCP session id, so merely recreating `mcp_sessions` is not
@@ -1014,14 +1051,28 @@ pub(super) async fn handle_agent_wait(
     args: &serde_json::Value,
     mcp_session_id: Option<&str>,
 ) -> serde_json::Value {
+    if args.get("byte_budget").is_some() || args.get("continuation").is_some() {
+        // DEFERRED (2026-10-17) — wait acknowledges delivery before responding;
+        // byte paging must reuse the unified subscription/ack boundary from #2004-4760.
+        return serde_json::json!({"error":"wait_byte_budget_unsupported", "alternative":"Use agent action=inbox with byte_budget; wait remains unbounded."});
+    }
     let caller_tuic = match mcp_session_id
         .and_then(|sid| state.mcp.to_session.get(sid).map(|e| e.value().clone()))
     {
         Some(t) => t,
         None => {
-            return serde_json::json!({"error": "You are not registered. Identity normally auto-binds at initialize; ensure $TUIC_SESSION is set or call agent action=register."});
+            return missing_identity_context(mcp_session_id);
         }
     };
+    if args.get("subscription_id").is_some() {
+        return crate::mail_subscriptions::wait(
+            state,
+            &caller_tuic,
+            args,
+            clamp_wait_timeout(args["timeout_ms"].as_u64()),
+        )
+        .await;
+    }
     let since = resolve_agent_since(state, &caller_tuic, args);
     let (mut active_wait, mut inbox_events) = ActiveAgentWaitGuard::new(state, &caller_tuic, since);
     let timeout_ms = clamp_wait_timeout(args["timeout_ms"].as_u64());
@@ -1193,9 +1244,11 @@ pub(crate) async fn local_peer_call_with_message_id(
             })
             .await
         }
-        Some("register" | "list_peers" | "inbox") => handle_messaging(state, args, sid),
+        Some("register" | "list_peers" | "inbox" | "subscribe" | "ack" | "unsubscribe") => {
+            handle_messaging(state, args, sid)
+        }
         _ => {
-            serde_json::json!({"error":"Peer mail permits register/list_peers/send/inbox/wait only"})
+            serde_json::json!({"error":"Peer mail permits register/list_peers/send/inbox/wait/subscribe/ack/unsubscribe only"})
         }
     }
 }
@@ -1205,6 +1258,39 @@ pub(super) fn handle_messaging(
     args: &serde_json::Value,
     mcp_session_id: Option<&str>,
 ) -> serde_json::Value {
+    if let Some(error) = crate::mail_subscriptions::paging_error(args) {
+        return error;
+    }
+    if args["action"] == "inbox" {
+        let budget = match super::response_pages::budget(args) {
+            Ok(budget) => budget,
+            Err(error) => return error,
+        };
+        if let Some(budget) = budget {
+            let Some(owner) = mcp_session_id
+                .and_then(|sid| state.mcp.to_session.get(sid).map(|v| v.value().clone()))
+                .filter(|owner| state.peer_agents.contains_key(owner))
+            else {
+                return missing_identity_context(mcp_session_id);
+            };
+            let (response, cursor) = state.mcp.response_pages.lock().page_with_ack(
+                &owner,
+                "inbox",
+                args,
+                budget,
+                || capture_inbox_reply(state, args, mcp_session_id, false),
+            );
+            if let Some(ack) = cursor {
+                state.acknowledge_agent_snapshot(
+                    &owner,
+                    ack.cursor,
+                    &ack.message_ids,
+                    ack.eviction_watermark,
+                );
+            }
+            return response;
+        }
+    }
     handle_messaging_with_message_id(state, args, mcp_session_id, None)
 }
 
@@ -1218,6 +1304,17 @@ fn handle_messaging_with_message_id(
         Ok(a) => a,
         Err(e) => return e,
     };
+    if matches!(action, "subscribe" | "ack" | "unsubscribe")
+        || (action == "inbox" && args.get("subscription_id").is_some())
+    {
+        let Some(peer) =
+            mcp_session_id.and_then(|sid| state.mcp.to_session.get(sid).map(|e| e.value().clone()))
+        else {
+            return missing_identity_context(mcp_session_id);
+        };
+        return crate::mail_subscriptions::action(state, &peer, args);
+    }
+
     if matches!(action, "register" | "list_peers") && args.get("project").is_some() {
         return serde_json::json!({"error": "agent parameter project was renamed to path"});
     }
@@ -1431,11 +1528,22 @@ fn handle_messaging_with_message_id(
             response
         }
         "list_peers" => {
+            let recipient = match args["to"].as_str() {
+                Some(reference) => match state.resolve_peer_ref_checked(reference) {
+                    Ok(Some(id)) => Some(id),
+                    Ok(None) => return serde_json::json!({"error":"Recipient not found"}),
+                    Err(error) => return serde_json::json!({"error":error}),
+                },
+                None => None,
+            };
             let project_filter = args["path"].as_str();
             let peers: Vec<serde_json::Value> = state
                 .peer_agents
                 .iter()
                 .filter(|entry| {
+                    if recipient.as_deref().is_some_and(|id| id != entry.key()) {
+                        return false;
+                    }
                     if let Some(filter) = project_filter {
                         entry.value().project.as_deref() == Some(filter)
                     } else {
@@ -1449,6 +1557,9 @@ fn handle_messaging_with_message_id(
                     // so finding "the tab working on X" still cost a session list
                     // and a manual join.
                     let live_pty = state.live_pty_for_peer(&p.tuic_session);
+                    let snapshot = live_pty
+                        .as_deref()
+                        .and_then(|id| state.session_state_with_shell(id));
                     let mut peer = serde_json::json!({
                         "tuic_session": p.tuic_session,
                         "name": p.name,
@@ -1479,7 +1590,20 @@ fn handle_messaging_with_message_id(
                         "path",
                         p.project.clone().map(serde_json::Value::String),
                     );
-                    peer
+                    if args["compact"] == true {
+                        peer["state"] = snapshot
+                            .as_ref()
+                            .and_then(|s| s.agent_state.as_ref().or(s.shell_state.as_ref()))
+                            .map(|s| serde_json::json!(s))
+                            .unwrap_or_else(|| serde_json::json!("unknown"));
+                        if let Some(snapshot) = snapshot.as_ref().filter(|s| s.last_activity_ms > 0)
+                        {
+                            peer["last_activity_ms"] = serde_json::json!(snapshot.last_activity_ms);
+                        }
+                        super::response_pages::compact(&peer)
+                    } else {
+                        peer
+                    }
                 })
                 .collect();
             serde_json::json!({"peers": peers})
@@ -1543,7 +1667,7 @@ fn handle_messaging_with_message_id(
                 }) {
                 Some(s) => s,
                 None => {
-                    return serde_json::json!({"error": "You are not registered. Register first with agent action=register"});
+                    return missing_identity_context(mcp_session_id);
                 }
             };
             let now_ms = std::time::SystemTime::now()
@@ -2022,57 +2146,75 @@ fn handle_messaging_with_message_id(
             );
             response
         }
-        "inbox" => {
-            // Resolve caller's tuic_session via O(1) mcp_to_session reverse map (RUST-3/PERF-2).
-            let tuic_session = match mcp_session_id
-                .and_then(|sid| state.mcp.to_session.get(sid).map(|e| e.value().clone()))
-                .filter(|tuic| state.peer_agents.contains_key(tuic))
-            {
-                Some(ts) => ts,
-                None => {
-                    return serde_json::json!({"error": "You are not registered. Register first with agent action=register"});
-                }
-            };
-            let limit = args["limit"]
-                .as_u64()
-                .unwrap_or(crate::state::AGENT_INBOX_CAPACITY as u64)
-                .clamp(1, crate::state::AGENT_INBOX_CAPACITY as u64)
-                as usize;
-            let since = resolve_agent_since(state, &tuic_session, args);
-            let (messages, has_more, missed_count) =
-                state.observe_agent_inbox(&tuic_session, since, limit);
-            // Same contract as wait: always hand back a usable cursor, falling back
-            // to the position we read from when the batch is empty.
-            let next_since = messages
-                .iter()
-                .map(|message| message.timestamp)
-                .max()
-                .unwrap_or(since);
-            advance_agent_cursor(state, &tuic_session, next_since);
-            let message_ids: Vec<&str> =
-                messages.iter().map(|message| message.id.as_str()).collect();
-            tracing::info!(
-                source = "agent_msg",
-                event = "inbox_read",
-                caller_session_id = mcp_session_id.unwrap_or(""),
-                caller_peer_id = %tuic_session,
-                inbox_owner = %tuic_session,
-                message_ids = %serde_json::json!(message_ids),
-                "Peer inbox read"
-            );
-            let mut resp = serde_json::json!({
-                "messages": messages,
-                "count": messages.len(),
-                "next_since": next_since,
-                "has_more": has_more,
-            });
-            if missed_count > 0 {
-                resp["missed_count"] = serde_json::json!(missed_count);
-            }
-            resp
-        }
+        "inbox" => capture_inbox_reply(state, args, mcp_session_id, true).0,
         other => serde_json::json!({"error": format!(
             "Unknown action '{}' for tool 'agent'. Available: {}", other, AGENT_ACTIONS
         )}),
     }
+}
+
+/// Capture and optionally acknowledge through the same delivery-gate boundary.
+fn capture_inbox_reply(
+    state: &Arc<AppState>,
+    args: &serde_json::Value,
+    mcp_session_id: Option<&str>,
+    acknowledge: bool,
+) -> (
+    serde_json::Value,
+    Option<super::response_pages::Acknowledgement>,
+) {
+    // Resolve caller's tuic_session via O(1) mcp_to_session reverse map (RUST-3/PERF-2).
+    let tuic_session = match mcp_session_id
+        .and_then(|sid| state.mcp.to_session.get(sid).map(|e| e.value().clone()))
+        .filter(|tuic| state.peer_agents.contains_key(tuic))
+    {
+        Some(ts) => ts,
+        None => {
+            return (missing_identity_context(mcp_session_id), None);
+        }
+    };
+    let limit = args["limit"]
+        .as_u64()
+        .unwrap_or(crate::state::AGENT_INBOX_CAPACITY as u64)
+        .clamp(1, crate::state::AGENT_INBOX_CAPACITY as u64) as usize;
+    let since = resolve_agent_since(state, &tuic_session, args);
+    let (messages, has_more, missed_count, eviction_watermark) = if acknowledge {
+        let (messages, has_more, missed_count) =
+            state.observe_agent_inbox(&tuic_session, since, limit);
+        (messages, has_more, missed_count, 0)
+    } else {
+        state.read_agent_inbox(&tuic_session, since, limit, false)
+    };
+    // Same contract as wait: always hand back a usable cursor, falling back
+    // to the position we read from when the batch is empty.
+    let next_since = messages
+        .iter()
+        .map(|message| message.timestamp)
+        .max()
+        .unwrap_or(since);
+    let message_ids: Vec<String> = messages.iter().map(|message| message.id.clone()).collect();
+    let acknowledgement = (!acknowledge).then(|| super::response_pages::Acknowledgement {
+        cursor: next_since,
+        message_ids: message_ids.clone(),
+        eviction_watermark,
+    });
+    tracing::info!(
+        source = "agent_msg",
+        event = "inbox_read",
+        caller_session_id = mcp_session_id.unwrap_or(""),
+        caller_peer_id = %tuic_session,
+        inbox_owner = %tuic_session,
+        message_ids = %serde_json::json!(message_ids),
+        "Peer inbox read"
+    );
+    let mut resp = serde_json::json!({
+        "messages": messages,
+        "count": messages.len(),
+        "next_since": next_since,
+        "has_more": has_more,
+    });
+    if missed_count > 0 {
+        resp["missed_count"] = serde_json::json!(missed_count);
+    }
+    (resp, acknowledgement)
 }

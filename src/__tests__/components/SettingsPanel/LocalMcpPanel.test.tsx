@@ -1,4 +1,4 @@
-import { fireEvent, render } from "@solidjs/testing-library";
+import { fireEvent, render, within } from "@solidjs/testing-library";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("../../../stores/appLogger", () => ({
@@ -29,9 +29,16 @@ import { uiStore } from "../../../stores/ui";
 import { rpc } from "../../../transport";
 import { mockInvoke } from "../../mocks/tauri";
 
-const nativeTools = ["session", "plugin_dev_guide", "config", "debug", "remote", "secret", "progress", "telegram"].map(
-	(name) => ({ name, summary: `${name} summary`, description: `${name} full description` }),
-);
+const nativeTools = [
+	"session",
+	"plugin_dev_guide",
+	"settings",
+	"debug",
+	"remote",
+	"secret",
+	"progress",
+	"telegram",
+].map((name) => ({ name, summary: `${name} summary`, description: `${name} full description` }));
 
 describe("LocalMcpPanel", () => {
 	beforeEach(() => {
@@ -59,6 +66,34 @@ describe("LocalMcpPanel", () => {
 		});
 	});
 
+	// Catches: redundant MCP narration returning above the real visibility controls.
+	it("does not narrate native tools or on-demand discovery", async () => {
+		uiStore.setSettingsExpertMode(true);
+		const view = render(() => <LocalMcpPanel />);
+		await vi.advanceTimersByTimeAsync(0);
+		expect(view.getByRole("checkbox", { name: /Collapse tools/ })).toBeDefined();
+		for (const copy of [
+			"Native tools exposed via MCP. Disable tools to restrict what AI agents can access.",
+			"Discover tools on demand through search_tools, get_tool_schema and call_tool.",
+		])
+			expect(view.queryByText(copy)).toBeNull();
+		view.unmount();
+		uiStore.setSettingsExpertMode(false);
+	});
+
+	// Catches: page/card inventories returning as permanent MCP narration.
+	it.each([
+		"Local MCP connection, tool visibility and upstream servers.",
+		"Choose which built-in tools MCP clients can call. Disabled tools are hidden from clients.",
+	])("does not repeat MCP card contents: %s", async (copy) => {
+		const view = render(() => <LocalMcpPanel />);
+		await vi.advanceTimersByTimeAsync(0);
+		expect(view.getByRole("heading", { name: "TUIC Tools" })).toBeDefined();
+		expect(view.getByRole("checkbox", { name: "session" })).toBeDefined();
+		expect(view.queryByText(copy)).toBeNull();
+		view.unmount();
+	});
+
 	// Catches: a static UI inventory silently drops a newly registered backend tool.
 	it("renders every backend native tool, including new tools and full descriptions", async () => {
 		const view = render(() => <LocalMcpPanel />);
@@ -83,6 +118,8 @@ describe("LocalMcpPanel", () => {
 		});
 		const view = render(() => <LocalMcpPanel />);
 		await vi.advanceTimersByTimeAsync(0);
+		expect(view.queryByRole("region", { name: "Sessions" })).toBeNull();
+		expect(view.queryByRole("region", { name: "Other tools" })).toBeNull();
 		const tip = view.getByText(/Long design help/);
 		const badge = tip.parentElement!;
 		vi.spyOn(badge, "getBoundingClientRect").mockReturnValue({ left: 100, top: 100, bottom: 116 } as DOMRect);
@@ -99,6 +136,61 @@ describe("LocalMcpPanel", () => {
 		tools = [];
 		await vi.advanceTimersByTimeAsync(3000);
 		expect(badge.isConnected).toBe(false);
+		view.unmount();
+	});
+
+	// Catches: domain grouping re-enables a saved denial or saves a heading instead of the wire name.
+	it("keeps saved denials across domain grouping, sibling edits and reload", async () => {
+		let saved = {
+			disabled_native_tools: ["task", "workflow_report", "debug", "unknown_tool"],
+			settings_mcp_enabled: false,
+		};
+		const groups = [
+			["Sessions", ["session"]],
+			["Agents and tasks", ["agent", "task"]],
+			["Repositories", ["repo"]],
+			[
+				"Workflows and stories",
+				["workflow", "story", "workflow_run", "workflow_story_create", "workflow_report", "workflow_launch"],
+			],
+			["Automations", ["automations"]],
+			["User interface and Design Mode", ["ui", "design_mode"]],
+			["Secrets", ["secret"]],
+			["Settings access", ["settings"]],
+			["Progress", ["progress"]],
+			["Rare tools", ["debug", "plugin_dev_guide"]],
+			["Conditional tools", ["voice", "telegram", "remote"]],
+			["Other tools", ["future_tool"]],
+		] as const;
+		const tools = groups.flatMap(([, names]) => names.map((name) => ({ name, summary: name, description: name })));
+		const base = vi.mocked(rpc).getMockImplementation();
+		vi.mocked(rpc).mockImplementation((command: string, args?: Record<string, unknown>) => {
+			if (command === "load_config") return Promise.resolve(structuredClone(saved));
+			if (command === "get_mcp_status") return Promise.resolve({ native_tools: tools });
+			return base?.(command, args) as Promise<never>;
+		});
+		mockInvoke.mockImplementation(async (command: string, args?: Record<string, unknown>) => {
+			if (command === "load_config") return structuredClone(saved);
+			if (command === "save_config") saved = structuredClone(args?.config as typeof saved);
+		});
+		let view = render(() => <LocalMcpPanel />);
+		await vi.advanceTimersByTimeAsync(0);
+		for (const [label, names] of groups) {
+			const section = within(view.getByRole("region", { name: label }));
+			expect(section.getAllByRole("checkbox").map((input) => input.getAttribute("aria-label"))).toEqual(names);
+		}
+		const task = view.getByRole("checkbox", { name: "task" }) as HTMLInputElement;
+		expect(task.checked).toBe(false);
+		fireEvent.click(view.getByRole("checkbox", { name: "agent" }));
+		await vi.advanceTimersByTimeAsync(0);
+		expect(saved.disabled_native_tools).toEqual(["task", "workflow_report", "debug", "unknown_tool", "agent"]);
+		view.unmount();
+		view = render(() => <LocalMcpPanel />);
+		await vi.advanceTimersByTimeAsync(0);
+		for (const name of ["task", "workflow_report", "debug", "agent", "settings"]) {
+			expect((view.getByRole("checkbox", { name }) as HTMLInputElement).checked).toBe(false);
+		}
+		expect((view.getByRole("checkbox", { name: "future_tool" }) as HTMLInputElement).checked).toBe(true);
 		view.unmount();
 	});
 
@@ -185,7 +277,7 @@ describe("LocalMcpPanel", () => {
 
 	describe("expert controls", () => {
 		const DEFAULTS = {
-			app: { collapse_tools: false, disabled_native_tools: ["config", "debug"] },
+			app: { collapse_tools: false, disabled_native_tools: ["settings", "debug"] },
 			notifications: {},
 			agent_settings: {},
 		};
@@ -210,7 +302,7 @@ describe("LocalMcpPanel", () => {
 		const nativeToolToggles = (view: ReturnType<typeof render>) => view.queryByText("plugin_dev_guide");
 
 		it("hides Collapse tools at its default, but keeps the basic native tool toggles", async () => {
-			const view = await renderWith({ collapse_tools: false, disabled_native_tools: ["config", "debug"] });
+			const view = await renderWith({ collapse_tools: false, disabled_native_tools: ["settings", "debug"] });
 			expect(collapseTools(view)).toBeNull();
 			expect(nativeToolToggles(view)).not.toBeNull();
 			expect(view.getByText("Native tools")).toBeDefined();
@@ -218,14 +310,14 @@ describe("LocalMcpPanel", () => {
 		});
 
 		it("shows Collapse tools once its saved value differs from the default", async () => {
-			const view = await renderWith({ collapse_tools: true, disabled_native_tools: ["config", "debug"] });
+			const view = await renderWith({ collapse_tools: true, disabled_native_tools: ["settings", "debug"] });
 			expect(collapseTools(view)).not.toBeNull();
 			view.unmount();
 		});
 
 		it("shows Collapse tools at its default in expert mode", async () => {
 			uiStore.setSettingsExpertMode(true);
-			const view = await renderWith({ collapse_tools: false, disabled_native_tools: ["config", "debug"] });
+			const view = await renderWith({ collapse_tools: false, disabled_native_tools: ["settings", "debug"] });
 			expect(collapseTools(view)).not.toBeNull();
 			view.unmount();
 		});
@@ -246,10 +338,10 @@ describe("LocalMcpPanel", () => {
 			await vi.advanceTimersByTimeAsync(0);
 			expect(nativeToolToggles(view)).toBeNull();
 
-			answer({ collapse_tools: false, disabled_native_tools: ["config", "debug"] });
+			answer({ collapse_tools: false, disabled_native_tools: ["settings", "debug"] });
 			await vi.advanceTimersByTimeAsync(0);
-			const configToggle = view.getByText("config").closest("div")?.parentElement?.querySelector("input");
-			expect(configToggle?.checked).toBe(false);
+			const configToggle = view.getByRole("checkbox", { name: "settings" }) as HTMLInputElement;
+			expect(configToggle.checked).toBe(false);
 			view.unmount();
 		});
 
@@ -257,7 +349,7 @@ describe("LocalMcpPanel", () => {
 		// not fall back to the section heading.
 		it("scrolls to each indexed TUIC Tools control, not just its section", async () => {
 			uiStore.setSettingsExpertMode(true);
-			const view = await renderWith({ collapse_tools: false, disabled_native_tools: ["config", "debug"] });
+			const view = await renderWith({ collapse_tools: false, disabled_native_tools: ["settings", "debug"] });
 			const entries = SETTINGS_SEARCH_INDEX.filter(
 				(entry) => entry.tab === "mcp" && entry.section === "TUIC Tools" && entry.label,
 			);
@@ -276,4 +368,29 @@ describe("LocalMcpPanel", () => {
 			view.unmount();
 		});
 	});
+});
+
+// Catches: legacy config access silently enabling the replacement settings tool.
+it("requires trusted UI opt-in even when settings is absent from disabled names", async () => {
+	vi.useFakeTimers();
+	vi.mocked(rpc).mockImplementation((command: string) => {
+		if (command === "load_config") return Promise.resolve({ disabled_native_tools: [], settings_mcp_enabled: false });
+		if (command === "get_mcp_status") return Promise.resolve({ native_tools: nativeTools });
+		return Promise.resolve(undefined);
+	});
+	mockInvoke.mockImplementation((command: string) =>
+		Promise.resolve(command === "load_config" ? { disabled_native_tools: [], settings_mcp_enabled: false } : undefined),
+	);
+	const view = render(() => <LocalMcpPanel />);
+	await vi.advanceTimersByTimeAsync(0);
+	const toggle = view.getByRole("checkbox", { name: "settings" });
+	expect((toggle as HTMLInputElement).checked).toBe(false);
+	fireEvent.click(toggle);
+	await vi.advanceTimersByTimeAsync(0);
+	expect(mockInvoke).toHaveBeenCalledWith(
+		"save_config",
+		expect.objectContaining({ config: expect.objectContaining({ settings_mcp_enabled: true }) }),
+	);
+	view.unmount();
+	vi.useRealTimers();
 });

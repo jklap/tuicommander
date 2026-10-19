@@ -91,7 +91,11 @@ export const SettingsShell: Component<SettingsShellProps> = (props) => {
 						</Show>
 						<div class={s.headerActions}>
 							{props.headerActions}
-							<button class={s.close} onClick={props.onClose}>
+							<button
+								data-non-setting="Navigate or close Settings without editing configuration"
+								class={s.close}
+								onClick={props.onClose}
+							>
 								&times;
 							</button>
 						</div>
@@ -102,12 +106,17 @@ export const SettingsShell: Component<SettingsShellProps> = (props) => {
 						<nav class={s.nav} style={{ width: `${navWidth()}px` }}>
 							<div class={s.compactNav}>
 								<Select
+									data-non-setting="Navigate between Settings pages"
 									aria-label="Settings page"
 									value={props.activeTab}
 									onChange={(event) => props.onTabChange(event.currentTarget.value)}
 								>
 									<For each={props.tabs.filter((tab) => tab.key !== "__sep__" && !tab.key.startsWith("__label__:"))}>
-										{(tab) => <option value={tab.key}>{tab.label}</option>}
+										{(tab) => (
+											<option value={tab.key} selected={props.activeTab === tab.key}>
+												{tab.label}
+											</option>
+										)}
 									</For>
 								</Select>
 							</div>
@@ -125,6 +134,7 @@ export const SettingsShell: Component<SettingsShellProps> = (props) => {
 										</div>
 									) : (
 										<button
+											data-non-setting="Navigate or close Settings without editing configuration"
 											class={cx(
 												s.navItem,
 												tab.source && s.navItemPlugin,

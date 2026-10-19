@@ -8,7 +8,8 @@ import { rpc } from "../../transport";
 import { CommandInput } from "../components/CommandInput";
 import { CommandWidget } from "../components/CommandWidget";
 import { IdeasOverlay } from "../components/IdeasOverlay";
-import { OpenMarkdownMenu } from "../components/OpenMarkdownMenu";
+import { MobileJumpBottom } from "../components/MobileJumpBottom";
+import { createOpenMarkdownTabs, OpenMarkdownMenu } from "../components/OpenMarkdownMenu";
 import { OutputView } from "../components/OutputView";
 import { SessionHeaderOverlay, type SessionHeaderPanel } from "../components/SessionHeaderOverlay";
 import { SuggestChips } from "../components/SuggestChips";
@@ -18,7 +19,7 @@ import { useSessionChatView } from "../components/useSessionChatView";
 
 import { getAgentCommands } from "../config/agentCommands";
 import { useMobileVoice } from "../useMobileVoice";
-import type { SessionInfo } from "../useSessions";
+import type { SessionInfo, SessionState } from "../useSessions";
 import { formatRetryCountdown } from "../utils/formatRetryCountdown";
 import { isKnownAgentType } from "../utils/sessionKind";
 import { useDebouncedStatus } from "../utils/useDebouncedStatus";
@@ -47,19 +48,55 @@ function elapsedTime(ms: number): string {
 	return `${Math.floor(minutes / 1_440)}d`;
 }
 
+/** Both responsive call actions use the same handset, not the dictation mic. */
+function VoiceCallIcon() {
+	return (
+		<svg
+			width="20"
+			height="20"
+			viewBox="0 0 24 24"
+			fill="none"
+			stroke="currentColor"
+			stroke-width="2"
+			stroke-linecap="round"
+			aria-hidden="true"
+		>
+			<path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72c.13.96.36 1.9.69 2.79a2 2 0 0 1-.45 2.11L8.09 9.89a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45c.89.33 1.83.56 2.79.69A2 2 0 0 1 22 16.92z" />
+		</svg>
+	);
+}
+
 export function SessionDetailScreen(props: SessionDetailScreenProps) {
-	// Merge polled state with real-time WebSocket state pushes.
-	// WS state arrives instantly; poll state arrives every 3s as fallback.
-	const [wsState, setWsState] = createSignal<Record<string, unknown> | null>(null);
-	const sessionState = () => {
-		const ws = wsState();
-		const poll = props.session.state;
-		if (!ws) return poll;
-		// WS state is authoritative when present; poll state fills gaps on reconnect.
-		return { ...poll, ...ws } as typeof poll;
-	};
+	// Both transports send complete snapshots, with cleared optional fields omitted.
+	// Replace rather than merge, and let a fresh poll recover a paused/stale socket.
+	const [sessionState, setSessionState] = createSignal(props.session.state);
+	createEffect(() => {
+		const snapshot = props.session.state;
+		setSessionState((current) => {
+			if (snapshot && current && snapshot.last_activity_ms < current.last_activity_ms) return current;
+			return snapshot;
+		});
+	});
 	const status = useDebouncedStatus(() => ({ ...props.session, state: sessionState() }));
 	const [moreOpen, setMoreOpen] = createSignal(false);
+	const [wideMarkdown, setWideMarkdown] = createSignal(window.innerWidth >= 768);
+	const [markdownOpen, setMarkdownOpen] = createSignal(false);
+	const markdownTabs = createOpenMarkdownTabs(() => props.session.worktree_path || props.session.cwd);
+	const resizeMarkdown = () => {
+		const wide = window.innerWidth >= 768;
+		if (wide === wideMarkdown()) return;
+		setWideMarkdown(wide);
+		setMarkdownOpen(false);
+		setMoreOpen(false);
+	};
+	window.addEventListener("resize", resizeMarkdown);
+	onCleanup(() => window.removeEventListener("resize", resizeMarkdown));
+	const openMarkdown: Parameters<typeof OpenMarkdownMenu>[0]["onOpen"] = (tab) => {
+		setMarkdownOpen(false);
+		setMoreOpen(false);
+		props.onOpenFileLink?.(tab.absolute_path, undefined, tab.fs_root);
+	};
+
 	const [headerPanel, setHeaderPanel] = createSignal<SessionHeaderPanel | null>(null);
 	const agentType = () => sessionState()?.agent_type;
 	const chat = useSessionChatView({
@@ -68,6 +105,8 @@ export function SessionDetailScreen(props: SessionDetailScreenProps) {
 		sessionExists: () => props.sessionExists,
 		subscribeWake: props.subscribeChatWake,
 	});
+	const [cliAtBottom, setCliAtBottom] = createSignal(true);
+	let jumpCli: (() => void) | undefined;
 	const [browserDictating, setBrowserDictating] = createSignal(false);
 	const voice = useMobileVoice(
 		() => props.session.session_id,
@@ -161,7 +200,7 @@ export function SessionDetailScreen(props: SessionDetailScreenProps) {
 	const egoQuestionWaiting = () =>
 		sessionState()?.agent_type === "ego" &&
 		sessionState()?.awaiting_input &&
-		!!sessionState()?.choice_prompt &&
+		(!!sessionState()?.choice_prompt || (!!sessionState()?.question_confident && !!sessionState()?.question_text)) &&
 		props.sessionExists;
 	const codexQuestionWaiting = () =>
 		sessionState()?.agent_type === "codex" &&
@@ -174,7 +213,7 @@ export function SessionDetailScreen(props: SessionDetailScreenProps) {
 		if (openingQuestion()) return;
 		setOpeningQuestion(true);
 		try {
-			await rpc("write_pty", { sessionId: props.session.session_id, data: "\x1b[1;3A" });
+			await rpc("write_pty", { sessionId: props.session.session_id, data: "\x1b[1;2D" });
 			setCodexQuestionOpen(true);
 		} catch (err) {
 			appLogger.warn("network", "Could not open Codex question", { error: err });
@@ -264,35 +303,50 @@ export function SessionDetailScreen(props: SessionDetailScreenProps) {
 						<Show when={voice.phase()}> · Voice {voice.phase()}</Show>
 					</span>
 				</button>
+				<Show when={wideMarkdown()}>
+					<div class={styles.markdownDropdown}>
+						<button
+							type="button"
+							class={styles.markdownTrigger}
+							aria-expanded={markdownOpen()}
+							onClick={() => {
+								setMoreOpen(false);
+								setMarkdownOpen((open) => !open);
+							}}
+						>
+							Markdown
+							<svg width="12" height="12" viewBox="0 0 12 12" fill="currentColor" aria-hidden="true">
+								<path d="m2 4 4 4 4-4z" />
+							</svg>
+						</button>
+						<Show when={markdownOpen()}>
+							<div class={`${styles.overflow} ${styles.markdownPopover}`}>
+								<OpenMarkdownMenu
+									cwd={props.session.worktree_path || props.session.cwd}
+									source={markdownTabs}
+									onOpen={openMarkdown}
+								/>
+							</div>
+						</Show>
+					</div>
+				</Show>
 				<chat.Toggle />
 				<Show when={voice.available()}>
 					<button
 						type="button"
-						class={styles.headerAction}
+						class={`${styles.headerAction} ${styles.secondaryAction}`}
 						classList={{ [styles.voiceActive]: voice.armed() }}
-						aria-label={voice.armed() ? "Stop voice conversation" : "Start voice conversation"}
+						aria-label={voice.armed() ? "Stop voice call" : "Start voice call"}
 						aria-pressed={voice.armed()}
 						disabled={browserDictating()}
 						onClick={() => void voice.toggle()}
 					>
-						<svg
-							width="20"
-							height="20"
-							viewBox="0 0 24 24"
-							fill="none"
-							stroke="currentColor"
-							stroke-width="2"
-							stroke-linecap="round"
-							aria-hidden="true"
-						>
-							<rect x="9" y="3" width="6" height="11" rx="3" />
-							<path d="M5 11a7 7 0 0 0 14 0M12 18v3" />
-						</svg>
+						<VoiceCallIcon />
 					</button>
 				</Show>
 				<button
 					type="button"
-					class={styles.headerAction}
+					class={`${styles.headerAction} ${styles.secondaryAction}`}
 					aria-label={`Session tasks, ${sessionState()?.active_sub_tasks ?? 0} active`}
 					onClick={() => setHeaderPanel("tasks")}
 				>
@@ -341,7 +395,10 @@ export function SessionDetailScreen(props: SessionDetailScreenProps) {
 					class={styles.headerAction}
 					aria-label="More session actions"
 					aria-expanded={moreOpen()}
-					onClick={() => setMoreOpen((open) => !open)}
+					onClick={() => {
+						setMarkdownOpen(false);
+						setMoreOpen((open) => !open);
+					}}
 				>
 					<svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
 						<circle cx="12" cy="5" r="1.8" />
@@ -352,6 +409,32 @@ export function SessionDetailScreen(props: SessionDetailScreenProps) {
 			</header>
 			<Show when={moreOpen()}>
 				<div class={styles.overflow}>
+					<Show when={voice.available()}>
+						<button
+							type="button"
+							class={styles.phoneAction}
+							aria-pressed={voice.armed()}
+							disabled={browserDictating()}
+							onClick={() => {
+								setMoreOpen(false);
+								void voice.toggle();
+							}}
+						>
+							<VoiceCallIcon />
+							{voice.armed() ? "Stop voice call" : "Start voice call"}
+						</button>
+					</Show>
+					<button
+						type="button"
+						class={styles.phoneAction}
+						aria-label={`Tasks, ${sessionState()?.active_sub_tasks ?? 0} active`}
+						onClick={() => {
+							setMoreOpen(false);
+							setHeaderPanel("tasks");
+						}}
+					>
+						Tasks <span>{sessionState()?.active_sub_tasks ?? 0}</span>
+					</button>
 					<button
 						type="button"
 						onClick={() => {
@@ -388,13 +471,13 @@ export function SessionDetailScreen(props: SessionDetailScreenProps) {
 					>
 						Ideas
 					</button>
-					<OpenMarkdownMenu
-						cwd={props.session.worktree_path || props.session.cwd}
-						onOpen={(tab) => {
-							setMoreOpen(false);
-							props.onOpenFileLink?.(tab.absolute_path, undefined, tab.fs_root);
-						}}
-					/>
+					<Show when={!wideMarkdown()}>
+						<OpenMarkdownMenu
+							cwd={props.session.worktree_path || props.session.cwd}
+							source={markdownTabs}
+							onOpen={openMarkdown}
+						/>
+					</Show>
 					<Show when={hasCommands()}>
 						<button
 							type="button"
@@ -456,9 +539,13 @@ export function SessionDetailScreen(props: SessionDetailScreenProps) {
 				<chat.View />
 				<OutputView
 					visible={!chat.active()}
+					onAtBottomChange={setCliAtBottom}
+					onRegisterScrollToBottom={(fn) => {
+						jumpCli = fn;
+					}}
 					sessionId={props.session.session_id}
 					onOpenFileLink={props.onOpenFileLink}
-					onStateChange={setWsState}
+					onStateChange={(state) => setSessionState(state as unknown as SessionState)}
 					onInputLine={setPtyInputLine}
 					searchQuery={searchQuery()}
 				/>
@@ -470,6 +557,10 @@ export function SessionDetailScreen(props: SessionDetailScreenProps) {
 						</button>
 					</div>
 				</Show>
+				<MobileJumpBottom
+					visible={chat.active() ? !chat.atBottom() : !cliAtBottom()}
+					onScrollToBottom={() => (chat.active() ? chat.scrollToBottom() : jumpCli?.())}
+				/>
 			</div>
 			<Show when={!sessionState()?.awaiting_input && sessionState()?.suggested_actions?.length}>
 				<SuggestChips
@@ -478,37 +569,40 @@ export function SessionDetailScreen(props: SessionDetailScreenProps) {
 					agentType={sessionState()?.agent_type as string | null | undefined}
 				/>
 			</Show>
-			<TerminalKeybar
-				sessionId={props.session.session_id}
-				agentType={sessionState()?.agent_type as string | null | undefined}
-				awaitingInput={sessionState()?.awaiting_input}
-				choicePromptOpen={!!sessionState()?.choice_prompt}
-				questionConfident={sessionState()?.question_confident}
-				sessionExists={props.sessionExists}
-				onCommandWidgetOpen={() => setCommandWidgetOpen(true)}
-				onSlashRequest={() => insertComposerText?.("/")}
-				onInputKeyRequest={(key) => requestComposerInputKey?.(key)}
-			/>
-			<CommandInput
-				serverVoiceRecording={voice.recording()}
-				onBrowserDictating={setBrowserDictating}
-				sessionId={props.session.session_id}
-				managedSession={!!sessionState()?.agent_type}
-				awaitingInput={sessionState()?.awaiting_input}
-				sessionExists={props.sessionExists}
-				prefillValue={inputPrefill()}
-				ptyInputLine={ptyInputLine()}
-				agentType={sessionState()?.agent_type ?? null}
-				slashItems={sessionState()?.slash_menu_items}
-				choicePrompt={agentType() === "ego" && !egoQuestionOpen() ? undefined : sessionState()?.choice_prompt}
-				codexQuestionOpen={codexQuestionOpen()}
-				onRegisterInsertText={(fn) => {
-					insertComposerText = fn;
-				}}
-				onRegisterInputKey={(fn) => {
-					requestComposerInputKey = fn;
-				}}
-			/>
+			<div class={styles.controls}>
+				<TerminalKeybar
+					sessionId={props.session.session_id}
+					agentType={sessionState()?.agent_type as string | null | undefined}
+					awaitingInput={sessionState()?.awaiting_input}
+					choicePromptOpen={!!sessionState()?.choice_prompt}
+					questionConfident={sessionState()?.question_confident}
+					sessionExists={props.sessionExists}
+					onCommandWidgetOpen={() => setCommandWidgetOpen(true)}
+					onSlashRequest={() => insertComposerText?.("/")}
+					onInputKeyRequest={(key) => requestComposerInputKey?.(key)}
+				/>
+				<CommandInput
+					serverVoiceRecording={voice.recording()}
+					onBrowserDictating={setBrowserDictating}
+					sessionId={props.session.session_id}
+					managedSession={!!sessionState()?.agent_type}
+					awaitingInput={sessionState()?.awaiting_input}
+					sessionExists={props.sessionExists}
+					prefillValue={inputPrefill()}
+					ptyInputLine={ptyInputLine()}
+					agentType={sessionState()?.agent_type ?? null}
+					slashItems={sessionState()?.slash_menu_items}
+					choicePrompt={agentType() === "ego" && !egoQuestionOpen() ? undefined : sessionState()?.choice_prompt}
+					questionText={egoQuestionOpen() && !sessionState()?.choice_prompt ? sessionState()?.question_text : undefined}
+					codexQuestionOpen={codexQuestionOpen()}
+					onRegisterInsertText={(fn) => {
+						insertComposerText = fn;
+					}}
+					onRegisterInputKey={(fn) => {
+						requestComposerInputKey = fn;
+					}}
+				/>
+			</div>
 			<Show when={commandWidgetOpen()}>
 				<CommandWidget
 					sessionId={props.session.session_id}
@@ -520,6 +614,7 @@ export function SessionDetailScreen(props: SessionDetailScreenProps) {
 				<IdeasOverlay
 					sessionId={props.session.session_id}
 					repoPath={props.session.cwd}
+					microphoneBlocked={voice.recording() || browserDictating()}
 					onDismiss={() => setIdeasOpen(false)}
 				/>
 			</Show>

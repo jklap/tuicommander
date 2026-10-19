@@ -34,6 +34,7 @@
 /agents/detect
 /agents/detect-all
 /agents/ides
+/agents/launch
 /agents/launch-args
 /agents/open-in-app
 /agents/verify-session
@@ -105,6 +106,7 @@
 /config/telegram
 /config/themes
 /config/ui-prefs
+/debug/frame-workload
 /design-mode
 /design-mode/command
 /design-mode/navigate
@@ -352,6 +354,7 @@
 /sessions/x/visible
 /sessions/x/write
 /sessions/x/write-parts
+/settings/action
 /stats
 /stories/action
 /stories/capabilities

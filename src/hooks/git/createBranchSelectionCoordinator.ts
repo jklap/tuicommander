@@ -5,6 +5,7 @@ import { paneLayoutStore } from "../../stores/paneLayout";
 import { repoSettingsStore } from "../../stores/repoSettings";
 import { repositoriesStore } from "../../stores/repositories";
 import { paneLayoutKey, savedPaneLayouts } from "../../stores/savedPaneLayouts";
+import { reconcileTerminalOwnership } from "../../stores/terminalOwnership";
 import { terminalsStore } from "../../stores/terminals";
 import type { SavedTerminal } from "../../types";
 import { resolveAgentResume, verifyAndBuildResumeCommand } from "../../utils/agentSession";
@@ -138,9 +139,6 @@ export function createBranchSelectionCoordinator(deps: BranchSelectionCoordinato
 				fontSize: terminal.fontSize,
 				name: terminal.name,
 				cwd: terminal.cwd,
-				placementPath: terminal.tuicSession
-					? repositoriesStore.get(repoPath)?.declaredWorktrees?.[terminal.tuicSession]?.worktreePath
-					: undefined,
 				awaitingInput: null,
 				tuicSession: terminal.tuicSession ?? crypto.randomUUID(),
 				agentType: terminal.agentType ?? null,
@@ -167,6 +165,7 @@ export function createBranchSelectionCoordinator(deps: BranchSelectionCoordinato
 			// Same reason as handleAddTerminalToWorkspace: a restore knows its repo.
 			terminalsStore.setRepoPath(id, repoPath);
 			repositoriesStore.addTerminalToWorkspace(repoPath, workspaceId, id);
+			reconcileTerminalOwnership(id);
 			restoredIds.push({ id, terminal, resolution });
 		}
 		return restoredIds;
@@ -369,22 +368,30 @@ export function createBranchSelectionCoordinator(deps: BranchSelectionCoordinato
 					// Capture old terminal IDs from the pane layout (branch.terminals is cleared on hydration)
 					const oldTerminalIds = paneLayoutStore.getTerminalTabIds();
 					// Lazy restore: create terminals from persisted session state
+					const hadTerminals = branch.hadTerminals;
 					const restoredIds = await restoreSavedTabs(repoPath, workspaceId, restorableTerminals, isEagerResumeArmed());
-					if (restoredIds.length > 0) terminalsStore.setActive(restoredIds[0].id);
+					// Reconciliation may have moved stale snapshots to another workspace.
+					// Only this workspace's tabs may become active or enter its pane layout.
+					const ownedIds = new Set(repositoriesStore.get(repoPath)?.workspaces[workspaceId]?.terminals ?? []);
+					const selectedRestored = restoredIds.filter(({ id }) => ownedIds.has(id));
+					terminalsStore.setActive(selectedRestored[0]?.id ?? null);
 
-					// Remap disk-restored layout terminal IDs to newly created IDs
+					// Keep positional correspondence with the original snapshot, not the filtered list.
 					const hasDiskLayout = paneLayoutStore.consumeRestoredFromDisk();
-					if (hasDiskLayout && oldTerminalIds.length > 0) {
-						const idMap = new Map<string, string>();
-						for (let i = 0; i < Math.min(oldTerminalIds.length, restoredIds.length); i++) {
-							idMap.set(oldTerminalIds[i], restoredIds[i].id);
-						}
+					const idMap = new Map<string, string>();
+					for (let i = 0; i < Math.min(oldTerminalIds.length, restoredIds.length); i++) {
+						if (ownedIds.has(restoredIds[i].id)) idMap.set(oldTerminalIds[i], restoredIds[i].id);
+					}
+					if (hasDiskLayout && oldTerminalIds.length > 0 && idMap.size === oldTerminalIds.length) {
 						paneLayoutStore.remapTerminalIds(idMap);
 						appLogger.debug("terminal", `BranchSelect REMAP disk-restored paneLayout for ${workspaceId}`, {
 							remapped: idMap.size,
 						});
 					} else {
 						paneLayoutStore.reset();
+					}
+					if (selectedRestored.length === 0 && !hadTerminals) {
+						await handleAddTerminalToWorkspace(repoPath, workspaceId);
 					}
 
 					// Second pass: verify resume commands in parallel (non-blocking).

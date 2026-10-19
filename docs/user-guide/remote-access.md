@@ -24,6 +24,10 @@ Once enabled, the settings panel shows the access URL: `http://<your-ip>:<port>`
 
 The settings panel shows a QR code for the access URL — scan it from a phone or tablet to connect quickly. The QR code uses your actual local IP address.
 
+If local IP discovery fails, the settings controls and QR dialog remain open. The
+network address area shows the error and a **Retry** action. Retry repeats address
+discovery without changing the saved remote-access configuration.
+
 ## What Works Remotely
 
 The browser client provides the same UI as the desktop app:
@@ -86,6 +90,10 @@ TUICommander includes a phone-optimized interface for monitoring agents from you
 
 Opening `/` also offers the form login. iPad Safari selects the touch interface, including when it requests the desktop website with a Mac user agent. Desktop browsers keep the full interface. In that interface, **Add Repository** browses folders on the computer running TUICommander, starting at its home directory; it does not browse the device opening Safari.
 
+At widths of 768 px or more, tap **Markdown** in the session top bar to open a desktop Markdown tab from the same repository. On phones, open **More session actions → Markdown** instead. The list refreshes in place when desktop tabs change; ordinary session polls do not reset it.
+
+After you tick Markdown checkboxes, save source edits, or add block comments, use **Agent** and **Send** to request changes. The session you opened Files from is selected when available; you can choose another agent in the same repository. A transient toast says whether the request was delivered now or queued for the agent’s next idle window. Commented blocks use the same amber highlight as desktop Markdown. Failed requests keep the changes available to send again.
+
 ### Add to Home Screen
 
 The mobile UI supports PWA (Progressive Web App) installation:
@@ -96,6 +104,28 @@ The mobile UI supports PWA (Progressive Web App) installation:
 The app launches in standalone mode (no browser chrome) for a native-like experience.
 
 **The title can look faded on an iPhone.** In the installed PWA the "TUICommander" title in the top bar may look soft or faded, strongest at the top edge. We attribute this to the iOS status-bar edge effect, not to the app. Evidence: in a 390x844 mobile emulation with a 62 px top safe-area inset, the computed styles of the title and every ancestor up to `html` have `opacity: 1`, and `filter`, `backdrop-filter`, `text-shadow`, `mask-image` and `mix-blend-mode` all `none`, so nothing in our CSS fades it. Limit: this is an inference from the absence of a CSS cause; no iPhone layer inspection was possible, so it is not confirmed on a device.
+
+At phone widths up to 430 px, the session header keeps CLI/Chat one tap away.
+Open **More session actions** for **Start voice call** / **Stop voice call** (with the same handset icon as the header) and session tasks. Tablet
+headers keep these controls directly in the bar. Tap the session name for details.
+
+A choice answer stays bound to the terminal that showed the question, even if you
+leave the detail screen while its keys are being sent. A failed send shows an error
+and enables the choice buttons again. Send and Queue also keep their original terminal.
+
+For Claude sessions on a phone, tap **Chat** in the session header. This switches the reading surface without closing the terminal or
+clearing its history; returning to CLI follows the latest output. Expand the tool activity and edit to read its **Old**
+and **New** text. Tab stops align at four spaces. Swipe the edit block sideways
+for long lines rather than wrapping coloured terminal rows. Switch back with
+**CLI** for permission prompts. Startup trust, external-file imports, permission
+prompts and selection lists keep their option rows and interaction footer. Edit excerpts are bounded to 20,000 characters
+per version; an ellipsis marks a truncated excerpt. A failed tool card describes
+a proposed edit, not a successful file change.
+
+
+In a terminal, a down-arrow appears to the right of **Send** while CLI or Chat
+output is scrolled back. Tap it to return to the latest output. It does not send
+terminal input or cover the key-bar controls.
 
 Both mobile composers use **+**, a text box with a microphone when browser speech is available, and **Send**. Tap **+ → Attach file** to choose a file or **Take photo** to open the camera capture picker. In a terminal, the upload
 inserts its `@path` into the draft; review the draft and tap Send when ready.
@@ -137,6 +167,7 @@ and [WebKit's open support issue](https://bugs.webkit.org/show_bug.cgi?id=194593
 The question is encrypted to the phone's Web Push subscription. It does not
 pass through TUICommander's content-blind cloud relay. TUICommander sends at
 most one question or completion push per session every 30 seconds.
+Session notices use the session display name, or the agent and repository when no name is set. Progress notices show the progress message, not the tool arguments.
 Notifications from different sessions remain separate. A newer notification
 for one session can replace its earlier one; tapping either remaining session
 notification opens that session.
@@ -182,7 +213,9 @@ Hold Send with a finger or mouse, then select **Queue** to hold your current age
 
 
 - **Sessions list** — See all running agents with status (idle, busy, question, rate-limited, error)
-- **Session detail** — Live output streaming, quick-reply chips (Yes/No/Enter/Ctrl-C), text input. The terminal keybar Ctrl button opens Ctrl+C, Ctrl+B, Ctrl+D and Ctrl+Enter. A choice sends once and closes; tap outside or press Escape to dismiss. Ctrl+C and Ctrl+D use danger colours. Ctrl+Enter is agent-aware: it submits in Claude Code and ego, and inserts a newline in Codex, OpenCode, Goose, Grok and pi. Other agents use documented or conservative fallback keys; ordinary Enter remains the submit key.
+- **Return to latest output** — Scroll back in a session’s CLI or Chat output to show the down-arrow at the right end of the key bar, above Send. Tap it to return to the bottom without sending terminal input. It hides when you reach the bottom, including by manual scrolling.
+- **Question cards** — Single-choice, multiple-choice and free-text cards use the selected theme and open above the terminal key bar, leaving its keys available.
+- **Session detail** — Opening an ego free-text question card preserves your unsent answer. Send submits the complete answer through the guarded human-reply path, whether the card is open or closed; a refused reply keeps the draft. Live output streaming, quick-reply chips (Yes/No/Enter/Ctrl-C), text input. The terminal keybar Ctrl button opens Ctrl+C, Ctrl+B, Ctrl+D and Ctrl+Enter. A choice sends once and closes; tap outside or press Escape to dismiss. Ctrl+C and Ctrl+D use danger colours. Ctrl+Enter is agent-aware: it submits in Claude Code and ego, and inserts a newline in Codex, OpenCode, Goose, Grok and pi. Other agents use documented or conservative fallback keys; ordinary Enter remains the submit key.
 - **Files** — Browse a configured repository, view `.md` files as rendered Markdown or other text as plain text, and tap Edit to change and save source files up to 1 MB
 - **Question banner** — Instant notification when any agent needs input, with quick-reply buttons
 - **Activity feed** — Chronological event feed grouped by time
@@ -546,6 +579,11 @@ sent to a daemon, including when every registered repository is remote.
 machine selector; it defaults to the machine of the repository the settings nav is standing
 on, and an explicit pick overrides it, so a remote machine is editable from a local repo.
 
+Authenticated Settings actions are available on the headless daemon through the same
+`POST /settings/action` contract as the desktop server. The daemon also serves the
+authenticated `/config` snapshot used to load and refresh browser Settings. Successful durable edits publish
+`settings-changed` over SSE so connected Settings readers can refresh without saving.
+
 Three things stay local even while a remote machine is selected, because they cannot work
 anywhere else: installing or removing the TUIC MCP bridge (`install_agent_mcp`), opening an
 agent's config file in the editor, and the upstream OAuth flow — that one opens a browser
@@ -830,3 +868,12 @@ A successful recovery uses the resolved endpoint for the current session.
 Remote Machines shows the effective address and **Save resolved address**.
 Select that action to update the saved connection without disconnecting it.
 Leaving the action alone keeps the original saved address.
+
+## Remote Settings startup limits
+
+The shared Settings HTTP endpoint retains local-or-authenticated access; MCP mutation remains loopback-only. A local request does not implicitly target a remote daemon. Select the owner explicitly, keep its read revision, and never treat a remote invalidation cursor as a local CAS token. [Startup workflows](../backend/settings-startup.md) covers confirmation, device-login state and readback after uncertain or partial persistence. Secrets remain write-only.
+
+Typed Ego startup login returns a session on the explicitly selected daemon.
+Open that session in the owning client's terminal view to authenticate, then
+request status and refresh providers on that same daemon. Never read a local
+credential owner to infer the result of remote authentication.

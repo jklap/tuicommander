@@ -2,6 +2,9 @@
 pub mod accounts;
 pub mod agents;
 pub mod catalogue;
+pub mod changes;
+pub mod circleci;
+pub mod corrections;
 pub mod ego;
 mod ego_schema;
 pub mod model;
@@ -110,6 +113,9 @@ mod policy_domain_tests;
 #[cfg(test)]
 mod policy_lifecycle_tests;
 
+pub mod api;
+mod prompts;
+
 #[cfg(test)]
 mod choice_tests;
 pub mod registration;
@@ -119,3 +125,17 @@ mod registration_tests;
 pub mod upstream_credentials;
 #[cfg(test)]
 mod upstream_credentials_tests;
+
+#[cfg(test)]
+mod api_tests;
+
+#[cfg(test)]
+mod startup_flow_tests;
+
+#[cfg(test)]
+mod circleci_tests;
+#[cfg(feature = "desktop")]
+pub(crate) mod legacy;
+
+#[cfg(test)]
+pub(crate) mod refresh_test_support;

@@ -744,7 +744,12 @@ export const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 	},
 
 	// --- Config: defaults (Settings "expert mode") ---
-	get_config_defaults: { map: () => ({ method: "GET", path: "/config/defaults" }) },
+	get_config_defaults: {
+		map: (args) =>
+			args.preview
+				? { method: "POST", path: "/config/defaults", body: args.preview }
+				: { method: "GET", path: "/config/defaults" },
+	},
 
 	// --- Config: repo settings ---
 	load_repo_settings: { map: () => ({ method: "GET", path: "/config/repo-settings" }) },
@@ -1874,6 +1879,9 @@ export const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 			},
 		}),
 	},
+	managed_agent_launch: {
+		map: (args) => ({ method: "POST", path: "/agents/launch", body: args.request }),
+	},
 	spawn_agent: {
 		map: (args) => {
 			const ptyConfig = isRecord(args.pty_config) ? args.pty_config : {};
@@ -2215,6 +2223,10 @@ export const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 	probe_ssh_config_hosts: { map: () => ({ method: "GET", path: "/tunnels/ssh-hosts/status" }) },
 	list_ssh_agent_keys: { map: () => ({ method: "GET", path: "/tunnels/agent-keys" }) },
 
+	// --- Opt-in terminal-content evidence ---
+	save_frame_workload: {
+		map: (args) => ({ method: "POST", path: "/debug/frame-workload", body: { recording: args.recording } }),
+	},
 	// --- App Logger ---
 	push_log: {
 		map: (args) => ({
@@ -2368,6 +2380,9 @@ export const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 			path: `/api/plugins/${p("pluginId")}/register`,
 			body: { capabilities: args.capabilities },
 		}),
+	},
+	settings_action: {
+		map: (args) => ({ method: "POST", path: "/settings/action", body: args.request }),
 	},
 	plugin_settings_action: {
 		map: (args, p) => ({

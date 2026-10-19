@@ -322,3 +322,7 @@ Hold `Cmd` alone (`Ctrl` on Windows/Linux) for 450 ms to show shortcut badges on
 | `block-search-toggle` | `Cmd+Shift+B` | Search in block |
 | `answers-only` | `Cmd+Alt+R` | Show every prompt of the session with its 💬 answers (turns without an answer are left out); press again to return to the live terminal |
 | `toggle-hands-free` | `Cmd+Alt+V` | Start/stop hands-free conversation with the active terminal |
+
+## Plugin action discovery
+
+A connected frontend publishes its registered plugin command IDs for the shared settings owner. Explicit keybinding-choice refresh includes those IDs and built-in actions. Unloading removes the plugin IDs from later refreshes. Before any frontend publication, plugin choices report unavailable rather than an empty successful list. Publication does not change shortcut overrides.

@@ -8,18 +8,21 @@ import { TerminalKeybar } from "../components/TerminalKeybar";
 import { SessionDetailScreen } from "../screens/SessionDetailScreen";
 import type { SessionInfo } from "../useSessions";
 
-const { rpc } = vi.hoisted(() => ({ rpc: vi.fn(async (_command: string, _args?: unknown) => undefined) }));
+const { rpc, voice } = vi.hoisted(() => ({
+	rpc: vi.fn(async (_command: string, _args?: unknown) => undefined),
+	voice: { available: false, armed: false, toggle: vi.fn(async () => {}) },
+}));
 vi.mock("../../transport", async (importOriginal) => ({
 	...(await importOriginal<typeof import("../../transport")>()),
 	rpc,
 }));
 vi.mock("../useMobileVoice", () => ({
 	useMobileVoice: () => ({
-		available: () => false,
-		armed: () => false,
+		available: () => voice.available,
+		armed: () => voice.armed,
 		recording: () => false,
 		phase: () => undefined,
-		toggle: async () => {},
+		toggle: voice.toggle,
 	}),
 }));
 vi.mock("../components/OutputView", () => ({ OutputView: () => <div>Terminal output</div> }));
@@ -27,9 +30,55 @@ vi.mock("../components/OutputView", () => ({ OutputView: () => <div>Terminal out
 afterEach(() => {
 	cleanup();
 	rpc.mockClear();
+	voice.available = false;
+	voice.armed = false;
+	voice.toggle.mockClear();
 });
 
 describe("mobile terminal controls", () => {
+	// Catches the call control being presented as dictation or losing its toggle action.
+	it.each([false, true])("uses the call label and pressed state when armed=%s", (armed) => {
+		voice.available = true;
+		voice.armed = armed;
+		render(() => (
+			<SessionDetailScreen
+				subscribeChatWake={() => () => {}}
+				session={{ session_id: "voice", cwd: "/repo", worktree_path: null, worktree_branch: null }}
+				sessionExists={true}
+				onBack={() => {}}
+				onOpenFiles={() => {}}
+			/>
+		));
+		const call = screen.getByRole("button", { name: armed ? "Stop voice call" : "Start voice call" });
+		expect(call.getAttribute("aria-pressed")).toBe(String(armed));
+		fireEvent.click(call);
+		expect(voice.toggle).toHaveBeenCalledOnce();
+	});
+
+	// Catches: the responsive overflow action loses the call icon or its toggle state.
+	it.each([false, true])("keeps the handset action in More when armed=%s", (armed) => {
+		voice.available = true;
+		voice.armed = armed;
+		render(() => (
+			<SessionDetailScreen
+				subscribeChatWake={() => () => {}}
+				session={{ session_id: "voice-menu", cwd: "/repo", worktree_path: null, worktree_branch: null }}
+				sessionExists
+				onBack={() => {}}
+				onOpenFiles={() => {}}
+			/>
+		));
+		fireEvent.click(screen.getByRole("button", { name: "More session actions" }));
+		const call = screen
+			.getAllByRole("button", { name: armed ? "Stop voice call" : "Start voice call" })
+			.find((button) => !button.closest("header"))!;
+		expect(call.querySelector('svg[aria-hidden="true"]')).not.toBeNull();
+		expect(call.getAttribute("aria-pressed")).toBe(String(armed));
+		fireEvent.click(call);
+		expect(voice.toggle).toHaveBeenCalledOnce();
+		expect(screen.getByRole("button", { name: "More session actions" }).getAttribute("aria-expanded")).toBe("false");
+	});
+
 	it("shows Claude's actual choices without generic Yes or No buttons", () => {
 		const session: SessionInfo = {
 			session_id: "claude-question",
@@ -110,6 +159,9 @@ describe("mobile terminal controls", () => {
 			});
 			cleanup();
 			rpc.mockClear();
+			voice.available = false;
+			voice.armed = false;
+			voice.toggle.mockClear();
 		}
 		const expected = {
 			text: "/",
@@ -138,6 +190,9 @@ describe("mobile terminal controls", () => {
 		fireEvent.input(input, { target: { value: "unsent draft" } });
 		input.setSelectionRange(7, 12);
 		rpc.mockClear();
+		voice.available = false;
+		voice.armed = false;
+		voice.toggle.mockClear();
 		fireEvent.click(screen.getByRole("button", { name: "/" }));
 		expect(input.value).toBe("unsent /");
 		expect(input.selectionStart).toBe(8);
@@ -183,6 +238,9 @@ describe("mobile terminal controls", () => {
 		const input = screen.getByPlaceholderText("Type a command...") as HTMLTextAreaElement;
 		insertText?.("/");
 		rpc.mockClear();
+		voice.available = false;
+		voice.armed = false;
+		voice.toggle.mockClear();
 		fireEvent.keyDown(input, { key: "Tab" });
 		expect(rpc).toHaveBeenCalledWith("write_pty", { sessionId: "session-1", data: "\t" });
 		fireEvent.keyDown(input, { key: "Escape" });

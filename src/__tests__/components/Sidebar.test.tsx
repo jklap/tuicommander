@@ -235,6 +235,8 @@ describe("Sidebar", () => {
 		// feature-behavior block can enable it and the gating block can rely on off.
 		settingsStore.setTabTreeEnabled(false);
 		_resetMergedActivityAccum();
+		// Rich rows cache fetch times; cases that move the clock must not inherit them.
+		progressStore.resetForTests();
 	});
 
 	afterEach(() => {

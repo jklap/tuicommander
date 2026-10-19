@@ -13,10 +13,21 @@ use std::sync::Arc;
 
 const ID: &str = "ego";
 
-/// Write-only base auth edits. No Debug/Serialize: values must not enter diagnostics.
+#[path = "ego_login.rs"]
+mod login;
+
+/// Base auth edits and human login lifecycle. No Debug/Serialize: write-only values must not enter diagnostics.
 #[derive(Deserialize, schemars::JsonSchema)]
 #[serde(tag = "action", rename_all = "snake_case", deny_unknown_fields)]
 pub enum EgoAuthAction {
+    /// Open the configured Ego login in a human-operated PTY. No credential input is accepted.
+    BeginLogin {
+        provider: String,
+    },
+    /// Read terminal liveness and fresh credential presence; exit is not authentication success.
+    LoginStatus {
+        flow_id: String,
+    },
     SetHeaders {
         provider: String,
         #[schemars(extend("writeOnly" = true))]
@@ -36,10 +47,11 @@ pub enum EgoAuthAction {
 }
 
 pub struct EgoSettingsStore {
-    state: Arc<AppState>,
+    state: std::sync::Weak<AppState>,
     context: Option<Arc<ConfigContext>>,
     runtime: tokio::runtime::Handle,
     sequence: Arc<Mutex<()>>,
+    logins: Arc<login::Logins>,
 }
 
 impl EgoSettingsStore {
@@ -48,11 +60,12 @@ impl EgoSettingsStore {
     #[allow(dead_code)] // Registered by the settings facade in Step 4.
     pub(crate) fn new(state: Arc<AppState>) -> Result<Self, Failure> {
         Ok(Self {
-            state,
+            state: Arc::downgrade(&state),
             context: None,
             runtime: tokio::runtime::Handle::try_current()
                 .map_err(|_| Error::new(ID, "unavailable"))?,
             sequence: Arc::new(Mutex::new(())),
+            logins: Arc::new(login::Logins::default()),
         })
     }
 
@@ -67,14 +80,22 @@ impl EgoSettingsStore {
         action: EgoAuthAction,
     ) -> Result<CommitReply, Failure> {
         let _sequence = self.sequence.lock();
-        let mut context =
-            ConfigContext::configured(&self.state).map_err(|_| Error::new(ID, "unavailable"))?;
+        let mut context = ConfigContext::configured(
+            self.state
+                .upgrade()
+                .ok_or_else(|| Error::new(ID, "unavailable"))?
+                .as_ref(),
+        )
+        .map_err(|_| Error::new(ID, "unavailable"))?;
         context.profile = None;
         let latest = self.snapshot(&context)?;
         if transaction::revision(&latest)? != expected_revision {
             return Err(Error::new(ID, "conflict"));
         }
         let (provider, field, value) = match action {
+            EgoAuthAction::BeginLogin { .. } | EgoAuthAction::LoginStatus { .. } => {
+                return Err(Error::new(ID, "invalid_type"));
+            }
             EgoAuthAction::SetHeaders { provider, headers } => (
                 provider,
                 "headers",
@@ -260,8 +281,12 @@ impl Store for EgoSettingsStore {
             .map_or(Target::Machine, |id| Target::Profile { id: id.clone() })
     }
     fn resolve(self: Arc<Self>, target: &Target) -> Result<Arc<Self>, Failure> {
+        let state = self
+            .state
+            .upgrade()
+            .ok_or_else(|| Error::new(ID, "unavailable"))?;
         let context = Arc::new(
-            ConfigContext::configured(&self.state).map_err(|_| Error::new(ID, "unavailable"))?,
+            ConfigContext::configured(state.as_ref()).map_err(|_| Error::new(ID, "unavailable"))?,
         );
         let current = context
             .profile
@@ -280,6 +305,7 @@ impl Store for EgoSettingsStore {
             context: Some(context),
             runtime: self.runtime.clone(),
             sequence: self.sequence.clone(),
+            logins: self.logins.clone(),
         }))
     }
     fn validate_read_paths(&self, paths: &[String]) -> Result<(), Failure> {

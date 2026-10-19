@@ -186,13 +186,17 @@ pub(super) async fn get_notification_config() -> impl IntoResponse {
 pub(super) async fn put_notification_config(
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
     auth: Option<Extension<Authenticated>>,
+    State(state): State<Arc<AppState>>,
     Json(request): Json<crate::config::ConfigSaveRequest<crate::config::NotificationConfig>>,
 ) -> impl IntoResponse {
     if let Err(resp) = require_local_or_auth(&addr, auth.is_some()) {
         return resp;
     }
     match crate::config::save_notification_config(request.base, request.config) {
-        Ok(()) => (StatusCode::OK, Json(serde_json::json!({"ok": true}))),
+        Ok(()) => {
+            crate::settings::api::publish_change(&state, "notifications", true);
+            (StatusCode::OK, Json(serde_json::json!({"ok": true})))
+        }
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(serde_json::json!({"error": e})),
@@ -206,19 +210,29 @@ pub(super) async fn get_ui_prefs() -> impl IntoResponse {
 
 /// `_http` suffix: `crate::config::get_config_defaults` already owns the bare name.
 pub(super) async fn get_config_defaults_http() -> impl IntoResponse {
-    Json(crate::config::get_config_defaults())
+    Json(crate::config::get_config_defaults(None))
+}
+
+pub(super) async fn preview_config_defaults_http(
+    Json(preview): Json<crate::settings::agents::LaunchPreview>,
+) -> impl IntoResponse {
+    Json(crate::config::get_config_defaults(Some(preview)))
 }
 
 pub(super) async fn put_ui_prefs(
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
     auth: Option<Extension<Authenticated>>,
+    State(state): State<Arc<AppState>>,
     Json(request): Json<crate::config::ConfigSaveRequest<crate::config::UIPrefsConfig>>,
 ) -> impl IntoResponse {
     if let Err(resp) = require_local_or_auth(&addr, auth.is_some()) {
         return resp;
     }
     match crate::config::save_ui_prefs(request.base, request.config) {
-        Ok(()) => (StatusCode::OK, Json(serde_json::json!({"ok": true}))),
+        Ok(()) => {
+            crate::settings::api::publish_change(&state, "preferences", true);
+            (StatusCode::OK, Json(serde_json::json!({"ok": true})))
+        }
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(serde_json::json!({"error": e})),
@@ -233,13 +247,17 @@ pub(super) async fn get_repo_settings() -> impl IntoResponse {
 pub(super) async fn put_repo_settings(
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
     auth: Option<Extension<Authenticated>>,
+    State(state): State<Arc<AppState>>,
     Json(request): Json<crate::config::ConfigSaveRequest<crate::config::RepoSettingsMap>>,
 ) -> impl IntoResponse {
     if let Err(resp) = require_local_or_auth(&addr, auth.is_some()) {
         return resp;
     }
     match crate::config::save_repo_settings(request.base, request.config) {
-        Ok(()) => (StatusCode::OK, Json(serde_json::json!({"ok": true}))),
+        Ok(()) => {
+            crate::settings::api::publish_change(&state, "repositories", true);
+            (StatusCode::OK, Json(serde_json::json!({"ok": true})))
+        }
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(serde_json::json!({"error": e})),
@@ -270,6 +288,7 @@ pub(super) async fn put_repositories(
         Ok(changed) => {
             if changed {
                 state.notify_repositories_changed();
+                crate::settings::api::publish_change(&state, "repositories_registration", true);
             }
             (StatusCode::OK, Json(serde_json::json!({"ok": true})))
         }
@@ -321,13 +340,17 @@ pub(super) async fn get_pane_layout() -> impl IntoResponse {
 pub(super) async fn put_pane_layout(
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
     auth: Option<Extension<Authenticated>>,
+    State(state): State<Arc<AppState>>,
     Json(request): Json<crate::config::ConfigSaveRequest<serde_json::Value>>,
 ) -> impl IntoResponse {
     if let Err(resp) = require_local_or_auth(&addr, auth.is_some()) {
         return resp;
     }
     match crate::config::save_pane_layout(request.base, request.config) {
-        Ok(()) => (StatusCode::OK, Json(serde_json::json!({"ok": true}))),
+        Ok(()) => {
+            crate::settings::api::publish_change(&state, "pane_layout", true);
+            (StatusCode::OK, Json(serde_json::json!({"ok": true})))
+        }
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(serde_json::json!({"error": e})),
@@ -375,13 +398,17 @@ pub(super) async fn get_prompt_library() -> impl IntoResponse {
 pub(super) async fn put_prompt_library(
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
     auth: Option<Extension<Authenticated>>,
+    State(state): State<Arc<AppState>>,
     Json(request): Json<crate::config::ConfigSaveRequest<crate::config::PromptLibraryConfig>>,
 ) -> impl IntoResponse {
     if let Err(resp) = require_local_or_auth(&addr, auth.is_some()) {
         return resp;
     }
     match crate::config::save_prompt_library(request.base, request.config) {
-        Ok(()) => (StatusCode::OK, Json(serde_json::json!({"ok": true}))),
+        Ok(()) => {
+            crate::settings::api::publish_change(&state, "prompts", true);
+            (StatusCode::OK, Json(serde_json::json!({"ok": true})))
+        }
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(serde_json::json!({"error": e})),
@@ -398,13 +425,17 @@ pub(super) async fn get_repo_defaults() -> impl IntoResponse {
 pub(super) async fn put_repo_defaults(
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
     auth: Option<Extension<Authenticated>>,
+    State(state): State<Arc<AppState>>,
     Json(request): Json<crate::config::ConfigSaveRequest<crate::config::RepoDefaultsConfig>>,
 ) -> impl IntoResponse {
     if let Err(resp) = require_local_or_auth(&addr, auth.is_some()) {
         return resp;
     }
     match crate::config::save_repo_defaults(request.base, request.config) {
-        Ok(()) => (StatusCode::OK, Json(serde_json::json!({"ok": true}))),
+        Ok(()) => {
+            crate::settings::api::publish_change(&state, "repo_defaults", true);
+            (StatusCode::OK, Json(serde_json::json!({"ok": true})))
+        }
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(serde_json::json!({"error": e})),
@@ -474,13 +505,17 @@ pub(super) async fn get_keybindings() -> impl IntoResponse {
 pub(super) async fn put_keybindings(
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
     auth: Option<Extension<Authenticated>>,
+    State(state): State<Arc<AppState>>,
     Json(request): Json<crate::config::ConfigSaveRequest<serde_json::Value>>,
 ) -> impl IntoResponse {
     if let Err(resp) = require_local_or_auth(&addr, auth.is_some()) {
         return resp;
     }
     match crate::config::save_keybindings(request.base, request.config) {
-        Ok(()) => (StatusCode::OK, Json(serde_json::json!({"ok": true}))),
+        Ok(()) => {
+            crate::settings::api::publish_change(&state, "keybindings", true);
+            (StatusCode::OK, Json(serde_json::json!({"ok": true})))
+        }
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(serde_json::json!({"error": e})),
@@ -497,13 +532,17 @@ pub(super) async fn get_agents_config() -> impl IntoResponse {
 pub(super) async fn put_agents_config(
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
     auth: Option<Extension<Authenticated>>,
+    State(state): State<Arc<AppState>>,
     Json(request): Json<crate::config::ConfigSaveRequest<crate::config::AgentsConfig>>,
 ) -> impl IntoResponse {
     if let Err(resp) = require_local_or_auth(&addr, auth.is_some()) {
         return resp;
     }
     match crate::config::save_agents_config(request.base, request.config) {
-        Ok(()) => (StatusCode::OK, Json(serde_json::json!({"ok": true}))),
+        Ok(()) => {
+            crate::settings::api::publish_change(&state, "agents", true);
+            (StatusCode::OK, Json(serde_json::json!({"ok": true})))
+        }
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(serde_json::json!({"error": e})),
@@ -641,11 +680,8 @@ pub(super) async fn put_remote_connection(
             .into_response();
     }
     let _guard = state.connections_lock.lock().await;
-    match crate::remote_connection::upsert_remote_connection(
-        &state.data_dir,
-        request.base,
-        request.connection,
-    ) {
+    match crate::remote_connection::save_connection_record(&state, request.base, request.connection)
+    {
         Ok(()) => Json(serde_json::json!({"ok": true})).into_response(),
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -670,33 +706,21 @@ pub(super) async fn delete_remote_connection(
     // takes the poll, the mirror, its rows and the session token with it.
     crate::remote_runtime::teardown_deleted(&state, &id);
     let _guard = state.connections_lock.lock().await;
-    match crate::remote_connection::remove_remote_connection(&state.data_dir, &id) {
-        Ok(true) => {}
-        Ok(false) => {
-            return (
-                StatusCode::NOT_FOUND,
-                Json(serde_json::json!({"error": format!("connection '{id}' not found")})),
-            )
-                .into_response();
-        }
-        Err(e) => {
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({"error": e})),
-            )
-                .into_response();
-        }
-    }
-    // Same reason as the IPC command: the vault key is the connection's UUID, so
-    // a secret left behind belongs to an id nothing can name again.
-    if let Err(e) = crate::remote_connection::set_connection_password(&id, "") {
-        return (
+    match crate::remote_connection::delete_connection_record(&state, &id, |id| {
+        crate::remote_connection::set_connection_password(id, "")
+    }) {
+        Ok(true) => Json(serde_json::json!({"ok": true})).into_response(),
+        Ok(false) => (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"error": format!("connection '{id}' not found")})),
+        )
+            .into_response(),
+        Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(serde_json::json!({"error": e})),
         )
-            .into_response();
+            .into_response(),
     }
-    Json(serde_json::json!({"ok": true})).into_response()
 }
 
 /// Store the Basic Auth password for a connection, or forget it when the body
@@ -706,16 +730,16 @@ pub(super) async fn delete_remote_connection(
 pub(super) async fn put_remote_connection_password(
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
     auth: Option<Extension<Authenticated>>,
+    State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
     Json(body): Json<RemoteConnectionPasswordRequest>,
 ) -> impl IntoResponse {
     if let Err(resp) = require_local_or_auth(&addr, auth.is_some()) {
         return resp.into_response();
     }
-    super::json_result(crate::remote_connection::set_connection_password(
-        &id,
-        &body.password,
-    ))
+    super::json_result(
+        crate::remote_connection::set_connection_password_with_refresh(&state, &id, &body.password),
+    )
 }
 
 pub(super) async fn get_remote_connection_password_exists(
@@ -977,13 +1001,16 @@ pub(super) async fn list_audio_output_devices_http() -> impl IntoResponse {
 pub(super) async fn discover_agent_session_http(
     Json(body): Json<DiscoverAgentSessionRequest>,
 ) -> impl IntoResponse {
-    Json(crate::agent_session::discover_agent_session(
-        body.agent_type,
-        body.cwd,
-        body.claimed_ids,
-        body.agent_pid,
-        body.env_overrides,
-    ))
+    Json(
+        crate::agent_session::discover_agent_session(
+            body.agent_type,
+            body.cwd,
+            body.claimed_ids,
+            body.agent_pid,
+            body.env_overrides,
+        )
+        .await,
+    )
 }
 
 pub(super) async fn claude_project_dir_http(
@@ -1304,5 +1331,103 @@ mod tests {
         .into_response();
 
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+}
+
+#[cfg(test)]
+mod refresh_review_tests {
+    use super::*;
+
+    // Catches: an HTTP save returning success without invalidating that owner's clients.
+    #[tokio::test]
+    async fn every_http_config_save_wakes_its_settings_section() {
+        let dir = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+        let _guard = crate::config::set_config_dir_override(dir.path().to_path_buf());
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+        let mut events = state.event_bus.subscribe();
+        macro_rules! save {
+            ($save:ident, $load:ident, $section:literal) => {{
+                let base = crate::config::$load();
+                let desired = crate::settings::refresh_test_support::edited($section, &base);
+                let expected = serde_json::to_value(&desired).unwrap();
+                let response = $save(
+                    ConnectInfo("127.0.0.1:1234".parse().unwrap()), None, State(state.clone()),
+                    Json(crate::config::ConfigSaveRequest { base, config: desired }),
+                ).await.into_response();
+                assert_eq!(response.status(), StatusCode::OK, $section);
+                assert_eq!(serde_json::to_value(crate::config::$load()).unwrap(), expected);
+                let event = events.try_recv().expect(concat!($section, " HTTP save did not publish"));
+                assert!(matches!(event, crate::state::AppEvent::SettingsChanged(ref change) if change.section == $section && change.persisted && change.applied));
+                assert!(events.try_recv().is_err(), "one save must publish once");
+            }};
+        }
+        save!(
+            put_notification_config,
+            load_notification_config,
+            "notifications"
+        );
+        save!(put_ui_prefs, load_ui_prefs, "preferences");
+        save!(put_repo_settings, load_repo_settings, "repositories");
+        save!(put_repo_defaults, load_repo_defaults, "repo_defaults");
+        save!(put_prompt_library, load_prompt_library, "prompts");
+        save!(put_agents_config, load_agents_config, "agents");
+        save!(put_keybindings, load_keybindings, "keybindings");
+        save!(put_pane_layout, load_pane_layout, "pane_layout");
+    }
+    // Catches: a transport retaining its own publisher after CRUD is shared, emitting duplicate generations.
+    #[tokio::test]
+    async fn http_connection_crud_publishes_once_per_persisted_change() {
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+        let connection = crate::remote_connection::RemoteConnection::new_ssh(
+            "fixture",
+            "not-contacted.example",
+            "fixture",
+        );
+        let mut events = state.event_bus.subscribe();
+        let response = put_remote_connection(
+            ConnectInfo("127.0.0.1:1234".parse().unwrap()),
+            None,
+            State(state.clone()),
+            Json(crate::remote_connection::RemoteConnectionSaveRequest {
+                base: None,
+                connection: connection.clone(),
+            }),
+        )
+        .await
+        .into_response();
+        assert_eq!(response.status(), StatusCode::OK);
+        let event = events
+            .try_recv()
+            .expect("HTTP connection save must publish");
+        assert!(
+            matches!(event, crate::state::AppEvent::SettingsChanged(ref change) if change.section == "connections" && change.persisted && change.applied)
+        );
+        assert!(events.try_recv().is_err());
+        let response = delete_remote_connection(
+            ConnectInfo("127.0.0.1:1234".parse().unwrap()),
+            None,
+            State(state.clone()),
+            Path(connection.id.clone()),
+        )
+        .await
+        .into_response();
+        assert_eq!(response.status(), StatusCode::OK);
+        let event = events
+            .try_recv()
+            .expect("HTTP connection delete must publish");
+        assert!(
+            matches!(event, crate::state::AppEvent::SettingsChanged(ref change) if change.section == "connections" && change.persisted && change.applied)
+        );
+        assert!(events.try_recv().is_err());
+        let response = delete_remote_connection(
+            ConnectInfo("127.0.0.1:1234".parse().unwrap()),
+            None,
+            State(state),
+            Path(connection.id),
+        )
+        .await
+        .into_response();
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+        assert!(events.try_recv().is_err());
     }
 }

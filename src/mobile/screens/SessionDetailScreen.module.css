@@ -288,3 +288,44 @@
 .overflow .markdownEntry { flex-direction: column; align-items: stretch; justify-content: center; gap: 4px; padding-block: 8px; }
 .markdownEntry span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .markdownPath { color: var(--fg-muted); font-size: 11px; }
+
+/* Phones reserve identity space; tablets keep the direct secondary controls. */
+.overflow .phoneAction { display: none; }
+
+@media (max-width: 430px) {
+  .header .secondaryAction { display: none; }
+  .overflow .phoneAction { display: flex; }
+}
+
+/* Anchor composer sheets above both input and keys, regardless of keybar height. */
+.controls {
+  position: relative;
+  flex-shrink: 0;
+}
+
+.controls > :last-child {
+  position: static;
+}
+
+.markdownDropdown { position: relative; flex-shrink: 0; }
+.markdownTrigger {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 44px;
+  padding: 0 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-tertiary);
+  color: var(--fg-primary);
+  font: inherit;
+  cursor: pointer;
+}
+.markdownTrigger[aria-expanded="true"] { background: var(--bg-highlight); }
+.markdownPopover {
+  top: calc(100% + 4px);
+  right: 0;
+  width: 280px;
+  box-shadow: var(--shadow-dropdown);
+}
+.markdownPopover .markdownSection { border: 0; }

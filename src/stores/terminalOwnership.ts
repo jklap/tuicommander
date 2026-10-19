@@ -1,11 +1,32 @@
 import { batch } from "solid-js";
+import { pathStartsWith } from "../utils/pathUtils";
 import { appLogger } from "./appLogger";
-import { globalWorkspaceStore } from "./globalWorkspace";
+import { globalWorkspaceStore, MANUAL_SCOPE } from "./globalWorkspace";
 import { placementWorkspaceFor, repositoriesStore, resolveRepoOwner } from "./repositories";
 import { terminalsStore } from "./terminals";
 
+/** A validated declaration owns display placement, never cwd or removal authority. */
+export function getDeclaredTerminalWorkspace(terminalId: string): { repoPath: string; workspaceId: string } | null {
+	const peer = terminalsStore.get(terminalId)?.tuicSession;
+	if (!peer) return null;
+	// Reconnect initially derives repoPath from actual cwd, which may now be in
+	// another repo or unregistered. The stable declaration owns its containing repo.
+	for (const repoPath of repositoriesStore.getPaths()) {
+		const repo = repositoriesStore.get(repoPath);
+		const declaration = repo?.declaredWorktrees?.[peer];
+		if (!declaration) continue;
+		const workspace = repo?.workspaces[declaration.workspaceId];
+		// Removed or replaced checkouts retract the association before a refresh saves it.
+		if (!workspace || workspace.worktreePath !== declaration.worktreePath || workspace.worktreePath === repoPath) {
+			continue;
+		}
+		return { repoPath, workspaceId: declaration.workspaceId };
+	}
+	return null;
+}
+
 /**
- * Re-home terminals whose branch placement disagrees with their own cwd.
+ * Re-home terminals from an explicit declaration, otherwise their own cwd.
  *
  * A terminal whose cwd matched no registered repo is parked in the Global
  * Workspace, with `repoPath: null` recording that it has no owner yet. Nothing
@@ -33,13 +54,21 @@ export function reconcileTerminalOwnership(terminalId?: string): void {
 		const terminal = terminalsStore.get(terminalId);
 		if (!terminal) continue;
 
-		const owner = resolveRepoOwner(terminal.placementPath ?? terminal.cwd);
+		const declared = getDeclaredTerminalWorkspace(terminalId);
+		const owner = declared ?? resolveRepoOwner(terminal.cwd);
 		// Still unclaimed. Leave the parked tab where it is — moving it nowhere
 		// would only make it invisible.
 		if (!owner) continue;
 
 		const workspaceId = placementWorkspaceFor(owner);
-		if (!workspaceId) continue;
+		if (!workspaceId) {
+			// A selected linked checkout is not a substitute for an undiscovered root row.
+			const current = repositoriesStore.findOwnerForTerminal(terminalId);
+			if (current) repositoriesStore.removeTerminalFromWorkspace(current.repoPath, current.workspaceId, terminalId);
+			terminalsStore.setRepoPath(terminalId, null);
+			globalWorkspaceStore.promote(terminalId, MANUAL_SCOPE);
+			continue;
+		}
 
 		// A null `repoPath` is the parked marker: this tab sits in the Global
 		// Workspace because nothing claimed its cwd. Now something does, so it
@@ -101,4 +130,42 @@ export function reconcileTerminalOwnership(terminalId?: string): void {
 export function reclaimParkedTerminal(terminalId: string): void {
 	if (terminalsStore.get(terminalId)?.repoPath != null) return;
 	reconcileTerminalOwnership(terminalId);
+}
+
+/** Removal authority comes from current cwd, never sidebar membership or a declaration.
+ * Re-read each terminal after every await: another tab may cd while a close is pending. */
+export async function closeWorktreeTerminals(
+	worktreePath: string,
+	closeTerminal: (id: string, skipConfirm?: boolean) => Promise<void>,
+): Promise<void> {
+	if (!worktreePath) return;
+	const failures: unknown[] = [];
+	for (const id of terminalsStore.getIds()) {
+		const cwd = terminalsStore.get(id)?.cwd;
+		if (!cwd || !pathStartsWith(cwd, worktreePath)) continue;
+		try {
+			await closeTerminal(id, true);
+		} catch (error) {
+			failures.push(error);
+		}
+	}
+	if (failures.length > 0) {
+		throw new AggregateError(failures, `${failures.length} terminal(s) could not be closed`);
+	}
+}
+
+/** Drop a removed checkout's index without losing unrelated tabs filed under it. */
+export function removeWorktreeWorkspace(repoPath: string, workspaceId: string): void {
+	const survivors = [...(repositoriesStore.get(repoPath)?.workspaces[workspaceId]?.terminals ?? [])];
+	batch(() => {
+		repositoriesStore.removeWorkspace(repoPath, workspaceId);
+		for (const id of survivors) {
+			if (!terminalsStore.get(id)) continue;
+			reconcileTerminalOwnership(id);
+			if (!repositoriesStore.findOwnerForTerminal(id)) {
+				terminalsStore.setRepoPath(id, null);
+				globalWorkspaceStore.promote(id, MANUAL_SCOPE);
+			}
+		}
+	});
 }

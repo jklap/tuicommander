@@ -116,7 +116,9 @@ screen: increasing terminal rows can move history back into the viewport and
 make the two representations overlap.
 
 Clipboard selections use the same absolute grid coordinates. TUICommander joins
-rows marked with `WRAPLINE`, trims terminal padding, and then removes only
+rows marked with `WRAPLINE`, preserves real spaces at wrapped margins, omits
+synthetic `WIDE_CHAR_SPACER` and `LEADING_WIDE_CHAR_SPACER` cells from text and
+text-length accounting, trims unwrapped terminal padding, and then removes only
 coherent multi-line Claude space/NBSP `▎` visual gutters. Claude composer
 selections remove one leading `❯ ` and two continuation-margin columns only
 when the ordered selection starts at grid column zero with the marker in the
@@ -343,3 +345,7 @@ different replaced record never licenses deleting an omitted history record.
 ### History-anchored viewport scrolling
 
 History-anchored scrolling uses `TerminalGrid::screen_origin()` (`total_scrolled`) and `scroll_to_anchor`; it resolves the all-time row to a display offset under the VT lock. The existing fork origin and history cap provide the coordinate; no new fork patch is required.
+
+### Soft-wrap extraction contract
+
+`TerminalGrid` uses the existing alacritty WRAPLINE flag for text and styled-log extraction. Wrapped rows retain their trailing cells, including a real space in the final column. Non-wrapped rows still trim unused terminal padding. No fork patch is needed: the grid already carries the required boundary. The log wire format exposes this flag as `wrapped` for mobile output.

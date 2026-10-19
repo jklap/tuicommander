@@ -73,7 +73,8 @@ Values shown are the `:root` defaults of `global.css` (the former VS Code Dark p
 | `--warning` | `#dcdcaa` | Caution, pending, main branch icon (yellow) |
 | `--attention` | `#e8984c` | Actionable alerts, confirmation prompts (orange) |
 | `--error` | `#f48771` | Errors, failures, closed PRs (coral) |
-| `--merged` | `#a371f7` | PR merged badge (purple) |
+| `--merged` | `#ae83ff` | PR merged marker and badge background (purple; Paper uses `#7540b0`) |
+| `--text-on-merged` | `#000000` | Filled merged badge label (Paper uses `#ffffff`); independent of accent action foreground |
 | `--unseen` | `#c084fc` | Terminal completed while user wasn't viewing (purple, clears on view) |
 | `--diff-del` | `--error` mixed 25% with white | Deleted-line counts in the sidebar stats badge. Lighter than `--error` so a negative diff does not read as an alarm; `vscode-light` resets it to `--error` |
 | `--border` | `#3e3e42` | All borders and dividers |
@@ -162,7 +163,7 @@ Use `gap` on flex containers, not margins between children.
 | `--radius-lg` | 6px | Larger controls — dropdowns, add-repo button, form inputs |
 | `--radius-xl` | 8px | Modals, panels, dialogs |
 | `--radius-pill` | 12px | PR badges, status pills |
-| `--radius-full` | 50% | Circles — toggle thumbs, repo initials avatar |
+| `--radius-full` | 9999px | Pills; square elements stay circular — toggle thumbs, repo initials avatar |
 
 ## Shadows
 
@@ -449,13 +450,18 @@ enabled choice. Tasks uses it for List, Board and Roadmap.
 
 Full-screen overlay. All pages share `width: min(1136px, calc(100vw - 48px))`, `height: 80vh`, independently scrolling navigation and content, and existing theme tokens. This width replaces the previous 700px guide after the 2026-10-16 mock approval. Never resize on tab selection or eagerly mount pages to avoid flashes.
 - Navigation: 232px default; retain saved user width and resize behavior. Content padding: 24px 32px.
-- `SettingPageHeader`: 20px title, one-sentence purpose, scope badge and optional source.
+- `SettingPageHeader`: 20px title, optional subtitle, scope badge and optional source. Omit subtitles that only repeat card headings. A header without a subtitle or source reserves no subtitle space.
 - `SectionCard`: semantic `<h3>`, 15px heading, 16px padding/gap, 8px radius, `--bg-primary`.
 - `SettingRow`: persistent label/hint left, existing shared control right (up to 260px, 36px high), 12px vertical padding. Reuse `SettingField` IDs; errors go below the field and join `aria-describedby`.
 - `StatusSummary`: visible status words and existing `StatusBadge` semantic tone, source and freshness. Unknown is neutral; saved sign-in is not a live connection.
 - `ListRow`: wrapping name/subtitle, source/version/access badges and named actions. `EmptyState` explains absence and offers one valid action; do not conflate loading, failed or unsupported state.
 - `DangerZone`: explicit scope and consequence for destructive/disconnecting actions only; caller retains confirmation. Ordinary reset is not automatically destructive.
+- Label/help pairs use the shared `.helpLabel` layout so stacked and grid fields reserve one cell for the pair; the badge remains beside wrapped label text.
+- Paper shades the shared success, attention, changes/review and merged tokens for readable marker text; the legend and sidebar keep the same components and shapes.
+- Agent color tiles use metadata-selected `--identity-on-light` or `--identity-on-dark`; identity fills do not change with the app theme.
+- Settings maps secondary and muted copy to the shared `--settings-foreground` token, mixed from the theme foregrounds for elevated/highlighted surfaces. Links and link buttons use `--link-foreground` without changing action fills. Settings accent actions retain the theme's `--text-on-accent` foreground.
 - Help is 12px `--fg-secondary`, never essential `--fg-muted`. Contextual help is selective and adds information beyond the subtitle; do not add a question mark to every row.
+- Card heading actions stay in the shared heading flex layout so descriptions cannot flow beneath an absolute action. Color targets do not shrink; compact color targets are 44px circles and wrap within the full-width control column.
 - Below 800px rows stack; below 600px navigation is compact and controls/actions have 44px targets. Preserve keyboard labels and long translations.
 - Keep existing autosave/explicit-save boundaries and lazy mounting. Shared primitives never probe, save or infer service state.
 
@@ -467,7 +473,7 @@ Full-screen overlay. All pages share `width: min(1136px, calc(100vw - 48px))`, `
 |-------|-----------|--------|------------|-------|
 | Open | `--success` | none | `--text-on-success` | — |
 | Draft | transparent | `1px dashed --fg-muted` | `--fg-muted` | — |
-| Merged | `#a371f7` | none | `--text-on-accent` | — |
+| Merged | `--merged` | none | `--text-on-merged` | — |
 | Closed | `--error` | none | `--text-on-error` | — |
 | Conflict | `--error` | none | `--text-on-error` | pulse-opacity 1.5s |
 | CI Failed | `--error` | none | `--text-on-error` | bold |
@@ -598,12 +604,13 @@ The mobile PWA has its own standalone stylesheet at `src/mobile/mobile.css`, **c
 - Border radius scale (`--radius-sm` through `--radius-full`, excluding `--radius-xs`)
 - Shadow tokens (`--shadow-popup`, `--shadow-dropdown`)
 - ANSI terminal palette
+- Session Chat semantic prompt/answer colors and the font size scale, imported from `src/styles/chat-tokens.css` by both stylesheet entrypoints
 
 ### What differs
 | Property | Desktop (`global.css`) | Mobile (`mobile.css`) |
 |----------|----------------------|----------------------|
 | Font mono stack | JetBrains Mono, Fira Code, Hack, Cascadia, ... | SF Mono, Menlo, Consolas, DejaVu, ... |
-| Font size scale | `--font-3xs` through `--font-3xl` (8–24px) | Not defined — components use explicit `px` values |
+| Font size scale | `--font-3xs` through `--font-3xl` (8–24px) | Same shared scale; native inputs retain 16px text |
 | Layout variables | `--sidebar-width`, `--toolbar-height`, `--tab-bar-height`, `--status-height` | Not used — mobile uses flex-based layout |
 | User select | Disabled (`none`) | Enabled (`text`) |
 | Theme variables | `--activity`, `--merged`, `--unseen` | Not present (mobile has no terminal activity tracking yet) |
@@ -645,3 +652,15 @@ black on Commander's blue accent and white on Paper's darker blue. The pressed
 state changes the background to `--accent-hover` instead of fading the whole
 strip. Do not reuse Commander's shared white accent foreground here: at 13px,
 its 3.36:1 contrast does not meet WCAG AA.
+
+Paper mobile question-banner names use `--warning`; Input badge labels use
+`--fg-primary` over the existing attention tint. The Paper Input badge does not
+fade: whole-badge opacity would reduce small-text contrast below WCAG AA.
+Commander retains its urgent/attention foregrounds and pulse.
+
+### Constrained layouts and theme surfaces
+
+- Detached Files and Markdown panels fill their window; inline panels retain their docked width limits.
+- Dialog footer hints wrap as complete groups, with gaps between groups and actions. Action labels do not wrap letter by letter.
+- Task field labels align at the top when neighboring controls have different heights. Roadmap state labels use ellipsis inside short bars.
+- Native controls use the light color scheme on the Paper theme. Mobile bottom tabs and diff gutters use the existing application surface tokens.

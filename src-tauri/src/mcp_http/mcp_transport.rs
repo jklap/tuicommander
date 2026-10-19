@@ -18,7 +18,6 @@ use super::mcp_transport_ancillary::CONFIRM_TIMEOUT;
 use super::mcp_transport_ancillary::SESSION_HTML_TAB_LIMIT;
 pub(crate) use super::mcp_transport_ancillary::create_daemon_workflow_worktree;
 pub(crate) use super::mcp_transport_ancillary::emit_progress_entry;
-use super::mcp_transport_ancillary::handle_config;
 #[cfg(test)]
 use super::mcp_transport_ancillary::handle_confirm;
 use super::mcp_transport_ancillary::handle_debug_unified;
@@ -58,8 +57,6 @@ use super::mcp_transport_ancillary::worktree_remove_success_response;
 #[cfg(test)]
 use super::mcp_transport_catalogue::AGENT_ACTIONS;
 #[cfg(test)]
-use super::mcp_transport_catalogue::CONFIG_ACTIONS;
-#[cfg(test)]
 use super::mcp_transport_catalogue::DEBUG_ACTIONS;
 #[cfg(test)]
 use super::mcp_transport_catalogue::InstructionContext;
@@ -95,7 +92,6 @@ use super::mcp_transport_catalogue::meta_tool_definitions;
 pub(crate) use super::mcp_transport_catalogue::native_tool_catalog;
 #[cfg(test)]
 use super::mcp_transport_catalogue::native_tool_definitions;
-#[cfg(test)]
 pub(crate) use super::mcp_transport_catalogue::rebuild_tool_search_index;
 use super::mcp_transport_catalogue::removed_native_action_replacement;
 #[cfg(test)]
@@ -251,6 +247,13 @@ fn upstream_tool_result(value: &serde_json::Value) -> Option<&serde_json::Value>
         .and_then(|object| object.get(UPSTREAM_TOOL_RESULT_MARKER))
 }
 
+fn tool_result_is_error(result: &serde_json::Value) -> bool {
+    if let Some(upstream) = upstream_tool_result(result) {
+        return upstream["isError"].as_bool().unwrap_or(false);
+    }
+    result.get("error").is_some_and(|error| !error.is_null())
+}
+
 /// Produce the JSON-RPC `result` for a `tools/call` response.
 ///
 /// A successful upstream call already speaks the MCP CallToolResult contract,
@@ -350,6 +353,14 @@ pub(super) fn resolve_agent_type(client_name: Option<&str>) -> Option<&'static s
         Some("amp")
     } else if name.contains("goose") {
         Some("goose")
+    } else if name.contains("opencode") {
+        Some("opencode")
+    } else if name.contains("grok") {
+        Some("grok")
+    } else if name == "pi" || name.starts_with("pi-") {
+        Some("pi")
+    } else if name.contains("ego") {
+        Some("ego")
     } else {
         None
     }
@@ -452,7 +463,17 @@ fn session_action_requires_blocking_pool(action: &str) -> bool {
 }
 
 fn agent_action_requires_blocking_pool(action: &str) -> bool {
-    matches!(action, "spawn" | "send")
+    matches!(
+        action,
+        "spawn"
+            | "send"
+            | "inbox"
+            | "subscribe"
+            | "ack"
+            | "unsubscribe"
+            | "task_get"
+            | "task_cancel"
+    )
 }
 
 fn secret_inspection_tool(name: &str, args: &serde_json::Value) -> bool {
@@ -500,6 +521,28 @@ async fn guard_secret_inspection(
     call.await
 }
 
+/// Both catalogue adapters share caller ownership and the existing host-grant owner.
+async fn handle_design_mode_with_caller(
+    state: &Arc<AppState>,
+    args: &serde_json::Value,
+    mcp_session_id: Option<&str>,
+) -> serde_json::Value {
+    let origin = super::mcp_transport_ancillary::resolve_mcp_origin_pty(state, mcp_session_id);
+    if args["action"] != "start"
+        && !(crate::design_mode::mcp::visible_to(state, origin.as_deref())
+            && (args["action"] == "status"
+                || crate::design_mode::mcp::owns_repo(
+                    state,
+                    origin.as_deref(),
+                    args["repo_path"].as_str().unwrap_or(""),
+                )))
+    {
+        serde_json::json!({"error":"Design Mode not armed for this session"})
+    } else {
+        crate::design_mode::mcp::handle(state, args).await
+    }
+}
+
 async fn dispatch_mcp_tool_call_with_context(
     state: &Arc<AppState>,
     addr: SocketAddr,
@@ -508,15 +551,23 @@ async fn dispatch_mcp_tool_call_with_context(
     mcp_session_id: Option<&str>,
     managed_parent_cwd: Option<&str>,
 ) -> serde_json::Value {
-    // Enforce disabled_native_tools on every call path (not just the call_tool meta-tool).
-    // Read-guard does not span an await and is released at the end of the `if` expression.
-    if state
-        .config
-        .read()
-        .disabled_native_tools
-        .iter()
-        .any(|d| d == name)
-    {
+    if name == "config" {
+        return serde_json::json!({"error":"Unknown tool 'config'"});
+    }
+    if let Some(error) = super::mcp_transport_catalogue::native_tool_unavailability(state, name) {
+        return serde_json::json!({"error": error});
+    }
+    // Grouped actions retain the underlying owner's explicit tool denial.
+    if state.config.read().disabled_native_tools.iter().any(|d| {
+        (name == "workflow"
+            && Some(d.as_str())
+                == super::mcp_transport_catalogue::workflow_member_tool(
+                    args["action"].as_str().unwrap_or(""),
+                ))
+            || (d == "task"
+                && name == "agent"
+                && matches!(args["action"].as_str(), Some("task_get" | "task_cancel")))
+    }) {
         return serde_json::json!({"error": format!("Tool '{}' is disabled by configuration", name)});
     }
     if let Some(action) = args["action"].as_str()
@@ -543,28 +594,38 @@ async fn dispatch_mcp_tool_call_with_context(
     {
         return serde_json::json!({"error":"connection_id must be a nonempty connection qualifier"});
     }
+    if let Some(error) = super::mcp_input_contract::validate(name, args) {
+        return error;
+    }
+    if args["action"] == "help"
+        && let Some(help) = super::mcp_transport_catalogue::native_tool_help(name)
+    {
+        return help;
+    }
     // Resolve client identity at dispatch level — tool handlers get a plain bool
     let is_claude_code = mcp_session_id
         .and_then(|sid| state.mcp.sessions.get(sid))
         .map(|meta| meta.is_claude_code)
         .unwrap_or(false);
     match name {
-        "design_mode" => {
-            let origin =
-                super::mcp_transport_ancillary::resolve_mcp_origin_pty(state, mcp_session_id);
-            if args["action"] != "start"
-                && !(crate::design_mode::mcp::visible_to(state, origin.as_deref())
-                    && (args["action"] == "status"
-                        || crate::design_mode::mcp::owns_repo(
-                            state,
-                            origin.as_deref(),
-                            args["repo_path"].as_str().unwrap_or(""),
-                        )))
+        "design_mode" => handle_design_mode_with_caller(state, args, mcp_session_id).await,
+        "ui" if args["action"]
+            .as_str()
+            .is_some_and(|action| action.starts_with("design_")) =>
+        {
+            if let Some(error) =
+                super::mcp_transport_catalogue::native_tool_unavailability(state, "design_mode")
             {
-                serde_json::json!({"error":"Design Mode not armed for this session"})
-            } else {
-                crate::design_mode::mcp::handle(state, args).await
+                return serde_json::json!({"error":error});
             }
+            let mut design_args = args.clone();
+            design_args["action"] = serde_json::json!(
+                args["action"]
+                    .as_str()
+                    .unwrap()
+                    .trim_start_matches("design_")
+            );
+            handle_design_mode_with_caller(state, &design_args, mcp_session_id).await
         }
         "automations" => {
             crate::automations::mcp::handle(
@@ -578,7 +639,9 @@ async fn dispatch_mcp_tool_call_with_context(
         "telegram" => crate::telegram::handle_tool(state, args, mcp_session_id).await,
         "session" => {
             let action = args["action"].as_str().unwrap_or("");
-            if let Some(remote) = super::remote_mcp_sessions::resolve(state, args) {
+            if action != "list"
+                && let Some(remote) = super::remote_mcp_sessions::resolve(state, args)
+            {
                 if matches!(action, "submit" | "force_retry") && !addr.ip().is_loopback() {
                     return serde_json::json!({"error":"This session action is restricted to localhost connections"});
                 }
@@ -666,7 +729,11 @@ async fn dispatch_mcp_tool_call_with_context(
             {
                 return result;
             }
-            if action == "wait" && !addr.ip().is_loopback() {
+            if action == "launch" {
+                super::launch_transaction::execute(state, addr, args).await
+            } else if matches!(action, "wait" | "subscribe" | "ack" | "unsubscribe")
+                && !addr.ip().is_loopback()
+            {
                 serde_json::json!({
                     "error": "Inter-agent messaging is restricted to localhost connections"
                 })
@@ -678,13 +745,20 @@ async fn dispatch_mcp_tool_call_with_context(
                 let sid = mcp_session_id.map(str::to_owned);
                 let parent_cwd = managed_parent_cwd.map(str::to_owned);
                 run_blocking_handler(move || {
-                    handle_agent_unified_with_parent_cwd(
-                        &state,
-                        addr,
-                        &args,
-                        sid.as_deref(),
-                        parent_cwd.as_deref(),
-                    )
+                    if matches!(
+                        args["action"].as_str(),
+                        Some("subscribe" | "ack" | "unsubscribe")
+                    ) {
+                        super::mcp_transport_peer::handle_messaging(&state, &args, sid.as_deref())
+                    } else {
+                        handle_agent_unified_with_parent_cwd(
+                            &state,
+                            addr,
+                            &args,
+                            sid.as_deref(),
+                            parent_cwd.as_deref(),
+                        )
+                    }
                 })
                 .await
             } else {
@@ -710,6 +784,15 @@ async fn dispatch_mcp_tool_call_with_context(
             let args = args.clone();
             let sid = mcp_session_id.map(str::to_owned);
             run_blocking_handler(move || handle_story(&state, &args, sid.as_deref())).await
+        }
+        "workflow" => {
+            let state = state.clone();
+            let args = args.clone();
+            let sid = mcp_session_id.map(str::to_owned);
+            run_blocking_handler(move || {
+                super::mcp_transport_ancillary::handle_workflow(&state, addr, &args, sid.as_deref())
+            })
+            .await
         }
         "workflow_run" => {
             let state = state.clone();
@@ -747,10 +830,20 @@ async fn dispatch_mcp_tool_call_with_context(
         "plugin_dev_guide" => {
             serde_json::json!({"content": super::plugin_docs::PLUGIN_DOCS})
         }
-        "config" => {
-            let state = state.clone();
-            let args = args.clone();
-            run_blocking_handler(move || handle_config(&state, addr, &args)).await
+        "settings" => {
+            let enabled = state.config.read().settings_mcp_enabled
+                && !state
+                    .config
+                    .read()
+                    .disabled_native_tools
+                    .iter()
+                    .any(|name| name == "settings");
+            let caller = crate::settings::policy::Caller::mcp(
+                addr,
+                mcp_session_id.unwrap_or("headerless").to_owned(),
+                enabled,
+            );
+            crate::settings::api::execute(state, args.clone(), caller).await
         }
         "debug" => handle_debug_unified(state, addr, args),
         // Blocking pool: `speak` builds nothing, but `status` reaps a finished
@@ -767,7 +860,7 @@ async fn dispatch_mcp_tool_call_with_context(
             handle_call_tool(state, addr, args, mcp_session_id, managed_parent_cwd).await
         }
         _ => serde_json::json!({"error": format!(
-            "Unknown tool '{}'. Available: session, agent, task, remote, repo, story, progress, ui, plugin_dev_guide, config, debug, voice, search_tools, get_tool_schema, call_tool", name
+            "Unknown tool '{}'. Available: session, agent, task, remote, repo, workflow, story, progress, ui, plugin_dev_guide, settings, debug, voice, search_tools, get_tool_schema, call_tool", name
         )}),
     }
 }
@@ -1157,10 +1250,12 @@ pub(super) async fn mcp_post(
             // refuse with guidance the caller can act on, which a blanket -32600
             // never gave them.
             let is_cc_ua = detect_claude_code_from_headers(&headers);
-            if let Some(sid) = headers
-                .get(MCP_SESSION_HEADER)
-                .and_then(|v| v.to_str().ok())
-            {
+            let session_id_str = super::mcp_transport_peer::call_session_context(
+                &state,
+                &headers,
+                request_is_modern_lifecycle(&headers, &body),
+            );
+            if let Some(sid) = session_id_str.as_deref() {
                 refresh_mcp_session(
                     &state,
                     sid,
@@ -1175,15 +1270,12 @@ pub(super) async fn mcp_post(
                 .get("params")
                 .cloned()
                 .unwrap_or(serde_json::Value::Null);
+            let audit = super::mcp_call_audit::Call::start(&state.mcp.call_audit, &params);
             let tool_name = params["name"].as_str().unwrap_or("").to_string();
             let args = params
                 .get("arguments")
                 .cloned()
                 .unwrap_or(serde_json::json!({}));
-            let session_id_str = headers
-                .get(MCP_SESSION_HEADER)
-                .and_then(|v| v.to_str().ok())
-                .map(|s| s.to_string());
             let managed_parent_cwd = managed_parent_cwd_from_header(
                 &state,
                 session_id_str.as_deref(),
@@ -1213,7 +1305,7 @@ pub(super) async fn mcp_post(
                     }
                 })
                 .await;
-                let is_error = result.get("error").is_some();
+                let is_error = tool_result_is_error(&result);
                 (result, is_error)
             } else {
                 let result = Box::pin(handle_mcp_tool_call_with_context(
@@ -1225,10 +1317,11 @@ pub(super) async fn mcp_post(
                     managed_parent_cwd.as_deref(),
                 ))
                 .await;
-                let is_error = result.get("error").is_some();
+                let is_error = tool_result_is_error(&result);
                 (result, is_error)
             };
             let mut tool_result = format_tool_call_result(&result, is_error);
+            audit.finish(&result, &tool_result);
             if request_is_modern_lifecycle(&headers, &body) {
                 // A completed 2026-07-28 tool call has this discriminator,
                 // including tool-level errors. Preserve any discriminator an
@@ -1400,7 +1493,9 @@ pub(super) async fn mcp_get(
             tokio::select! {
                 result = tools_rx.recv() => {
                     match result {
-                        Ok(()) => {
+                        Ok(()) | Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
+                            // Publish fresh schemas before telling the client to refetch.
+                            rebuild_tool_search_index(&state);
                             let notification = serde_json::json!({
                                 "jsonrpc": "2.0",
                                 "method": "notifications/tools/list_changed"
@@ -1410,7 +1505,6 @@ pub(super) async fn mcp_get(
                                     .data(serde_json::to_string(&notification).unwrap_or_default())
                             );
                         }
-                        Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
                         Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
                     }
                 }
@@ -1562,9 +1656,9 @@ mod critic_story_tool_text {
             .expect("story tool")
             .clone();
         let description = definition["description"].as_str().unwrap_or_default();
-        let variants = definition["inputSchema"]["properties"]["input"]["oneOf"]
+        let variants = definition["inputSchema"]["properties"]["input"]["anyOf"]
             .as_array()
-            .expect("oneOf");
+            .expect("anyOf");
         let mut missing = Vec::new();
         for variant in variants {
             let action = &variant["properties"]["action"];
@@ -1700,7 +1794,13 @@ mod session_placement_tests {
                 root_path: {"path":root_path,"workspaces":{"main":{"worktreePath":root_path,"savedTerminals":[
                     {"tuicSession":"caller-peer","name":"Caller","cwd":root_path,"fontSize":14,"agentType":"codex"},
                     {"tuicSession":"sibling-peer","name":"Sibling","cwd":root_path,"fontSize":14,"agentType":"codex"}
-                ]}}},
+                ]},
+                // setWorkspace saves new rows without savedTerminals until a snapshot.
+                // Catches: scanning that absent key with IndexMut inserts null, so
+                // declaring an already-discovered row fails before saving anything.
+                "feature": {"workspaceId":"feature","branchName":"feature","kind":"worktree","worktreePath":worktree},
+                "unrelated": {"workspaceId":"unrelated","branchName":"unrelated"}
+                }},
                 foreign_path: {"path":foreign_path,"workspaces":{}}
             }, "repoOrder":[root_path,foreign_path]
         })).unwrap();
@@ -1741,6 +1841,12 @@ mod session_placement_tests {
         assert_eq!(placed["creator_session"], "caller-pty");
         assert_eq!(placed["workspace_id"], "feature");
         let saved = crate::config::load_repositories();
+        assert!(
+            saved["repos"][root_path]["workspaces"]["unrelated"]
+                .get("savedTerminals")
+                .is_none(),
+            "declaration manufactured a null restore list on an unrelated workspace"
+        );
         assert_eq!(
             saved["repos"][root_path]["workspaces"]["main"]["savedTerminals"][0]["tuicSession"],
             "sibling-peer"
@@ -1773,6 +1879,35 @@ mod session_placement_tests {
             ),
             serde_json::to_value(declared).unwrap()
         );
+        // Adjacent boundaries: a never-discovered target and a target that
+        // already owns a sibling's restore record must keep working too.
+        for target in [
+            None,
+            Some(serde_json::json!({"savedTerminals":[{"tuicSession":"target-sibling"}]})),
+        ] {
+            let expected_count = if target.is_some() { 2 } else { 1 };
+            let mut snapshot = before.clone();
+            let rows = snapshot["repos"][root_path]["workspaces"]
+                .as_object_mut()
+                .unwrap();
+            if let Some(target) = target {
+                rows.insert("feature".into(), target);
+            } else {
+                rows.remove("feature");
+            }
+            crate::config::replace_repositories_for_test(snapshot).unwrap();
+            let result = handle_session(&state, &request, Some("placement-mcp"));
+            assert!(result.get("error").is_none(), "{result}");
+            let snapshot = crate::config::load_repositories();
+            let target = snapshot["repos"][root_path]["workspaces"]["feature"]["savedTerminals"]
+                .as_array()
+                .unwrap();
+            assert_eq!(target.len(), expected_count);
+            assert_eq!(target.last().unwrap()["tuicSession"], "caller-peer");
+            if expected_count > 1 {
+                assert_eq!(target[0]["tuicSession"], "target-sibling");
+            }
+        }
         let restarted = test_state();
         insert_session(&restarted, "restored-pty");
         restarted
@@ -1853,3 +1988,5 @@ mod session_placement_tests {
         );
     }
 }
+
+pub(crate) use super::mcp_transport_ancillary::queue_peer_notice;

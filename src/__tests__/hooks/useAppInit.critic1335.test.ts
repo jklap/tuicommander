@@ -39,6 +39,7 @@ function createMockDeps(): AppInitDeps {
 			startAutoFetch: vi.fn(),
 			startPrNotificationTimer: vi.fn(),
 			loadFontFromConfig: vi.fn(),
+			startDictationSettingsSync: vi.fn(() => vi.fn()),
 			refreshDictationConfig: vi.fn().mockResolvedValue(undefined),
 			startUserActivityListening: vi.fn(),
 		},

@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, waitFor } from "@solidjs/testing-library";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@solidjs/testing-library";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { appLogger } from "../../stores/appLogger";
 import { SessionDetailScreen } from "../screens/SessionDetailScreen";
@@ -96,21 +96,21 @@ it("hides the voice control when the server has no hands-free route", async () =
 	mount();
 	await waitFor(() => expect(rpc).toHaveBeenCalledWith("get_hands_free_status"));
 	await Promise.resolve();
-	expect(screen.queryByRole("button", { name: /voice conversation/ })).toBeNull();
+	expect(screen.queryByRole("button", { name: /voice call/ })).toBeNull();
 });
 
 it("arms synchronously inside the tap and disarms on the second tap", async () => {
 	// catches: arming after an await, which spends the iOS user gesture before the AudioContext can resume.
 	mount();
-	const button = await screen.findByRole("button", { name: "Start voice conversation" });
+	const button = await screen.findByRole("button", { name: "Start voice call" });
 
 	fireEvent.click(button);
 	expect(voice.armHandsFree).toHaveBeenCalledWith("s1");
 
-	const stop = await screen.findByRole("button", { name: "Stop voice conversation" });
+	const stop = await screen.findByRole("button", { name: "Stop voice call" });
 	fireEvent.click(stop);
 	await waitFor(() => expect(voice.disarmHandsFree).toHaveBeenCalledTimes(1));
-	await screen.findByRole("button", { name: "Start voice conversation" });
+	await screen.findByRole("button", { name: "Start voice call" });
 });
 
 it("shows a refused start as a readable toast without the Error prefix", async () => {
@@ -120,7 +120,7 @@ it("shows a refused start as a readable toast without the Error prefix", async (
 		return false;
 	});
 	mount();
-	fireEvent.click(await screen.findByRole("button", { name: "Start voice conversation" }));
+	fireEvent.click(await screen.findByRole("button", { name: "Start voice call" }));
 	await waitFor(() =>
 		expect(toastAdd).toHaveBeenCalledWith("Voice not started", "Voice needs a secure page", "error", true),
 	);
@@ -129,8 +129,8 @@ it("shows a refused start as a readable toast without the Error prefix", async (
 it("ends the conversation when the session screen is left", async () => {
 	// catches: the microphone staying open on a screen the user has navigated away from.
 	const { unmount } = mount();
-	fireEvent.click(await screen.findByRole("button", { name: "Start voice conversation" }));
-	await screen.findByRole("button", { name: "Stop voice conversation" });
+	fireEvent.click(await screen.findByRole("button", { name: "Start voice call" }));
+	await screen.findByRole("button", { name: "Stop voice call" });
 
 	unmount();
 
@@ -140,7 +140,7 @@ it("ends the conversation when the session screen is left", async () => {
 it("keeps Spoken replies out of the session screen when voice is available", async () => {
 	// catches: the redundant Spoken replies row returning beneath the session header.
 	mount();
-	await screen.findByRole("button", { name: "Start voice conversation" });
+	await screen.findByRole("button", { name: "Start voice call" });
 	expect(screen.queryByRole("checkbox", { name: "Spoken replies" })).toBeNull();
 	expect(screen.queryByText("Spoken replies")).toBeNull();
 });
@@ -175,7 +175,7 @@ it("hides browser dictation when neither recognition constructor exists", async 
 	vi.stubGlobal("SpeechRecognition", undefined);
 	vi.stubGlobal("webkitSpeechRecognition", undefined);
 	mount();
-	await screen.findByRole("button", { name: "Start voice conversation" });
+	await screen.findByRole("button", { name: "Start voice call" });
 	expect(screen.queryByRole("button", { name: "Dictate into draft" })).toBeNull();
 });
 
@@ -183,7 +183,7 @@ it("appends interim and final speech without focusing, duplicating hypotheses or
 	// Catches: opening the phone keyboard, replacing typed text, or sending on result.
 	browserSpeech();
 	const { container } = mount();
-	await screen.findByRole("button", { name: "Start voice conversation" });
+	await screen.findByRole("button", { name: "Start voice call" });
 	const input = container.querySelector("textarea")!;
 	const focus = vi.spyOn(input, "focus");
 	fireEvent.input(input, { target: { value: "Review" } });
@@ -213,7 +213,7 @@ it.each([
 	// Catches: silently discarding the draft on browser/service permission failures.
 	browserSpeech();
 	const { container } = mount();
-	await screen.findByRole("button", { name: "Start voice conversation" });
+	await screen.findByRole("button", { name: "Start voice call" });
 	const input = container.querySelector("textarea")!;
 	fireEvent.input(input, { target: { value: "Keep this" } });
 	fireEvent.click(screen.getByRole("button", { name: "Dictate into draft" }));
@@ -234,7 +234,7 @@ it.each(["it", "auto"])("uses configured language %s or the navigator fallback",
 	browserSpeech();
 	rpc.mockImplementation(async (command) => (command === "get_dictation_config" ? { language } : { armed: false }));
 	mount();
-	await screen.findByRole("button", { name: "Start voice conversation" });
+	await screen.findByRole("button", { name: "Start voice call" });
 	await waitFor(() => expect(rpc).toHaveBeenCalledWith("get_dictation_config"));
 	await Promise.resolve();
 	fireEvent.click(screen.getByRole("button", { name: "Dictate into draft" }));
@@ -245,7 +245,7 @@ it("excludes server voice while browser recognition starts and releases it on en
 	// Catches: two mic consumers during the browser permission prompt.
 	browserSpeech();
 	mount();
-	const server = await screen.findByRole("button", { name: "Start voice conversation" });
+	const server = await screen.findByRole("button", { name: "Start voice call" });
 	fireEvent.click(screen.getByRole("button", { name: "Dictate into draft" }));
 	expect(server.hasAttribute("disabled")).toBe(true);
 	fireEvent.click(server);
@@ -253,9 +253,31 @@ it("excludes server voice while browser recognition starts and releases it on en
 	FakeRecognition.latest.onend?.();
 	expect(server.hasAttribute("disabled")).toBe(false);
 	fireEvent.click(server);
-	await screen.findByRole("button", { name: "Stop voice conversation" });
+	await screen.findByRole("button", { name: "Stop voice call" });
 	expect(screen.getByRole("button", { name: "Dictate into draft" }).hasAttribute("disabled")).toBe(true);
 });
+
+// Catches: opening Ideas bypasses the session's existing microphone exclusion,
+// so idea speech competes with a voice call or continues into the hidden terminal draft.
+it.each(["voice call", "terminal dictation"])(
+	"blocks Ideas dictation while %s already owns the microphone",
+	async (owner) => {
+		browserSpeech();
+		mount();
+		const server = await screen.findByRole("button", { name: "Start voice call" });
+		if (owner === "voice call") {
+			fireEvent.click(server);
+			await screen.findByRole("button", { name: "Stop voice call" });
+		} else {
+			fireEvent.click(screen.getByRole("button", { name: "Dictate into draft" }));
+		}
+		fireEvent.click(screen.getByRole("button", { name: "More session actions" }));
+		fireEvent.click(screen.getByRole("button", { name: /^Ideas$/ }));
+		const ideaInput = screen.getByPlaceholderText("Type an idea...");
+		const mic = within(ideaInput.parentElement!).getByRole("button", { name: "Dictate into draft" });
+		expect(mic.hasAttribute("disabled")).toBe(true);
+	},
+);
 
 it("excludes browser speech during a pending server permission prompt", async () => {
 	// Catches: a race before the server has published its armed status.
@@ -268,7 +290,7 @@ it("excludes browser speech during a pending server permission prompt", async ()
 			}),
 	);
 	mount();
-	fireEvent.click(await screen.findByRole("button", { name: "Start voice conversation" }));
+	fireEvent.click(await screen.findByRole("button", { name: "Start voice call" }));
 	expect(screen.getByRole("button", { name: "Dictate into draft" }).hasAttribute("disabled")).toBe(true);
 	finish(false);
 	await waitFor(() =>
@@ -282,7 +304,7 @@ it.each(["run tests in package", "replace everything", ""])(
 		// Catches: editing leaves recording active or a queued result overwrites the manual draft.
 		browserSpeech();
 		mount();
-		const server = await screen.findByRole("button", { name: "Start voice conversation" });
+		const server = await screen.findByRole("button", { name: "Start voice call" });
 		const input = screen.getByRole("textbox") as HTMLTextAreaElement;
 		fireEvent.click(screen.getByRole("button", { name: "Dictate into draft" }));
 		const recognition = FakeRecognition.latest;
@@ -308,7 +330,7 @@ it("aborts recognition and ignores late results when the screen is left", async 
 	// Catches: background recording or modifying an abandoned composer.
 	browserSpeech();
 	const { unmount } = mount();
-	await screen.findByRole("button", { name: "Start voice conversation" });
+	await screen.findByRole("button", { name: "Start voice call" });
 	const input = screen.getByRole("textbox") as HTMLTextAreaElement;
 	fireEvent.click(screen.getByRole("button", { name: "Dictate into draft" }));
 	const recognition = FakeRecognition.latest;
@@ -320,4 +342,23 @@ it("aborts recognition and ignores late results when the screen is left", async 
 	lateResult({ results: [{ isFinal: true, 0: { transcript: "late speech" } }] });
 	expect(input.value).toBe("keep draft");
 	expect(rpc).not.toHaveBeenCalled();
+});
+
+it("keeps voice start and stop reachable from More without losing the tap gesture", async () => {
+	// catches: moving phone voice into More loses arming, disarming, or the iOS gesture.
+	mount();
+	await screen.findByRole("button", { name: "Start voice call" });
+	fireEvent.click(screen.getByRole("button", { name: "More session actions" }));
+	const overflow = screen
+		.getAllByRole("button", { name: "Start voice call" })
+		.find((button) => !button.closest("header"))!;
+	fireEvent.click(overflow);
+	expect(voice.armHandsFree).toHaveBeenCalledWith("s1");
+	await waitFor(() =>
+		expect(screen.getByRole("button", { name: "More session actions" }).getAttribute("aria-expanded")).toBe("false"),
+	);
+	fireEvent.click(screen.getByRole("button", { name: "More session actions" }));
+	const stop = screen.getAllByRole("button", { name: "Stop voice call" }).find((button) => !button.closest("header"))!;
+	fireEvent.click(stop);
+	await waitFor(() => expect(voice.disarmHandsFree).toHaveBeenCalledOnce());
 });

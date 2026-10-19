@@ -42,7 +42,7 @@ export interface ChoicePrompt {
 	dismiss_key?: string;
 	amend_key?: string;
 	/** How this agent's dialog accepts a selected option. */
-	selection_mode?: "navigate-enter";
+	selection_mode?: "navigate-enter" | "toggle-enter";
 }
 
 /** Single option in a ChoicePrompt. Matches Rust output_parser::ChoiceOption. */
@@ -234,10 +234,5 @@ export function useSessions(onRecovered?: () => void) {
 		});
 	}
 
-	/** Count of sessions with pending questions */
-	function questionCount(): number {
-		return sessions().filter((s) => s.state?.awaiting_input).length;
-	}
-
-	return { sessions, loading, refreshing, error, authError, refresh, questionCount, markSeen, subscribeChatWake };
+	return { sessions, loading, refreshing, error, authError, refresh, markSeen, subscribeChatWake };
 }

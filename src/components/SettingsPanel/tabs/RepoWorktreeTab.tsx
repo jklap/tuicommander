@@ -1,6 +1,8 @@
 import { type Component, For, Show } from "solid-js";
 import { t } from "../../../i18n";
 import { isMacOS } from "../../../platform";
+import type { SettingId } from "../../../services/settingsCatalogue";
+import { settingOptions } from "../../../services/settingsCatalogue";
 import type {
 	AutoDeleteOnPrClose,
 	MergeStrategy,
@@ -29,6 +31,8 @@ export interface RepoTabProps {
 /** Nullable controls retain an explicit inherited state instead of flattening it. */
 const INHERIT = "__inherit__";
 function BooleanOverride(props: {
+	settingId?: SettingId;
+	"data-setting-exclusion"?: string;
 	label: string;
 	value: boolean | null;
 	fallback: boolean;
@@ -38,6 +42,8 @@ function BooleanOverride(props: {
 		<SettingRow label={props.label}>
 			{(id, descriptionId) => (
 				<Select
+					data-setting-id={props.settingId}
+					data-setting-exclusion={props["data-setting-exclusion"]}
 					id={id}
 					aria-describedby={descriptionId()}
 					value={props.value === null ? INHERIT : String(props.value)}
@@ -70,7 +76,6 @@ export const RepoWorktreeTab: Component<RepoTabProps> = (props) => {
 		<div class={`${s.section} ${r.page}`}>
 			<SettingPageHeader
 				title={props.settings.displayName || "Repository"}
-				description="Configure repository identity and inherited worktree defaults."
 				scope="Repository"
 				source={props.settings.path}
 				breadcrumb="Repositories / Settings"
@@ -79,6 +84,7 @@ export const RepoWorktreeTab: Component<RepoTabProps> = (props) => {
 				<div class={r.group}>
 					<label for="repo-field-1">{t("repoWorktree.label.displayName", "Display Name")}</label>
 					<Input
+						data-setting-id="repositories.repos.{key}.display_name"
 						id="repo-field-1"
 						type="text"
 						value={props.settings.displayName ?? ""}
@@ -88,20 +94,27 @@ export const RepoWorktreeTab: Component<RepoTabProps> = (props) => {
 					<p class={s.hint}>{t("repoWorktree.hint.displayName", "Shown in sidebar instead of folder name")}</p>
 				</div>
 
-				<div class={r.group}>
-					<label>{t("repoWorktree.label.sidebarColor", "Sidebar Color")}</label>
-					<ColorSwatchPicker
-						color={props.settings.color ?? ""}
-						presets={DEFAULT_COLOR_PRESETS}
-						onChange={(c) => props.onUpdate("color", c)}
-					/>
-					<p class={s.hint}>{t("repoWorktree.hint.sidebarColor", "Color-code this repo in the sidebar")}</p>
-				</div>
+				<SettingRow
+					label={t("repoWorktree.label.sidebarColor", "Sidebar Color")}
+					hint={t("repoWorktree.hint.sidebarColor", "Color-code this repo in the sidebar")}
+				>
+					{() => (
+						<ColorSwatchPicker
+							settingId="repositories.repos.{key}.color"
+							color={props.settings.color ?? ""}
+							presets={DEFAULT_COLOR_PRESETS}
+							onChange={(c) => props.onUpdate("color", c)}
+						/>
+					)}
+				</SettingRow>
 
 				<div class={r.group}>
-					<label for="repo-field-2">{t("repoWorktree.label.autoFetchInterval", "Auto-Fetch Interval")}</label>
-					<ContextualHelp label={t("repoWorktree.label.autoFetchInterval", "Auto-Fetch Interval")} />
+					<div class={s.helpLabel}>
+						<label for="repo-field-2">{t("repoWorktree.label.autoFetchInterval", "Auto-Fetch Interval")}</label>
+						<ContextualHelp label={t("repoWorktree.label.autoFetchInterval", "Auto-Fetch Interval")} />
+					</div>
 					<Select
+						data-setting-id="repositories.repos.{key}.auto_fetch_interval_minutes"
 						id="repo-field-2"
 						value={
 							props.settings.autoFetchIntervalMinutes != null
@@ -139,6 +152,7 @@ export const RepoWorktreeTab: Component<RepoTabProps> = (props) => {
 				<div class={r.group}>
 					<label for="repo-field-3">{t("repoWorktree.label.branchFrom", "Branch From")}</label>
 					<Select
+						data-setting-id="repositories.repos.{key}.base_branch"
 						id="repo-field-3"
 						value={baseBranchValue()}
 						onChange={(e) => handleBaseBranchChange(e.currentTarget.value)}
@@ -154,10 +168,13 @@ export const RepoWorktreeTab: Component<RepoTabProps> = (props) => {
 				</div>
 
 				<div class={r.group}>
-					<label>{t("repoWorktree.label.fileHandling", "File Handling")}</label>
-					<ContextualHelp label={t("repoWorktree.label.fileHandling", "File Handling")} />
+					<div class={s.helpLabel}>
+						<label>{t("repoWorktree.label.fileHandling", "File Handling")}</label>
+						<ContextualHelp label={t("repoWorktree.label.fileHandling", "File Handling")} />
+					</div>
 
 					<BooleanOverride
+						settingId="repositories.repos.{key}.copy_ignored_files"
 						label="Copy ignored files"
 						value={props.settings.copyIgnoredFiles}
 						fallback={props.defaults.copyIgnoredFiles}
@@ -165,6 +182,7 @@ export const RepoWorktreeTab: Component<RepoTabProps> = (props) => {
 					/>
 
 					<BooleanOverride
+						settingId="repositories.repos.{key}.copy_untracked_files"
 						label="Copy untracked files"
 						value={props.settings.copyUntrackedFiles}
 						fallback={props.defaults.copyUntrackedFiles}
@@ -174,9 +192,12 @@ export const RepoWorktreeTab: Component<RepoTabProps> = (props) => {
 			</SectionCard>
 			<SectionCard title={t("repoWorktree.heading.worktreeSettings", "Worktree Settings")}>
 				<div class={r.group}>
-					<label for="repo-field-4">{t("repoWorktree.label.worktreeStorage", "Storage Strategy")}</label>
-					<ContextualHelp label={t("repoWorktree.label.worktreeStorage", "Storage Strategy")} />
+					<div class={s.helpLabel}>
+						<label for="repo-field-4">{t("repoWorktree.label.worktreeStorage", "Storage Strategy")}</label>
+						<ContextualHelp label={t("repoWorktree.label.worktreeStorage", "Storage Strategy")} />
+					</div>
 					<Select
+						data-setting-id="repositories.repos.{key}.worktree_storage"
 						id="repo-field-4"
 						value={props.settings.worktreeStorage ?? INHERIT}
 						onChange={(e) =>
@@ -191,14 +212,19 @@ export const RepoWorktreeTab: Component<RepoTabProps> = (props) => {
 								default: props.defaults.worktreeStorage,
 							})}
 						</option>
-						<option value="sibling">{t("repoWorktree.worktreeStorage.sibling", "Sibling directory (__wt)")}</option>
-						<option value="app-dir">{t("repoWorktree.worktreeStorage.appDir", "App config directory")}</option>
-						<option value="inside-repo">
-							{t("repoWorktree.worktreeStorage.insideRepo", "Inside repository (.worktrees)")}
-						</option>
-						<option value="claude-code-default">
-							{t("repoWorktree.worktreeStorage.claudeCodeDefault", "Claude Code default (.claude/worktrees)")}
-						</option>
+						<For
+							each={settingOptions("repositories.repos.{key}.worktree_storage", {
+								sibling: t("repoWorktree.worktreeStorage.sibling", "Sibling directory (__wt)"),
+								"app-dir": t("repoWorktree.worktreeStorage.appDir", "App config directory"),
+								"inside-repo": t("repoWorktree.worktreeStorage.insideRepo", "Inside repository (.worktrees)"),
+								"claude-code-default": t(
+									"repoWorktree.worktreeStorage.claudeCodeDefault",
+									"Claude Code default (.claude/worktrees)",
+								),
+							}).filter((option) => option.value !== "")}
+						>
+							{(option) => <option value={option.value}>{option.label}</option>}
+						</For>
 					</Select>
 				</div>
 
@@ -206,6 +232,7 @@ export const RepoWorktreeTab: Component<RepoTabProps> = (props) => {
 					<SettingRow label="Show all worktrees of this repo in one consolidated screen">
 						{(id, descriptionId) => (
 							<input
+								data-setting-id="repositories.repos.{key}.auto_consolidate_worktrees"
 								id={id}
 								aria-describedby={descriptionId()}
 								class={r.rowSwitch}
@@ -220,6 +247,7 @@ export const RepoWorktreeTab: Component<RepoTabProps> = (props) => {
 
 				<div class={r.group}>
 					<BooleanOverride
+						settingId="repositories.repos.{key}.prompt_on_create"
 						label="Prompt for branch name during creation"
 						value={props.settings.promptOnCreate}
 						fallback={props.defaults.promptOnCreate}
@@ -229,6 +257,7 @@ export const RepoWorktreeTab: Component<RepoTabProps> = (props) => {
 
 				<div class={r.group}>
 					<BooleanOverride
+						settingId="repositories.repos.{key}.delete_branch_on_remove"
 						label="Delete local branch when removing worktree"
 						value={props.settings.deleteBranchOnRemove}
 						fallback={props.defaults.deleteBranchOnRemove}
@@ -238,6 +267,7 @@ export const RepoWorktreeTab: Component<RepoTabProps> = (props) => {
 
 				<div class={r.group}>
 					<BooleanOverride
+						settingId="repositories.repos.{key}.auto_archive_merged"
 						label="Auto-archive merged worktrees"
 						value={props.settings.autoArchiveMerged}
 						fallback={props.defaults.autoArchiveMerged}
@@ -246,9 +276,12 @@ export const RepoWorktreeTab: Component<RepoTabProps> = (props) => {
 				</div>
 
 				<div class={r.group}>
-					<label for="repo-field-5">{t("repoWorktree.label.orphanCleanup", "Orphan Worktree Cleanup")}</label>
-					<ContextualHelp label={t("repoWorktree.label.orphanCleanup", "Orphan Worktree Cleanup")} />
+					<div class={s.helpLabel}>
+						<label for="repo-field-5">{t("repoWorktree.label.orphanCleanup", "Orphan Worktree Cleanup")}</label>
+						<ContextualHelp label={t("repoWorktree.label.orphanCleanup", "Orphan Worktree Cleanup")} />
+					</div>
 					<Select
+						data-setting-id="repositories.repos.{key}.orphan_cleanup"
 						id="repo-field-5"
 						value={props.settings.orphanCleanup ?? INHERIT}
 						onChange={(e) =>
@@ -263,16 +296,25 @@ export const RepoWorktreeTab: Component<RepoTabProps> = (props) => {
 								default: props.defaults.orphanCleanup,
 							})}
 						</option>
-						<option value="ask">{t("repoWorktree.orphanCleanup.ask", "Ask before removing")}</option>
-						<option value="on">{t("repoWorktree.orphanCleanup.on", "Auto-remove")}</option>
-						<option value="off">{t("repoWorktree.orphanCleanup.off", "Keep (mark as detached)")}</option>
+						<For
+							each={settingOptions("repositories.repos.{key}.orphan_cleanup", {
+								ask: t("repoWorktree.orphanCleanup.ask", "Ask before removing"),
+								on: t("repoWorktree.orphanCleanup.on", "Auto-remove"),
+								off: t("repoWorktree.orphanCleanup.off", "Keep (mark as detached)"),
+							}).filter((option) => option.value !== "")}
+						>
+							{(option) => <option value={option.value}>{option.label}</option>}
+						</For>
 					</Select>
 				</div>
 
 				<div class={r.group}>
-					<label for="repo-field-6">{t("repoWorktree.label.prMergeStrategy", "PR Merge Strategy")}</label>
-					<ContextualHelp label={t("repoWorktree.label.prMergeStrategy", "PR Merge Strategy")} />
+					<div class={s.helpLabel}>
+						<label for="repo-field-6">{t("repoWorktree.label.prMergeStrategy", "PR Merge Strategy")}</label>
+						<ContextualHelp label={t("repoWorktree.label.prMergeStrategy", "PR Merge Strategy")} />
+					</div>
 					<Select
+						data-setting-id="repositories.repos.{key}.pr_merge_strategy"
 						id="repo-field-6"
 						value={props.settings.prMergeStrategy ?? INHERIT}
 						onChange={(e) =>
@@ -287,16 +329,25 @@ export const RepoWorktreeTab: Component<RepoTabProps> = (props) => {
 								default: props.defaults.prMergeStrategy,
 							})}
 						</option>
-						<option value="merge">{t("repoWorktree.mergeStrategy.merge", "Merge")}</option>
-						<option value="squash">{t("repoWorktree.mergeStrategy.squash", "Squash")}</option>
-						<option value="rebase">{t("repoWorktree.mergeStrategy.rebase", "Rebase")}</option>
+						<For
+							each={settingOptions("repositories.repos.{key}.pr_merge_strategy", {
+								merge: t("repoWorktree.mergeStrategy.merge", "Merge"),
+								squash: t("repoWorktree.mergeStrategy.squash", "Squash"),
+								rebase: t("repoWorktree.mergeStrategy.rebase", "Rebase"),
+							}).filter((option) => option.value !== "")}
+						>
+							{(option) => <option value={option.value}>{option.label}</option>}
+						</For>
 					</Select>
 				</div>
 
 				<div class={r.group}>
-					<label for="repo-field-7">{t("repoWorktree.label.afterMerge", "After Merge Behavior")}</label>
-					<ContextualHelp label={t("repoWorktree.label.afterMerge", "After Merge Behavior")} />
+					<div class={s.helpLabel}>
+						<label for="repo-field-7">{t("repoWorktree.label.afterMerge", "After Merge Behavior")}</label>
+						<ContextualHelp label={t("repoWorktree.label.afterMerge", "After Merge Behavior")} />
+					</div>
 					<Select
+						data-setting-id="repositories.repos.{key}.after_merge"
 						id="repo-field-7"
 						value={props.settings.afterMerge ?? INHERIT}
 						onChange={(e) =>
@@ -311,16 +362,25 @@ export const RepoWorktreeTab: Component<RepoTabProps> = (props) => {
 								default: props.defaults.afterMerge,
 							})}
 						</option>
-						<option value="archive">{t("repoWorktree.afterMerge.archive", "Archive worktree")}</option>
-						<option value="delete">{t("repoWorktree.afterMerge.delete", "Delete worktree")}</option>
-						<option value="ask">{t("repoWorktree.afterMerge.ask", "Ask each time")}</option>
+						<For
+							each={settingOptions("repositories.repos.{key}.after_merge", {
+								archive: t("repoWorktree.afterMerge.archive", "Archive worktree"),
+								delete: t("repoWorktree.afterMerge.delete", "Delete worktree"),
+								ask: t("repoWorktree.afterMerge.ask", "Ask each time"),
+							}).filter((option) => option.value !== "")}
+						>
+							{(option) => <option value={option.value}>{option.label}</option>}
+						</For>
 					</Select>
 				</div>
 
 				<div class={r.group}>
-					<label for="repo-field-8">{t("repoWorktree.label.autoDeleteOnPrClose", "Auto-Delete on PR Close")}</label>
-					<ContextualHelp label={t("repoWorktree.label.autoDeleteOnPrClose", "Auto-Delete on PR Close")} />
+					<div class={s.helpLabel}>
+						<label for="repo-field-8">{t("repoWorktree.label.autoDeleteOnPrClose", "Auto-Delete on PR Close")}</label>
+						<ContextualHelp label={t("repoWorktree.label.autoDeleteOnPrClose", "Auto-Delete on PR Close")} />
+					</div>
 					<Select
+						data-setting-id="repositories.repos.{key}.auto_delete_on_pr_close"
 						id="repo-field-8"
 						value={props.settings.autoDeleteOnPrClose ?? INHERIT}
 						onChange={(e) =>
@@ -335,9 +395,15 @@ export const RepoWorktreeTab: Component<RepoTabProps> = (props) => {
 								default: props.defaults.autoDeleteOnPrClose,
 							})}
 						</option>
-						<option value="off">{t("repoWorktree.autoDelete.off", "Off")}</option>
-						<option value="ask">{t("repoWorktree.autoDelete.ask", "Ask before deleting")}</option>
-						<option value="auto">{t("repoWorktree.autoDelete.auto", "Auto-delete silently")}</option>
+						<For
+							each={settingOptions("repositories.repos.{key}.auto_delete_on_pr_close", {
+								off: t("repoWorktree.autoDelete.off", "Off"),
+								ask: t("repoWorktree.autoDelete.ask", "Ask before deleting"),
+								auto: t("repoWorktree.autoDelete.auto", "Auto-delete silently"),
+							}).filter((option) => option.value !== "")}
+						>
+							{(option) => <option value={option.value}>{option.label}</option>}
+						</For>
 					</Select>
 					<p class={s.hint}>
 						{t("repoWorktree.hint.autoDelete", "Delete local branch when its PR is merged or closed")}
@@ -351,6 +417,7 @@ export const RepoWorktreeTab: Component<RepoTabProps> = (props) => {
 							<Select
 								id={id}
 								aria-describedby={descriptionId()}
+								data-setting-id="repositories.repos.{key}.pr_hide_drafts"
 								value={props.settings.prHideDrafts === null ? INHERIT : String(props.settings.prHideDrafts)}
 								onChange={(e) =>
 									props.onUpdate(
@@ -372,6 +439,7 @@ export const RepoWorktreeTab: Component<RepoTabProps> = (props) => {
 							<Select
 								id={id}
 								aria-describedby={descriptionId()}
+								data-setting-id="repositories.repos.{key}.pr_hide_conflicting"
 								value={props.settings.prHideConflicting === null ? INHERIT : String(props.settings.prHideConflicting)}
 								onChange={(e) =>
 									props.onUpdate(
@@ -393,6 +461,7 @@ export const RepoWorktreeTab: Component<RepoTabProps> = (props) => {
 							<Select
 								id={id}
 								aria-describedby={descriptionId()}
+								data-setting-id="repositories.repos.{key}.pr_hide_ci_failing"
 								value={props.settings.prHideCiFailing === null ? INHERIT : String(props.settings.prHideCiFailing)}
 								onChange={(e) =>
 									props.onUpdate(
@@ -416,6 +485,7 @@ export const RepoWorktreeTab: Component<RepoTabProps> = (props) => {
 						<label>{t("repoWorktree.label.terminal", "Terminal")}</label>
 
 						<BooleanOverride
+							data-setting-exclusion="transient.repositories.terminal_meta_hotkeys"
 							label="Enable Cmd+1-9 terminal hotkeys"
 							value={props.settings.terminalMetaHotkeys}
 							fallback={true}

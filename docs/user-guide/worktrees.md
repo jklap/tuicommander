@@ -90,6 +90,11 @@ Click `+` next to a repository name. A dialog opens where you can:
 
 When "Prompt on create" is off (Settings → Git & GitHub → Worktree Defaults), clicking `+` instantly creates a linked worktree with an auto-generated name based on the default branch.
 
+The default branch is the main checkout's explicitly configured base when it
+resolves to a commit. Otherwise, TUICommander uses local `main`, then local
+`master`, then the remote HEAD branch, then the main checkout's attached branch. This also supports repositories with no remote and
+a non-standard base branch. Linked worktrees do not supply the fallback branch.
+
 ### From Branch Right-Click (quick-clone)
 
 Right-click any non-main branch without a worktree → **Create Worktree**. This creates a new branch named `{source}--{random-name}` based on the selected branch, with a worktree directory.
@@ -296,7 +301,7 @@ If a session starts in a new sibling worktree before that refresh, TUICommander 
 
 Switching branches in TUICommander does not change the working directory of existing terminals. Each branch's terminals stay in their worktree path.
 
-If a branch changes inside an existing linked worktree, its terminal sessions remain open and the sidebar updates their workspace to the new branch. Removing the worktree directory closes its terminal sessions.
+If a branch changes inside an existing linked worktree, its terminal sessions remain open and the sidebar updates their workspace to the new branch. Removing or recycling a worktree closes only terminals whose current working directory is inside that checkout. A repo-root terminal is never closed merely because a stale sidebar row lists it. Creating or declaring a worktree does not move the caller's tab unless its working directory is in that checkout. Reload and saved-tab restore also use the terminal's working directory, not an old worktree declaration. If a saved tab belongs to another workspace, restoring it does not activate it in the selected workspace or retain it in that workspace's pane layout. The selected workspace shows its own tabs or its normal empty state.
 
 When you switch branches:
 - Previous branch's terminals are hidden (but remain alive)
