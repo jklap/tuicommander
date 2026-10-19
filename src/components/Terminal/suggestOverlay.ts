@@ -283,10 +283,20 @@ export function planSuggestOverlay(
 	const blocks: OverlayBlock[] = [];
 	const parts: string[] = [];
 	let lastAnswerEnd: number | undefined;
+	let inFence = false;
 	for (let row = firstRow; row < totalRows; row++) {
 		const snapshot = getRow(row);
 		if (!snapshot) continue;
 		const text = snapshot.text;
+
+		// answerExtent owns fences inside marked answers. Standalone examples
+		// reach this scan instead, and their protocol-looking text is literal too.
+		if (!snapshot.isWrapped && FENCE_RE.test(text)) {
+			inFence = !inFence;
+			lastAnswerEnd = undefined;
+			continue;
+		}
+		if (inFence) continue;
 
 		if (!snapshot.isWrapped && PROMPT_ROW_RE.test(text)) {
 			lastAnswerEnd = undefined;
@@ -357,7 +367,7 @@ export function planSuggestOverlay(
 				const next = getRow(row + 1);
 				if (!next || next.text.trim() === "") break;
 				if (next.isWrapped) continue;
-				if (!ANSWER_CONTINUATION_RE.test(next.text)) break;
+				if (!ANSWER_CONTINUATION_RE.test(next.text) || FENCE_RE.test(next.text)) break;
 				if (OUTPUT_ROW_RE.test(next.text) || ANSWER_MARKER_RE.test(next.text) || PROMPT_ROW_RE.test(next.text)) break;
 				if (SUGGEST_ANCHOR_RE.test(next.text) || INTENT_HIGHLIGHT_RE.test(next.text)) break;
 			}
@@ -381,6 +391,9 @@ function overlayDiv(top: number, height: number, background: string): HTMLDivEle
 	return div;
 }
 
+/** Shared desktop/mobile answer gutter; no background tint or speech-bubble glyph. */
+export const ANSWER_RULE_SHADOW = "inset 3px 0 0 var(--answer-rule)";
+
 /**
  * Replace the contents of `container` with one absolutely positioned strip per
  * answer row: a transparent strip with a solid gutter bar. Intent rows get a
@@ -397,7 +410,7 @@ export function paintOverlayBlocks(container: HTMLElement, blocks: readonly Over
 			container.appendChild(div);
 		} else if (block.kind === "answer") {
 			const div = overlayDiv(block.row * cellHeight, cellHeight, "transparent");
-			div.style.boxShadow = "inset 3px 0 0 var(--answer-rule)";
+			div.style.boxShadow = ANSWER_RULE_SHADOW;
 			container.appendChild(div);
 		}
 	}
