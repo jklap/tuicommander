@@ -6,7 +6,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
-- Bind native Codex hooks for HTTP/MCP-spawned agents and generic HTTP terminals using their live inherited session identity; preserve exact owner validation (#2081-ac1f).
+- Bind native Codex hooks for HTTP/MCP-spawned agents and generic HTTP terminals using their live inherited session identity; preserve exact owner validation and prevent bound-session listing deadlocks (#2081-ac1f).
 - Expose bound Grok terminal Chat on mobile and share the supported-adapter check with desktop, without changing exact transcript binding or native question controls (#2077-b132).
 
 - Expose the existing bound Codex terminal Chat view in the mobile session header, with the same PTY controls and backend binding refusal (#2076-8190).

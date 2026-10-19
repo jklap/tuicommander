@@ -517,6 +517,19 @@ mod tests {
     #[cfg(unix)]
     #[tokio::test]
     async fn http_spawned_codex_pty_accepts_its_native_binding() {
+        exercise_native_binding(false).await;
+    }
+
+    // Catches: session listing holds the PTY mutex while native binding
+    // validation tries to acquire the same mutex, deadlocking HTTP and IPC.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn bound_codex_session_listing_does_not_relock_pty() {
+        exercise_native_binding(true).await;
+    }
+
+    #[cfg(unix)]
+    async fn exercise_native_binding(check_listing: bool) {
         use base64::Engine;
         let scratch = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
         let _config = crate::config::set_config_dir_override(scratch.path().join("config"));
@@ -671,6 +684,58 @@ mod tests {
             } else {
                 Err("hook replay never reached the reader".into())
             };
+            if check_listing && result.is_ok() {
+                let pid = state
+                    .session_maps
+                    .sessions
+                    .get(&sid)
+                    .unwrap()
+                    .lock()
+                    ._child
+                    .process_id()
+                    .unwrap();
+                let listed_state = state.clone();
+                let (tx, rx) = std::sync::mpsc::channel();
+                let listing = std::thread::spawn(move || {
+                    let rows = super::super::session::local_session_rows(&listed_state);
+                    let mcp = super::super::mcp_transport_session_agent::handle_session(
+                        &listed_state,
+                        &serde_json::json!({"action":"list"}),
+                        None,
+                    );
+                    let _ = tx.send((rows, mcp));
+                });
+                let (rows, mcp) = match rx.recv_timeout(std::time::Duration::from_secs(10)) {
+                    Ok(rows) => rows,
+                    Err(error) => {
+                        // The failed worker owns the locked session. Do not
+                        // deadlock cleanup on it: kill only our spawned probe.
+                        unsafe {
+                            libc::kill(pid as i32, libc::SIGKILL);
+                        }
+                        panic!("{path}: session listing deadlocked on native binding: {error}");
+                    }
+                };
+                listing.join().unwrap();
+                assert!(
+                    mcp.as_array()
+                        .unwrap()
+                        .iter()
+                        .any(|row| row["session_id"] == sid),
+                    "MCP must list the same bound PTY"
+                );
+                let row = rows.iter().find(|row| row.session_id == sid).unwrap();
+                assert_eq!(
+                    row.state
+                        .as_ref()
+                        .unwrap()
+                        .codex_binding
+                        .as_ref()
+                        .unwrap()
+                        .session_id,
+                    hook["session_id"].as_str().unwrap()
+                );
+            }
             crate::pty::close_pty_core(&state, &sid, false);
             match result {
                 Ok(snapshot) => assert!(

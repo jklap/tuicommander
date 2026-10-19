@@ -1,6 +1,6 @@
 ## HTTP and MCP Codex binding (2081-ac1f) — Rust restart required
 
-- [ ] After Boss manually restarts `make dev` or installs `make build`, spawn disposable Codex terminals through HTTP and MCP, submit a prompt and verify desktop/mobile Chat reads each terminal’s own transcript. Include Codex launched inside a generic HTTP shell terminal. This peer did not restart or replace the running desktop; reader changes require a rebuilt backend.
+- [ ] After Boss manually restarts `make dev` or installs `make build`, spawn disposable Codex terminals through HTTP and MCP, submit a prompt and verify desktop/mobile Chat reads each terminal’s own transcript. Include Codex launched inside a generic HTTP shell terminal. Confirm HTTP/desktop and MCP session lists remain responsive after native binding. This peer did not restart or replace the running desktop; reader changes require a rebuilt backend.
 
 ## Compact MCP guidance (2069-7347) — Rust restart required
 
