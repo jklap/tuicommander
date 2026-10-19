@@ -653,6 +653,11 @@ state changes the background to `--accent-hover` instead of fading the whole
 strip. Do not reuse Commander's shared white accent foreground here: at 13px,
 its 3.36:1 contrast does not meet WCAG AA.
 
+Paper mobile question-banner names use `--warning`; Input badge labels use
+`--fg-primary` over the existing attention tint. The Paper Input badge does not
+fade: whole-badge opacity would reduce small-text contrast below WCAG AA.
+Commander retains its urgent/attention foregrounds and pulse.
+
 ### Constrained layouts and theme surfaces
 
 - Detached Files and Markdown panels fill their window; inline panels retain their docked width limits.
