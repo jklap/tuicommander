@@ -1,9 +1,10 @@
 # Git Operations
 
-Terminal placement uses reported cwd, not `placementPath` or a persisted
-`declaredWorktrees` association. Creating a checkout through `git -C` does not
-move the caller's process or its tab into that checkout. Cold saved-terminal
-restoration and reconnect also resolve the workspace from cwd.
+Terminal placement uses a valid caller-bound `declaredWorktrees` association when
+one exists, otherwise reported cwd. Creating a checkout through `git -C` does not
+move the caller's process or its tab into that checkout. An explicit declaration
+moves only its tab; saved-terminal restoration, reconnect and OSC 7 retain that
+placement without changing shell cwd. Legacy `placementPath` alone is not authority.
 
 **Modules:** `src-tauri/crates/tuic-git/src/{git,git_cli,git_graph,git_locks,git_reads,worktree,cow}.rs` (domain), `src-tauri/src/{git,git_graph,worktree}.rs` (app adapters)
 
@@ -524,8 +525,9 @@ before closing it and uses directory-boundary, separator-independent containment
 Missing cwd is not permission to close. Surviving tabs from a removed row are
 reconciled to their cwd workspace or parked in the Global Workspace.
 
-Creation declarations remain backend metadata. They do not override cwd for tab
-placement on creation, OSC 7, reload or saved-tab restore. A repo-root session waits
+Creation alone remains cwd-based. Explicit caller declarations override cwd only
+for display placement, never terminal cleanup. A declaration must match an existing
+workspace id and checkout path; removal retracts it. An undeclared repo-root session waits
 for the root workspace to be discovered rather than joining the selected linked
 worktree.
 

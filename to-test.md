@@ -7,7 +7,7 @@
 
 ## Declaration into a newly discovered workspace (2044-31f3) — Rust restart required
 
-- [ ] After Boss restarts the Rust backend, use an isolated instance and declare an existing linked worktree whose saved workspace row has no `savedTerminals`. Confirm declaration succeeds, the caller restore record moves without duplicating sibling records, and cwd-based sidebar reconciliation remains correct. The peer did not restart or mutate the installed instance; live sidebar verification is still pending.
+- [ ] After Boss restarts the Rust backend, use an isolated instance and declare an existing linked worktree whose saved workspace row has no `savedTerminals`. Confirm declaration succeeds, the caller restore record moves without duplicating sibling records, and the caller tab appears under the declared workspace despite unchanged cwd. Repeat the declaration, reload the frontend and send a cwd update; placement must persist without moving sibling tabs. The peer did not restart or mutate the installed instance; live sidebar verification is still pending.
 
 ## Automation profile validation and failure mail (2015-bdb3) — Rust restart required
 

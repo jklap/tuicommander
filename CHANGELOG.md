@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+- Keep an agent tab under its explicitly declared worktree despite unchanged shell cwd, later cwd reports and saved-tab restore; preserve sibling tabs and cwd-based removal safety (#2044-31f3).
+
 - Reuse retained terminal pixels during whole-row history growth instead of redrawing every glyph, skip unchanged damaged rows repaint bounded cell spans, and merge equal background fills; invalidate reuse on geometry, theme, screen or marker-layout changes (#2040-16b2).
 
 - Reject automation profiles the runner cannot resolve, preserve host-local timezone defaults on creation, expose repair hints on invalid list rows, and notify the creator inbox once for failed runs, including pre-spawn failures (#2015-bdb3).

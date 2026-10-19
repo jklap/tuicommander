@@ -2197,9 +2197,9 @@ worktrees are discovered without recreating or deleting them.
 
 The response and `session-worktree-declared` event use the worktree lifecycle
 payload, with `creator_session` naming the caller and `spawn_session=false`.
-The frontend reconciles the caller from its reported cwd; a caller outside that
-checkout stays in its cwd workspace. Sibling tabs and the active selection stay
-unchanged. Retrying the same declaration is idempotent.
+Only the caller’s tab moves to the declared workspace, without changing shell cwd.
+Sibling tabs and an inactive selection stay unchanged. If the caller is active,
+its selected workspace follows the same tab. Retrying the declaration is idempotent.
 
 The stable `TUIC_SESSION` association is stored in the owning repository's
 `declaredWorktrees` map using the existing locked repository delta. Any saved
@@ -2207,15 +2207,16 @@ caller snapshot moves to the target workspace; sibling snapshots are preserved.
 After a restart or WebView reconnect, HTTP `GET /sessions` and IPC
 `list_active_sessions` return the declared `worktree_path` and `worktree_branch`
 while `cwd` remains the reported shell directory. The frontend restores tab
-placement from cwd, not the declared worktree path. Declaration does not acquire
+placement from the persisted declaration when its workspace id and checkout path
+still match. Declaration does not acquire
 worktree cleanup ownership.
 A concurrent repository edit can return a configuration conflict; retry the
 declaration after refreshing rather than overwriting that edit.
 
-The association is backend metadata, not authority to place or close a terminal.
-Later shell cwd notifications, reconnect and saved-tab restore use cwd to resolve
-the tab's workspace. Worktree removal also checks each terminal's current cwd, not
-its declaration or sidebar membership.
+The association owns display placement during later shell cwd notifications,
+reconnect and saved-tab restore. A removed or replaced checkout invalidates it.
+Worktree removal checks each terminal’s current cwd, not its declaration or sidebar
+membership.
 
 **Intentional request transport exception:** `declare_worktree` is an MCP-only
 action, callable over the existing HTTP `POST /mcp` route with a bound caller.
