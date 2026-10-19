@@ -20,7 +20,8 @@ interface LocalIpEntry {
  * renders the code large so it can be scanned at a glance from the palette.
  */
 export const RemoteQrDialog: Component<{ onClose: () => void }> = (props) => {
-	const [localIps] = createResource(() => rpc<LocalIpEntry[]>("get_local_ips"));
+	const [localIps, { refetch: refetchLocalIps }] = createResource(() => rpc<LocalIpEntry[]>("get_local_ips"));
+	const availableIps = () => (localIps.error ? undefined : localIps());
 	const [selectedIp, setSelectedIp] = createSignal<string | null>(null);
 	const [serverEnabled, setServerEnabled] = createSignal<boolean | null>(null);
 	const [connectUrl, setConnectUrl] = createSignal<string | null>(null);
@@ -28,7 +29,7 @@ export const RemoteQrDialog: Component<{ onClose: () => void }> = (props) => {
 	const [error, setError] = createSignal<string | null>(null);
 	const [copied, setCopied] = createSignal(false);
 
-	const activeIp = () => selectedIp() || localIps()?.[0]?.ip || null;
+	const activeIp = () => (localIps.error ? null : selectedIp() || availableIps()?.[0]?.ip || null);
 
 	// Warn if the remote server is off — the QR will render but the phone can't
 	// reach it until Remote Access is enabled.
@@ -98,23 +99,45 @@ export const RemoteQrDialog: Component<{ onClose: () => void }> = (props) => {
 						</p>
 					</Show>
 
-					<div class={s.qrCard}>
-						<Show when={qrDataUrl()} fallback={<div class={s.placeholder}>{error() ?? "Generating QR…"}</div>}>
-							<img
-								class={s.qr}
-								src={qrDataUrl()!}
-								alt="QR code for remote mobile connection"
-								width={320}
-								height={320}
-							/>
-						</Show>
-					</div>
-
-					<Show when={(localIps()?.length ?? 0) > 1}>
+					<Show when={!localIps.error}>
+						<div class={s.qrCard}>
+							<Show
+								when={qrDataUrl()}
+								fallback={
+									<div class={s.placeholder}>
+										{error() ?? (localIps.loading || activeIp() ? "Generating QR…" : "Not available")}
+									</div>
+								}
+							>
+								<img
+									class={s.qr}
+									src={qrDataUrl()!}
+									alt="QR code for remote mobile connection"
+									width={320}
+									height={320}
+								/>
+							</Show>
+						</div>
+					</Show>
+					<Show when={localIps.error}>
+						<div class={s.discoveryFailure}>
+							<p role="alert">Local IP discovery failed: {String(localIps.error)}</p>
+							<div class={`${d.actions} ${s.retryActions}`}>
+								<button
+									type="button"
+									class={d.cancelBtn}
+									onClick={() => void Promise.resolve(refetchLocalIps()).catch(() => {})}
+								>
+									Retry
+								</button>
+							</div>
+						</div>
+					</Show>
+					<Show when={(availableIps()?.length ?? 0) > 1}>
 						<label class={s.ipRow}>
 							<span>Network</span>
 							<Select value={activeIp() ?? ""} onChange={(e) => setSelectedIp(e.currentTarget.value)}>
-								<For each={localIps()}>
+								<For each={availableIps()}>
 									{(entry) => (
 										<option value={entry.ip}>
 											{entry.label} — {entry.ip}

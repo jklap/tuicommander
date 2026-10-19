@@ -49,10 +49,12 @@ ideas
 benchmarks
 .mdkb
 scripts/*
+!scripts/check-desktop-embedding.sh
 !scripts/github-work-live-check.mjs
 !scripts/github-work-live-check.test.mjs
 !scripts/check-mobile-session-chat-layout.mjs
 !scripts/check-mobile-jump-layout.mjs
+!scripts/check-chat-code-copy-layout.py
 !scripts/fixtures/
 scripts/fixtures/*
 !scripts/fixtures/mobile-session-chat-layout.html

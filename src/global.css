@@ -231,7 +231,6 @@
   --search-match: #ffff0040;
   --search-match-active: #ff8c00b0;
   --search-match-border: #ff8c00;
-  --tweak-highlight: #f5a623;
 
   /* Tab-type colors (shared between TabBar and PaneTree) */
   --tab-diff-rgb: 239, 68, 68;       /* red */
@@ -344,6 +343,11 @@ html, body {
   /* Dark app: make native controls (number-input spinners, selects, pickers)
      render their affordances light instead of the default black-on-dark. */
   color-scheme: dark;
+}
+
+html[data-theme="vscode-light"],
+html[data-theme="vscode-light"] body {
+  color-scheme: light;
 }
 
 #app {

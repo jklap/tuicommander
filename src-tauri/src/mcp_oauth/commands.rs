@@ -164,6 +164,8 @@ pub(crate) async fn start_mcp_upstream_oauth_inner(
 
                 if let Err(e) = crate::mcp_upstream_config::update_upstream_auth(&name, auth.clone()) {
                     tracing::warn!(source = "mcp_oauth", %name, "Failed to persist DCR client_id: {e}");
+                } else {
+                    crate::settings::api::publish_change(state, "upstreams", true);
                 }
 
                 auth

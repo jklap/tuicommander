@@ -18,6 +18,7 @@ export interface PaintState {
 	neutral: string;
 	hidden: boolean;
 	fullRepaint: boolean;
+	viewportTop?: number;
 	projectionChanged: boolean;
 	dirtyIndices?: number[];
 	hiddenRows: number[];

@@ -65,6 +65,50 @@ describe("repoSettingsStore", () => {
 		mockInvoke.mockClear();
 	});
 
+	// Catches: false being treated as inheritance, or null retaining a stale global filter.
+	it("PR visibility overrides preserve false and track inherited global changes", async () => {
+		const { settingsStore } = await import("../../stores/settings");
+		mockInvoke.mockResolvedValueOnce({});
+		await settingsStore.hydrate();
+		vi.useFakeTimers();
+		try {
+			testInScope(() => {
+				store.getOrCreate("/repo", "Repo");
+				settingsStore.setPrHideDrafts(true);
+				settingsStore.setPrHideConflicting(true);
+				settingsStore.setPrHideCiFailing(true);
+				expect(store.getEffective("/repo")).toMatchObject({
+					prHideDrafts: true,
+					prHideConflicting: true,
+					prHideCiFailing: true,
+				});
+				store.update("/repo", { prHideDrafts: false, prHideConflicting: false, prHideCiFailing: false });
+				expect(store.getEffective("/repo")).toMatchObject({
+					prHideDrafts: false,
+					prHideConflicting: false,
+					prHideCiFailing: false,
+				});
+				store.update("/repo", { prHideDrafts: null, prHideConflicting: null, prHideCiFailing: null });
+				expect(store.getEffective("/repo")).toMatchObject({
+					prHideDrafts: true,
+					prHideConflicting: true,
+					prHideCiFailing: true,
+				});
+				settingsStore.setPrHideDrafts(false);
+				settingsStore.setPrHideConflicting(false);
+				settingsStore.setPrHideCiFailing(false);
+				expect(store.getEffective("/repo")).toMatchObject({
+					prHideDrafts: false,
+					prHideConflicting: false,
+					prHideCiFailing: false,
+				});
+			});
+		} finally {
+			vi.clearAllTimers();
+			vi.useRealTimers();
+		}
+	});
+
 	describe("get()", () => {
 		it("returns undefined for unknown repo", () => {
 			testInScope(() => {

@@ -107,6 +107,7 @@ pub(crate) struct HttpMcpClient {
     /// popups for upstreams that don't need credentials.
     has_auth: bool,
     headers: Vec<UpstreamHeader>,
+    settings_publisher: crate::settings::changes::Publisher,
 }
 
 impl HttpMcpClient {
@@ -158,7 +159,16 @@ impl HttpMcpClient {
             token_manager: OnceCell::new(),
             has_auth,
             headers: Vec::new(),
+            settings_publisher: Default::default(),
         }
+    }
+
+    pub(crate) fn with_settings_publisher(
+        mut self,
+        publisher: crate::settings::changes::Publisher,
+    ) -> Self {
+        self.settings_publisher = publisher;
+        self
     }
 
     pub(crate) fn with_headers(mut self, headers: Vec<UpstreamHeader>) -> Self {
@@ -276,14 +286,17 @@ impl HttpMcpClient {
         self.token_manager
             .get_or_init(|| async {
                 let resource = set.resource.clone().or_else(|| Some(self.url.clone()));
-                Arc::new(TokenManager::new(
-                    self.name.clone(),
-                    self.url.clone(),
-                    set.client_id.clone(),
-                    set.client_secret.clone(),
-                    set.token_endpoint.clone(),
-                    resource,
-                ))
+                Arc::new(
+                    TokenManager::new(
+                        self.name.clone(),
+                        self.url.clone(),
+                        set.client_id.clone(),
+                        set.client_secret.clone(),
+                        set.token_endpoint.clone(),
+                        resource,
+                    )
+                    .with_settings_publisher(self.settings_publisher.clone()),
+                )
             })
             .await
             .clone()

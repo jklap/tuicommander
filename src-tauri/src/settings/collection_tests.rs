@@ -312,3 +312,63 @@ fn external_prompt_writer_child() {
     })
     .unwrap();
 }
+
+// Catches: treating decoded collection keys as path fragments during create/remove.
+#[tokio::test]
+async fn stable_collection_keys_preserve_literal_separators_and_pointer_escapes() {
+    let (_dir, owner, service) = setup();
+    let mut revision = transaction::revision(&owner.read().unwrap()).unwrap();
+    for id in ["literal/slash", "literal~1slash", "literal\\slash"] {
+        revision = patch(&service, revision, vec![create(id)])
+            .await
+            .unwrap()
+            .revision;
+    }
+    revision = patch(
+        &service,
+        revision,
+        vec![Edit::Set {
+            path: "/prompts/literal~1slash/text".into(),
+            value: json!("Only the slash record"),
+        }],
+    )
+    .await
+    .unwrap()
+    .revision;
+    let rows = owner.read().unwrap()["prompts"].as_array().unwrap().clone();
+    assert_eq!(rows.len(), 3);
+    assert_eq!(
+        rows.iter()
+            .find(|row| row["id"] == "literal/slash")
+            .unwrap()["text"],
+        "Only the slash record"
+    );
+    assert!(
+        rows.iter()
+            .filter(|row| row["id"] != "literal/slash")
+            .all(|row| row["text"] == "Body")
+    );
+    revision = patch(
+        &service,
+        revision,
+        vec![Edit::Remove {
+            path: "/prompts".into(),
+            id: "literal/slash".into(),
+        }],
+    )
+    .await
+    .unwrap()
+    .revision;
+    let remaining = owner.read().unwrap();
+    assert_eq!(remaining["prompts"].as_array().unwrap().len(), 2);
+    for id in ["", ".", "..", "__proto__"] {
+        assert_eq!(
+            patch(&service, revision.clone(), vec![create(id)])
+                .await
+                .unwrap_err()
+                .code,
+            "unknown_path"
+        );
+        assert_eq!(owner.read().unwrap(), remaining);
+    }
+}

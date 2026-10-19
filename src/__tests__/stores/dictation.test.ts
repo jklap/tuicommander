@@ -153,6 +153,17 @@ describe("dictationStore", () => {
 		store = (await import("../../stores/dictation")).dictationStore;
 	});
 
+	// Catches: shallow store merging retaining a correction deleted by the owner.
+	it("removes_deleted_corrections_when_adopting_owner_readback", async () => {
+		await testInScopeAsync(async () => {
+			mockInvoke.mockResolvedValueOnce({ old: "stale", keep: "original" });
+			await store.refreshCorrections();
+			mockInvoke.mockResolvedValueOnce({ keep: "updated" });
+			await store.refreshCorrections();
+			expect(store.state.corrections).toEqual({ keep: "updated" });
+		});
+	});
+
 	describe("defaults", () => {
 		it("has correct default state", () => {
 			testInScope(() => {

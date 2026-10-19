@@ -6,11 +6,56 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+- Keep GitHub network proof lookups off the worktree-list request path; use cached definitive answers or conservative local classification, with fresh checkout safety fields (#2044-31f3).
+
+- Keep an agent tab under its explicitly declared worktree despite unchanged shell cwd, later cwd reports and saved-tab restore; preserve sibling tabs and cwd-based removal safety (#2044-31f3).
+- Export the title and clean answer labels from Codex native `/plan` questions instead of retaining an unrelated waiting title (#2026-9178).
+
+- Reuse retained terminal pixels during whole-row history growth instead of redrawing every glyph, skip unchanged damaged rows repaint bounded cell spans, and merge equal background fills; invalidate reuse on geometry, theme, screen or marker-layout changes (#2040-16b2).
+
+- Reject automation profiles the runner cannot resolve, preserve host-local timezone defaults on creation, expose repair hints on invalid list rows, and notify the creator inbox once for failed runs, including pre-spawn failures (#2015-bdb3).
+- Create retry-safe one-shot automations with name, prompt, a relative delay and an explicit saved profile; the host resolves caller repository defaults and returns the saved fire time without extra clock/list/get calls (#2001-5c1f).
+- Persist global and per-repository PR visibility filters, including explicit Show overrides and inherited defaults (#1993).
+- Send saved mobile Markdown checkbox edits and tweak comments to a repository agent with the desktop review prompt, transient delivered or queued feedback, and visible comment highlighting (#2042-a71b).
+
+- Recover modern stateless managed MCP routing from exact live host identity and return bounded missing-context diagnostics instead of blind registration advice (#2008-5317).
+
+- Record bounded body-free runtime MCP call outcomes with separate application, transport and effect observations; do not mark native `error:null` results as failures (#2010-30a7).
+
+- Validate native MCP arguments against advertised action contracts before dispatch; return bounded, value-masked repair details. Progress limits count raw Unicode scalar values consistently across transports (#2007-59f6).
+
+- Include a byte-bounded complete top schema in MCP tool search, with catalogue identity and explicit schema reuse until invalidation (#2013-73f9).
+
+- Publish typed Settings account enumeration and configured Ego interactive login start/status, with human terminal authentication and separate credential readback (#1790-1011).
+### Fixed
+
+- Show the mobile awaiting total only in the AWAITING tile, move waiting-session navigation to that tile, keep the per-session question banners, and remove the connected header narration (#2055-b727).
+
+- Remove repeated Settings, roadmap and variable-field copy, use a plain catalogue record label, and omit subtitle space from title-only Settings headers (#2053-58a5).
+- Style Remote Mobile retries with shared dialog controls, keep task Save buttons beside their fields, fit the Stories header on phones while keeping Close at the top right, and apply theme colors to crash diagnostics (#2054-0eb2).
+
+- Remove implementation commentary and repeated usage hints from Settings, keep compact page names clear of the selector arrow, and prevent clipped header badges, tight catalogue labels and touching action buttons, and show catalogue effects only once (#2047-e20c).
+
+- Keep Settings help beside wrapped labels, match narrow plugin header widths across loading states, and align repository color actions (#2046-5c34).
+- Remove permanent query-engine and prompt-inspector narration while retaining status values and contextual warnings (#2052-c9d1).
+
+- Keep Remote Access settings and the mobile QR dialog available after local IP discovery fails, with an inline error and retry (#2049-2d50).
+
+- Use a theme-coloured monochrome icon in the Ideas panel heading instead of a platform emoji (#2048-5a9f).
+- Reuse unchanged worktree integration proofs during MCP listing instead of repeating per-checkout Git work; keep fresh safety fields and uncached removal checks (#2044-31f3).
+- Remove permanent setup narration from AI Chat, Ideas, Tasks setup and Worktrees while keeping their actions and state labels (#2050-2b8a).
+
+- Keep the code Copy control inside its own row above fenced answers, without clipping or covering wrapped text in desktop and mobile Chat (#2045-848c).
+
+- Return the same structured static-validation errors from automation HTTP and MCP calls (#2007-59f6).
+
+- Preserve description-only MCP session input without terminal bytes, and consume ACP mail wake cursors only after an accepted turn (#2007, #2004).
 - Generate configurable launch playbook modules with append-only global and agent additions, explicit all-off controls, child-only guidance and legacy override migration. Effective previews follow the selected machine (#2000-b50f).
 - Keep the mobile Markdown menu list stable during session polls and refresh it in place.
 
 ### Added
 
+- Set independent mobile Terminal and Chat font sizes in Settings, remembered on this device only (#2023-54c4).
 - Dictate into the mobile Ideas input with the shared composer mic. Speech replaces the selected text without sending to a session or saving the idea.
 - Open desktop Markdown tabs from the mobile session top bar at tablet widths; phones keep the session menu list.
 
@@ -19,6 +64,23 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Fixed
 
 - Replace stale slash-command lists with a single filtered match, and dismiss the list when the agent closes completion, including ego `/go` and `/goal` (#2030-84bb).
+- Refresh Settings readers after legacy upstream credential and OAuth owner writes, including durable partial-vault failures, connection password edits, deployment pairing-token creation and deployment-mode changes (#1989-22fe).
+- Dismiss the mobile suggestion list as soon as a chip is picked, without restoring it from session activity updates; re-arm after the backend clears or replaces the list and show the existing send-failure notice if submission fails (#2029-994d).
+
+- Send Grok and ego immediate approval keys without an extra Enter on mobile, and keep answered ego selectors cleared during retirement scrolling (#2027-7ef3, #2028-6999).
+
+- Export CLI-enforced Codex command approvals past command metadata, preserving immediate numeric refusal (#2026-9178).
+
+- Keep ego selector titles free of diagnostics and working rows, and expose default-mode CLI approval controls with the refusal explanation wait (#2028-6999).
+
+- Export Grok native Ask and CLI-enforced approval options, preserving immediate numeric answers and the free-text transition (#2027-7ef3).
+
+- Recognize Codex 0.162.1 native question options and open queued questions with the live-verified Shift+Left key on mobile (#2026-9178).
+
+- Keep local HTTP/MCP-spawned agent terminals eligible for Chat; distinguish machine ownership from creation provenance while preserving worker cleanup and notification policy (#2032-8dc3).
+
+- Serve authenticated Settings actions and the browser Settings bootstrap on headless daemons through shared routes; keep desktop-only upstream OAuth unavailable there (#2014-9d06).
+- Report an idle ego turn as idle even while background processes remain tracked, consistently across desktop, mobile, and `agent ls` (#2018-1885).
 
 - Preserve and tint the complete wrapped intent line in mobile CLI output, including its first row (#2019-7c5d).
 - Keep Settings peer refresh current after no-op edits, omitted repository defaults, transient read failures, and desktop connection/tunnel saves; avoid conflict notices for acknowledged upstream header saves (#1788-2163).
@@ -33,6 +95,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Honor an explicitly configured worktree integration base before stale conventional or remote default refs (#1961-bab6).
 
 - Correct Settings accent-action text, compact navigation, wrapped help badges, shortcut groups, and workspace path presentation; hide the desktop-only Local tools card in browser mode (#1945).
+- Add independent durable peer-mail subscriptions with actionable filters, explicit acknowledgement, bounded replay, retention-loss reporting, HTTP SSE and ACP notifications (#2004-4760).
 
 - Keep marker-projected terminal frames incremental: repaint dirty display rows and changed projection slots instead of clearing the whole canvas (#2003-f218).
 - Bound CLI marker planning to 128 rows above the viewport, reuse unchanged row generations, and resolve cold prompt ownership in bounded background steps (#2002-2239).
@@ -46,6 +109,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Keep the selected workspace's active tab and pane layout consistent when saved tabs are restored to another workspace by cwd (#1999-95b0).
 ### Added
 
+- Discover and edit dictation correction records through their stable-key Settings owner, with shared atomic persistence and live dictionary refresh (#1992-d4fa).
 - Publish typed Settings account enumeration and configured Ego interactive login start/status, with human terminal authentication and separate credential readback (#1790-1011).
 - Add three guided Smart Prompts for issue-to-draft-PR, incoming PR review and authorized bounded-fix configuration, with prerequisite stops and an end-to-end setup guide; the live GitHub pilot remains pending (#2012-72ff).
 

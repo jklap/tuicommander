@@ -89,6 +89,12 @@ describe("worktree removal cwd authority", () => {
 	// Catches: the backend removal event closes a root coordinator by sidebar membership.
 	it("keeps a misfiled root coordinator alive and visible after a removal event", async () => {
 		const root = add(REPO);
+		terminalsStore.update(root, { tuicSession: "declared-root" });
+		repositoriesStore.setDeclaredWorktree(REPO, "declared-root", {
+			workspaceId: "feature",
+			branch: "feature",
+			worktreePath: WT,
+		});
 		const nested = add(`${WT}/src`);
 		const close = vi.fn(async (id: string) => terminalsStore.remove(id));
 		await pruneRemovedWorktree(REPO, "feature", workflow(close).closeTerminalsForBranch);
@@ -96,6 +102,7 @@ describe("worktree removal cwd authority", () => {
 		expect(terminalsStore.get(root)?.cwd).toBe(REPO);
 		expect(repositoriesStore.findOwnerForTerminal(root)?.workspaceId).toBe("main");
 		expect(repositoriesStore.get(REPO)?.workspaces.feature).toBeUndefined();
+		expect(repositoriesStore.get(REPO)?.declaredWorktrees?.["declared-root"]).toBeUndefined();
 	});
 
 	// Catches: an unrelated or unknown-cwd tab is closed, or disappears with its stale row.

@@ -2039,6 +2039,134 @@ fn instructions_make_no_claim_about_the_user_or_the_platform() {
     }
 }
 
+/// Catches: discovery forces a second schema fetch for an unchanged admitted tool.
+#[test]
+fn catalogue_schema_reuse_avoids_second_discovery_hop() {
+    let state = test_state();
+    let definition = serde_json::json!({
+        "name": "needle", "description": "Needle discovery.",
+        "inputSchema": {"type": "object", "properties": {}}
+    });
+    *state.mcp.tool_search_index.write() =
+        crate::tool_search::ToolSearchIndex::build(std::slice::from_ref(&definition));
+    let args = serde_json::json!({"query": "needle", "schema_byte_budget": 4096});
+    let first = handle_search_tools(&state, &args);
+    assert_eq!(first["top_schema"], definition);
+    let second = handle_search_tools(&state, &args);
+    assert_eq!(second["top_schema"], first["top_schema"]);
+    assert_eq!(
+        second["catalogue_generation"],
+        first["catalogue_generation"]
+    );
+    assert!(first["catalogue_generation"].is_string());
+    assert_eq!(
+        handle_get_tool_schema(&state, &serde_json::json!({"tool_name": "needle"})),
+        definition
+    );
+}
+
+/// Catches: schema truncation or character-count budgeting admits an incomplete UTF-8 contract.
+#[test]
+fn catalogue_schema_reuse_budget_counts_complete_utf8_definition() {
+    let state = test_state();
+    let definition = serde_json::json!({"name":"needle", "description":"Needle éé discovery.", "inputSchema":{"type":"object"}});
+    let bytes = serde_json::to_vec(&definition).unwrap().len();
+    *state.mcp.tool_search_index.write() =
+        crate::tool_search::ToolSearchIndex::build(std::slice::from_ref(&definition));
+    for budget in [0, bytes - 1] {
+        let result = handle_search_tools(
+            &state,
+            &serde_json::json!({"query":"needle", "schema_byte_budget":budget}),
+        );
+        assert!(result.get("top_schema").is_none());
+        assert_eq!(result["results"][0]["name"], "needle");
+    }
+    let result = handle_search_tools(
+        &state,
+        &serde_json::json!({"query":"needle", "schema_byte_budget":bytes}),
+    );
+    assert_eq!(result["top_schema"], definition);
+    let empty = handle_search_tools(&state, &serde_json::json!({"query":"zzzzabsent"}));
+    assert!(empty.get("top_schema").is_none());
+}
+
+/// Catches: a removed tool keeps its admitted generation or inline schema after invalidation.
+#[test]
+fn catalogue_schema_reuse_generation_changes_with_visibility() {
+    let state = test_state();
+    rebuild_tool_search_index(&state);
+    let before = handle_search_tools(
+        &state,
+        &serde_json::json!({"query":"PTY multiplexer tmux pane lifecycle"}),
+    );
+    assert_eq!(before["top_schema"]["name"], "session");
+    rebuild_tool_search_index(&state);
+    let unchanged = handle_search_tools(
+        &state,
+        &serde_json::json!({"query":"PTY multiplexer tmux pane lifecycle"}),
+    );
+    assert_eq!(
+        before["catalogue_generation"],
+        unchanged["catalogue_generation"]
+    );
+    state
+        .config
+        .write()
+        .disabled_native_tools
+        .push("session".to_owned());
+    rebuild_tool_search_index(&state);
+    let after = handle_search_tools(
+        &state,
+        &serde_json::json!({"query":"PTY multiplexer tmux pane lifecycle"}),
+    );
+    assert_ne!(
+        before["catalogue_generation"],
+        after["catalogue_generation"]
+    );
+    assert_ne!(after["top_schema"]["name"], "session");
+    assert!(
+        handle_get_tool_schema(&state, &serde_json::json!({"tool_name":"session"}))
+            .get("error")
+            .is_some()
+    );
+}
+
+/// Catches: observed bad inputs reach handlers and return opaque retry errors.
+#[tokio::test]
+async fn action_validation_rejects_observed_bad_inputs_before_effects() {
+    let state = test_state();
+    let cases = [
+        (
+            "progress",
+            serde_json::json!({"type":"done", "text":"x".repeat(582)}),
+        ),
+        (
+            "progress",
+            serde_json::json!({"type":"done", "text":"x".repeat(543)}),
+        ),
+        (
+            "progress",
+            serde_json::json!({"type":"done", "text":"x".repeat(502)}),
+        ),
+        (
+            "ui",
+            serde_json::json!({"action":"tab", "id":"never-created", "html":"safe"}),
+        ),
+        ("agent", serde_json::json!({"action":"list"})),
+        ("repo", serde_json::json!({"action":"worktree_create"})),
+    ];
+    for (tool, args) in cases {
+        let result = handle_mcp_tool_call(&state, loopback_addr(), tool, &args, None).await;
+        assert_eq!(result["code"], "invalid_arguments", "{tool}: {result}");
+        assert_eq!(result["effect"], "not_started");
+        assert_eq!(result["retryable"], false);
+        assert_eq!(result["repair"]["retry_after_correction"], true);
+        assert!(!result["violations"].as_array().unwrap().is_empty());
+        assert!(result["violations"][0]["path"].is_string());
+    }
+    assert!(state.session_maps.session_html_tabs.is_empty());
+}
+
 /// Catches: launch-capable agents receiving conflicting rules twice through MCP.
 #[test]
 fn launch_capable_clients_receive_no_duplicate_playbook() {
@@ -2056,4 +2184,77 @@ fn launch_capable_clients_receive_no_duplicate_playbook() {
         assert!(!text.contains("never `git worktree add/remove`"));
         assert!(text.contains("## Multi-Agent Work"));
     }
+}
+
+/// Catches: merging launch bypasses static validation or omits its reusable discovery contract.
+#[tokio::test]
+async fn launch_discovery_schema_matches_predispatch_validation() {
+    let state = test_state();
+    let definition = native_tool_definitions()
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|tool| tool["name"] == "agent")
+        .unwrap()
+        .clone();
+    *state.mcp.tool_search_index.write() =
+        crate::tool_search::ToolSearchIndex::build(std::slice::from_ref(&definition));
+    let discovery = handle_search_tools(
+        &state,
+        &serde_json::json!({
+            "query":"agent", "schema_byte_budget":65536
+        }),
+    );
+    assert_eq!(discovery["top_schema"], definition);
+    let validator = jsonschema::validator_for(&discovery["top_schema"]["inputSchema"]).unwrap();
+    let creation = serde_json::json!({
+        "action":"launch", "idempotency_key":"stable-key", "parent_session_id":"parent",
+        "name":"worker", "keep_open":true, "workspace":{"existing_path":"/fixture"},
+        "spawn":{"prompt":"task", "agent_type":"ego", "rows":24, "cols":80}
+    });
+    let mut new_workspace = creation.clone();
+    new_workspace["workspace"] = serde_json::json!({"repo_path":"/fixture", "branch":"feat/child"});
+    for valid in [
+        &creation,
+        &new_workspace,
+        &serde_json::json!({"action":"launch", "launch_id":"receipt"}),
+    ] {
+        assert!(validator.is_valid(valid), "{valid}");
+        assert!(crate::mcp_http::mcp_input_contract::validate("agent", valid).is_none());
+    }
+    let mut missing = creation.clone();
+    missing.as_object_mut().unwrap().remove("keep_open");
+    let mut mixed = creation.clone();
+    mixed["launch_id"] = serde_json::json!("receipt");
+    let mut ambiguous_workspace = creation.clone();
+    ambiguous_workspace["workspace"]["branch"] = serde_json::json!("feat/child");
+    let mut missing_prompt = creation.clone();
+    missing_prompt["spawn"]
+        .as_object_mut()
+        .unwrap()
+        .remove("prompt");
+    let mut reserved = creation.clone();
+    reserved["spawn"]["cwd"] = serde_json::json!("/other");
+    let mut malformed = creation.clone();
+    malformed["spawn"]["env"] = serde_json::json!({"TOKEN":42});
+    let mut oversized = creation.clone();
+    oversized["spawn"]["rows"] = serde_json::json!(crate::mcp_http::MAX_TERMINAL_DIMENSION + 1);
+    for invalid in [
+        serde_json::json!({"action":"launch"}),
+        missing,
+        mixed,
+        ambiguous_workspace,
+        missing_prompt,
+        reserved,
+        malformed,
+        oversized,
+    ] {
+        assert!(!validator.is_valid(&invalid), "{invalid}");
+        let result = handle_mcp_tool_call(&state, loopback_addr(), "agent", &invalid, None).await;
+        assert_eq!(result["code"], "invalid_arguments", "{result}");
+        assert_eq!(result["effect"], "not_started");
+        assert_eq!(result["retryable"], false);
+    }
+    assert!(!state.data_dir.join("managed-launches.sqlite").exists());
+    assert!(state.session_maps.sessions.is_empty());
 }

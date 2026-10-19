@@ -227,23 +227,31 @@ async fn handle_worktree_with_caller(
             if let Err(e) = validate_mcp_repo_path(&path) {
                 return e;
             }
-            let mut wts = match crate::worktree::get_worktree_paths(path.clone()) {
-                Ok(wts) => wts,
-                Err(e) => return serde_json::json!({"error": e}),
+            let inventory_path = path.clone();
+            let mut wts = match tokio::task::spawn_blocking(move || {
+                crate::worktree::get_worktree_paths(inventory_path)
+            })
+            .await
+            {
+                Ok(Ok(wts)) => wts,
+                Ok(Err(error)) => return serde_json::json!({"error": error}),
+                Err(error) => {
+                    return serde_json::json!({"error": format!("worktree inventory task failed: {error}")});
+                }
             };
-            // Same source as the sidebar's lifecycleStatus (get_repo_summary /
-            // get_repo_diff_stats): inspect_workspace_lifecycle, fanned out per
-            // worktree on the blocking pool so the async worker isn't parked on
-            // the git subprocesses each inspection runs.
+            // Keep full, fresh checkout safety fields, but share the sidebar's
+            // ref-keyed merge proofs instead of rerunning every integration read.
+            // GitHub evidence is cache-only here; monitoring fills it separately.
             let mut lifecycle_handles = Vec::with_capacity(wts.len());
-            for workspace_id in wts.keys().cloned().collect::<Vec<_>>() {
+            for (workspace_id, workspace) in &wts {
+                let workspace_id = workspace_id.clone();
+                let workspace = workspace.clone();
                 let base_repo = path.clone();
-                let proof_state = Arc::clone(state);
                 lifecycle_handles.push(tokio::task::spawn_blocking(move || {
-                    let lifecycle = crate::worktree::inspect_workspace_lifecycle(
-                        &proof_state,
+                    let lifecycle = tuic_git::worktree::inspect_workspace_listing_with_pr(
                         std::path::Path::new(&base_repo),
-                        &workspace_id,
+                        &workspace,
+                        crate::worktree::merged_github_pr_proves_tip_cached,
                     );
                     (workspace_id, lifecycle)
                 }));
@@ -1138,6 +1146,15 @@ pub(super) fn queue_workflow_coordinator_wake(
         timestamp: now_ms,
         delivered_via_channel: false,
     };
+    queue_peer_notice(state, recipient, message)
+}
+
+/// Host-originated mail shares peer identity locking and payload-free wake routing.
+pub(crate) fn queue_peer_notice(
+    state: &AppState,
+    recipient: &str,
+    message: crate::state::AgentMessage,
+) -> bool {
     let message_id = message.id.clone();
     let timestamp = {
         let _guard = PEER_IDENTITY_BIND_LOCK.lock();

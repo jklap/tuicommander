@@ -188,7 +188,7 @@ Copy buttons use a single unwrapped line, including in the full app shell.
 `Transcript` interprets complete ACP answer text as it streams: it hides the
 connection acknowledgement, shows a declared intent as status, and offers
 bracketed `suggest:` items as prompt buttons. Markdown examples stay literal.
-Messages, tool output and code blocks have copy actions. The transcript has
+Messages, tool output and code blocks have copy actions. Chat preserves fenced-code padding inside highlighted answers and places Copy in a normal-flow row above the code, so the control neither clips nor covers wrapped text. The transcript has
 text selection and find/select-all/clear shortcuts. Find selects phrases across
 inline Markdown within each block, skips collapsed disclosure bodies, and closes
 on Escape from the input or navigation buttons. Local file paths use the
@@ -250,7 +250,7 @@ the backend list and card order remain unchanged. Closing search clears the quer
 Waiting sessions sort above idle agents and shells without changing order within each
 group. The new-session sheet chooses an agent and repository, then opens the new
 session after `spawn_agent` succeeds. The question counter opens the first waiting
-session; each banner shows its session name and repository.
+session from the AWAITING tile, without a duplicate app-bar count; each banner shows its session name and repository.
 Each session card uses separate buttons to open or kill the session. Both have
 accessible names, and the kill button has a 44 px hit area. The list reserves
 space below its last card so the floating new-session button cannot cover it.
@@ -274,6 +274,8 @@ viewer only within a registered repository. External paths show a toast with the
 resolved path. HTTP(S) output links open outside the PWA.
 Markdown images in the Files viewer resolve relative to their source file and
 load through the authenticated `/fs/markdown-image` route.
+
+`FilesScreen` receives the existing mobile session list and the originating session ID from `MobileApp`. Its Markdown review controls select a live agent in the owning repository and call `enqueue_agent_command` over HTTP. Desktop and mobile use `buildMarkdownReviewPrompt` for the same path, checkbox, and tweak-comment contract. Successful sends clear only the acknowledged review state; failed sends remain retryable.
 
 The embedded Progress list clamps long messages to four lines until More is
 pressed. Activity presents local 24-hour times, minute durations, and singular
@@ -405,7 +407,7 @@ label row above its pages, and the configured repositories follow under
   - **Smart Prompts** (`SmartPromptsTab`)
 - **Integrations**
   - **MCP** (`LocalMcpPanel` + `UpstreamMcpPanel`) — HTTP API server status, TUIC tools, upstream MCP servers
-  - **Remote Access** (`RemoteAccessPanel`) — Remote access, Tailscale HTTPS, QR/connect URL, cloud relay
+  - **Remote Access** (`RemoteAccessPanel`) — Remote access, Tailscale HTTPS, QR/connect URL, cloud relay; local IP discovery failures stay inline with retry while the remaining controls stay available
   - **Remote Machines** (`RemoteMachinesTab`) — `tuic-remote` connections
   - **Plugins** (`PluginsTab`) — Plugin management, enable/disable, log viewer
 - **Repositories**
@@ -860,3 +862,7 @@ backend recovery snapshot exists; its one-second display timer stops on unmount.
 The component displays phase, attempt, next-time and a zero-clamped countdown,
 with a single-flight Force retry button using the shared backend retry transaction.
 A non-empty composer refuses the retry; the status bar displays the error.
+
+Voice correction controls carry `corrections.replacements.{from}.from` and
+`corrections.replacements.{from}.to` catalogue identities. Import, add and remove
+retain the existing TextCorrector workflow; export does not change settings.

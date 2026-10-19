@@ -83,16 +83,7 @@ pub(crate) fn launch_named(
     run_id: &str,
 ) -> Result<Value, String> {
     let config = crate::config::load_agents_config();
-    if !config.agents.values().any(|agent| {
-        agent
-            .run_configs
-            .iter()
-            .any(|run| run.name.eq_ignore_ascii_case(profile))
-    }) {
-        return Err(format!(
-            "Automation run configuration '{profile}' not found"
-        ));
-    }
+    config.require_named_run_config(profile)?;
     let spawned = launch(
         state,
         SocketAddr::from(([127, 0, 0, 1], 0)),

@@ -1602,14 +1602,12 @@ export const AgentsTab: Component<AgentsTabProps> = (props) => {
 					<div class={`${s.section} ${a.page}`}>
 						<SettingPageHeader
 							title="Terminal agents"
-							description="Configure terminal agents and named launch configurations."
 							scope={
 								machine()
 									? `Machine: ${remoteConnectionsStore.getConnectionState(machine()!)?.connection.name ?? machine()}`
 									: "This machine"
 							}
 							breadcrumb="Agents / Terminal agents"
-							source="Terminal (PTY) launch settings. AI Chat uses separate ACP settings."
 						/>
 						<div class={a.machineScope}>
 							<MachineSelector
@@ -1639,10 +1637,6 @@ export const AgentsTab: Component<AgentsTabProps> = (props) => {
 							</Show>
 						</div>
 						<SectionCard title="Agent behavior">
-							<p class={s.hint} style={{ "margin-bottom": "12px" }}>
-								Control terminal-agent presentation and expand an agent to edit its named launch configurations.
-							</p>
-
 							<SettingToggle
 								settingId="app.intent_tab_title"
 								row
@@ -1718,10 +1712,7 @@ export const AgentsTab: Component<AgentsTabProps> = (props) => {
 const EgoPermissionsSection: Component = () => {
 	const configStore = useAgentConfig();
 	return (
-		<SectionCard
-			title="ego permissions"
-			description="Terminal launches and managed spawns only. Approval policy and filesystem confinement are separate choices."
-		>
+		<SectionCard title="ego permissions" description="Permissions for new terminal sessions.">
 			<div class={a.permissionRows}>
 				<div class={s.helpLabel}>
 					<label for="ego-permission-mode">Permissions</label>
@@ -1776,10 +1767,7 @@ const EgoPermissionsSection: Component = () => {
 						{(option) => <option value={option.value}>{option.label}</option>}
 					</For>
 				</Select>
-				<p class={s.hint}>
-					Applies to new terminal launches and managed spawns, including resumes. Overrides matching raw flags. AI Chat
-					uses its own ACP settings.
-				</p>
+				<p class={s.hint}>Applies to new terminal launches and managed spawns, including resumes.</p>
 			</div>
 		</SectionCard>
 	);

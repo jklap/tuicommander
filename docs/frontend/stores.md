@@ -802,3 +802,10 @@ Snapshot adoption merges object leaves. Arrays are atomic owner values: concurre
 ## Startup workflow state versus Settings state
 
 [Settings startup workflows](../backend/settings-startup.md) separates device-login state, human confirmation, owner CAS revisions and process-local invalidation generations. A terminal command exiting is not authentication success. `services/egoLogin.ts` remains the UI login entry point. Schema-only consumers use the typed Ego owner `begin_login`/`login_status` workflow; status reads the configured credential owner after termination and provider refresh determines the displayed model state. The typed inspector blocks another write after partial/unknown persistence until authoritative readback, and retains a dirty draft's original CAS revision across incoming refreshes.
+
+The dictation store subscribes separately to `voice` configuration and
+`corrections` dictionary generations. Correction refresh calls
+`get_correction_map` without saving; the Voice page's new-entry text remains
+component-local and is not overwritten. Both subscriptions are disposed together.
+
+Terminal ownership and creation provenance are independent: `TerminalData.isRemote` reflects a configured remote `connection_id`; `isExternallyCreated` preserves the backend `is_remote` HTTP/MCP creation flag for worker-tab cleanup, decoration and completion policy. Local `session-created` events set only creation provenance; startup reconciliation derives ownership from the connection, not the launch transport.

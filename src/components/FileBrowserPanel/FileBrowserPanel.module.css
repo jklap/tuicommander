@@ -11,6 +11,13 @@
   overflow: hidden;
 }
 
+.detached {
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+  border-left: none;
+}
+
 .hidden {
   display: none;
 }

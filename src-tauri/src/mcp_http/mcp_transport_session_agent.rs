@@ -1730,7 +1730,7 @@ pub(crate) fn suspend_refusal(ss: &crate::state::SessionState) -> Option<&'stati
     }
     if ss.agent_type.is_some() {
         let working = matches!(ss.agent_state.as_deref(), Some("working" | "starting"));
-        if ss.background_work || working {
+        if ss.has_pending_background_probe() || ss.background_work || working {
             return Some("agent working");
         }
     } else if ss.shell_state.as_deref() == Some("busy") {
@@ -2687,24 +2687,16 @@ pub(super) fn resolve_run_config(
 ) -> ResolvedRunConfig {
     let needle = agent_type.to_ascii_lowercase();
 
-    // Pass 1: try to match as a run config name across all agents
-    for (agent_key, settings) in &agents_cfg.agents {
-        // Retired or unknown harness settings remain readable but cannot launch a peer.
-        if !crate::agent::is_known_agent_type(agent_key) {
-            continue;
-        }
-        for cfg in &settings.run_configs {
-            if cfg.name.to_ascii_lowercase() == needle {
-                return ResolvedRunConfig {
-                    agent_type: agent_key.clone(),
-                    command: Some(cfg.command.clone()),
-                    args: Some(cfg.args.clone()),
-                    model: cfg.model.clone(),
-                    env: cfg.env.clone(),
-                    default_config: false,
-                };
-            }
-        }
+    // The automation boundary and interactive spawn share saved-profile identity.
+    if let Some((agent_key, cfg)) = agents_cfg.named_run_config(agent_type) {
+        return ResolvedRunConfig {
+            agent_type: agent_key.to_owned(),
+            command: Some(cfg.command.clone()),
+            args: Some(cfg.args.clone()),
+            model: cfg.model.clone(),
+            env: cfg.env.clone(),
+            default_config: false,
+        };
     }
 
     // Literal Codex consumes the same visible default used by terminal menus.

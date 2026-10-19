@@ -1527,7 +1527,10 @@ The configured remote machines and their vault password. The password is write
 only: it goes to the OS credential vault keyed by the connection's UUID and is
 never returned, never written to `connections.json` — `GET .../password` answers
 whether one is stored, not what it is. `POST .../token` trades it for the remote
-daemon's in-memory session token.
+daemon's in-memory session token. Successful password set/clear requests publish
+a value-free `settings-changed` event for `connections` after vault persistence;
+a failed vault write publishes nothing. Deployment pairing-token creation and
+persisted deployment-mode changes invalidate the same Settings section.
 `PUT /config/remote-connections` takes `{ "base": null, "connection": {...} }`
 for a new machine, or the loaded connection as `base` when editing. The server
 merges only changed fields into that connection's latest locked record.
@@ -2972,7 +2975,8 @@ worktrees are discovered without recreating or deleting them.
 The response and `session-worktree-declared` event use the worktree lifecycle
 payload, with `creator_session` naming the caller and `spawn_session=false`.
 Only that tab moves. Its real cwd, sibling tabs and an inactive selection stay
-unchanged. Retrying the same declaration is idempotent.
+unchanged; an active caller’s selected workspace follows the same tab. Retrying
+the same declaration is idempotent.
 
 The stable `TUIC_SESSION` association is stored in the owning repository's
 `declaredWorktrees` map using the existing locked repository delta. Any saved
@@ -2980,13 +2984,16 @@ caller snapshot moves to the target workspace; sibling snapshots are preserved.
 After a restart or WebView reconnect, HTTP `GET /sessions` and IPC
 `list_active_sessions` return the declared `worktree_path` and `worktree_branch`
 while `cwd` remains the actual shell directory. The frontend restores placement
-from that worktree path. Declaration does not acquire worktree cleanup ownership.
+from the persisted stable caller declaration across registered repositories,
+independent of a changed cwd-derived repository, when the workspace id and checkout
+path still match. Declaration does not acquire worktree cleanup ownership.
 A concurrent repository edit can return a configuration conflict; retry the
 declaration after refreshing rather than overwriting that edit.
 
 The explicit placement remains authoritative over later shell cwd notifications
 until another declaration changes it. The frontend retains the backend placement
-path separately from the observed cwd during reconciliation.
+in `declaredWorktrees` separately from the observed cwd during reconciliation.
+Removing or replacing the matching checkout invalidates that placement.
 
 **Intentional request transport exception:** `declare_worktree` is an MCP-only
 action, callable over the existing HTTP `POST /mcp` route with a bound caller.
@@ -3007,14 +3014,32 @@ consumers use the separate session event subscription.
 ### Automations
 
 `POST /automations/action` accepts `{ "input": { "action": "list" } }`.
+
+Saved run configurations are validated against the same named-profile lookup used
+by the runner. Names are case-insensitive; a bare agent type such as `claude`
+is not a saved profile unless a profile has that name. Create, definition
+updates and re-enabling reject an unresolved name with a repair hint listing
+valid saved profiles. Existing list rows retain invalid definitions, but expose
+`run_config_error` and return `next_run_ms: null` until repaired. A profile can
+be removed after saving; launch checks it again and records a failed run.
+
+Failed agent-created runs also offer an `automation_run_failed` creator inbox
+message with `run_id`, `definition_id`, `name` and `reason`, even before spawn.
+The durable `owner` notification channel deduplicates publication; acceptance
+means inbox queued, not read. No creator means the existing bell/alert path.
 Unknown `/automations/*` endpoints return HTTP 404 with a JSON `error`, rather
 than the SPA frontend shell.
 It is available on desktop, browser/PWA and headless hosts. The addressed backend
 owns the definitions, history and execution; this route never forwards Run Now
 to a different machine. It shares its input parser and Rust implementation with
 `automation_action` IPC. Success is the JSON value below (no reply wrapper).
-Application errors use HTTP 500 with `{ "error": "message" }`; IPC rejects with
-the identical message. Malformed HTTP JSON/envelopes use Axum extraction errors.
+Static action-schema violations use HTTP 400 with the same `invalid_arguments`
+repair payload as MCP, including bounded, value-masked `violations` and
+`effect=not_started`. Both entry points use the advertised MCP input contract
+before dispatch. Semantic application errors use HTTP 500 with
+`{ "error": "message" }`; IPC rejects with the identical semantic message and
+retains its string-error signature. Malformed HTTP JSON/envelopes use Axum
+extraction errors.
 
 | Action | Input fields besides `action` | Success |
 |---|---|---|
@@ -3022,7 +3047,7 @@ the identical message. Malformed HTTP JSON/envelopes use Axum extraction errors.
 | template | template_id, repository, run_config, optional/null timezone | Fresh unsaved AutomationDefinition with enabled:false; omitted zone uses host local IANA zone |
 | `list` | None | Array of `{definition,next_run_ms,last_status}` |
 | `get` | `id` | Stored definition |
-| `create` | `definition` | Stored definition, including resolved timezone |
+| `create` | `definition`, optionally with `in_secs` instead of an absolute schedule | Stored definition, resolved timezone/local fire time and computed `next_run_ms` |
 | `update` | `definition`, optional `id`; or `id,enabled` | Stored definition |
 | `pause`, `resume` | `id` | `{ok:true}`; atomic enabled-only edit |
 | `delete` | `id` | `{ok:true}`; history retained |
@@ -3036,6 +3061,19 @@ the identical message. Malformed HTTP JSON/envelopes use Axum extraction errors.
 | `preset` | `preset`: hourly/daily/weekdays/weekly cadence | `{cron}` |
 
 Definitions use the snake_case storage model, including optional `once_local`.
+Create accepts `in_secs` (positive integer elapsed seconds from the host UTC clock)
+as an alternative to cron and `once_local`; combinations are rejected. Relative
+creation stores the local time in the selected IANA zone and an exact UTC `once_at`
+so a DST fold cannot move the occurrence. Preserve `once_at` for unchanged schedule
+edits; clear it when changing the schedule. `next_run_ms` in create replies is
+computed, not stored; update/preview ignore this read-only field.
+HTTP/IPC callers without bound agent identity supply all normal definition fields.
+Bound MCP callers can omit id, repository, workspace, enabled, grace_secs,
+overlap and max_duration_secs. They must supply the actual saved `run_config`:
+agent-type defaults are not proof of the caller's account/model profile.
+Generated bound creates are idempotent by caller plus original request; identical
+retries return the first saved occurrence without resetting its delay. Supply a
+new explicit id for a separate identical reminder. See the MCP guide for defaults.
 Update replaces only the named definition and rejects a changed id; enabled-only
 update preserves concurrent edits. Supplying both `definition` and `enabled` is
 an error. Create ignores client creator provenance; update preserves it.
@@ -3232,6 +3270,8 @@ No live write or desktop-load verification is implied by recorded-fixture tests.
 
 ## Shared settings action (#1787-4778)
 
+Both the desktop HTTP server and headless `tuic-remote` register this route through the same shared router. They also share `GET /config` and `PUT /config`, used by browser Settings hydration and refresh; reads retain the existing credential redaction. Headless upstream `begin_login` returns `unavailable` before resolving or contacting an upstream; bridge installation and opening agent config files remain desktop-only.
+
 POST `/settings/action` accepts the Rust-generated settings envelope directly, identical to IPC `settings_action` request and MCP settings arguments. It requires local or authenticated access. Describe is bounded to 128 fields per page. Owner edits require explicit target and expectedRevision; structured errors contain no input values. The owner inventory is complete; the same gate rejects future unresolved gaps. Typed workflows use `{action:"perform",target:{kind:"machine"},store,operation}`. The store selects the Rust operation DTO: github_accounts, ego (also expectedRevision), upstreams, connections, circleci, telegram, and voice in dictation builds. Dynamic-choice describe/refresh uses target, store and paths; catalogue describe uses bounded filters instead.
 
 Gated HTTP and IPC edits return `confirmation_required` with `proposalId` and do not write.
@@ -3377,3 +3417,64 @@ legacy daemons that do not return the bounded envelope.
 
 See [startup workflows](../backend/settings-startup.md#interactive-login) for
 expiry, retained-terminal cleanup, readback and error semantics.
+
+#### Dictation correction Settings records
+
+`POST /settings/action` describes the machine-owned `corrections` store. Get
+`/replacements`, create/remove records keyed by `from`, and set
+`/replacements/<JSON-Pointer-escaped heard text>/to` with `expectedRevision`.
+The same owner backs `PUT /dictation/corrections` and its existing `{map}` body.
+Persistence precedes runtime adoption and value-free `corrections` change hints.
+No microphone is opened. Non-dictation builds describe unavailable fields.
+
+Legacy upstream credential POST/DELETE now shares the IPC state-bearing owner
+adapter and emits value-free `upstreams` Settings generations after persistence.
+Failed validation or vault writes emit no hint; compound durable-vault failures
+emit an unapplied hint so readers reload instead of assuming nothing changed.
+
+### MCP static repair errors (#2007-59f6)
+
+`POST /mcp` rejects native static input-schema violations before effects with
+`invalid_arguments`, bounded value-masked `violations`, `effect=not_started`, and
+`retryable=false`. Correct the identified JSON-pointer fields before retrying.
+See the native argument repair contract in the MCP backend guide. Progress HTTP
+and IPC use the same raw 500-Unicode-scalar text limit as MCP.
+
+### GET /mcp/audit
+
+Returns a bounded, body-free runtime MCP call outcome projection (100 newest rows,
+1024 retained per instance). Includes call/parent correlation UUIDs, recognized
+operation, target digest, UTF-8 response text bytes, application error and separate
+transport/effect uncertainty. HTTP and ACP tools/call share the instrumentation.
+See [MCP runtime audit](../backend/mcp-http.md#runtime-call-outcome-audit-2010-30a7)
+for measurement, retention, privacy and retry-grouping limits. Reply construction
+does not prove delivery; cancelled/lost replies must not imply no effect.
+
+Modern `/mcp` managed calls may omit `mcp-session-id` while carrying the exact
+host-issued `x-tuic-session` for a live PTY/ACP peer. Internal identity recovery
+adds no legacy response session header. Missing identity returns structured
+`identity_context_required` with `effect=not_started`, `retryable=false` and one
+context-change repair attempt; a request repeated unchanged cannot repair it.
+
+## Durable peer-mail subscriptions
+
+Loopback endpoints use the existing MCP peer identity from `Mcp-Session-Id` and
+respect the `agent` tool enable switch. They do not accept a recipient identity.
+
+| Method | Path | Contract |
+|---|---|---|
+| POST | `/agent/subscriptions/action` | Same `subscribe`, `inbox`, `ack`, `unsubscribe` request and validation as the MCP agent tool |
+| GET | `/agent/subscriptions/{id}/events` | Continuous SSE; one `mail` event per pending batch cursor, with messages, cursor, acknowledged_cursor, missed_count and has_more |
+
+Create with `{"action":"subscribe","subscription_id":"pump","filter":"actionable"}`.
+Process each batch and post `{"action":"ack","subscription_id":"pump","cursor":N}`.
+The filter defaults to actionable; alternatives are all, exit and failure.
+Reconnect replays retained **unacknowledged** batches. `Last-Event-ID` is not an
+acknowledgement. The journal retains 1000 messages per peer across restart;
+matching unacknowledged evictions are explicit in missed_count. Legacy inbox
+reads do not consume this reader. Subscription ACK observes exact live delivery
+IDs without advancing the legacy cursor or acknowledging its loss watermark.
+`byte_budget` and `continuation` are unsupported for subscriptions; acknowledge
+each bounded batch, then read again when `has_more` is true. These endpoints
+require the bound `Mcp-Session-Id`; a stateless `x-tuic-session` alone is not an
+HTTP subscription binding. See [retention and notification semantics](../backend/mcp-http.md#durable-independent-mail-subscriptions).

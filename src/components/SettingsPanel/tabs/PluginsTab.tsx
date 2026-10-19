@@ -437,12 +437,7 @@ export const PluginsTab: Component<{
 	return (
 		<div class={s.section}>
 			<div>
-				<SettingPageHeader
-					title="Manage plugins"
-					description="Manage installed plugins and browse the community registry."
-					scope="Application defaults"
-					breadcrumb="Plugins / Manage plugins"
-				/>
+				<SettingPageHeader title="Manage plugins" scope="Application defaults" breadcrumb="Plugins / Manage plugins" />
 				<button
 					data-non-setting="Open plugin documentation"
 					class={ps.docsLink}
@@ -483,9 +478,7 @@ export const PluginsTab: Component<{
 
 					<Show
 						when={plugins().length > 0}
-						fallback={
-							<p class={s.hint}>No plugins installed. Use the buttons below to install from a folder or ZIP file.</p>
-						}
+						fallback={<p class={`${s.hint} ${ps.emptyState}`}>No plugins installed.</p>}
 					>
 						<div class={ps.pluginList}>
 							<For each={plugins() as PluginState[]}>

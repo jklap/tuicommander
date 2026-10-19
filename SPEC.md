@@ -1,5 +1,9 @@
 # TUICommander Specification
 
+- [x] Mobile Markdown review sends persisted edits and tweak comments through the shared desktop prompt and backend idle queue, with repository agent selection and delivery feedback (#2042-a71b).
+
+- [x] Durable independent peer-mail subscriptions: shared insertion journal, filtered bounded replay, explicit acknowledgement, retention-loss counters, HTTP SSE and ACP resource notifications (#2004-4760).
+
 - [x] Generated launch playbook modules with global/per-agent switches, append-only user additions, explicit all off, legacy default-copy migration and machine-owned effective previews (#2000-b50f).
 
 - [x] Mobile open Markdown tabs: one shared list in a top-bar dropdown at >=768 px, otherwise in the session menu; unchanged-cwd polls do not reset entries (#2024-9a86, #2025-82cb).
@@ -432,8 +436,9 @@ MCP callers can declare an existing linked worktree through
 `session action=declare_worktree worktree_path=/absolute/path`. Ownership comes
 from the immutable PTY launch directory and registered Git worktrees. The
 caller-only association persists under stable `TUIC_SESSION`, survives restart
-and does not change shell cwd or acquire cleanup ownership. Tab placement follows
-cwd, not this association, during creation, OSC 7, reconnect and restore. Removing
+and does not change shell cwd or acquire cleanup ownership. Explicit declarations
+own tab placement during OSC 7, reconnect and restore while the matching checkout
+exists. Creation without declaration remains cwd-based. Removing
 or recycling a worktree closes only terminals whose current cwd lies inside that
 checkout. A stale sidebar membership never authorizes closing an unrelated tab.
 
@@ -914,6 +919,14 @@ completion/maximum-duration handling remain pending; idle is not success.
 
 ### Automation HTTP and IPC parity
 
+Saved run configurations use one case-insensitive named-profile lookup across
+create, update, re-enable, list diagnostics and managed launch. Unresolved
+profiles are rejected with valid-profile repair choices; persisted invalid
+list rows expose `run_config_error` and no next occurrence. Failed agent-created
+runs offer one creator inbox notice through a durable owner-channel claim,
+including failures before session/task binding. Mail acceptance is not proof
+of consumption.
+
 Desktop IPC `automation_action` and desktop/headless HTTP `/automations/action`
 share one Rust action API for list/get/create/update/delete, atomic pause/resume,
 Run Now, paginated retained run history, previews/presets and `24h`/`7d` aggregates.
@@ -1232,6 +1245,18 @@ MCP, IPC and HTTP. Readback reports stored presence only (`set`, `unset`,
 `unavailable`), never a secret. Git & GitHub keeps its effective-source status;
 removing a stored token leaves environment and CircleCI CLI fallbacks unchanged.
 
+### Automation lean creation (#2001-5c1f)
+
+Bound agents can create with name, prompt, in_secs and an explicit run_config.
+The shared API resolves elapsed delay using the host clock and uses only
+caller-specific repository defaults. Actual saved profile identity is not retained
+in current caller metadata, so missing run_config fails instead of substituting
+an agent-type default. Generated IDs hash caller identity and the original request;
+identical retries atomically reuse the original occurrence. A separate identical
+reminder needs a new explicit id. Schedule choices are exclusive. Create returns the saved definition and next_run_ms; once_local and
+once_at preserve both the selected zone's local display and the exact UTC instant.
+Unbound HTTP/IPC callers still supply explicit definition fields.
+
 ## Durable managed launch (2006-f5a1)
 
 Managed workers can launch through one keyed transaction across MCP, HTTP and IPC. The journal reserves the child identity before workspace or PTY side effects, retains key tombstones, and refuses conflicting reuse. A retry returns the same identity; ambiguous interrupted creation blocks without a replacement or fallback checkout. Existing/new workspaces, a stable name, a registered parent and explicit keep-open policy are supported. Receipts separate prompt transport delivery from model acceptance, require native Ready-screen evidence for ready, and expose warm-artifact state independently. Model/account/brief policy stays outside TUIC.
@@ -1240,3 +1265,32 @@ Native automation and workflow run bindings also use this transaction through `m
 ## Frame workload evidence (#1638-c94c)
 
 Implemented: opt-in, perfDebug-gated global bounded frame bytes and paint snapshots, rotated instance-local captures, manual debug dump and production grid-paint replay timing. The synthetic smoke fixture checks harness wiring only. Original captured-stall heartbeat/input/backend RED and same-workload GREEN remain open. See docs/backend/stall-journal.md for bounds and privacy.
+
+Dictation corrections use the machine-owned `corrections` Settings collection,
+keyed by heard text. The existing TextCorrector map remains the stored format;
+Settings and legacy transports share locked atomic persistence, runtime adoption
+and value-free refresh hints. Non-dictation builds report unavailable descriptors
+(#1992-d4fa).
+
+MCP lazy discovery returns an optional complete top_schema, bounded by schema_byte_budget (default 16384, maximum 65536 UTF-8 JSON bytes), and catalogue_generation. Clients invalidate admitted schemas on tools/list_changed or changed generation (#2013-73f9).
+
+## Bounded MCP runtime outcomes (#2010-30a7)
+
+HTTP and ACP tools/call share a body-free 1024-record instance-local audit ring;
+`GET /mcp/audit` projects the newest 100 rows. Explicit call/parent UUIDs, recognized
+operations, target digests and UTF-8 text-byte costs support runtime correlation.
+Application error, transport observation and effect certainty stay separate;
+reply construction is not delivery proof and cancellation does not imply rollback.
+Real ego/Codex correlation and captured lost-reply traces remain unverified.
+
+## Managed MCP stateless identity (#2008-5317)
+
+Modern tools/call uses an internal routing context for an exact live PTY/ACP peer
+asserted by the host header, without adding legacy session state to the wire.
+Unknown peers remain unbound. Missing-context diagnostics prohibit unchanged
+retries and require host reconnect or explicit external initialize/register.
+Consumer retry enforcement remains a separate live ego verification requirement.
+
+## Mobile device-local font sizes
+
+Implemented (#2023-54c4): mobile Settings has separate Terminal and Chat controls with smaller/larger buttons and current values, without explanatory text. Each preference has its own localStorage key and 10–24 px range with 1 px steps. The existing defaults stay 14 px for CLI output and Chat body text. Chat changes apply only within Session Chat and AI Chat transcripts. Composers, UI chrome, desktop fonts and other devices are unchanged. CLI rows rewrap locally without resizing the shared PTY and keep the visible row when scrolled back.

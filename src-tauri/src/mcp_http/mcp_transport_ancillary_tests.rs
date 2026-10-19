@@ -489,9 +489,177 @@ async fn github_dispatch_reports_missing_and_unknown_actions() {
     );
 }
 
-/// worktree_list must reuse `inspect_workspace_lifecycle` — the same
-/// function `get_repo_summary`/`get_repo_diff_stats` call for the sidebar's
-/// `lifecycleStatus` — rather than recomputing merge state a second way.
+/// Catches: a cold listing waits on GitHub network proof behind the CLI's 3s deadline.
+/// A loopback HTTP proxy rejects any attempted connection, without contacting GitHub.
+#[tokio::test]
+async fn native_mcp_worktree_list_never_queries_uncached_github_proofs() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    let config = tempfile::tempdir().unwrap();
+    let _guard = crate::config::set_config_dir_override(config.path().to_path_buf());
+    let (_temp, repo, _) = branch_delete_fixture();
+    crate::git_cli::git_cmd(&repo)
+        .args(["checkout", "main"])
+        .run()
+        .unwrap();
+    let checkout = _temp.path().join("cold-proof");
+    crate::git_cli::git_cmd(&repo)
+        .args([
+            "worktree",
+            "add",
+            "-b",
+            "cold-proof",
+            checkout.to_str().unwrap(),
+        ])
+        .run()
+        .unwrap();
+    branch_delete_commit(&checkout, "own.txt", "unmerged work\n");
+    crate::git_cli::git_cmd(&repo)
+        .args([
+            "remote",
+            "add",
+            "origin",
+            "https://github.com/fixture/never-contact.git",
+        ])
+        .run()
+        .unwrap();
+
+    let proxy = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let proxy_url = format!("http://{}", proxy.local_addr().unwrap());
+    let requests = Arc::new(AtomicUsize::new(0));
+    let observed = Arc::clone(&requests);
+    let proxy_task = tokio::spawn(async move {
+        while let Ok((mut socket, _)) = proxy.accept().await {
+            let mut bytes = [0; 4096];
+            let bytes_read = socket.read(&mut bytes).await.unwrap();
+            if bytes_read == 0 {
+                continue;
+            }
+            observed.fetch_add(1, Ordering::Relaxed);
+            socket
+                .write_all(
+                    b"HTTP/1.1 502 Bad Gateway\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+                )
+                .await
+                .unwrap();
+        }
+    });
+    let mut state = test_state();
+    Arc::get_mut(&mut state).unwrap().http_client = reqwest::Client::builder()
+        .proxy(reqwest::Proxy::all(proxy_url).unwrap())
+        .build()
+        .unwrap();
+    // Synthetic cached token prevents any external credential lookup. The proxy
+    // rejects CONNECT before TLS, so the token never leaves this process.
+    *state.github.token.write() = Some("synthetic-fixture-token".into());
+    let response = handle_worktree(
+        &state,
+        &serde_json::json!({"action":"worktree_list", "path":repo}),
+        false,
+    )
+    .await;
+    proxy_task.abort();
+    let _ = proxy_task.await;
+    assert_eq!(
+        requests.load(Ordering::Relaxed),
+        0,
+        "cold listing attempted GitHub network I/O"
+    );
+    assert_eq!(
+        response["cold-proof"]["lifecycle_status"]["commit_status"], "unmerged",
+        "{response}"
+    );
+    assert_eq!(
+        response["cold-proof"]["lifecycle_status"]["dirty_files"], 0,
+        "{response}"
+    );
+    assert!(
+        response["cold-proof"]["lifecycle_status"]["dirty_fingerprint"].is_string(),
+        "{response}"
+    );
+}
+
+/// Catches repeated inventory/integration subprocesses for unchanged linked
+/// worktrees on the listing path; fresh dirt and fingerprints must still move.
+#[tokio::test]
+async fn native_mcp_worktree_list_reuses_merge_proofs_for_forty_worktrees() {
+    let (_temp, repo, _) = branch_delete_fixture();
+    crate::git_cli::git_cmd(&repo)
+        .args(["checkout", "main"])
+        .run()
+        .unwrap();
+    let mut checkouts = Vec::new();
+    for index in 0..39 {
+        let checkout = _temp.path().join(format!("work-{index}"));
+        crate::git_cli::git_cmd(&repo)
+            .args([
+                "worktree",
+                "add",
+                "-b",
+                &format!("work-{index}"),
+                checkout.to_str().unwrap(),
+            ])
+            .run()
+            .unwrap();
+        checkouts.push(checkout);
+    }
+    let state = test_state();
+    let args = serde_json::json!({"action": "worktree_list", "path": repo});
+    let first = handle_worktree(&state, &args, false).await;
+    assert_eq!(first.as_object().unwrap().len(), 40, "{first}");
+    let fingerprint = first["work-0"]["lifecycle_status"]["dirty_fingerprint"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    std::fs::write(checkouts[0].join("untracked.txt"), "fresh dirt\n").unwrap();
+
+    let before = tuic_git::git_cli::git_cmd_forks(&repo);
+    let started = std::time::Instant::now();
+    let second = handle_worktree(&state, &args, false).await;
+    let elapsed = started.elapsed();
+    let forks = tuic_git::git_cli::git_cmd_forks(&repo) - before;
+    assert_eq!(second.as_object().unwrap().len(), 40, "{second}");
+    assert_eq!(second["work-0"]["lifecycle_status"]["dirty_files"], 1);
+    assert_eq!(
+        second["work-0"]["lifecycle_status"]["removal_safety"],
+        "requires_force"
+    );
+    assert_ne!(
+        second["work-0"]["lifecycle_status"]["dirty_fingerprint"],
+        fingerprint
+    );
+    assert_eq!(second["work-1"]["lifecycle_status"]["dirty_files"], 0);
+    for workspace in second.as_object().unwrap().values() {
+        assert!(workspace["lifecycle_status"]["dirty_fingerprint"].is_string());
+        assert_eq!(
+            workspace["lifecycle_status"]["submodule_unpushed_commits"],
+            serde_json::json!([])
+        );
+    }
+    // One inventory plus the main checkout's fresh status/fingerprint reads.
+    // No sibling branch may re-run its inventory or unchanged merge proof.
+    assert!(
+        forks <= 6,
+        "40-worktree repeat listing built {forks} base-repo git commands in {elapsed:?}"
+    );
+    assert!(
+        elapsed < std::time::Duration::from_secs(3),
+        "40-worktree repeat listing exceeded the CLI response window: {elapsed:?}"
+    );
+
+    // Changed refs must invalidate monitoring proofs, unlike a plain file save.
+    branch_delete_commit(&checkouts[1], "feature.txt", "own commit\n");
+    let changed = handle_worktree(&state, &args, false).await;
+    assert_eq!(
+        changed["work-1"]["lifecycle_status"]["commit_status"],
+        "unmerged"
+    );
+    assert_eq!(changed["work-0"]["lifecycle_status"]["dirty_files"], 1);
+}
+
+/// worktree_list must share the sidebar and removal classifier rather than
+/// recomputing merge state a second way; listing may reuse monitoring proofs.
 #[tokio::test]
 async fn native_mcp_worktree_list_reports_lifecycle_status() {
     let config = tempfile::tempdir().unwrap();

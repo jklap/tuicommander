@@ -445,3 +445,5 @@
   .installSuggestion > div { grid-template-columns: minmax(0, 1fr); }
   .installSuggestion button { grid-column: 1; grid-row: auto; }
 }
+
+.emptyState { padding: 16px 0; }

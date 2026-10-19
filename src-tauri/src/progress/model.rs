@@ -136,7 +136,7 @@ pub(crate) fn validate_text(field: &str, value: &str, max: usize) -> Result<(), 
     if trimmed.is_empty() {
         return Err(format!("{field} must not be empty"));
     }
-    let count = trimmed.chars().count();
+    let count = value.chars().count();
     if count > max {
         return Err(format!(
             "{field} must be at most {max} characters (got {count})"

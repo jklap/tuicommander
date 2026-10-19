@@ -44,6 +44,22 @@ fn option_text(row: &str, multiple: bool) -> Option<(&str, &str)> {
         .filter(|(key, _)| !key.is_empty() && key.bytes().all(|ch| ch.is_ascii_digit()))
 }
 
+/// Native diagnostics, working chrome and a submitted composer delimit the
+/// question. Both modal forms share this boundary contract; soft-wrapped rows
+/// have already been joined from terminal-grid metadata by the PTY adapter.
+fn is_question_boundary(row: &str) -> bool {
+    let row = row.trim();
+    row.is_empty()
+        || row.starts_with("εgo:")
+        || row.starts_with('>')
+        || (crate::chrome::is_spinner_row(row) && row.contains("Esc to interrupt"))
+        || row.starts_with("Ctrl+B backgrounds")
+        || row.starts_with("Ctrl+Enter steers")
+        || row.contains("Option+P models")
+        || matches!(row, "/help" | "· /help")
+        || (row.chars().count() >= 3 && row.chars().all(|ch| matches!(ch, '─' | '━' | '═' | '-')))
+}
+
 pub fn parse_ego_question(rows: &[String]) -> Option<ParsedEvent> {
     let (end, multiple) = footer_end(rows, FOOTER)
         .map(|end| (end, false))
@@ -95,7 +111,12 @@ pub fn parse_ego_question(rows: &[String]) -> Option<ParsedEvent> {
         return None;
     }
     let mut start = first;
-    while start > 0 && !rows[start - 1].trim().is_empty() {
+    // A repaint may retain the tail of the previous selector immediately above
+    // the new title. Those numbered rows are history, not title continuation.
+    while start > 0
+        && !is_question_boundary(&rows[start - 1])
+        && option_text(&rows[start - 1], multiple).is_none()
+    {
         start -= 1;
     }
     let title = rows[start..first]
@@ -119,6 +140,59 @@ pub fn parse_ego_question(rows: &[String]) -> Option<ParsedEvent> {
     })
 }
 
+/// CLI-enforced default-mode tool approval, distinct from ask_question.
+/// The five exact key markers and Risk row anchor the native surface.
+pub fn parse_ego_approval(rows: &[String]) -> Option<ParsedEvent> {
+    const REFUSAL: &str = "What should it do instead? (Enter alone just says no)";
+    let end = rows.iter().rposition(|row| !row.trim().is_empty())? + 1;
+    if rows[end - 1].trim() == REFUSAL {
+        return Some(ParsedEvent::Question {
+            prompt_text: REFUSAL.to_owned(),
+            confident: true,
+        });
+    }
+    if end < 4 || !rows[end - 3].trim().starts_with("Risk: ") {
+        return None;
+    }
+    let title = rows[end - 4].trim();
+    if !title.starts_with("Allow ") || !title.ends_with('?') {
+        return None;
+    }
+    lazy_static::lazy_static! {
+        static ref KEY_RE: regex::Regex = regex::Regex::new(r"(?:^|\s)\[([yaned])\]\s+").unwrap();
+    }
+    let footer = format!("{} {}", rows[end - 2].trim(), rows[end - 1].trim());
+    let keys: Vec<_> = KEY_RE.captures_iter(&footer).collect();
+    if keys.iter().map(|key| &key[1]).collect::<Vec<_>>() != ["y", "a", "n", "e", "d"] {
+        return None;
+    }
+    let mut options = Vec::new();
+    for (index, key) in keys.iter().enumerate() {
+        let start = key.get(0)?.end();
+        let end = keys
+            .get(index + 1)
+            .map_or(footer.len(), |key| key.get(0).unwrap().start());
+        let label = footer[start..end].trim();
+        if label.is_empty() {
+            return None;
+        }
+        options.push(ChoiceOption {
+            key: key[1].to_owned(),
+            label: label.to_owned(),
+            highlighted: index == 0,
+            destructive: &key[1] == "n",
+            hint: None,
+        });
+    }
+    Some(ParsedEvent::ChoicePrompt {
+        title: title.to_owned(),
+        options,
+        selection_mode: None,
+        dismiss_key: None,
+        amend_key: None,
+    })
+}
+
 /// This text shape alone is not authoritative: call only during a confident ego
 /// awaiting interval. A ready composer has the same empty `>` row.
 pub fn parse_ego_free_text_question(rows: &[String]) -> Option<ParsedEvent> {
@@ -127,19 +201,7 @@ pub fn parse_ego_free_text_question(rows: &[String]) -> Option<ParsedEvent> {
         return None;
     }
     let mut start = end;
-    while start > 0 {
-        let row = rows[start - 1].trim();
-        if row.is_empty()
-            || row.starts_with("εgo:")
-            || row.starts_with("Ctrl+B backgrounds")
-            || row.starts_with("Ctrl+Enter steers")
-            || row.contains("Option+P models")
-            || matches!(row, "/help" | "· /help")
-            || (row.chars().count() >= 3
-                && row.chars().all(|ch| matches!(ch, '─' | '━' | '═' | '-')))
-        {
-            break;
-        }
+    while start > 0 && !is_question_boundary(&rows[start - 1]) {
         start -= 1;
     }
     let prompt_text = rows[start..end]

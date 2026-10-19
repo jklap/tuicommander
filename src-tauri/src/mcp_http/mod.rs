@@ -18,6 +18,8 @@ mod guards;
 pub(crate) mod launch_transaction;
 mod log_routes;
 pub(crate) mod managed_launch;
+pub(crate) mod mcp_call_audit;
+mod mcp_input_contract;
 pub(crate) mod mcp_transport;
 mod mcp_transport_ancillary;
 #[cfg(test)]
@@ -30,6 +32,7 @@ pub(crate) mod mcp_transport_session_agent;
 mod open_markdown_routes;
 pub(crate) mod response_pages;
 
+mod mail_routes;
 mod mcp_work_item;
 mod plugin_docs;
 mod plugin_routes;
@@ -364,7 +367,10 @@ async fn reconnect_mcp_upstream_http(
 }
 
 /// POST /mcp/upstreams/credential — save an upstream credential to OS keyring.
-async fn save_mcp_upstream_credential_http(Json(body): Json<serde_json::Value>) -> Response {
+async fn save_mcp_upstream_credential_http(
+    State(state): State<Arc<AppState>>,
+    Json(body): Json<serde_json::Value>,
+) -> Response {
     let name = match body.get("name").and_then(|v| v.as_str()) {
         Some(n) => n.to_string(),
         None => return (StatusCode::BAD_REQUEST, "missing 'name'").into_response(),
@@ -386,17 +392,16 @@ async fn save_mcp_upstream_credential_http(Json(body): Json<serde_json::Value>) 
         Some(url) => url.to_string(),
         None => return (StatusCode::BAD_REQUEST, "missing 'url'").into_response(),
     };
-    let result = if body
-        .get("replace")
-        .and_then(|v| v.as_bool())
-        .unwrap_or(false)
-    {
-        crate::mcp_upstream_credentials::save_mcp_upstream_credential_with_replace(
-            name, token, header, url, true,
-        )
-    } else {
-        crate::mcp_upstream_credentials::save_mcp_upstream_credential(name, token, header, url)
-    };
+    let result = crate::mcp_upstream_credentials::save_with_refresh(
+        &state,
+        name,
+        token,
+        header,
+        url,
+        body.get("replace")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false),
+    );
     match result {
         Ok(()) => Json(()).into_response(),
         Err(e) => err_500(&e),
@@ -404,7 +409,10 @@ async fn save_mcp_upstream_credential_http(Json(body): Json<serde_json::Value>) 
 }
 
 /// DELETE /mcp/upstreams/credential — delete an upstream credential from OS keyring.
-async fn delete_mcp_upstream_credential_http(Json(body): Json<serde_json::Value>) -> Response {
+async fn delete_mcp_upstream_credential_http(
+    State(state): State<Arc<AppState>>,
+    Json(body): Json<serde_json::Value>,
+) -> Response {
     let name = match body.get("name").and_then(|v| v.as_str()) {
         Some(n) => n.to_string(),
         None => return (StatusCode::BAD_REQUEST, "missing 'name'").into_response(),
@@ -418,7 +426,7 @@ async fn delete_mcp_upstream_credential_http(Json(body): Json<serde_json::Value>
         Ok(header) => header,
         Err(_) => return (StatusCode::BAD_REQUEST, "invalid header metadata").into_response(),
     };
-    match crate::mcp_upstream_credentials::delete_mcp_upstream_credential(name, header) {
+    match crate::mcp_upstream_credentials::delete_with_refresh(&state, name, header) {
         Ok(()) => Json(()).into_response(),
         Err(e) => err_500(&e),
     }
@@ -1013,6 +1021,13 @@ fn tunnel_routes() -> Router<Arc<AppState>> {
 fn shared_routes() -> Router<Arc<AppState>> {
     Router::new()
         .route("/mcp/peer", get(remote_peer::endpoint))
+        .route("/mcp/audit", get(mcp_call_audit::endpoint))
+        .route("/settings/action", post(settings_routes::settings_action))
+        // Browser Settings hydration and refresh read the same redacted owner snapshot.
+        .route(
+            "/config",
+            get(config_routes::get_config).put(config_routes::put_config),
+        )
         .route("/accounts/action", post(account_routes::action))
         .route("/accounts/secret-form", post(account_routes::secret_form))
         // Version (authenticated)
@@ -1846,10 +1861,6 @@ pub fn build_router(state: Arc<AppState>, remote_auth: bool, mcp_enabled: bool) 
         )
         // Config
         .route(
-            "/config",
-            get(config_routes::get_config).put(config_routes::put_config),
-        )
-        .route(
             "/config/hash-password",
             post(config_routes::hash_password_http),
         )
@@ -1894,7 +1905,6 @@ pub fn build_router(state: Arc<AppState>, remote_auth: bool, mcp_enabled: bool) 
             "/config/pane-layout",
             get(config_routes::get_pane_layout).put(config_routes::put_pane_layout),
         )
-        .route("/settings/action", post(settings_routes::settings_action))
         .route("/config/clear-caches", post(config_routes::clear_caches))
         .route(
             "/config/clear-repo-caches",
@@ -1935,6 +1945,8 @@ pub fn build_router(state: Arc<AppState>, remote_auth: bool, mcp_enabled: bool) 
             "/audio/output-devices",
             get(config_routes::list_audio_output_devices_http),
         )
+        .route("/agent/subscriptions/action", post(mail_routes::action))
+        .route("/agent/subscriptions/{id}/events", get(mail_routes::events))
         .route(
             "/agent/discover-session",
             post(config_routes::discover_agent_session_http),
@@ -4463,6 +4475,8 @@ mod tests {
             // absent here, tuic-remote answered 404 and remote repos ran with
             // no agent configs.
             "/config/agents",
+            // Headless Settings uses the same bootstrap snapshot as desktop.
+            "/config",
         ];
         // Desktop-only or router-specific — MUST NOT be in shared_routes():
         // /health (public_routes only), /fs/read-editor (router-specific
@@ -4475,7 +4489,6 @@ mod tests {
             "/repo/github",
             "/repo/prs",
             "/dictation/status",
-            "/config",
             "/config/themes",
             "/mcp/status",
             "/plugins/list",
@@ -5030,6 +5043,142 @@ mod tests {
         assert_eq!(crate::mcp_upstream_config::load_mcp_upstreams(), current);
     }
 
+    // Catches: legacy connection password writes bypassing refresh or advertising failed persistence.
+    #[tokio::test]
+    #[serial_test::serial]
+    async fn legacy_connection_password_settings_refresh_follows_vault_persistence() {
+        let tmp = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+        let _guard = crate::config::set_config_dir_override(tmp.path().to_path_buf());
+        crate::credentials::reset_test_faults();
+        let state = test_state();
+        let app = build_router(state.clone(), false, true);
+        let mut events = state.event_bus.subscribe();
+        let id = "legacy-connection-refresh";
+        let request = |password: &str| {
+            put_from(
+                &format!("/config/remote-connections/{id}/password"),
+                &serde_json::json!({"password": password}),
+                std::net::SocketAddr::from(([127, 0, 0, 1], 0)),
+            )
+        };
+        let response = app
+            .clone()
+            .oneshot(request("connection-secret-canary"))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            crate::credentials::get(crate::credentials::Credential::RemoteConnection(id))
+                .unwrap()
+                .as_deref(),
+            Some("connection-secret-canary")
+        );
+        let crate::state::AppEvent::SettingsChanged(first) = events
+            .try_recv()
+            .expect("durable connection password write must refresh another Settings reader")
+        else {
+            panic!("expected Settings change")
+        };
+        crate::credentials::MOCK_FAIL_WRITES.store(true, std::sync::atomic::Ordering::SeqCst);
+        let rejected = app
+            .clone()
+            .oneshot(request("rejected-secret-canary"))
+            .await
+            .unwrap();
+        crate::credentials::reset_test_faults();
+        assert_eq!(rejected.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        assert!(
+            events.try_recv().is_err(),
+            "failed vault write must not publish"
+        );
+        assert_eq!(
+            crate::credentials::get(crate::credentials::Credential::RemoteConnection(id))
+                .unwrap()
+                .as_deref(),
+            Some("connection-secret-canary")
+        );
+        let response = app.oneshot(request("")).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert!(!crate::remote_connection::connection_password_exists(id).unwrap());
+        let crate::state::AppEvent::SettingsChanged(second) = events
+            .try_recv()
+            .expect("durable connection password clear must refresh another Settings reader")
+        else {
+            panic!("expected Settings change")
+        };
+        assert_eq!(first.section, "connections");
+        assert_eq!(second.section, "connections");
+        assert!(first.persisted && first.applied && second.persisted && second.applied);
+        assert!(first.generation < second.generation);
+        assert!(
+            events.try_recv().is_err(),
+            "each write publishes exactly once"
+        );
+        let payload = serde_json::to_value((first, second)).unwrap();
+        for notice in payload.as_array().unwrap() {
+            assert_eq!(
+                notice.as_object().unwrap().len(),
+                4,
+                "hints contain only section, generation and persistence/apply flags"
+            );
+        }
+        assert!(!payload.to_string().contains("secret-canary"));
+    }
+
+    // Catches: a successful direct credential write leaving other Settings readers stale.
+    #[tokio::test]
+    #[serial_test::serial]
+    async fn legacy_upstream_credential_write_publishes_value_free_refresh() {
+        let tmp = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+        let _guard = crate::config::set_config_dir_override(tmp.path().to_path_buf());
+        let state = test_state();
+        let mut events = state.event_bus.subscribe();
+        let response = build_router(state.clone(), false, true)
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/mcp/upstreams/credential")
+                    .header("content-type", "application/json")
+                    .extension(axum::extract::ConnectInfo(std::net::SocketAddr::from((
+                        [127, 0, 0, 1],
+                        0,
+                    ))))
+                    .body(Body::from(
+                        serde_json::json!({"name":"legacy-publisher-fixture",
+                    "token":"legacy-secret-canary","url":"https://example.com/mcp"})
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            crate::mcp_upstream_credentials::read_credential_for_url(
+                "legacy-publisher-fixture",
+                "https://example.com/mcp"
+            )
+            .unwrap()
+            .as_deref(),
+            Some("legacy-secret-canary")
+        );
+        let notice = std::iter::from_fn(|| events.try_recv().ok())
+            .find_map(|event| match event {
+                crate::state::AppEvent::SettingsChanged(notice) => Some(notice),
+                _ => None,
+            })
+            .expect("durable legacy credential write did not refresh another Settings reader");
+        assert_eq!(notice.section, "upstreams");
+        assert!(notice.persisted);
+        assert!(
+            !serde_json::to_string(&notice)
+                .unwrap()
+                .contains("legacy-secret-canary")
+        );
+        crate::mcp_upstream_credentials::delete_upstream_credential("legacy-publisher-fixture")
+            .unwrap();
+    }
+
     // Catches: HTTP dropping compound credentials or treating omitted replace
     // as permission to overwrite an existing upstream credential.
     #[tokio::test]
@@ -5063,7 +5212,8 @@ mod tests {
         );
         let mut replacement =
             serde_json::json!({"name":name,"token":"replacement-http-secret","url":url});
-        let response = save_mcp_upstream_credential_http(Json(replacement.clone())).await;
+        let response =
+            save_mcp_upstream_credential_http(State(test_state()), Json(replacement.clone())).await;
         assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
         assert_eq!(
             crate::mcp_upstream_credentials::read_credential_for_url(name, url)
@@ -5072,7 +5222,8 @@ mod tests {
             Some("original-http-secret")
         );
         replacement["replace"] = serde_json::json!(true);
-        let response = save_mcp_upstream_credential_http(Json(replacement)).await;
+        let response =
+            save_mcp_upstream_credential_http(State(test_state()), Json(replacement)).await;
         assert_eq!(response.status(), StatusCode::OK);
         assert_eq!(
             crate::mcp_upstream_credentials::read_credential_for_url(name, url)
@@ -5087,7 +5238,7 @@ mod tests {
     async fn secret_header_http_credentials_preserve_metadata_and_return_json_unit() {
         let name = "secret-header-http";
         let header = serde_json::json!({"name":"x-api-key", "credential_ref":uuid::Uuid::new_v4().to_string()});
-        let response = save_mcp_upstream_credential_http(Json(
+        let response = save_mcp_upstream_credential_http(State(test_state()), Json(
             serde_json::json!({"name":name,"token":"DUMMY_HTTP_SENTINEL","header":header,"url":"https://example.com/mcp"}),
         ))
         .await;
@@ -5110,9 +5261,10 @@ mod tests {
             .as_deref(),
             Some("DUMMY_HTTP_SENTINEL")
         );
-        let response = delete_mcp_upstream_credential_http(Json(
-            serde_json::json!({"name":name,"header":header}),
-        ))
+        let response = delete_mcp_upstream_credential_http(
+            State(test_state()),
+            Json(serde_json::json!({"name":name,"header":header})),
+        )
         .await;
         assert_eq!(response.status(), StatusCode::OK);
         assert_eq!(
@@ -6709,11 +6861,9 @@ mod tests {
     async fn test_session_input_missing_session_id() {
         let state = test_state();
         let result = call_mcp_tool(&state, "session", serde_json::json!({"action": "input"})).await;
-        assert!(
-            result["error"]
-                .as_str()
-                .unwrap()
-                .contains("requires 'session_id'")
+        assert_eq!(
+            crate::test_support::mcp_argument_constraint(&result, "", "required"),
+            &serde_json::json!(["session_id"])
         );
     }
 
@@ -6745,7 +6895,10 @@ mod tests {
             }),
         )
         .await;
-        assert!(result["error"].as_str().unwrap().contains("'input'"));
+        assert_eq!(
+            crate::test_support::mcp_argument_constraint(&result, "", "anyOf"),
+            &serde_json::json!([{"required":["input"]},{"required":["special_key"]},{"required":["pty_description"]}])
+        );
     }
 
     #[tokio::test]
@@ -6774,11 +6927,9 @@ mod tests {
         let state = test_state();
         let result =
             call_mcp_tool(&state, "session", serde_json::json!({"action": "output"})).await;
-        assert!(
-            result["error"]
-                .as_str()
-                .unwrap()
-                .contains("requires 'session_id'")
+        assert_eq!(
+            crate::test_support::mcp_argument_constraint(&result, "", "required"),
+            &serde_json::json!(["session_id"])
         );
     }
 
@@ -6802,11 +6953,9 @@ mod tests {
         let state = test_state();
         let result =
             call_mcp_tool(&state, "session", serde_json::json!({"action": "resize"})).await;
-        assert!(
-            result["error"]
-                .as_str()
-                .unwrap()
-                .contains("requires 'session_id'")
+        assert_eq!(
+            crate::test_support::mcp_argument_constraint(&result, "", "required"),
+            &serde_json::json!(["session_id"])
         );
     }
 
@@ -6831,11 +6980,9 @@ mod tests {
     async fn test_session_close_missing_session_id() {
         let state = test_state();
         let result = call_mcp_tool(&state, "session", serde_json::json!({"action": "close"})).await;
-        assert!(
-            result["error"]
-                .as_str()
-                .unwrap()
-                .contains("requires 'session_id'")
+        assert_eq!(
+            crate::test_support::mcp_argument_constraint(&result, "", "required"),
+            &serde_json::json!(["session_id"])
         );
     }
 
@@ -6859,11 +7006,9 @@ mod tests {
     async fn test_session_pause_missing_session_id() {
         let state = test_state();
         let result = call_mcp_tool(&state, "session", serde_json::json!({"action": "pause"})).await;
-        assert!(
-            result["error"]
-                .as_str()
-                .unwrap()
-                .contains("requires 'session_id'")
+        assert_eq!(
+            crate::test_support::mcp_argument_constraint(&result, "", "required"),
+            &serde_json::json!(["session_id"])
         );
     }
 
@@ -6887,11 +7032,9 @@ mod tests {
         let state = test_state();
         let result =
             call_mcp_tool(&state, "session", serde_json::json!({"action": "resume"})).await;
-        assert!(
-            result["error"]
-                .as_str()
-                .unwrap()
-                .contains("requires 'session_id'")
+        assert_eq!(
+            crate::test_support::mcp_argument_constraint(&result, "", "required"),
+            &serde_json::json!(["session_id"])
         );
     }
 
@@ -7007,7 +7150,25 @@ mod tests {
             }),
         )
         .await;
-        assert_eq!(result["error"]["code"], "invalid_type", "{result}");
+        let variants = crate::test_support::mcp_argument_constraint(&result, "", "anyOf");
+        let patch = variants
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|variant| variant["oneOf"].as_array())
+            .flatten()
+            .find(|variant| variant["properties"]["action"]["const"] == "patch")
+            .expect("patch repair schema");
+        assert_eq!(
+            patch["required"],
+            serde_json::json!([
+                "action",
+                "target",
+                "store",
+                "expectedRevision",
+                "operations"
+            ])
+        );
         let retired = call_mcp_tool(&state, "config", serde_json::json!({"action":"save"})).await;
         assert!(
             retired["error"].as_str().unwrap().contains("Unknown tool"),
@@ -7050,11 +7211,9 @@ mod tests {
             serde_json::json!({"action": "worktree_list"}),
         )
         .await;
-        assert!(
-            result["error"]
-                .as_str()
-                .unwrap()
-                .contains("requires 'path'")
+        assert_eq!(
+            crate::test_support::mcp_argument_constraint(&result, "", "required"),
+            &serde_json::json!(["path"])
         );
     }
 
@@ -7071,11 +7230,9 @@ mod tests {
             }),
         )
         .await;
-        assert!(
-            result["error"]
-                .as_str()
-                .unwrap()
-                .contains("requires 'branch'")
+        assert_eq!(
+            crate::test_support::mcp_argument_constraint(&result, "", "anyOf"),
+            &serde_json::json!([{"required":["branch"]},{"required":["worktree_path"]}])
         );
     }
 
@@ -7196,37 +7353,30 @@ mod tests {
     async fn test_session_missing_action() {
         let state = test_state();
         let result = call_mcp_tool(&state, "session", serde_json::json!({})).await;
-        assert!(
-            result["error"]
-                .as_str()
-                .unwrap()
-                .contains("Missing 'action'")
+        assert_eq!(
+            crate::test_support::mcp_argument_constraint(&result, "", "required"),
+            &serde_json::json!(["action"])
         );
-        assert!(result["error"].as_str().unwrap().contains("list, create"));
     }
 
     #[tokio::test]
     async fn test_session_unknown_action() {
         let state = test_state();
         let result = call_mcp_tool(&state, "session", serde_json::json!({"action": "bogus"})).await;
-        assert!(
-            result["error"]
-                .as_str()
-                .unwrap()
-                .contains("Unknown action 'bogus'")
-        );
-        assert!(result["error"].as_str().unwrap().contains("session"));
+        let allowed = crate::test_support::mcp_argument_constraint(&result, "/action", "enum");
+        let allowed = allowed.as_array().unwrap();
+        assert!(allowed.contains(&serde_json::json!("list")));
+        assert!(allowed.contains(&serde_json::json!("create")));
+        assert!(!allowed.contains(&serde_json::json!("bogus")));
     }
 
     #[tokio::test]
     async fn test_repo_missing_action() {
         let state = test_state();
         let result = call_mcp_tool(&state, "repo", serde_json::json!({})).await;
-        assert!(
-            result["error"]
-                .as_str()
-                .unwrap()
-                .contains("Missing 'action'")
+        assert_eq!(
+            crate::test_support::mcp_argument_constraint(&result, "", "required"),
+            &serde_json::json!(["action"])
         );
     }
 
@@ -7234,12 +7384,11 @@ mod tests {
     async fn test_repo_unknown_action() {
         let state = test_state();
         let result = call_mcp_tool(&state, "repo", serde_json::json!({"action": "commit"})).await;
-        assert!(
-            result["error"]
-                .as_str()
-                .unwrap()
-                .contains("Unknown action 'commit'")
-        );
+        let allowed = crate::test_support::mcp_argument_constraint(&result, "/action", "enum");
+        let allowed = allowed.as_array().unwrap();
+        assert!(allowed.contains(&serde_json::json!("list")));
+        assert!(allowed.contains(&serde_json::json!("worktree_list")));
+        assert!(!allowed.contains(&serde_json::json!("commit")));
     }
 
     /// Helper: create a temporary git repo with an initial commit for worktree tests.
@@ -10889,3 +11038,6 @@ mod workflow_authority_critic_tests {
         }
     }
 }
+
+#[cfg(test)]
+mod remote_settings_tests;
