@@ -110,6 +110,27 @@ describe("Activity Dashboard session navigation", () => {
 		expect(terminalsStore.get(previous)?.sessionId).toBe("coordinator-session");
 	});
 
+	// Catches: opening another workspace's session inserts it into the previous workspace's split.
+	it("does_not_dock_another_workspace_session_into_the_previous_split", () => {
+		const previous = coordinator();
+		const agent = terminalsStore.add(makeTerminal({ name: "feature-worker", sessionId: "feature-session" }));
+		repositoriesStore.setWorkspace(repoPath, "feature", { worktreePath: `${repoPath}/feature` });
+		repositoriesStore.addTerminalToWorkspace(repoPath, "feature", agent);
+		const group = paneLayoutStore.createGroup();
+		paneLayoutStore.setRoot({ type: "leaf", id: group });
+		paneLayoutStore.setActiveGroup(group);
+		paneLayoutStore.addTab(group, { id: previous, type: "terminal" });
+		paneLayoutStore.split(group, "horizontal");
+		paneLayoutStore.setActiveGroup(group);
+		const previousLayout = paneLayoutStore.serialize();
+
+		navigateToTerminal(agent);
+
+		expect(repositoriesStore.getActiveTerminals()).toEqual([agent]);
+		expect(terminalsStore.state.activeId).toBe(agent);
+		expect(paneLayoutStore.serialize()).toEqual(previousLayout);
+	});
+
 	// Catches: manual parking is looked up only in the currently consolidated repository scope.
 	it("opens_a_parked_agent_from_another_workspace_scope", () => {
 		const previous = coordinator();
