@@ -4524,7 +4524,13 @@ async fn capture_codex_spawn_with(
     let root = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
     let output = root.path().join("argv");
     let binary = root.path().join(command_name);
-    std::fs::write(&binary, MOCK_CODEX_ARGV_SCRIPT).unwrap();
+    // Keep the mock alive until the observer has read both argv and the queue.
+    // Otherwise EOF cleanup can remove a correctly deferred initial prompt.
+    std::fs::write(
+        &binary,
+        format!("{MOCK_CODEX_ARGV_SCRIPT}read -r release\n"),
+    )
+    .unwrap();
     std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o700)).unwrap();
     let _config = crate::config::set_config_dir_override(root.path().join("config"));
     let cfg = serde_json::from_value(serde_json::json!({
@@ -4553,6 +4559,7 @@ async fn capture_codex_spawn_with(
         .get(spawned["session_id"].as_str().unwrap())
         .and_then(|queue| queue.front().map(|injection| injection.text().to_string()));
     let actual = wait_for_file_content_async(&output, std::time::Duration::from_secs(60)).await;
+    let _ = crate::pty::close_pty_core(&state, spawned["session_id"].as_str().unwrap(), false);
     (
         actual.split_terminator('\0').map(str::to_string).collect(),
         spawned,

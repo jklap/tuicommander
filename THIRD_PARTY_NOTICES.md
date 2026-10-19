@@ -40,7 +40,7 @@ authors and communities behind each project.
 | drag | 2.1.1 | Apache-2.0 OR MIT |
 | flate2 | 1.1.10 | MIT OR Apache-2.0 |
 | futures-util | 0.3.33 | MIT OR Apache-2.0 |
-| gix | 0.85.0 | MIT OR Apache-2.0 |
+| gix | 0.89.0 | MIT OR Apache-2.0 |
 | glob | 0.3.4 | MIT OR Apache-2.0 |
 | grep-matcher | 0.1.9 | Unlicense OR MIT |
 | grep-regex | 0.1.14 | Unlicense OR MIT |
