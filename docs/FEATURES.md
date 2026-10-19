@@ -268,7 +268,8 @@ Right-click an HTTP(S) terminal link (including localhost) and choose **Start in
 MCP worktree creation registers the new workspace without moving a caller whose
 cwd is outside it. Agents working through `git -C` can record an association with
 `session action=declare_worktree worktree_path=/absolute/path`. That association
-does not override cwd for tab placement or removal. Removing or recycling a
+sets only the caller’s tab placement without changing shell cwd. Later cwd reports
+and restore keep that placement while the declared checkout exists. Removing or recycling a
 worktree closes only terminals whose current cwd lies inside it; unrelated tabs
 filed under a stale workspace survive and are re-homed. See [MCP backend](backend/mcp-http.md).
 
@@ -2173,7 +2174,7 @@ Unsupported actions are hidden. Menus close on outside tap or Escape and use
 - Search button at the top right filters the live session list by name, repository path, worktree path, branch, or agent type; closing search restores the full list
 - Waiting sessions appear first; the list preserves order within waiting, idle-agent, and shell groups. Session names keep their original casing, and busy state reads "Working".
 - The new-session sheet selects Claude Code, Codex, or Gemini, searches repositories, and opens the created agent session. Its close button and backdrop dismiss the sheet.
-- Question banners identify the session and repository; the header counter opens the first waiting session.
+- Question banners identify the session and repository; the AWAITING tile is the only awaiting total and opens the first waiting session.
 - Elevated session cards with agent icon, status badge, project/branch, relative time
 - Rich sub-rows per card: agent intent (crosshair icon) or last prompt (speech bubble), current task (gear icon) with inline progress bar, usage limit percentage
 - Question state highlighted via inset gold box-shadow

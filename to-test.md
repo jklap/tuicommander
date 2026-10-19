@@ -1,17 +1,20 @@
 ## ego Chat export diagnostics (2032-8dc3) — Rust restart required
 
 - [ ] After Boss manually restarts `make dev` or installs `make build`, verify an incompatible configured ego executable reports its path and failed export status. For the retained live failure, Settings points to `/Users/stefano.straus/bin/ego`, which rejects `--after`; select the transcript-capable `/Users/stefano.straus/.local/bin/ego`, then open Chat on a bound local ego session. Confirm the completed answer is shown and Chat stays open. This peer did not alter Settings, replace a binary, restart the app, or call desktop MCP tools.
+## Agent session discovery (2057-2769) — Rust restart required
+
+- [ ] After Boss manually restarts `make dev` or installs `make build`, profile an isolated instance against about 1500 ego sessions and 10 polled ego terminals. Confirm discovery stays off the desktop main thread and repeated polls read only each bound lease. Check session ids after an ego restart and pid reuse. This peer did not restart or probe Boss's desktop; REALITY stays open for the coordinator.
 
 ## Canvas base-grid repaint reductions (2040-16b2) — load landed frontend
 
 - [ ] With the landed frontend in native WebKit, verify typing stays responsive during scrolling agent output and record keyboard-to-paint latency. Check normal history growth, a stationary spinner, colored trailing blanks, wide glyphs, combining marks and marker-filtered output. Worktree browser replay proves lower drawing-operation counts and identical reference pixels, not native timing or the ego printer's independent row-emission delay. No Rust restart is needed for these frontend-only changes; do not restart a live desktop merely for this check.
 ## MCP worktree listing latency (2044-31f3) — Rust restart required
 
-- [ ] After Boss manually restarts the Rust backend, repeat `tuic mcp repo` with `action=worktree_list` on the many-worktree repositories. Confirm it returns without the CLI timeout, dirty file/fingerprint fields still update after edits, and the sidebar remains unchanged. This peer did not restart the installed app; criterion 4 remains unchecked.
+- [ ] After Boss manually restarts the Rust backend, repeat `tuic mcp repo` with `action=worktree_list` on the many-worktree repositories. Confirm cold listing makes no GitHub requests, dirty file/fingerprint fields still update after edits, and the sidebar remains unchanged. A GitHub-only merged proof can be absent until background monitoring populates the existing cache. Fresh Git/filesystem reads are not a hard latency guarantee. This peer did not restart the installed app; criterion 4 remains unchecked.
 
 ## Declaration into a newly discovered workspace (2044-31f3) — Rust restart required
 
-- [ ] After Boss restarts the Rust backend, use an isolated instance and declare an existing linked worktree whose saved workspace row has no `savedTerminals`. Confirm declaration succeeds, the caller restore record moves without duplicating sibling records, and cwd-based sidebar reconciliation remains correct. The peer did not restart or mutate the installed instance; live sidebar verification is still pending.
+- [ ] After Boss restarts the Rust backend, use an isolated instance and declare an existing linked worktree whose saved workspace row has no `savedTerminals`. Confirm declaration succeeds, the caller restore record moves without duplicating sibling records, and the caller tab appears under the declared workspace despite unchanged cwd. Repeat the declaration, cd into another repository or an unregistered directory, reload the frontend and send a cwd update; placement must persist without moving sibling tabs. The peer did not restart or mutate the installed instance; live sidebar verification is still pending.
 
 ## Automation profile validation and failure mail (2015-bdb3) — Rust restart required
 
@@ -28,6 +31,8 @@
 - [ ] After Boss restarts `make dev` or installs `make build`, verify Grok Ask color/Yes-No choices and a default-mode CLI-enforced tool approval on desktop/mobile. Numeric answers must submit once without Enter; z must switch to a text-only wait, and refusal/settlement must retract the controls. Live native CLI forms were captured, but this worktree backend was not loaded into the desktop.
 
 ## Codex native question parity (2026-9178) — Rust restart required
+
+- [ ] After Boss restarts the backend, trigger `/plan` `request_user_input` with “Pick a colour” and Red/Green/Blue. Verify the clean title and four choices (including None of the above) on desktop and authenticated mobile. The 2026-10-19 raw-byte parser regression does not prove live UI rendering; mobile verification requires Boss’s login.
 
 - [ ] After Boss manually restarts `make dev` or installs `make build`, ask Codex 0.162.1 for a native color question. Verify the desktop/mobile waiting state, use the mobile Open Codex question action, and answer once. Confirm options retract after settlement. Also trigger a CLI-enforced command approval and verify numeric refusal without Enter. Live CLI Shift+Left and numeric answers were captured; updated desktop/mobile rendering has not been verified against this worktree backend.
 ## Automation validation parity (2007-59f6) — Rust restart required

@@ -488,7 +488,17 @@ Observed Codex prompt forms and evidence:
 | `request_user_input` choices and `Other` | `codex-native-question-2026.tcap`; `captured_codex_0162_question_reaches_answer_controls` replays input/output through the real accumulator | A queued waiting signal appears first. `Shift+Left` opens the panel; `parse_choice_prompt` recognizes its `Queued follow-up inputs` heading, title, numbered options, and `⌃]` / `⇧→` footer. |
 | Command approval | `codex-0.157.1-approval-cancel.tcap`; `codex_canceled_approval_capture_clears_the_waiting_badge` replays an `Action Required` approval and Esc cancellation | The approval title sets the waiting question; the current screen and cancellation logic in `pty.rs` clear it when Codex returns to its composer. This capture does not establish that the approval uses the queued follow-up panel. |
 
-A distinct plan-question screen has not been captured. If Codex displays one, verify its rendered rows and keys before treating it as either form above.
+The distinct `/plan` form uses `Question N/M (K unanswered)` above the title and
+`tab to add notes | enter to submit answer | esc to interrupt` below its options.
+Both anchors and contiguous keys starting at 1 are required. Descriptions in the
+second column become option hints, not answer labels. Numeric answers submit
+immediately; Tab opens notes and Escape interrupts. The retained real PTY bytes
+are in `codex-plan-question-20261019.json`; this retained snapshot has no original
+geometry/timing. A fresh isolated headless recording,
+`codex-plan-question-20261019-real.tcap`, preserves real 41×128 geometry and
+ordered input/output. Parser and shared-accumulator regressions replay the open
+question before its recorded Ctrl+C. Neither fixture proves authenticated mobile
+rendering. Codex 0.162.1 accepts `/plan <question prompt>` in one submission.
 
 ### Grok native questions and enforced approvals
 

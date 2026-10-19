@@ -241,24 +241,17 @@ async fn handle_worktree_with_caller(
             };
             // Keep full, fresh checkout safety fields, but share the sidebar's
             // ref-keyed merge proofs instead of rerunning every integration read.
+            // GitHub evidence is cache-only here; monitoring fills it separately.
             let mut lifecycle_handles = Vec::with_capacity(wts.len());
             for (workspace_id, workspace) in &wts {
                 let workspace_id = workspace_id.clone();
                 let workspace = workspace.clone();
                 let base_repo = path.clone();
-                let proof_state = Arc::clone(state);
                 lifecycle_handles.push(tokio::task::spawn_blocking(move || {
                     let lifecycle = tuic_git::worktree::inspect_workspace_listing_with_pr(
                         std::path::Path::new(&base_repo),
                         &workspace,
-                        |repo, branch, tip| {
-                            crate::worktree::merged_github_pr_proves_tip_monitoring(
-                                &proof_state,
-                                repo,
-                                branch,
-                                tip,
-                            )
-                        },
+                        crate::worktree::merged_github_pr_proves_tip_cached,
                     );
                     (workspace_id, lifecycle)
                 }));
