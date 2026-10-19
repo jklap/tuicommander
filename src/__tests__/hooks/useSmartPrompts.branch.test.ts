@@ -18,6 +18,7 @@ vi.mock("../../stores/terminals", () => ({
 }));
 vi.mock("../../stores/repositories", () => ({
 	repositoriesStore: {
+		state: { repositories: {} },
 		getActive: () => ({
 			path: "/repo",
 			activeWorkspaceId: "workspace-uuid",
