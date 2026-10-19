@@ -106,6 +106,8 @@ practice.
 | `--emit-background-tasks` | Forces the `background_tasks` scrape. Not a legacy alias, same as `--emit-notification-type` — kept only for parity with the other `scrape_*` override flags. |
 | `--emit-title` | Forces the `session_title` scrape. Not a legacy alias — introduced alongside the exit-resume-banner feature, kept only for parity. |
 | `--emit-end-reason` | Forces the `reason` scrape. Not a legacy alias, same as `--emit-title`. |
+| `--receipt <claude\|grok\|codex-tool>` | Also emits the agent's native-payload receipt frame (`claude-hook=<TUIC_SESSION>:<pid>:<base64>`, `grok-hook=…`, `codex-tool=…`) ahead of the state verbs, so one hook process delivers both the receipt and the derived state. The frame bytes match the shell flavours in `agent_hook.rs` (`claude_receipt_command`, `grok_hook_command`, `codex_tool_command`). A Claude receipt over the tty path is split into 768-byte pieces and dropped above 32 KiB; over the socket it is posted whole. |
+| `--no-state` | Retains the non-state verbs (`ccsession`, `cwd`, `tool`, …) but drops every `state=` frame. Used on a receipt-only hook (Claude `PostToolUse`), where the receipt alone carries the state transition. |
 | `--version` | Prints `tuic-hook <version>` and exits. Bypasses the `TUIC_SESSION` gate — used by `hook_binary`'s startup drift check outside any agent session. |
 | `--help`, `-h` | Prints a usage summary (this table, condensed) and exits. Also bypasses the `TUIC_SESSION` gate. |
 
@@ -182,6 +184,25 @@ terminal (a pane of a real `tmux` started inside a TUIC tab, a command that copi
 parent's environment) then cannot label the wrong tab. A TUIC tmux-shim pane is its own PTY
 with its own `$TUIC_PTY_TTY` (`tmux_routes` test
 `each_tmux_shim_pane_shell_carries_its_own_pty_device`), so it resolves correctly either way.
+
+**Decision (2026-10-13): the `tuic-hook` binary keeps env-first.** It is the main Claude Code
+hook path, Claude's hook parent is detached (a live-tty lookup yields nothing there, so
+live-first would fall through to the variable anyway), and TUIC stamps `TUIC_PTY_TTY` last on
+every PTY it spawns, so a TUIC-spawned process always carries its own device. The shell paths
+flipped because they must also work for a process whose parent tty *is* readable and whose
+inherited variable may belong to another tab. Revisit if a real mislabeled-tab report names the
+binary; the change would be one lookup reordered in `tty.rs::resolve` plus its tests.
+
+## Delivery: socket first, tty fallback
+
+`tuic-hook` posts the frames it built to the local IPC endpoint — `POST /sessions/<TUIC_SESSION>/hook` on
+`$TUIC_SOCKET` (see [Agent Hook Frames](../api/http-api.md#agent-hook-frames)) — and treats a 2xx answer as
+delivered. Only when there is no `$TUIC_SOCKET`, the endpoint is unreachable, or it refuses the post does it
+write the same bytes to the pty (the resolution above). The socket path keeps the frames out of the visible
+terminal stream entirely and cannot be interleaved with the agent's own TUI redraws. Both paths feed the same
+PTY-reader decoder, so a verb must be on the endpoint's whitelist (`pty/hook_inbox.rs`'s `HOOK_VERBS`) to be
+accepted over the socket — a tty-only verb would silently never arrive. When `TUIC_HOOK_TTY` (the test seam) is
+set the socket is skipped, so the tty tests stay hermetic.
 
 ## Wire format
 
