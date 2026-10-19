@@ -17,6 +17,23 @@ to use the shared named-pipe transport.
 
 Manages pseudo-terminal sessions for all terminal tabs in the application.
 
+## Frame receipts and shared IPC delays
+
+Each session has its own frame ticker and desktop receipt gate. A closed gate
+stops ordinary desktop frames for that session, not another session's input or
+frames. Browser grid watchers have independent delivery even when the desktop
+gate is closed. The visible frontend acknowledges receipt before decoding and
+schedules canvas painting separately; an acknowledgement is not a paint receipt.
+
+The 500 ms gate warning reports a missing receipt, not its cause. Delayed
+WebView callbacks, IPC dispatch or acknowledgement delivery can all leave the
+gate closed. Native IPC dispatch is shared across sessions: blocking filesystem
+work there can delay their input dispatch and frame receipts together. Agent
+session discovery therefore uses the blocking pool on both IPC and HTTP. See
+[Command threading](command-threading.md#agent-session-discovery-2026-10-19) for the
+retained sample and regression evidence. This does not establish native
+keyboard-to-paint timing or attribute every historical stall.
+
 ## Bounded input and teardown
 
 Raw desktop, HTTP, WebSocket and MCP input runs on the blocking pool. The caller
