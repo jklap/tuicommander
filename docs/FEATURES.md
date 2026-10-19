@@ -2998,7 +2998,7 @@ Blocked runs remain active; idle alone does not prove success. Rust restart requ
 
 ---
 
-## 27. StreamDock M18 Macropad
+## 28. StreamDock M18 Macropad
 
 A 15-key LCD macropad (5×3 grid, 64×64px keys, plus 3 plain push buttons) that mirrors live
 session state — each key shows a session's status (working/idle/needs input/error/completed)
