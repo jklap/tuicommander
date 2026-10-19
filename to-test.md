@@ -61,9 +61,11 @@
 ## Automation profile validation and failure mail (2015-bdb3) — Rust restart required
 
 - [ ] After Boss restarts `make dev` or installs `make build`, use an isolated instance to reject an unknown saved profile with valid-profile choices. Remove a profile after saving and confirm list exposes `run_config_error` with no next run. A failed agent-created run must send its creator one inbox message with run id and reason even before spawn; repeated publication must not resend it. The installed backend was not restarted by this peer.
-## Mobile suggest dismissal (2029-994d)
+## Mobile suggest dismissal (2029-994d) — Rust restart required
 
-- [ ] In the updated mobile frontend, tap one suggestion. Confirm all chips disappear immediately, stay hidden through unrelated session activity and the next poll, and a later suggestion list (including identical labels after the backend clear) appears. Disconnect before choosing: exhausted retries must show the existing Send failed notice, not imply success. The 390×844 worktree page rendered, but real-backend fetches timed out and direct HTTP returned 401. Before/after tap screenshots are not available; no credentials were read. No Rust restart is required.
+- [ ] After Boss rebuilds/restarts the Rust app, verify Claude publishes `suggest: [ Reply alpha | Reply beta ]` after Stop hooks settle. At 390×844, tap Reply alpha and confirm all old chips disappear and stay gone after the next poll and an ACK-only response. Final recorded-stream tests and isolated backend submission checks pass, but the Mac locked during the final rebuild: Chrome reports `visibilityState=hidden`, so final trusted-click/poll screenshots remain unverified. Earlier screenshots expose the pre-boundary history-repaint defect, not a final pass. Evidence: `~/Gits/.tmp/results/fix2029-live/`.
+- [ ] Verify a genuinely later list, including identical labels after the backend clear, appears. Disconnect before choosing: exhausted retries must show the existing Send failed notice. Targeted component tests cover both cases; desktop behavior is unchanged.
+
 ## ego title and enforced approval parity (2028-6999) — Rust restart required
 
 - [ ] After Boss manually restarts `make dev` or installs `make build`, verify ego question titles exclude skill/provider diagnostics and working rows. Check a default-mode CLI-enforced command approval on desktop/mobile: native keys appear, tapping No opens the explanation prompt without submitting it, and a subsequent bare Enter refuses and clears the wait. Confirm an answered selector stays cleared while its retained rows scroll after protocol busy. Replay evidence does not verify updated live UI rendering. The exact historical provider-notice adjacency was not reproduced.

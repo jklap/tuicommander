@@ -7,6 +7,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 - Bind native Codex hooks for HTTP/MCP-spawned agents and generic HTTP terminals using their live inherited session identity; preserve exact owner validation and prevent bound-session listing deadlocks (#2081-ac1f).
+- Share browser event subscriptions across session, Chat, Markdown, dictation and speech consumers so two mobile tabs leave HTTP/1.1 capacity for state reads and permission answers (#2078-464b).
+
+- Desktop terminal Chat now shows active native question and permission choices without submitting Compose drafts (#2079-78fa).
 - Expose bound Grok terminal Chat on mobile and share the supported-adapter check with desktop, without changing exact transcript binding or native question controls (#2077-b132).
 
 - Expose the existing bound Codex terminal Chat view in the mobile session header, with the same PTY controls and backend binding refusal (#2076-8190).
@@ -50,6 +53,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - Publish typed Settings account enumeration and configured Ego interactive login start/status, with human terminal authentication and separate credential readback (#1790-1011).
 ### Fixed
+
+- Preserve Claude follow-up suggestions through Stop-hook repaints after an early idle hook, so mobile receives the chips and can consume the list after a tap (#2029-994d).
 
 - Detect installed plugin payload differences even when the catalogue version is unchanged.
 
