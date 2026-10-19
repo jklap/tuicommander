@@ -25,13 +25,7 @@ fn peer(
             "Inter-agent messaging is restricted to localhost connections",
         ));
     }
-    if state
-        .config
-        .read()
-        .disabled_native_tools
-        .iter()
-        .any(|tool| tool == "agent")
-    {
+    if !state.config.read().mcp_capabilities.allows("agent", None) {
         return Err((
             StatusCode::FORBIDDEN,
             "Tool 'agent' is disabled by configuration",

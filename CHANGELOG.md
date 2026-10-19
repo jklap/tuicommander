@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+- **BREAKING:** replace native per-tool MCP switches with capability switches. Migrate saved denials without widening access and retain unknown-name diagnostics. Remove task, story, workflow_run/workflow_story_create/workflow_report/workflow_launch and design_mode aliases: use agent task_*, workflow actions and ui design_*. Reconnect cached clients and review external allow rules for the expanded groups (#2068-63b9).
+
 - Bind native Codex hooks for HTTP/MCP-spawned agents and generic HTTP terminals using their live inherited session identity; preserve exact owner validation and prevent bound-session listing deadlocks (#2081-ac1f).
 - Share browser event subscriptions across session, Chat, Markdown, dictation and speech consumers so two mobile tabs leave HTTP/1.1 capacity for state reads and permission answers (#2078-464b).
 

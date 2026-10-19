@@ -1219,13 +1219,7 @@ pub(crate) async fn local_peer_call_with_message_id(
     sid: Option<&str>,
     message_id: Option<String>,
 ) -> serde_json::Value {
-    if state
-        .config
-        .read()
-        .disabled_native_tools
-        .iter()
-        .any(|name| name == "agent")
-    {
+    if !state.config.read().mcp_capabilities.allows("agent", None) {
         return serde_json::json!({"error":"Tool 'agent' is disabled by configuration"});
     }
     match args["action"].as_str() {

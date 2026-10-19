@@ -350,19 +350,7 @@ fn render_repo_line(repos: &RepoSummary, collapse_tools: bool) -> String {
 /// Tools that reach the user, in display order.
 const USER_TOOLS: &[&str] = &["ui", "voice", "telegram", "progress", "secret"];
 /// Tools that drive the platform, in display order.
-const PLATFORM_TOOLS: &[&str] = &[
-    "session",
-    "agent",
-    "repo",
-    "story",
-    "workflow",
-    "task",
-    "automations",
-    "workflow_run",
-    "workflow_launch",
-    "workflow_report",
-    "workflow_story_create",
-];
+const PLATFORM_TOOLS: &[&str] = &["session", "agent", "repo", "workflow", "automations"];
 
 /// One line per purpose, naming only what this install registered. Deferred
 /// clients see tool names but no schema until they search, so without this
@@ -439,18 +427,6 @@ pub(super) fn validate_mcp_repo_path(path: &str) -> Result<(), serde_json::Value
 pub(super) const SESSION_ACTIONS: &str = "list, create, submit, force_retry, input, output, resize, rename, keep_open, suspend, close, kill, pause, resume, status, wait, declare_worktree, help";
 pub(super) const WORKFLOW_ACTIONS: &str = "story, run, proposal_create, report, launch";
 
-/// Preserve member denials during the additive period before the catalogue cutover.
-pub(super) fn workflow_member_tool(action: &str) -> Option<&'static str> {
-    match action {
-        "story" => Some("story"),
-        "run" => Some("workflow_run"),
-        "proposal_create" => Some("workflow_story_create"),
-        "report" => Some("workflow_report"),
-        "launch" => Some("workflow_launch"),
-        _ => None,
-    }
-}
-
 pub(super) const AGENT_ACTIONS: &str = "launch, spawn, register, list_peers, send, inbox, wait, subscribe, ack, unsubscribe, task_get, task_cancel, help";
 pub(super) const REPO_ACTIONS: &str = "list, add, active, status, branch_integrations, branch_integration, worktree_list, worktree_lifecycle, worktree_create, worktree_remove, orphan_cleanup_answer, branch_delete, progress_list, work_item, work_item_act, help";
 pub(super) const UI_ACTIONS: &str = "tab, toast, confirm, screenshot, design_start, design_stop, design_status, design_reload, design_navigate, design_screenshot, design_errors, design_eval, help";
@@ -486,52 +462,30 @@ pub(super) const NATIVE_TOOL_SUMMARIES: &[(&str, &str)] = &[
         "session",
         "Create terminals, send input, and read their output.",
     ),
-    ("agent", "Launch agents and exchange messages with them."),
-    ("task", "Track background work and retrieve its results."),
     (
-        "remote",
-        "Manage connections to remote TUICommander instances.",
+        "agent",
+        "Launch agents, exchange messages and track background outcomes.",
     ),
+    ("remote", "Preview and deploy remote daemon updates."),
     ("repo", "Inspect repositories and manage their worktrees."),
-    ("story", "Read project stories and update their progress."),
     (
         "workflow",
         "Manage stories, workflow runs and bound agent attempts.",
     ),
     (
-        "design_mode",
-        "Start Design Mode at a terminal link for layout work.",
-    ),
-    (
         "automations",
         "Create and manage scheduled agent definitions.",
-    ),
-    (
-        "workflow_story_create",
-        "Create a story for a project workflow.",
-    ),
-    (
-        "workflow_report",
-        "Report the outcome of a workflow attempt.",
-    ),
-    (
-        "workflow_launch",
-        "Launch an agent for a workflow assignment.",
     ),
     ("progress", "Record and review project progress."),
     (
         "ui",
-        "Show notifications and ask the user for confirmation.",
+        "Show tabs, notices, confirmation and browser Design Mode.",
     ),
     (
         "plugin_dev_guide",
         "Read the guide for developing TUICommander plugins.",
     ),
-    (
-        "workflow_run",
-        "Start workflow graphs and inspect their execution history.",
-    ),
-    ("settings", "Settings."),
+    ("settings", "Read and propose application settings."),
     ("debug", "Inspect application logs and runtime state."),
     (
         "voice",
@@ -542,7 +496,7 @@ pub(super) const NATIVE_TOOL_SUMMARIES: &[(&str, &str)] = &[
 /// Full MCP tool definitions — the one native tool family.
 ///
 /// This returns the unfiltered schema list. Public listing/search paths MUST
-/// route through [`filtered_native_tools`] to honour `disabled_native_tools`
+/// route through [`filtered_native_tools`] to honour `mcp_capabilities`
 /// and `progress_tracking`. Leaking the raw list to external clients exposes
 /// tool metadata for gated tools.
 pub(super) fn native_tool_definitions() -> serde_json::Value {
@@ -582,8 +536,6 @@ pub(super) fn native_validation_tool_definitions() -> serde_json::Value {
 fn native_reference_tool_definitions() -> serde_json::Value {
     let mut defs = serde_json::json!([
         crate::automations::mcp::tool_definition(),
-        // DEFERRED (2026-10-19) — remove the old name only at the approved 2068 catalogue cutover.
-        crate::design_mode::mcp::tool_definition(),
         crate::secrets::tool_definition(),
         crate::telegram::tool_definition(),
         {
@@ -660,14 +612,7 @@ fn native_reference_tool_definitions() -> serde_json::Value {
                 "since": { "type": "integer", "description": "Logical unix-millis cursor (action=inbox|wait). OMIT IT: the server remembers your last read position and resumes from there. Pass it only to override — since=0 deliberately replays the whole inbox. Every wait/inbox response carries next_since, including on timeout" }
             }, "required": ["action"] }
         },
-        {
-            "name": "task",
-            "description": "Poll a long-running task handle without blocking. `agent action=spawn` returns a task_id; use it here instead of holding a wait open, which is capped at 300s and loses the outcome if the connection drops.\n\nThe outcome is recorded when the agent exits whether or not anyone was listening, so a reconnecting orchestrator can still collect it (for up to 24h).\n\nActions:\n- get: Current state. Returns {task_id, status, status_message?, result?, error_detail?, poll_interval_ms}. status is working|input_required|completed|failed|cancelled; the last three are final and never change again. A failed task reports why in error_detail, NOT in error — a top-level `error` always means the call itself failed. Poll no faster than poll_interval_ms.\n- cancel: Mark the task cancelled. Does NOT kill the agent — use session action=kill for that. A cancel is final: the agent's later exit cannot overwrite it.",
-            "inputSchema": { "type": "object", "properties": {
-                "action": { "type": "string", "description": "One of: get, cancel" },
-                "task_id": { "type": "string", "description": "Task handle returned by agent action=spawn (required)" }
-            }, "required": ["action", "task_id"] }
-        },
+
         {
             "name": "remote",
             "description": "Update a connected remote daemon. preview reports both builds, source, target and live PTY count. update requires the count and selected SHA-256 from a preview after the user has confirmed session loss; it waits until the new build answers /health.",
@@ -709,46 +654,13 @@ fn native_reference_tool_definitions() -> serde_json::Value {
                 }, "additionalProperties": false }
             }, "required": ["action"] }
         },
-        {
-            "name": "story",
-            "description": "Read and update native plans and stories in the calling managed session's project. Pass one StoryAction as `input`; the input schema lists every action, field, type and enum. Every mutation is checked by the Rust story service, and a refusal names its cause. A claim binds to the calling live PTY.\n\nAgent actions: create_plan, list_plans, list_plan_sources, add_plan_source, get_plan, plan_state, plan_view, create_story, list_stories, get_story, transition_history (a story's recorded transitions), add_dependency, claim, and transition with check_criterion, uncheck_criterion, submit_review or approve. add_dependency on a ready story moves it to backlog (it cannot be claimed until the dependency is done) when the dependency is not done, and also when it is done but has no integration receipt in a workflow-owned plan.\n\nAdministrative actions: remove_dependency, and transition with start_manual, reject_review, block, unblock or wont_fix. Actor identity is recorded as provenance and never restricts an action; status, revision, project and dependency checks still apply.\n\nThis tool reaches only the calling session's own project (another project's plan is refused with `plan does not belong to project`). To read or approve a plan of another project, use the CLI: `tuic story '<action JSON>' --project /abs/project` (see the native-stories user guide).",
-            "inputSchema": { "type": "object", "properties": {
-                "input": crate::stories::story_action_schema()
-            }, "required": ["input"] }
-        },
+
         {
             "name": "workflow",
-            "description": "Durable project work for the calling managed session. Actions: story (input=StoryAction), run (input=RunAction), proposal_create, report, launch. Each action has a generated typed input; unknown fields are rejected before effects. story reads and updates native stories and plans; run starts pinned published graphs and reads ordered run history. proposal_create requires the active bound coordinator and {runId,proposalKey,story}; retry the same key and payload to return the same story, never substitute ordinary story create. report submits the typed AttemptReport for this live session's bound attempt; it does not advance story status. launch binds a pinned workflow attempt to an isolated registered worktree and renders its role prompt. Existing project, revision, coordinator, attempt ownership and local launch checks apply. Scheduled definitions remain in the separate automations tool. Legacy story and workflow_* tools remain available until the catalogue cutover.",
+            "description": "Durable project work for the calling managed session. Actions: story (input=StoryAction), run (input=RunAction), proposal_create, report, launch. Each action has a generated typed input; unknown fields are rejected before effects. story reads and updates native stories and plans: create_plan, list_plans, list_plan_sources, add_plan_source, get_plan, plan_state, plan_view, create_story, list_stories, get_story, transition_history, add_dependency, remove_dependency, claim and transition; actor identity is provenance and never restricts an action. remove_dependency remains administrative; add_dependency on a ready story moves it to backlog when its dependency is not done or lacks a required integration receipt; run starts pinned published graphs and reads ordered run history. proposal_create requires the active bound coordinator and {runId,proposalKey,story}; retry the same key and payload to return the same story, never substitute ordinary story create. report submits the typed AttemptReport for this live session's bound attempt; it does not advance story status. launch binds a pinned workflow attempt to an isolated registered worktree and renders its role prompt. Existing project, revision, coordinator, attempt ownership and local launch checks apply. Scheduled definitions remain in the separate automations tool.",
             "inputSchema": super::mcp_transport_ancillary::workflow_action_schema()
         },
-        {
-            "name": "workflow_run",
-            "description": "Start and inspect published workflow graphs in the calling managed session's project. Pass a generated RunAction as input: start_graph (payload-bound request_id, pinned definition revision, story expected_revision), get, list_plan_runs, events (after_sequence cursor), command, record_integration, recertify_canonical, execute_check. start_plan is the legacy record-only ledger, not executable delivery. Graph starts require the owning daemon; unsupported plan dispatch is refused visibly. Commands include pause, cancel, answer_input, resume_graph with explicit execution_id, activation_id and resolution. Legacy runs are inspect/cancel only in the UI. History is the same ordered ledger returned over HTTP/IPC, including decisions and evidence.",
-            "inputSchema": { "type": "object", "properties": {
-                "input": crate::workflows::run_action_schema()
-            }, "required": ["input"], "additionalProperties": false }
-        },
-        {
-            "name": "workflow_story_create",
-            "description": "Create a native story once from a plan run. Only the active bound coordinator may call this. A stable proposalKey prevents duplicate stories after retries; a reused key with different story data is rejected.",
-            "inputSchema": { "type": "object", "properties": {
-                "input": { "type": "object", "description": "{runId,proposalKey,story:NewStory}. The story must use the run's planId and a plan_step origin." }
-            }, "required": ["input"] }
-        },
-        {
-            "name": "workflow_report",
-            "description": "Submit a typed outcome for the workflow attempt bound to this live managed agent session. A report is idempotent for its attempt and does not itself advance the story status.",
-            "inputSchema": { "type": "object", "properties": {
-                "input": { "type": "object", "description": "AttemptReport with contractVersion, runId, storyId, storyRevision, attemptId, generation, outcome (completed|failed|needs_input|interrupted), summary, criterionResults [{index,satisfied,evidence}], and evidence [string]. needs_input requires inputRequest {question,options}; a completed reviewer report requires review {decision,artifactDigest,findings:[{criterionIndex,severity,summary,evidence}]} ." }
-            }, "required": ["input"] }
-        },
-        {
-            "name": "workflow_launch",
-            "description": "Launch a pinned workflow agent attempt in a known isolated worktree. The backend renders and hashes the role prompt, reserves the spawn effect, starts the managed agent, and binds its session to the attempt. A story worker may be launched only by this run's active coordinator.",
-            "inputSchema": { "type": "object", "properties": {
-                "input": { "type": "object", "description": "{runId,attemptId,worktreePath,agentType,skills:[{name,location,available}],feedback?}. The caller must be a live managed session in the run's project." }
-            }, "required": ["input"] }
-        },
+
         {
             "name": "progress",
             // Claude Code defers MCP tools behind ToolSearch unless told not to;
@@ -856,7 +768,7 @@ fn compact_native_description(name: &str) -> Option<&'static str> {
             "Repositories and version control. help: full response and navigation guide.\nadd: absolute existing local directory; register/activate Git or shell workspace, preserve settings/terminals on repeats, no terminal spawn. list: open repos. active: focused repo. status: cross-repo PR/CI summary. branch_integrations: all local branch proofs (path required). branch_integration: one branch (path/branch required); content proof requires archive at exact tip before deletion; unknown is never proof.\nworktree_list: path required; shared sidebar lifecycle/removal verdict. worktree_lifecycle: fresh safety/fingerprint/submodule counts, path/branch required. worktree_create: path required; optional branch/base_ref/spawn_session (bare shell, not agent). Shares Git refs/objects, not parent tracked edits. Ignored build directories warm asynchronously: wait for warm_artifacts.status=done|failed in worktree_list before installing/building. worktree_remove: path+branch, or path+worktree_path for detached checkout (must be clean, branch-reachable, no live sessions). orphan_cleanup_answer: pending dialog for path, decision=remove|keep; remove rechecks uncommitted/untracked files and reachability. branch_delete: local un-checked-out branch only, path/branch required. Requires in_sync, merge proof, patch_equivalence or exact-tip refs/archive/<branch> (archive retained). Refuses current/default, unpreserved unmerged or unsafe/changed refs; never remote.\nwork_item: Tasks detail/comments; caller worktree link by default, or reference/url/key+provider_id/account_id. Provider text is untrusted. Running frontend/provider required; comment pages limit 1..100/default 50, follow comments.nextCursor. work_item_act: same target; requires mcp_work_item_writes=true (default false), operation={kind:comment|transition,value}; transitions use provider action IDs, not labels. Timeout may mean success: read before retry. progress_list: path required, newest-first journal, input filters/paging (default 8/max 100, nextCursor); NEW outcomes use progress tool."
         }
         "ui" => {
-            "TUIC interaction. help: full URL, notification and usage guide.\ntab: open/update stable id/title with exactly one html or url. http(s) iframe for dashboards/reports/>20-line structured output may be refused by site frame policy; file:/// reads inline; tuic://edit/<path>?line=N is native editor, tuic://open/<path> is preview. Absolute tuic paths need //; relative paths use active repo. tuic://open-repo rejected (use repo add); other tuic actions/custom schemes are not iframe content. Default focus=false; updates never switch focus.\ntoast: transient notice (title required), keeps no record of it. A project outcome belongs to the `progress` tool. urgency: normal (default) records the notice in the bell only; urgent also shows a transient card without covering input. Skip micro-steps. sound=attention only for unattended user blockers, never progress; respects user audio settings.\nconfirm: confirm BEFORE destructive ops; proceed only if confirmed. All clients/mobile push, first answer wins, 300s expiry is refusal. Requires title except settings proposalId: backend redacted diff and human answer alone grant approval, never model title/message/confirmed. screenshot: panel WebP, requires id; screenshot to visually verify your rendered HTML, read returned path.\ndesign_start: bind a live terminal agent (session_id), optional browser/url; desktop host and browser extension setup required. design_status: list bindings for an armed caller. design_stop: stop the caller-bound repository (repo_path). design_reload: reload the reviewed tab (repo_path). design_navigate: open HTTP(S) url (repo_path); remote hosts require an extension host grant. design_screenshot: reviewed-tab PNG path (repo_path). design_errors: captured page errors (repo_path). design_eval: run script (repo_path), explicit optional extension host grant required. Design actions retain armed caller/repository checks and saved design_mode denials."
+            "TUIC interaction. help: full URL, notification and usage guide.\ntab: open/update stable id/title with exactly one html or url. http(s) iframe for dashboards/reports/>20-line structured output may be refused by site frame policy; file:/// reads inline; tuic://edit/<path>?line=N is native editor, tuic://open/<path> is preview. Absolute tuic paths need //; relative paths use active repo. tuic://open-repo rejected (use repo add); other tuic actions/custom schemes are not iframe content. Default focus=false; updates never switch focus.\ntoast: transient notice (title required), keeps no record of it. A project outcome belongs to the `progress` tool. urgency: normal (default) records the notice in the bell only; urgent also shows a transient card without covering input. Skip micro-steps. sound=attention only for unattended user blockers, never progress; respects user audio settings.\nconfirm: confirm BEFORE destructive ops; proceed only if confirmed. All clients/mobile push, first answer wins, 300s expiry is refusal. Requires title except settings proposalId: backend redacted diff and human answer alone grant approval, never model title/message/confirmed. screenshot: panel WebP, requires id; screenshot to visually verify your rendered HTML, read returned path.\ndesign_start: bind a live terminal agent (session_id), optional browser/url; desktop host and browser extension setup required. design_status: list bindings for an armed caller. design_stop: stop the caller-bound repository (repo_path). design_reload: reload the reviewed tab (repo_path). design_navigate: open HTTP(S) url (repo_path); remote hosts require an extension host grant. design_screenshot: reviewed-tab PNG path (repo_path). design_errors: captured page errors (repo_path). design_eval: run script (repo_path), explicit optional extension host grant required. Design actions retain armed caller/repository checks and Design Mode capability denials."
         }
         "voice" => {
             "Caller-bound hands-free speech, not application audio. help: full conversation/utterance guide. status: check first; if available is false reply in text. Mode notices come from TUICommander rather than from the user; off is final. The user can turn those notices off: absence proves nothing, status does. You do not choose the language or voice: write text in status.language. Speech supplements, never replaces normal reply.\nspeak: text required, max 2000 characters; supply status/notice turn to reject a stale reply, omission means now. Accepting a reply is NOT the same as the user hearing it: queued utterance_id is not heard; inspect status with that id; finished=heard to end, interrupted=user talked (normal), failed=never audible, unknown=too old. stop: immediately stop/drop queue and open new turn; use when reply is wrong."
@@ -950,7 +862,7 @@ pub(super) fn meta_tool_definitions(state: &Arc<AppState>) -> serde_json::Value 
 /// `progress` tool when it is enabled. Progress stays directly callable because
 /// reporting must not require preliminary discovery calls.
 ///
-/// Otherwise (default), returns native tools filtered by `disabled_native_tools`,
+/// Otherwise (default), returns native tools filtered by `mcp_capabilities`,
 /// merged with upstream proxy tools. Upstream tools are omitted when no
 /// upstreams are Ready.
 /// Resolve an MCP session's repo_path → per-repo `mcp_upstreams` allowlist.
@@ -997,13 +909,15 @@ pub(crate) fn native_tool_catalog() -> Vec<serde_json::Value> {
 /// caller authority: conversation binding, registration and deployment consent
 /// remain enforced by the respective handlers.
 pub(super) fn native_tool_unavailability(state: &AppState, name: &str) -> Option<String> {
-    if state
-        .config
-        .read()
-        .disabled_native_tools
-        .iter()
-        .any(|tool| tool == name)
-    {
+    native_action_unavailability(state, name, None)
+}
+
+pub(super) fn native_action_unavailability(
+    state: &AppState,
+    name: &str,
+    action: Option<&str>,
+) -> Option<String> {
+    if !state.config.read().mcp_capabilities.allows(name, action) {
         return Some(format!("Tool '{name}' is disabled by configuration"));
     }
     let reason = match name {
@@ -1044,25 +958,31 @@ pub(super) fn filtered_native_tools(state: &Arc<AppState>) -> Vec<serde_json::Va
                 && native_tool_unavailability(state, name).is_none()
         })
         .filter_map(|mut tool| {
-            if tool["name"] == "workflow" {
-                let variants = tool["inputSchema"]["oneOf"]
-                    .as_array_mut()
-                    .expect("workflow variants");
+            let name = tool["name"].as_str().unwrap_or_default().to_owned();
+            if let Some(variants) = tool["inputSchema"]
+                .get_mut("oneOf")
+                .and_then(serde_json::Value::as_array_mut)
+            {
                 variants.retain(|variant| {
-                    let action = variant["properties"]["action"]["const"]
-                        .as_str()
-                        .unwrap_or("");
-                    workflow_member_tool(action)
-                        .is_none_or(|member| native_tool_unavailability(state, member).is_none())
+                    let action = variant["properties"]["action"]["const"].as_str();
+                    native_action_unavailability(state, &name, action).is_none()
                 });
                 if variants.is_empty() {
                     return None;
                 }
-                let actions: Vec<_> = variants
-                    .iter()
-                    .map(|variant| variant["properties"]["action"]["const"].clone())
-                    .collect();
-                tool["inputSchema"]["properties"]["action"]["enum"] = serde_json::json!(actions);
+            }
+            if let Some(actions) = tool["inputSchema"]
+                .get_mut("properties")
+                .and_then(|properties| properties.get_mut("action"))
+                .and_then(|action| action.get_mut("enum"))
+                .and_then(serde_json::Value::as_array_mut)
+            {
+                actions.retain(|action| {
+                    native_action_unavailability(state, &name, action.as_str()).is_none()
+                });
+                if actions.is_empty() {
+                    return None;
+                }
             }
             super::mcp_input_contract::advertise_schema(&mut tool);
             Some(tool)
@@ -1120,10 +1040,6 @@ pub(super) fn merged_tool_definitions_for_mode(
     }
 
     let mut tools = filtered_native_tools(state);
-    let origin = super::mcp_transport_ancillary::resolve_mcp_origin_pty(state, mcp_session_id);
-    if !crate::design_mode::mcp::visible_to(state, origin.as_deref()) {
-        tools.retain(|tool| tool["name"] != "design_mode");
-    }
     let allowed = resolve_allowed_upstreams(state, mcp_session_id);
     let upstream_tools = state
         .mcp
@@ -1135,7 +1051,7 @@ pub(super) fn merged_tool_definitions_for_mode(
 }
 
 /// Build the full searchable tool corpus — native (filtered by
-/// `disabled_native_tools`) merged with upstream aggregated tools.
+/// `mcp_capabilities`) merged with upstream aggregated tools.
 ///
 /// Unlike [`merged_tool_definitions`], this bypasses the `collapse_tools`
 /// branch: when collapsed, the client sees only the 3 meta-tools but the
@@ -1198,7 +1114,7 @@ pub(super) fn handle_search_tools(
 pub(super) fn handle_search_tools_for_session(
     state: &Arc<AppState>,
     args: &serde_json::Value,
-    mcp_session_id: Option<&str>,
+    _mcp_session_id: Option<&str>,
 ) -> serde_json::Value {
     let query = match args["query"].as_str() {
         Some(q) if !q.trim().is_empty() => q,
@@ -1211,17 +1127,22 @@ pub(super) fn handle_search_tools_for_session(
     let limit = args["limit"].as_u64().unwrap_or(10).clamp(1, 100) as usize;
 
     let index = state.mcp.tool_search_index.read();
-    // Filter after ranking, not the shared index: one caller must not rewrite another's corpus.
-    let origin = super::mcp_transport_ancillary::resolve_mcp_origin_pty(state, mcp_session_id);
-    let visible = crate::design_mode::mcp::visible_to(state, origin.as_deref());
+    // Re-read current native policy even before the asynchronous index refresh.
+    let native = filtered_native_tools(state);
+    let registered = native_tool_definitions();
+    let available = |name: &str| {
+        !registered
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|tool| tool["name"] == name)
+            || native.iter().any(|tool| tool["name"] == name)
+    };
     let results = index.search(query, 100);
 
     let ranked: Vec<serde_json::Value> = results
         .iter()
-        .filter(|e| {
-            (e.name != "design_mode" || visible)
-                && native_tool_unavailability(state, &e.name).is_none()
-        })
+        .filter(|e| available(&e.name))
         .take(limit)
         .map(|e| serde_json::json!({ "name": e.name, "summary": e.summary }))
         .collect();
@@ -1234,7 +1155,12 @@ pub(super) fn handle_search_tools_for_session(
     let top_schema = ranked
         .first()
         .and_then(|entry| entry["name"].as_str())
-        .and_then(|name| index.get_schema(name))
+        .and_then(|name| {
+            native
+                .iter()
+                .find(|tool| tool["name"] == name)
+                .or_else(|| index.get_schema(name))
+        })
         .filter(|schema| serde_json::to_vec(schema).is_ok_and(|bytes| bytes.len() <= budget));
     let mut response = serde_json::json!({
         "results": ranked, "count": ranked.len(), "catalogue_generation": index.generation()
@@ -1257,7 +1183,7 @@ pub(super) fn handle_get_tool_schema(
 pub(super) fn handle_get_tool_schema_for_session(
     state: &Arc<AppState>,
     args: &serde_json::Value,
-    mcp_session_id: Option<&str>,
+    _mcp_session_id: Option<&str>,
 ) -> serde_json::Value {
     let tool_name = match args["tool_name"].as_str() {
         Some(n) if !n.trim().is_empty() => n,
@@ -1268,13 +1194,14 @@ pub(super) fn handle_get_tool_schema_for_session(
         }
     };
 
-    if native_tool_unavailability(state, tool_name).is_some() {
-        return serde_json::json!({"error": format!("Tool '{tool_name}' not found. Use search_tools to discover available tools.")});
-    }
-    let origin = super::mcp_transport_ancillary::resolve_mcp_origin_pty(state, mcp_session_id);
-    if tool_name == "design_mode" && !crate::design_mode::mcp::visible_to(state, origin.as_deref())
+    if native_tool_definitions()
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|tool| tool["name"] == tool_name)
     {
-        return serde_json::json!({"error":"Design Mode not armed for this session"});
+        return filtered_native_tools(state).into_iter().find(|tool| tool["name"] == tool_name)
+            .unwrap_or_else(|| serde_json::json!({"error": format!("Tool '{tool_name}' not found. Use search_tools to discover available tools.")}));
     }
     let index = state.mcp.tool_search_index.read();
 

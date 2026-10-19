@@ -29,9 +29,6 @@ fn advertised_native_schemas_have_no_root_combinators() {
     }
     for tool in searchable_tool_definitions(&state) {
         let name = tool["name"].as_str().unwrap();
-        if name == "design_mode" {
-            continue; // Session-bound visibility is covered by the Design Mode tests.
-        }
         let exact = handle_get_tool_schema(&state, &serde_json::json!({"tool_name":name}));
         assert_eq!(exact["name"], name);
         check("get_tool_schema", &exact);
@@ -126,7 +123,10 @@ fn native_tool_catalog_summaries_are_short_and_not_description_prefixes() {
         assert_eq!(entry["name"], tool["name"]);
         assert_eq!(
             &entry["description"],
-            recorded.get(name).unwrap_or(&tool["description"])
+            recorded
+                .get(name)
+                .filter(|_| name != "workflow")
+                .unwrap_or(&tool["description"])
         );
         assert!(!summary.trim().is_empty(), "{name} needs a summary");
         assert!(summary.chars().count() <= 70, "{name} summary is too long");
@@ -253,7 +253,7 @@ async fn conditional_configured_voice_is_discoverable_by_list_search_and_name() 
 /// the search corpus — a tool missing from the latter is invisible under
 /// `collapse_tools` and to lazy discovery.
 #[test]
-fn the_task_tool_is_listed_and_searchable() {
+fn agent_task_actions_are_listed_and_searchable() {
     let state = test_state();
 
     let listed = merged_tool_definitions(&state, None, None);
@@ -262,14 +262,24 @@ fn the_task_tool_is_listed_and_searchable() {
             .as_array()
             .unwrap()
             .iter()
-            .any(|t| t["name"] == "task"),
-        "task must appear in tools/list"
+            .any(|t| t["name"] == "agent"
+                && t["inputSchema"]["properties"]["action"]["enum"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|action| action == "task_get")),
+        "agent task actions must appear in tools/list"
     );
     assert!(
         searchable_tool_definitions(&state)
             .iter()
-            .any(|t| t["name"] == "task"),
-        "task must appear in the search corpus"
+            .any(|t| t["name"] == "agent"
+                && t["inputSchema"]["properties"]["action"]["enum"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|action| action == "task_get")),
+        "agent task actions must appear in the search corpus"
     );
 }
 
@@ -324,7 +334,7 @@ async fn native_tool_definitions_are_the_one_surviving_family() {
     let state = test_state();
     {
         let mut config = state.config.write();
-        config.disabled_native_tools.clear();
+        config.mcp_capabilities.denied.clear();
         config.settings_mcp_enabled = true;
         config.collapse_tools = false;
     }
@@ -342,14 +352,8 @@ async fn native_tool_definitions_are_the_one_surviving_family() {
             "secret",
             "session",
             "agent",
-            "task",
             "repo",
-            "story",
             "workflow",
-            "workflow_run",
-            "workflow_story_create",
-            "workflow_report",
-            "workflow_launch",
             "progress",
             "ui",
             "plugin_dev_guide",
@@ -425,7 +429,7 @@ fn the_collapsed_surface_is_the_meta_tools_plus_progress() {
 #[tokio::test]
 async fn disabled_progress_is_rejected_by_direct_and_collapsed_dispatch() {
     let state = test_state();
-    state.config.write().disabled_native_tools = vec!["progress".to_string()];
+    state.config.write().mcp_capabilities.denied = vec!["progress".to_string()];
     rebuild_tool_search_index(&state);
     let args = serde_json::json!({"type":"done", "text":"Must not persist."});
 
@@ -664,7 +668,7 @@ fn merged_tools_collapse_false_returns_all_native_tools() {
     let state = test_state();
     {
         let mut config = state.config.write();
-        config.disabled_native_tools.clear();
+        config.mcp_capabilities.denied.clear();
         config.settings_mcp_enabled = true;
         config.progress_tracking = true;
         config.collapse_tools = false;
@@ -679,14 +683,8 @@ fn merged_tools_collapse_false_returns_all_native_tools() {
             "secret",
             "session",
             "agent",
-            "task",
             "repo",
-            "story",
             "workflow",
-            "workflow_run",
-            "workflow_story_create",
-            "workflow_report",
-            "workflow_launch",
             "progress",
             "ui",
             "plugin_dev_guide",
@@ -771,7 +769,7 @@ fn collapse_tools_payload_size_meets_reduction_target() {
 fn merged_tools_collapse_true_hides_disabled_progress() {
     let state = test_state();
     state.config.write().collapse_tools = true;
-    state.config.write().disabled_native_tools = vec!["progress".to_string()];
+    state.config.write().mcp_capabilities.denied = vec!["progress".to_string()];
 
     let merged = merged_tool_definitions(&state, None, None);
     assert_eq!(tool_names(&merged).len(), 3);
@@ -863,7 +861,7 @@ fn search_tools_returns_ranked_results_for_github_query() {
 #[test]
 fn search_tools_excludes_disabled_native_tools() {
     let state = test_state();
-    state.config.write().disabled_native_tools = vec!["session".to_string()];
+    state.config.write().mcp_capabilities.denied = vec!["session".to_string()];
     rebuild_tool_search_index(&state);
 
     let r = handle_search_tools(&state, &serde_json::json!({ "query": "terminal session" }));
@@ -936,7 +934,7 @@ fn get_tool_schema_returns_error_for_unknown_tool() {
 #[test]
 fn get_tool_schema_excludes_disabled_native_tools() {
     let state = test_state();
-    state.config.write().disabled_native_tools = vec!["debug".to_string()];
+    state.config.write().mcp_capabilities.denied = vec!["diagnostics".to_string()];
     rebuild_tool_search_index(&state);
     let r = handle_get_tool_schema(&state, &serde_json::json!({ "tool_name": "debug" }));
     assert!(r["error"].as_str().is_some());
@@ -974,7 +972,7 @@ async fn call_tool_blocks_meta_tool_recursion() {
 #[tokio::test]
 async fn call_tool_rejects_disabled_native_tool() {
     let state = test_state();
-    state.config.write().disabled_native_tools = vec!["repo".to_string()];
+    state.config.write().mcp_capabilities.denied = vec!["repo".to_string()];
     let r = handle_call_tool(
         &state,
         loopback_addr(),
@@ -1005,7 +1003,7 @@ async fn call_tool_returns_unknown_tool_error_for_bogus_name() {
 async fn call_tool_propagates_addr_for_localhost_only_tools() {
     let state = test_state();
     state.config.write().settings_mcp_enabled = true;
-    state.config.write().disabled_native_tools.clear();
+    state.config.write().mcp_capabilities.denied.clear();
     let r = handle_call_tool(
         &state,
         non_loopback_addr(),
@@ -1661,10 +1659,9 @@ fn every_documented_action_constant_matches_schema_and_description() {
     // `debug` is the one exemption: its description points at `action=help`,
     // which returns the full usage guide, so duplicating five action bullets
     // into a tool that is disabled by default would buy nothing.
-    let cases: [(&str, &str, bool); 7] = [
+    let cases: [(&str, &str, bool); 6] = [
         ("session", SESSION_ACTIONS, true),
         ("agent", AGENT_ACTIONS, true),
-        ("task", TASK_ACTIONS, true),
         ("repo", REPO_ACTIONS, true),
         ("ui", UI_ACTIONS, true),
         ("voice", VOICE_ACTIONS, true),
@@ -1719,7 +1716,7 @@ fn rebuild_tool_search_index_populates_all_native_tools() {
     let state = test_state();
     {
         let mut config = state.config.write();
-        config.disabled_native_tools.clear();
+        config.mcp_capabilities.denied.clear();
         config.settings_mcp_enabled = true;
         config.progress_tracking = true;
         config.collapse_tools = false;
@@ -1735,18 +1732,11 @@ fn rebuild_tool_search_index_populates_all_native_tools() {
         names,
         vec![
             "automations",
-            "design_mode",
             "secret",
             "session",
             "agent",
-            "task",
             "repo",
-            "story",
             "workflow",
-            "workflow_run",
-            "workflow_story_create",
-            "workflow_report",
-            "workflow_launch",
             "progress",
             "ui",
             "plugin_dev_guide",
@@ -1770,7 +1760,7 @@ fn rebuild_tool_search_index_respects_disabled_native_tools() {
             .get_schema("session")
             .is_some()
     );
-    state.config.write().disabled_native_tools = vec!["session".to_string()];
+    state.config.write().mcp_capabilities.denied = vec!["session".to_string()];
     rebuild_tool_search_index(&state);
     assert!(
         state
@@ -1804,7 +1794,7 @@ async fn tool_search_index_rebuilds_on_broadcast() {
     );
 
     // Mutate config and fire the signal; the updater must rebuild.
-    state.config.write().disabled_native_tools = vec!["session".to_string()];
+    state.config.write().mcp_capabilities.denied = vec!["session".to_string()];
     let _ = state.mcp.tools_changed.send(());
 
     // Poll for the rebuild with a short deadline — the task is async.
@@ -2082,7 +2072,7 @@ fn no_upstreams_means_no_upstream_line_and_no_tools_means_no_map() {
 #[test]
 fn built_instructions_follow_the_served_tool_list_and_ready_upstreams() {
     let state = test_state();
-    state.config.write().disabled_native_tools = vec!["telegram".into()];
+    state.config.write().mcp_capabilities.denied = vec!["telegram".into()];
     state
         .mcp
         .upstream_registry
@@ -2280,7 +2270,8 @@ fn catalogue_schema_reuse_generation_changes_with_visibility() {
     state
         .config
         .write()
-        .disabled_native_tools
+        .mcp_capabilities
+        .denied
         .push("session".to_owned());
     rebuild_tool_search_index(&state);
     let after = handle_search_tools(
@@ -2432,7 +2423,7 @@ async fn launch_flat_discovery_keeps_predispatch_validation() {
 #[tokio::test]
 async fn conditional_remote_direct_call_without_connection_is_refused() {
     let state = test_state();
-    state.config.write().disabled_native_tools.clear();
+    state.config.write().mcp_capabilities.denied.clear();
     let result = handle_mcp_tool_call(
         &state,
         loopback_addr(),
@@ -2546,8 +2537,9 @@ async fn conditional_remote_tracks_live_connections_and_preserves_explicit_denia
     state
         .config
         .write()
-        .disabled_native_tools
-        .push("remote".into());
+        .mcp_capabilities
+        .denied
+        .push("remote_deployment".into());
     assert!(
         !tool_names(&merged_tool_definitions(&state, None, None))
             .iter()
@@ -2565,7 +2557,7 @@ async fn conditional_remote_tracks_live_connections_and_preserves_explicit_denia
         denied["error"],
         "Tool 'remote' is disabled by configuration"
     );
-    state.config.write().disabled_native_tools.clear();
+    state.config.write().mcp_capabilities.denied.clear();
     crate::remote_runtime::teardown(&state, "second");
     assert!(
         !tool_names(&merged_tool_definitions(&state, None, None))
@@ -2646,7 +2638,7 @@ async fn native_help_preserves_every_displaced_rule_2069() {
         }
     }
     let state = test_state();
-    state.config.write().disabled_native_tools.clear();
+    state.config.write().mcp_capabilities.denied.clear();
     let recorded: serde_json::Value =
         serde_json::from_str(include_str!("fixtures/native-guidance-2069.json")).unwrap();
     let definitions = native_tool_definitions();
@@ -2697,7 +2689,7 @@ async fn native_help_respects_owner_availability_2069() {
     let dir = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
     let _guard = crate::config::set_config_dir_override(dir.path().to_path_buf());
     let state = test_state();
-    state.config.write().disabled_native_tools = vec!["session".into()];
+    state.config.write().mcp_capabilities.denied = vec!["session".into()];
     for (name, reason) in [
         ("session", "disabled by configuration"),
         ("voice", "voice is not configured"),

@@ -14,7 +14,6 @@ pub(super) fn complete_schema(tool: &mut Value) {
         "agent" => Some(AGENT_ACTIONS),
         "workflow" => Some(WORKFLOW_ACTIONS),
         "repo" => Some(REPO_ACTIONS),
-        "task" => Some(TASK_ACTIONS),
         "ui" => Some(UI_ACTIONS),
         "voice" => Some(VOICE_ACTIONS),
         "debug" => Some(DEBUG_ACTIONS),

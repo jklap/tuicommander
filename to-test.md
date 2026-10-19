@@ -2655,3 +2655,5 @@ Needs an iPhone (iOS 16.4+, 18.4+ preferred), the desktop TUICommander running a
 ## Mobile Grok Chat (#2077-b132)
 
 - [ ] On a real phone, open a registry-bound Grok session and switch CLI → Chat → CLI. Confirm the existing question controls and composer remain touch-usable. Worktree browser evidence does not prove phone touch behavior.
+
+- [ ] After Boss restarts `make dev` or installs a rebuilt release, verify MCP capability switches, migrated denial diagnostics and client reconnect to the alias-free catalogue (#2068-63b9). Rust changes do not hot-reload.

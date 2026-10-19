@@ -52,6 +52,7 @@ pub(crate) mod codex_usage;
 pub(crate) mod config;
 pub(crate) mod conflict_assist;
 pub(crate) mod content_index;
+pub(crate) mod mcp_capabilities;
 mod open_markdown_tabs;
 pub mod settings;
 pub(crate) use tuic_git::cow;
@@ -1118,6 +1119,7 @@ async fn get_mcp_status(state: State<'_, Arc<AppState>>) -> Result<serde_json::V
 
     Ok(serde_json::json!({
         "native_tools": mcp_http::mcp_transport::native_tool_catalog(),
+        "native_capabilities": mcp_capabilities::catalog(),
         "enabled": true,
         "running": running,
         "remote_port": if remote_enabled { Some(remote_port) } else { None },

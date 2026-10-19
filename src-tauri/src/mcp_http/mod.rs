@@ -3257,7 +3257,7 @@ mod tests {
         // documents and avoids (#678-9a75).
         let state = Arc::new(crate::state::tests_support::make_test_app_state());
         // This fixture opts into every native tool, including the settings facade.
-        state.config.write().disabled_native_tools = Vec::new();
+        state.config.write().mcp_capabilities.denied = Vec::new();
         state.config.write().settings_mcp_enabled = true;
         mcp_transport::rebuild_tool_search_index(&state);
         state
@@ -6503,14 +6503,8 @@ mod tests {
         "secret",
         "session",
         "agent",
-        "task",
         "repo",
-        "story",
         "workflow",
-        "workflow_run",
-        "workflow_story_create",
-        "workflow_report",
-        "workflow_launch",
         "progress",
         "ui",
         "plugin_dev_guide",
@@ -6528,7 +6522,7 @@ mod tests {
         let state = test_state();
         {
             let mut config = state.config.write();
-            config.disabled_native_tools.clear();
+            config.mcp_capabilities.denied.clear();
             config.settings_mcp_enabled = true;
             config.progress_tracking = true;
             config.collapse_tools = false;
@@ -6542,7 +6536,8 @@ mod tests {
             let name = tool["name"].as_str().unwrap();
             {
                 let mut cfg = state.config.write();
-                cfg.disabled_native_tools = vec![name.to_owned()];
+                cfg.mcp_capabilities =
+                    crate::mcp_capabilities::McpCapabilities::from_legacy(&[name.to_owned()]);
                 cfg.collapse_tools = true;
                 cfg.progress_tracking = false;
             }
@@ -6564,6 +6559,7 @@ mod tests {
                     &entry["description"],
                     recorded
                         .get(definition["name"].as_str().unwrap())
+                        .filter(|_| definition["name"] != "workflow")
                         .unwrap_or(&definition["description"])
                 );
                 // Catches: HTTP status retaining description prefixes while Settings
@@ -6627,7 +6623,7 @@ mod tests {
     #[tokio::test]
     async fn disabled_critical_native_tools_cannot_bypass_settings_through_dispatch() {
         let state = test_state();
-        state.config.write().disabled_native_tools =
+        state.config.write().mcp_capabilities.denied =
             vec!["session".into(), "agent".into(), "progress".into()];
         let app = build_router(state.clone(), false, true);
         for collapse in [false, true] {
@@ -6685,12 +6681,12 @@ mod tests {
         let state = test_state();
         {
             let mut config = state.config.write();
-            config.disabled_native_tools.clear();
+            config.mcp_capabilities.denied.clear();
             config.settings_mcp_enabled = true;
             config.progress_tracking = true;
             config.collapse_tools = false;
         }
-        state.config.write().disabled_native_tools = vec!["debug".to_string()];
+        state.config.write().mcp_capabilities.denied = vec!["diagnostics".to_string()];
         let app = build_router(state, false, true);
         let body = serde_json::json!({
             "jsonrpc": "2.0",
@@ -6733,7 +6729,6 @@ mod tests {
         for core in [
             "session",
             "agent",
-            "task",
             "repo",
             "progress",
             "ui",
@@ -9151,7 +9146,7 @@ mod tests {
         let state = test_state();
         {
             let mut config = state.config.write();
-            config.disabled_native_tools.clear();
+            config.mcp_capabilities.denied.clear();
             config.settings_mcp_enabled = true;
             config.progress_tracking = true;
             config.collapse_tools = false;
@@ -9266,7 +9261,7 @@ mod tests {
         // Save config with a disabled tool
         let base = state.config.read().clone();
         let mut config = base.clone();
-        config.disabled_native_tools = vec!["session".to_string()];
+        config.mcp_capabilities.denied = vec!["session".to_string()];
         let app = build_router(state.clone(), false, true);
         let addr = std::net::SocketAddr::from(([127, 0, 0, 1], 0));
         let resp = app
