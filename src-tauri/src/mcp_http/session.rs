@@ -90,6 +90,31 @@ pub(crate) fn live_tuic_sessions_by_pty(
     by_pty
 }
 
+/// Publish managed-agent creation to the native frontend at the same boundary
+/// for HTTP and MCP spawns.
+#[cfg(feature = "desktop")]
+pub(super) fn emit_native_agent_session_created(
+    emit: impl FnOnce(&str, serde_json::Value),
+    state: &AppState,
+    session_id: &str,
+    cwd: Option<&str>,
+    agent_type: Option<&str>,
+    display_name: Option<&str>,
+    parent_session: Option<&str>,
+) {
+    emit(
+        "session-created",
+        serde_json::json!({
+            "session_id": session_id,
+            "tuic_session": live_tuic_sessions_by_pty(state).remove(session_id),
+            "cwd": cwd,
+            "agent_type": agent_type,
+            "display_name": display_name,
+            "parent_session": parent_session,
+        }),
+    );
+}
+
 /// Every PTY session this machine runs, as session-list rows.
 ///
 /// One builder for both transports: `GET /sessions` and the `list_active_sessions`
@@ -2630,6 +2655,47 @@ pub(super) async fn get_session_shell_family(
 
 #[cfg(test)]
 mod tests {
+    // Catches: native MCP/HTTP creation omits the live identity, so a new tab
+    // cannot match its caller's worktree declaration until reconnect.
+    #[cfg(feature = "desktop")]
+    #[test]
+    fn native_agent_created_event_retains_bound_identity() {
+        let state = crate::state::tests_support::make_test_app_state();
+        let mut command = portable_pty::CommandBuilder::new("unused");
+        crate::pty::bind_pty_identity(&state, &mut command, "pty-child", Some("stable-child"));
+        for expected in [Some("stable-child"), Some("pty-child"), None] {
+            match expected {
+                Some("pty-child") => {
+                    state.session_maps.live_pty_by_tuic_session.clear();
+                    crate::pty::bind_pty_identity(&state, &mut command, "pty-child", None);
+                }
+                None => state.session_maps.live_pty_by_tuic_session.clear(),
+                _ => {}
+            }
+            let mut emitted = None;
+            super::emit_native_agent_session_created(
+                |event, payload| {
+                    assert_eq!(event, "session-created");
+                    emitted = Some(payload);
+                },
+                &state,
+                "pty-child",
+                Some("/repo"),
+                Some("ego"),
+                Some("child"),
+                Some("parent"),
+            );
+            let payload = emitted.expect("native event must be emitted");
+            assert!(payload.get("tuic_session").is_some());
+            assert_eq!(payload["tuic_session"], serde_json::json!(expected));
+            assert_eq!(payload["session_id"], "pty-child");
+            assert_eq!(payload["cwd"], "/repo");
+            assert_eq!(payload["agent_type"], "ego");
+            assert_eq!(payload["display_name"], "child");
+            assert_eq!(payload["parent_session"], "parent");
+        }
+    }
+
     use super::*;
 
     /// Catches: HTTP detects a hand-launched agent but leaves the backend as a
