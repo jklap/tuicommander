@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+- Resolve ego session discovery through its per-PID index and held writer lease without scanning historical sessions; retain legacy lookup only when the index is absent (#2058-0d0e).
+
 - Keep GitHub network proof lookups off the worktree-list request path; use cached definitive answers or conservative local classification, with fresh checkout safety fields (#2044-31f3).
 
 - Keep an agent tab under its explicitly declared worktree despite unchanged shell cwd, later cwd reports and saved-tab restore; preserve sibling tabs and cwd-based removal safety (#2044-31f3).
