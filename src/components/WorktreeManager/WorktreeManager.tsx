@@ -286,7 +286,7 @@ export const WorktreeManager: Component<{ actions?: WorktreeActions }> = (props)
 
 					<div class={s.list}>
 						<Show when={worktrees().length === 0 && orphanRows().length === 0}>
-							<div class={s.empty}>No worktrees found. Create one from the sidebar.</div>
+							<div class={s.empty}>No worktrees found.</div>
 						</Show>
 
 						<Show when={worktrees().length > 0 || orphanRows().length > 0}>

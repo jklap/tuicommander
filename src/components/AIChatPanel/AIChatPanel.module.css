@@ -272,13 +272,14 @@
 }
 
 .messageList :global(pre[data-raw-code]) {
-  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
 }
 
 .messageList :global(pre[data-raw-code] button[data-copy-code]) {
-  position: absolute;
-  top: 4px;
-  right: 4px;
+  align-self: flex-end;
+  order: -1;
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
   background: var(--bg-tertiary);
@@ -1413,7 +1414,8 @@
   color: var(--fg-secondary);
 }
 
-.messageList[data-terminal-chat] .assistantMsg :global(#markdown-content [data-tuic-answer]) {
+/* Fenced code keeps its own inset, including room for the Copy control. */
+.messageList[data-terminal-chat] .assistantMsg :global(#markdown-content [data-tuic-answer]:not(pre)) {
   padding: 0;
   margin-top: 0;
   margin-bottom: 8px;
