@@ -424,6 +424,9 @@ webrtc-audio-processing-sys = { path = "patches/webrtc-audio-processing-sys" }
 # compatible with wayland-client/backend 0.31/0.3, while applying upstream's
 # quick-xml 0.41 parser adaptation. Patching current Wayland master here would
 # generate interfaces for its unreleased backend ABI and break Linux builds.
+# DEFERRED (2026-10-19) — 0.31.11 matches the fork's sources and passes native
+# generator tests, but retirement requires a Linux desktop build (rb unavailable).
+# See reports/wayland-scanner-2034.md for source and dependency evidence.
 wayland-scanner = { path = "patches/wayland-scanner" }
 
 [dev-dependencies]
