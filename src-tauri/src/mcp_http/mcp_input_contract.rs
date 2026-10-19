@@ -88,6 +88,30 @@ pub(super) fn complete_schema(tool: &mut Value) {
             conditions.push(json!({"if":{"properties":{"action":{"const":"worktree_remove"}},"required":["action"]},"then":{"anyOf":[{"required":["branch"]},{"required":["worktree_path"]}]}}));
         }
         "ui" => {
+            let design = crate::design_mode::mcp::tool_definition();
+            for field in ["session_id", "repo_path", "browser", "script"] {
+                schema["properties"][field] = design["inputSchema"]["properties"][field].clone();
+            }
+            let tab_url = schema["properties"]["url"]["description"]
+                .as_str()
+                .unwrap_or_default();
+            schema["properties"]["url"]["description"] = json!(format!(
+                "{tab_url} For design_start/design_navigate: absolute HTTP(S) page URL; remote hosts require an extension host grant."
+            ));
+            required(&["design_start"], &["session_id"]);
+            required(
+                &[
+                    "design_stop",
+                    "design_reload",
+                    "design_navigate",
+                    "design_screenshot",
+                    "design_errors",
+                    "design_eval",
+                ],
+                &["repo_path"],
+            );
+            required(&["design_navigate"], &["url"]);
+            required(&["design_eval"], &["script"]);
             required(&["tab"], &["id", "title"]);
             required(&["toast"], &["title"]);
             required(&["screenshot"], &["id"]);

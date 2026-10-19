@@ -8,6 +8,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - Invalidate the shared intent grammar during frontend hot reload so stale JSON cannot abort answer gutters or expose raw answer markers (#2073-8131).
 
+- Add `ui design_*` MCP actions with the existing Design Mode ownership, host grants and saved denials; keep the old tool until the explicit 2068 catalogue cutover (#2067-e708).
 - List and allow `remote`, `voice` and `telegram` only when their owning connection/configuration is available; share discovery and call gates and notify clients when conditions change (#2066-516c, #2067-e708).
 - End PTY intents at the title closure so joined trailing prose stays out of the CONTEXT header and desktop/mobile intent tint (#2060-0ebe).
 - Add the typed `workflow` MCP tool and `tuic workflow` CLI with story, run, proposal_create, report and launch actions; reuse existing handlers, retain proposal idempotency and member denials, and keep legacy tools until cutover. Automations remains separate (#2065-dcc5).

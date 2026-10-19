@@ -2370,7 +2370,7 @@ an explicit create action. These actions match across HTTP, IPC, MCP and CLI.
 
 ### Design Mode lifecycle tool
 
-The native `design_mode` tool exposes `start`, `stop`, `status`, `reload` and `navigate` through normal discovery and dispatch. Start accepts `session_id`, optional `browser` (`chrome` or `edge`) and optional absolute HTTP(S) `url`. Session references resolve like the session tool. Stop accepts `repo_path` from start/status. Reload takes the same `repo_path` and bumps a per-repository reload sequence; the extension reloads the reviewed tab once on its next heartbeat. Navigate takes `repo_path` and `url` (HTTP(S) on `localhost`, `127.0.0.1` or `[::1]`, no credentials); the heartbeat reply then carries `navigate: {seq, url}` and the extension opens the URL in the reviewed tab once per sequence. The sequence survives a re-arm but the URL does not, so a new Start never replays an old navigation. Reload and navigate answer "Design Mode is not running for this repository" when nothing is armed. The extension posts `heartbeat` to `/design-mode/extension` every 5 s (reply `{armed, reloadSeq, navigate?}`); an armed mode is stopped 60 s after the last heartbeat, or 10 min after Start when none arrived. The adapter uses the same lifecycle core as HTTP and IPC; headless builds return an explicit desktop-host-required error. URL-aware start is the default coordinator path for layout work.
+The `ui` tool exposes `design_start`, `design_stop`, `design_status`, `design_reload`, `design_navigate`, `design_screenshot`, `design_errors` and `design_eval`. These actions delegate to the existing Design Mode owner: the caller must own the armed repository for browser commands, remote hosts still require an extension host grant, and JavaScript still requires its optional host grant. A saved `design_mode` denial also blocks the new actions; disabling `ui` blocks all UI actions. The separate `design_mode` tool remains until the explicit breaking catalogue cutover in story 2068, not the Design Mode v2 rollout in story 1672. It exposes the same unprefixed actions and caller checks. Start accepts `session_id`, optional `browser` (`chrome` or `edge`) and optional absolute HTTP(S) `url`. Session references resolve like the session tool. Stop accepts `repo_path` from start/status. Reload takes the same `repo_path` and bumps a per-repository reload sequence; the extension reloads the reviewed tab once on its next heartbeat. Navigate takes `repo_path` and `url` (HTTP(S) on `localhost`, `127.0.0.1` or `[::1]`, no credentials); the heartbeat reply then carries `navigate: {seq, url}` and the extension opens the URL in the reviewed tab once per sequence. The sequence survives a re-arm but the URL does not, so a new Start never replays an old navigation. Reload and navigate answer "Design Mode is not running for this repository" when nothing is armed. The extension posts `heartbeat` to `/design-mode/extension` every 5 s (reply `{armed, reloadSeq, navigate?}`); an armed mode is stopped 60 s after the last heartbeat, or 10 min after Start when none arrived. The adapter uses the same lifecycle core as HTTP and IPC; headless builds return an explicit desktop-host-required error. URL-aware start is the default coordinator path for layout work.
 
 The GitHub settings owner adapter supplies typed device-login, Enterprise account,
 credential, label and binding actions for the later settings transport cutover.
@@ -2686,6 +2686,13 @@ The projection counts actual MCP ingress, not all Codex model custom calls.
 Client-side correlation/captured traces are needed to identify Codex attempts that
 never reached MCP or whose replies were lost. Do not evaluate transcript JavaScript
 to derive call counts. No OTel exporter is enabled by this feature.
+
+The [partial live recording](../../src-tauri/src/mcp_http/fixtures/outcomes-partial-2010.md)
+records a real ego-selected call with a server-retained client UUID, an application
+refusal, and a client disconnect over local IPC. It excludes response bodies and
+does not complete the four-outcome fixture: real client permission denial and
+rendering success still require recording. A successful speech-status read is
+not rendering evidence.
 
 ## Managed stateless reconnect context (#2008-5317)
 
