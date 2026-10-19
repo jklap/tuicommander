@@ -211,6 +211,8 @@ events, so another window or a phone sees the same order and cancellations.
 
 ## Mobile Screens (`src/mobile/`)
 
+`useSessionChatView` offers the existing header CLI / Chat switch for Claude, Grok, Codex and ego through the same supported-adapter predicate as desktop. `chat_view_snapshot` owns transcript binding; a refusal returns to CLI with its reason. The shared transcript does not replace the mounted terminal, composer, keyboard bar or native question controls.
+
 `SessionDetailScreen` replaces its state with each complete WebSocket or polled
 session snapshot, except polls whose `last_activity_ms` is older than the applied
 state. Equal timestamps remain replaceable; this field is not a protocol revision.
@@ -873,3 +875,5 @@ A non-empty composer refuses the retry; the status bar displays the error.
 Voice correction controls carry `corrections.replacements.{from}.from` and
 `corrections.replacements.{from}.to` catalogue identities. Import, add and remove
 retain the existing TextCorrector workflow; export does not change settings.
+
+Desktop `TerminalChatView` renders active native questions from the existing session lifecycle store below the shared transcript. `ChoicePromptOverlay` has an embedded layout; desktop and mobile share `sendNativeChoice` for agent-specific PTY keys. Compose drafts and ACP interaction state are not involved.

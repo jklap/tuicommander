@@ -2635,9 +2635,23 @@ impl ChunkProcessor {
             );
         }
         let rows = structured_rows.as_deref().unwrap_or(&changed_rows);
+        // Claude redraws earlier responses while submitting the next composer.
+        // Only suggestions below the latest submitted prompt belong to this
+        // turn. Exclude the live input box so an unsent draft is not a boundary.
+        let suggest_floor = if agent_type.as_deref() == Some("claude") && screen_present {
+            let refs: Vec<&str> = screen_buf.iter().map(String::as_str).collect();
+            let end = crate::chrome::find_agent_chrome_cutoff(&refs, Some("claude"))
+                .unwrap_or(refs.len());
+            refs[..end].iter().rposition(|row| {
+                row.strip_prefix('❯')
+                    .is_some_and(|draft| !draft.trim().is_empty())
+            })
+        } else {
+            None
+        };
         events.extend(
             self.parser
-                .parse_clean_lines(rows, agent_active_for_parse)
+                .parse_clean_lines_with_suggest_floor(rows, agent_active_for_parse, suggest_floor)
                 .into_iter()
                 .filter(|e| !suppress_heuristic_question(hook_instrumented, e)),
         );
@@ -3349,7 +3363,7 @@ impl ChunkProcessor {
                         // finishes; Codex can start an internal continuation
                         // without a PTY submission. Current semantic movement is
                         // stronger than either stale boundary.
-                        sl.reset_suggest_memory();
+                        sl.reopen_suggest_completion();
                         reopened_completion = true;
                     }
                     sl.note_working_screen();
