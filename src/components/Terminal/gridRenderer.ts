@@ -1474,8 +1474,9 @@ export function createGridRenderer(ctx: GridContext2D, deps: GridRendererDeps): 
 					// a clip: wide cells and italic bearings must not be cut or double-blended.
 					first = Math.max(0, first - 1);
 					end = Math.min(row.count, end + 1);
-					const x = first * m.cellWidth;
-					const width = (end - first) * m.cellWidth;
+					// The first glyph can extend left into the gutter (italic bearings).
+					const x = first === 0 ? -GUTTER_PX : first * m.cellWidth;
+					const width = end * m.cellWidth - x;
 					ctx.save();
 					ctx.beginPath();
 					ctx.rect(x, y, width, m.cellHeight);

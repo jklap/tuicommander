@@ -1,5 +1,11 @@
 import { expect, it, vi } from "vitest";
-import { ATTR_DEFAULT_BG, ATTR_DEFAULT_FG, type CellMetrics, type DecodedRow } from "../canvasTerminalUtils";
+import {
+	ATTR_DEFAULT_BG,
+	ATTR_DEFAULT_FG,
+	ATTR_ITALIC,
+	type CellMetrics,
+	type DecodedRow,
+} from "../canvasTerminalUtils";
 import { createGridRenderer, type PaintGridOptions } from "../gridRenderer";
 
 const metrics: CellMetrics = {
@@ -24,7 +30,17 @@ function row(index: number, text: string): DecodedRow {
 	};
 }
 function setup() {
-	const ctx = { canvas: { width: 120, height: 120 }, fillRect: vi.fn(), fillText: vi.fn(), drawImage: vi.fn() };
+	const ctx = {
+		canvas: { width: 120, height: 120 },
+		fillRect: vi.fn(),
+		fillText: vi.fn(),
+		drawImage: vi.fn(),
+		save: vi.fn(),
+		restore: vi.fn(),
+		beginPath: vi.fn(),
+		rect: vi.fn(),
+		clip: vi.fn(),
+	};
 	const renderer = createGridRenderer(ctx as unknown as CanvasRenderingContext2D, {
 		fontWeight: () => 400,
 		getFontFamily: () => "monospace",
@@ -177,4 +193,18 @@ it("background merging stops at default gaps and resolved color boundaries (2040
 		[30, 0, 10, 20],
 		[40, 0, 20, 20],
 	]);
+});
+
+it("first-column damage clears italic left bearings from the gutter (TERM-2)", () => {
+	const { ctx, renderer } = setup();
+	ctx.canvas.width = 240;
+	const before = row(0, "jAAAAAAA");
+	const after = row(0, " AAAAAAA");
+	before.attrs.fill(ATTR_DEFAULT_BG | ATTR_DEFAULT_FG | ATTR_ITALIC);
+	after.attrs.set(before.attrs);
+	renderer.paintGrid(new Map([[0, before]]), metrics, { fullRepaint: true });
+	ctx.fillRect.mockClear();
+	renderer.paintGrid(new Map([[0, after]]), metrics, { fullRepaint: false, dirtyIndices: new Set([0]) });
+	expect(ctx.rect).toHaveBeenCalledWith(-6, 0, 26, 20);
+	expect(ctx.fillRect).toHaveBeenCalledWith(-6, 0, 26, 20);
 });
