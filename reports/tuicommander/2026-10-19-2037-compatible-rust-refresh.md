@@ -235,3 +235,45 @@ Ran `node scripts/third-party-notices.mjs` locally through build-slot and mbx
 Only the reqwest, rusqlite, rustls, and ZIP direct-version rows changed.
 No application code or lockfile changed after the passing ZIP-domain tests and
 all-target clippy, so those results remain relevant.
+
+
+## Integration refresh after main advanced — 2026-10-20
+
+Merged main `710554c917bd9732a5c96693548614ff4b80a03f` into this branch as
+`f8dd429bbb91d22655a89ab03321dcff66473488`. Resolved only the root Cargo manifest
+comment conflict by retaining both the updater ZIP audit rationale and main's
+dirs follow-up comment, and the generated notices conflict by regenerating.
+Preserved main's dirs/SSH, gix 0.89, rodio 0.23/cpal 0.18, upstream Wayland
+scanner, and parser/mobile changes alongside this story's patches and ZIP 9.
+
+The automatically merged lockfile passed offline locked metadata without
+requiring `cargo update -w`. Generated notices and their freshness check passed.
+The coordinator explicitly requested the complete root package suite for this
+integration refresh, not another workspace suite:
+
+```sh
+scripts/with-test-tmp.sh cargo nextest run --locked \
+  --manifest-path src-tauri/Cargo.toml -p tuicommander
+cargo clippy --locked --manifest-path src-tauri/Cargo.toml \
+  -p tuicommander --all-targets -- -D warnings
+cd src-tauri && cargo audit
+```
+
+All ran on rb through build-slot:
+
+- Nextest: **6032 passed**, 25 skipped by the harness, four test binaries;
+  289.930 seconds execution after 10m07s test compilation and fixture setup.
+- Root-package all-target clippy: **passed**, 2m26s.
+- Audit: **passed**, with only the three documented updater ZIP 4 exceptions
+  and seven existing maintenance/unsoundness warnings.
+- Receipt `20261019T233445Z-21470`, aggregate exit 0, `stale=no`.
+- Important provenance qualification: **`box_dirty=yes`**, with exactly one
+  reported changed path, `./src-tauri/.tmp`. No production source path is listed;
+  the cause of that scratch-path change was not established. Do not describe
+  this receipt as box-clean. The local worktree is clean.
+- Log: `~/Gits/.tmp/chore-2037-merged-rb-validation.log`.
+
+Story preflight, changed-file formatting, and diff whitespace checks pass after
+the merge. This integration check does not add live Windows, hardware, native
+Mac compilation, or full-workspace runtime evidence. No application restart was
+performed.
