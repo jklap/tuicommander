@@ -3179,7 +3179,10 @@ and the equivalent desktop IPC) include optional
 hook evidence passes live PID, rollout id and cwd validation. Omission retracts
 exactness; clients must not substitute a heuristic discovery ID. The existing
 `GET /sessions/:id/chat-view` route repeats validation on every Codex read and
-returns `not_bound` when evidence is missing or stale.
+returns `not_bound` when evidence is missing or stale. Native hook binding also
+applies to PTYs created through the HTTP agent route, MCP agent spawn and generic
+`POST /sessions`: their readers use the live identity inherited by the child, not
+an absent transport caller identity.
 
 ### Desktop close notification
 
