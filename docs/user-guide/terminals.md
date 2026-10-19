@@ -76,6 +76,8 @@ Notice cards preserve line breaks between their heading and body. Harness inbox 
 
 In Chat, Compose stays docked and open after sending or queueing, clears the submitted text, and keeps focus for the next message. It cannot be closed or unpinned while Chat is active. **Esc** returns to CLI for terminal interaction; the Compose shortcut focuses the Chat input. Switching back to CLI restores that tab's previous Compose open and pin state. Unsent drafts survive switching in either direction, including text entered while a send or queue is still pending.
 
+On mobile, Codex and Grok also offer **CLI | Chat** in the session header. The backend must confirm the exact Codex native-hook or Grok registry transcript binding; a missing binding returns to CLI with a reason. The existing question controls, keyboard bar and composer keep targeting the same PTY. Select **CLI** for native terminal interaction.
+
 Local agents started through `tuic agent spawn` or HTTP remain eligible for Chat. HTTP/MCP creation controls worker-tab styling, cleanup and completion sounds; it does not mean that the PTY runs on another machine. A session owned by a configured remote connection remains unavailable to Chat.
 
 **Chat** is disabled, with the reason as its tooltip, when the terminal has no agent, the agent has no supported transcript adapter, or TUICommander has not bound the agent to a session file yet. If the agent exits or the binding is lost while Chat is open, the terminal returns to CLI with a one-line notice.

@@ -211,6 +211,8 @@ events, so another window or a phone sees the same order and cancellations.
 
 ## Mobile Screens (`src/mobile/`)
 
+`useSessionChatView` offers the existing header CLI / Chat switch for Claude, Grok, Codex and ego through the same supported-adapter predicate as desktop. `chat_view_snapshot` owns transcript binding; a refusal returns to CLI with its reason. The shared transcript does not replace the mounted terminal, composer, keyboard bar or native question controls.
+
 `SessionDetailScreen` replaces its state with each complete WebSocket or polled
 session snapshot, except polls whose `last_activity_ms` is older than the applied
 state. Equal timestamps remain replaceable; this field is not a protocol revision.

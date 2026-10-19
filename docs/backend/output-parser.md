@@ -367,7 +367,12 @@ existing mobile send-failure toast instead of silently hiding an unsent choice.
 Both clients retain the existing shared `record_submitted_line` →
 `note_submitted_input` backend path: Enter clears the known agent's suggestions
 and advances its turn epoch, so a subsequent poll reads the cleared state.
-No separate mobile backend clear endpoint is used.
+No separate mobile backend clear endpoint is used. Claude suggestion parsing
+ignores markers above the latest submitted prompt in the current screen, not
+just markers inside the live input box. Full-screen history repaints cannot
+restore a consumed list after fresh working evidence re-arms parser dedup.
+When a repaint contains several complete markers, the lowest marker wins;
+bounded bracket dewrapping also targets that latest marker.
 
 ### UsageLimit
 
@@ -585,7 +590,8 @@ explicit-state fields in `SilenceState` (`src-tauri/src/pty.rs`).
 Claude Stop hooks can block after Claude has already emitted a Stop/suggest
 marker. If the current screen still contains a semantic active phase (spinner
 prefix, active verb ending in an ellipsis, and parenthesized progress), the PTY
-lifecycle reopens the same turn and discards the premature suggestions. A plain
+lifecycle reopens the same turn. Undelivered choices survive until final readiness;
+already-published choices are discarded. A plain
 empty composer or completed-duration summary does not provide this evidence.
 
 Slash-menu parsing is gated by the input FSM's slash mode and intentionally

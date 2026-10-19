@@ -1149,17 +1149,17 @@ Chat is unavailable. Desktop and mobile reuse `TerminalChatTranscript`; no ACP
 connection or second event subscription is created. Compose, dictation targeting
 and answer marker rendering remain on the existing terminal paths.
 
-## Mobile Claude and ego terminal Chat view
+## Mobile terminal Chat view
 
 The terminal stays mounted. Chat edit tool disclosures render bounded
 old/new blocks, preserve tabs with four-space tab stops and scroll long lines
 horizontally. Claude Edit projection retains diff content through tool completion;
 failed calls remain labelled failed, not represented as applied edits.
 
-Claude and ego PTY sessions offer CLI / Chat in the existing mobile header. The shared
+Claude, Grok, Codex and ego PTY sessions offer CLI / Chat in the existing mobile header. The shared
 `TerminalChatTranscript` owns rendering, visibility-paused keepalive and backend
 unavailability. Mobile injects wakes from `useSessions`; it opens no additional
-EventSource. Both hosts defer Claude binding to the backend. Mobile retains the
+EventSource. Both hosts defer Claude binding to the backend. Mobile also defers Codex exact-hook and Grok registry binding to `chat_view_snapshot`; an unbound response returns to CLI with its reason. Desktop and mobile share the supported-adapter predicate. Mobile retains the
 existing composer and mounted hidden output, returning CLI to the bottom.
 Transcript follow pauses during touch and detaches on upward movement.
 
