@@ -78,6 +78,8 @@ export function SessionDetailScreen(props: SessionDetailScreenProps) {
 		});
 	});
 	const status = useDebouncedStatus(() => ({ ...props.session, state: sessionState() }));
+	// Native dialogs own their keys; otherwise report suggestions replace generic confirmations.
+	const showSuggestions = () => !sessionState()?.choice_prompt && !!sessionState()?.suggested_actions?.length;
 	const [moreOpen, setMoreOpen] = createSignal(false);
 	const [wideMarkdown, setWideMarkdown] = createSignal(window.innerWidth >= 768);
 	const [markdownOpen, setMarkdownOpen] = createSignal(false);
@@ -562,7 +564,7 @@ export function SessionDetailScreen(props: SessionDetailScreenProps) {
 					onScrollToBottom={() => (chat.active() ? chat.scrollToBottom() : jumpCli?.())}
 				/>
 			</div>
-			<Show when={!sessionState()?.awaiting_input && sessionState()?.suggested_actions?.length}>
+			<Show when={showSuggestions()}>
 				<SuggestChips
 					sessionId={props.session.session_id}
 					items={sessionState()!.suggested_actions!}
@@ -573,7 +575,7 @@ export function SessionDetailScreen(props: SessionDetailScreenProps) {
 				<TerminalKeybar
 					sessionId={props.session.session_id}
 					agentType={sessionState()?.agent_type as string | null | undefined}
-					awaitingInput={sessionState()?.awaiting_input}
+					awaitingInput={sessionState()?.awaiting_input && !showSuggestions()}
 					choicePromptOpen={!!sessionState()?.choice_prompt}
 					questionConfident={sessionState()?.question_confident}
 					sessionExists={props.sessionExists}
