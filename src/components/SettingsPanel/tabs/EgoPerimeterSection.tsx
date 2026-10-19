@@ -99,10 +99,6 @@ export const EgoPerimeterSection: Component<{ client?: EgoPerimeterClient }> = (
 									{editingRoots() ? "Hide folder editor" : "Add folder"}
 								</button>
 							}
-							description={t(
-								"perimeter.hint",
-								"ego roots extend the AI Chat workspace; they do not replace it. These defaults apply to new ego runs. Running conversations keep their admitted perimeter.",
-							)}
 						>
 							<p class={s.hint}>
 								{t("perimeter.target", "Profile:")} {loaded().profile ?? t("perimeter.userDefaults", "user defaults")}

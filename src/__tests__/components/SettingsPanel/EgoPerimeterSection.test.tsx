@@ -40,6 +40,7 @@ describe("EgoPerimeterSection", () => {
 		expect(await screen.findByText("Not verified here")).toBeTruthy();
 		expect(screen.queryByText("Enforced by OS")).toBeNull();
 		expect(screen.getByText(initial.preview)).toBeTruthy();
+		expect(screen.queryByText(/ego roots extend the AI Chat workspace/)).toBeNull();
 		fireEvent.click(screen.getByRole("button", { name: "Add folder" }));
 		expect((screen.getByLabelText("Root directory") as HTMLInputElement).value).toBe("/Users/stefano.straus/Gits");
 	});

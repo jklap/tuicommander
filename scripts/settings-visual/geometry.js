@@ -30,10 +30,13 @@
  if(breadcrumb&&header)check('consistent breadcrumb to header gap',Math.abs(rect(header).y-rect(breadcrumb).bottom-12)<=1,{breadcrumb:rect(breadcrumb),header:rect(header)});
  const upstream=byText('h3','Upstream MCP Servers');
  if(upstream){const card=upstream.closest('section'),row=card.parentElement.previousElementSibling;
-  const add=card.querySelector('button[title="Add upstream server"]'),description=[...card.querySelectorAll('p')].find(e=>e.textContent.includes('Proxy external MCP servers through TUIC.'));
-  const a=rect(add),d=rect(description);
-  check('upstream add action reserves description gap',a.bottom+8<=d.y||d.bottom+8<=a.y||a.right+8<=d.x||d.right+8<=a.x,{action:a,description:d});
+  const add=card.querySelector('button[title="Add upstream server"]'),selector=card.querySelector('select')??byText('p','No upstream servers configured.');
+  const a=rect(add),d=rect(selector);
+  check('upstream add action stays clear of card content',a.bottom+8<=d.y||d.bottom+8<=a.y||a.right+8<=d.x||d.right+8<=a.x,{action:a,selector:d});
 check('upstream card separated from connection row',rect(card).y-rect(row).bottom>=16,{card:rect(card),row:rect(row)});check('shared card heading size',getComputedStyle(upstream).fontSize==='15px',{size:getComputedStyle(upstream).fontSize});}
+ for(const badge of content.querySelectorAll('header [data-testid="status-badge"]')){const b=rect(badge),h=rect(badge.closest('header'));check('header badge stays within header',b.right<=h.right+1&&b.x>=h.x-1,{badge:b,header:h});check('header badge is legible or ellipsized',badge.scrollWidth<=badge.clientWidth+1||getComputedStyle(badge).textOverflow==='ellipsis',{clientWidth:badge.clientWidth,scrollWidth:badge.scrollWidth});}
+ for(const label of content.querySelectorAll('[class*="catalogueLabel"]')){const control=label.querySelector('input,select');if(control){const range=document.createRange();range.selectNode(label.firstChild);const a=rect(control),b=range.getBoundingClientRect();check('catalogue label has control gap',a.y-b.bottom>=8,{control:a,label:{bottom:b.bottom}});}}
+ const pluginEmpty=byText('p','No plugins installed.');if(pluginEmpty)check('plugin empty state has vertical space',parseFloat(getComputedStyle(pluginEmpty).paddingTop)>=16&&parseFloat(getComputedStyle(pluginEmpty).paddingBottom)>=16,{empty:rect(pluginEmpty)});
  const autoFetch=byText('label','Auto-Fetch Interval');
  if(autoFetch){const control=document.getElementById(autoFetch.htmlFor);if(control){const a=rect(autoFetch),b=rect(control);check('repository label before select',innerWidth>600?a.x<b.x&&a.y<=b.bottom:a.bottom<=b.y,{label:a,control:b});}}
  const select=document.querySelector('select[aria-label="Settings page"]');

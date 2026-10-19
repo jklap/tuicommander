@@ -118,7 +118,6 @@ export const AiChatTab: Component<{
 			<SettingPageHeader
 				title="AI Chat"
 				description="Agent defaults and access for new ego runs. Running conversations are unchanged."
-				scope="New ego runs"
 				breadcrumb="AI / AI Chat"
 			/>
 			<SectionCard title="Agent and model">

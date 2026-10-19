@@ -62,15 +62,6 @@ export const LocalMcpPanel: Component = () => {
 				breadcrumb="Integrations / MCP"
 			/>
 			<SectionCard title="Server connections">
-				<div class={s.group}>
-					<p class={s.hint}>
-						{t(
-							"services.hint.httpDescription",
-							"Serves the REST API and MCP protocol for AI agents and automation tools",
-						)}
-					</p>
-				</div>
-
 				<SettingRow label={t("services.label.serverStatus", "Server Status")}>
 					{() => (
 						<>
@@ -86,13 +77,7 @@ export const LocalMcpPanel: Component = () => {
 					)}
 				</SettingRow>
 
-				<SettingRow
-					label={t("services.label.mcpConnection", "MCP Connection")}
-					hint={t(
-						"services.hint.mcpConnection",
-						"AI agents connect via the tuic-bridge sidecar. MCP configs are auto-installed in supported agents (Claude Code, Cursor, etc.).",
-					)}
-				>
+				<SettingRow label={t("services.label.mcpConnection", "MCP Connection")}>
 					{() => <StatusBadge label="tuic-bridge" />}
 				</SettingRow>
 

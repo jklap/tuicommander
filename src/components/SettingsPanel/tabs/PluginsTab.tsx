@@ -483,9 +483,7 @@ export const PluginsTab: Component<{
 
 					<Show
 						when={plugins().length > 0}
-						fallback={
-							<p class={s.hint}>No plugins installed. Use the buttons below to install from a folder or ZIP file.</p>
-						}
+						fallback={<p class={`${s.hint} ${ps.emptyState}`}>No plugins installed.</p>}
 					>
 						<div class={ps.pluginList}>
 							<For each={plugins() as PluginState[]}>

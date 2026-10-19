@@ -325,7 +325,7 @@ export const AllSettingsTab: Component<{ initialSetting?: string }> = (props) =>
 				scope="Current instance / machine"
 			/>
 			<SectionCard title="Catalogue inspector">
-				<label class={s.group}>
+				<label class={`${s.group} ${s.catalogueLabel}`}>
 					Setting
 					<Select
 						data-non-setting="Select an owner field to inspect"
@@ -350,7 +350,7 @@ export const AllSettingsTab: Component<{ initialSetting?: string }> = (props) =>
 						.filter(({ part }) => part.startsWith("{"))}
 				>
 					{({ part, index }) => (
-						<label class={s.group}>
+						<label class={`${s.group} ${s.catalogueLabel}`}>
 							Existing record {part}
 							<Input
 								data-non-setting="Bind a catalogue path to an existing stable record key"
@@ -361,7 +361,7 @@ export const AllSettingsTab: Component<{ initialSetting?: string }> = (props) =>
 					)}
 				</For>
 				<Show when={field().owner === "repository"}>
-					<label class={s.group}>
+					<label class={`${s.group} ${s.catalogueLabel}`}>
 						Registered repository
 						<Select
 							data-non-setting="Select the repository settings owner"
@@ -376,7 +376,7 @@ export const AllSettingsTab: Component<{ initialSetting?: string }> = (props) =>
 					</label>
 				</Show>
 				<Show when={field().store === "ego" && field().owner === "profile"}>
-					<label class={s.group}>
+					<label class={`${s.group} ${s.catalogueLabel}`}>
 						Ego profile (empty uses machine)
 						<Input
 							data-non-setting="Select an existing Ego profile owner"

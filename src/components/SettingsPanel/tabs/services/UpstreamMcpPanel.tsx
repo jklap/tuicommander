@@ -636,12 +636,6 @@ export const UpstreamMcpPanel: Component = () => {
 					</button>
 				}
 			>
-				<div class={s.group}>
-					<p class={s.hint}>
-						Proxy external MCP servers through TUIC. Their tools appear prefixed as <code>{"{name}__{tool}"}</code>.
-					</p>
-				</div>
-
 				<MachineSelector value={machine()} label="Upstreams on" onChange={setMachine} />
 
 				{/* Add upstream form */}
@@ -836,7 +830,7 @@ export const UpstreamMcpPanel: Component = () => {
 				{/* Upstream list */}
 				<Show when={upstreams().length === 0 && !showAdd()}>
 					<p class={s.hint} style={{ color: "var(--text-dimmed)" }}>
-						No upstream servers configured. Click <strong>+</strong> to add one.
+						No upstream servers configured.
 					</p>
 				</Show>
 

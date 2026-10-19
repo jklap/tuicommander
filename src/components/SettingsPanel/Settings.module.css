@@ -1586,3 +1586,11 @@
   .navSearch { padding: 0; min-width: 0; }
   .compactNav { min-width: 0; }
 }
+
+/* Catalogue labels wrap their controls rather than sharing a setting row. */
+.catalogueLabel { display: flex; flex-direction: column; gap: 8px; }
+.catalogueLabel select { padding-inline-end: 32px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* Reserve the badge width on the final inline label fragment, then occupy that space. */
+.helpLabel > label:has(+ .infoBadge) { padding-inline-end: 20px; }
+.helpLabel > label + .infoBadge { margin-inline-start: -14px; }

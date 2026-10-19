@@ -54,6 +54,7 @@ describe("AiChatTab", () => {
 		const { container } = render(() => <AiChatTab client={client} />);
 		expect(await screen.findByRole("combobox")).toBeTruthy();
 		expect(screen.getByRole("button", { name: "Refresh from providers" })).toBeTruthy();
+		expect(screen.queryByText("New ego runs")).toBeNull();
 		// Catches implementation prose returning beside otherwise functional controls.
 		expect(container.textContent).not.toMatch(
 			/TUICommander owns|stored by ego|re-enumerate its sources|Credential state comes from/,

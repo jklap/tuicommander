@@ -9,7 +9,7 @@ import s from "./SettingsPrimitives.module.css";
 export function SettingPageHeader(props: {
 	title: string;
 	description?: string;
-	scope: string;
+	scope?: string;
 	source?: JSX.Element;
 	actions?: JSX.Element;
 	icon?: JSX.Element;
@@ -31,10 +31,12 @@ export function SettingPageHeader(props: {
 						<p class={s.source}>{props.source}</p>
 					</Show>
 				</div>
-				<div class={s.actions}>
-					<StatusBadge label={props.scope} />
-					{props.actions}
-				</div>
+				<Show when={props.scope || props.actions}>
+					<div class={s.actions}>
+						<Show when={props.scope}>{(scope) => <StatusBadge label={scope()} title={scope()} />}</Show>
+						{props.actions}
+					</div>
+				</Show>
 			</header>
 		</div>
 	);
