@@ -183,6 +183,14 @@ parent's environment) then cannot label the wrong tab. A TUIC tmux-shim pane is 
 with its own `$TUIC_PTY_TTY` (`tmux_routes` test
 `each_tmux_shim_pane_shell_carries_its_own_pty_device`), so it resolves correctly either way.
 
+**Decision (2026-10-13): the `tuic-hook` binary keeps env-first.** It is the main Claude Code
+hook path, Claude's hook parent is detached (a live-tty lookup yields nothing there, so
+live-first would fall through to the variable anyway), and TUIC stamps `TUIC_PTY_TTY` last on
+every PTY it spawns, so a TUIC-spawned process always carries its own device. The shell paths
+flipped because they must also work for a process whose parent tty *is* readable and whose
+inherited variable may belong to another tab. Revisit if a real mislabeled-tab report names the
+binary; the change would be one lookup reordered in `tty.rs::resolve` plus its tests.
+
 ## Wire format
 
 ```
