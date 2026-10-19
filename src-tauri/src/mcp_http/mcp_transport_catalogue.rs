@@ -896,35 +896,55 @@ pub(crate) fn native_tool_catalog() -> Vec<serde_json::Value> {
         .collect()
 }
 
-/// Apply the two config-driven filters (`disabled_native_tools`,
-/// `progress_tracking`) to the full native tool list. Centralised so
-/// every listing/search path uses the same rules — adding a future config
-/// flag means editing one place instead of chasing duplicated closures.
+/// Shared discovery/dispatch gate. Conditions describe owner configuration, not
+/// caller authority: conversation binding, registration and deployment consent
+/// remain enforced by the respective handlers.
+pub(super) fn native_tool_unavailability(state: &AppState, name: &str) -> Option<String> {
+    if state
+        .config
+        .read()
+        .disabled_native_tools
+        .iter()
+        .any(|tool| tool == name)
+    {
+        return Some(format!("Tool '{name}' is disabled by configuration"));
+    }
+    let reason = match name {
+        "remote" if !state.remote.has_connected_server() => "no connected remote server",
+        "voice" if !voice_configured() => "voice is not configured",
+        "telegram" if !crate::telegram::settings::configured() => "Telegram is not configured",
+        _ => return None,
+    };
+    Some(format!("Tool '{name}' is unavailable: {reason}"))
+}
+
+fn voice_configured() -> bool {
+    // An unset engine resolves to Edge, so engine selection is not an opt-in.
+    // Read the persisted owner flags and fail closed on a missing/corrupt file.
+    std::fs::read(crate::config::config_dir().join("dictation-config.json"))
+        .ok()
+        .and_then(|bytes| serde_json::from_slice::<crate::config::DictationConfig>(&bytes).ok())
+        .is_some_and(|config| config.enabled && config.hands_free_spoken_replies)
+}
+
+/// Apply the same native availability gate used at dispatch to every catalogue.
 pub(super) fn filtered_native_tools(state: &Arc<AppState>) -> Vec<serde_json::Value> {
-    let (disabled, progress_tracking, settings_enabled) = {
+    let (progress_tracking, settings_enabled) = {
         let cfg = state.config.read();
-        let disabled: std::collections::HashSet<String> =
-            cfg.disabled_native_tools.iter().cloned().collect();
-        (disabled, cfg.progress_tracking, cfg.settings_mcp_enabled)
+        (cfg.progress_tracking, cfg.settings_mcp_enabled)
     };
     native_tool_definitions()
         .as_array()
         .cloned()
         .unwrap_or_default()
         .into_iter()
-        .filter(|t| {
-            let name = t["name"].as_str().unwrap_or("");
-            // The global half of `progress_tracking`. It is deliberately the
-            // global one and not the effective per-agent value: this list also
-            // feeds `searchable_tool_definitions`, which builds ONE cached index
-            // for every session, so a per-agent answer here would be whichever
-            // agent happened to trigger the last rebuild. The per-agent escape
-            // hatch is enforced where a report is recorded, which answers
-            // `progress_tracking_disabled` instead of hiding the tool.
-            if !progress_tracking && name == "progress" {
-                return false;
-            }
-            (name != "settings" || settings_enabled) && !disabled.contains(name)
+        .filter(|tool| {
+            let name = tool["name"].as_str().unwrap_or("");
+            // This index is shared across callers; per-agent progress policy
+            // remains enforced by the report owner rather than discovery.
+            (progress_tracking || name != "progress")
+                && (settings_enabled || name != "settings")
+                && native_tool_unavailability(state, name).is_none()
         })
         .collect()
 }
@@ -1077,7 +1097,10 @@ pub(super) fn handle_search_tools_for_session(
 
     let ranked: Vec<serde_json::Value> = results
         .iter()
-        .filter(|e| e.name != "design_mode" || visible)
+        .filter(|e| {
+            (e.name != "design_mode" || visible)
+                && native_tool_unavailability(state, &e.name).is_none()
+        })
         .take(limit)
         .map(|e| serde_json::json!({ "name": e.name, "summary": e.summary }))
         .collect();
@@ -1124,6 +1147,9 @@ pub(super) fn handle_get_tool_schema_for_session(
         }
     };
 
+    if native_tool_unavailability(state, tool_name).is_some() {
+        return serde_json::json!({"error": format!("Tool '{tool_name}' not found. Use search_tools to discover available tools.")});
+    }
     let origin = super::mcp_transport_ancillary::resolve_mcp_origin_pty(state, mcp_session_id);
     if tool_name == "design_mode" && !crate::design_mode::mcp::visible_to(state, origin.as_deref())
     {

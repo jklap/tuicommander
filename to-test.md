@@ -1,3 +1,7 @@
+## Conditional MCP tools (2066-516c, 2067-e708) — Rust restart required
+
+- [ ] After Boss manually restarts the backend with `make dev` or installs `make build`, verify a downstream MCP client refreshes after remote connect/disconnect and Voice/Telegram configuration changes. Clients that ignore `notifications/tools/list_changed` need a reconnect. The running desktop does not load these Rust changes; this peer did not restart it. Conversation binding, Telegram registration and remote digest/session-loss confirmation remain required.
+
 ## Ego PID index (2058-0d0e) — Rust restart required
 
 - [ ] After Boss manually restarts `make dev` or installs `make build`, confirm an ego terminal discovers its active conversation through the PID index. The live backend does not hot-reload Rust. This peer did not restart or change the installed desktop instance.

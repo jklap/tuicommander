@@ -1,5 +1,7 @@
 # TUICommander Specification
 
+Conditional MCP tools (#2066-516c, conditional portion of #2067-e708): remote requires a live authenticated connected server; voice requires persisted dictation enabled and spoken replies enabled; Telegram requires enabled setup, a bot alias and its private token file. Shared predicates gate listing, search, schema lookup and calls. Owner changes invalidate the catalogue. Configuration does not replace conversation binding, Telegram registration or deployment consent. Design Mode regrouping remains a separate cutover.
+
 - [x] Mobile Markdown review sends persisted edits and tweak comments through the shared desktop prompt and backend idle queue, with repository agent selection and delivery feedback (#2042-a71b).
 
 - [x] Durable independent peer-mail subscriptions: shared insertion journal, filtered bounded replay, explicit acknowledgement, retention-loss counters, HTTP SSE and ACP resource notifications (#2004-4760).

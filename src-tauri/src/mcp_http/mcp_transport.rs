@@ -525,16 +525,8 @@ async fn dispatch_mcp_tool_call_with_context(
     if name == "config" {
         return serde_json::json!({"error":"Unknown tool 'config'"});
     }
-    // Enforce disabled_native_tools on every call path (not just the call_tool meta-tool).
-    // Read-guard does not span an await and is released at the end of the `if` expression.
-    if state
-        .config
-        .read()
-        .disabled_native_tools
-        .iter()
-        .any(|d| d == name)
-    {
-        return serde_json::json!({"error": format!("Tool '{}' is disabled by configuration", name)});
+    if let Some(error) = super::mcp_transport_catalogue::native_tool_unavailability(state, name) {
+        return serde_json::json!({"error": error});
     }
     if let Some(action) = args["action"].as_str()
         && let Some(replacement) = removed_native_action_replacement(name, action)

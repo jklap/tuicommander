@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+- List and allow `remote`, `voice` and `telegram` only when their owning connection/configuration is available; share discovery and call gates and notify clients when conditions change (#2066-516c, #2067-e708).
+
 - Resolve ego session discovery through its per-PID index and held writer lease without scanning historical sessions; retain legacy lookup only when the index is absent (#2058-0d0e).
 
 - Keep GitHub network proof lookups off the worktree-list request path; use cached definitive answers or conservative local classification, with fresh checkout safety fields (#2044-31f3).

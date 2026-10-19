@@ -564,6 +564,9 @@ fn story_tool_publishes_its_input_schema_and_tracking_only_actor_contract() {
 /// into whichever conversation happened to be armed.
 #[tokio::test]
 async fn voice_binds_to_the_calling_terminal_on_the_direct_and_collapsed_paths() {
+    let dir = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+    let _guard = crate::config::set_config_dir_override(dir.path().to_path_buf());
+    write_voice_config(dir.path(), true, true);
     let state = test_state();
 
     let unbound_direct = tool_call_text(
