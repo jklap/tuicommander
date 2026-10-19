@@ -58,6 +58,7 @@ pub(super) fn complete_schema(tool: &mut Value) {
         }
         "agent" => {
             required(&["send"], &["to", "message"]);
+            required(&["task_get", "task_cancel"], &["task_id"]);
             required(&["subscribe", "ack", "unsubscribe"], &["subscription_id"]);
             required(&["ack"], &["cursor"]);
         }
@@ -213,6 +214,23 @@ pub(super) fn validate(name: &str, args: &Value) -> Option<Value> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Catches: agent task actions accept a missing or non-string task handle before dispatch.
+    #[test]
+    fn agent_task_actions_require_a_string_task_id() {
+        for action in ["task_get", "task_cancel"] {
+            for args in [
+                json!({"action":action}),
+                json!({"action":action,"task_id":1}),
+            ] {
+                assert_eq!(
+                    validate("agent", &args).unwrap()["code"],
+                    "invalid_arguments"
+                );
+            }
+            assert!(validate("agent", &json!({"action":action,"task_id":"handle"})).is_none());
+        }
+    }
 
     /// Catches: newly advertised subscription actions omit their repairable required fields.
     #[test]

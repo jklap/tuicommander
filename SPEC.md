@@ -678,6 +678,7 @@ Some frontend-only stores persist to localStorage:
 - [x] Sidebar PR badges retain `#number` while showing lifecycle, conflict, CI, and review state
 - [x] Parallel agent orchestration
 - [x] Orchestrated PTY task descriptions with prompt-derived fallback metadata
+- [x] Agent task_get/task_cancel share the existing task service, spawning-owner checks and immutable outcomes; task cancellation leaves the PTY alive. The current task tool stays until catalogue cutover (#2064-6385).
 - [x] Page retained MCP terminal output through text/byte offsets, with continuation instructions and eviction-gap reporting
 - [x] One-call MCP managed-agent submission with bounded terminal-movement receipt
 - [x] Expandable terminal Context bar for agent intent, orchestrator assignment, and last user prompt
