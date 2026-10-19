@@ -60,6 +60,11 @@ opt-level = 1
 opt-level = 0
 debug = 0
 
+# The full-corpus history replays run near the 120s harness bound at O0.
+# Keep the root test crate at O0; optimize the grid adapter and replay oracle.
+[profile.test.package.tuic-terminal]
+opt-level = 1
+
 [profile.release]
 lto = "thin"
 codegen-units = 1
