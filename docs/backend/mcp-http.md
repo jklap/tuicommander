@@ -649,11 +649,18 @@ does not add another blanket wrapper.
 
 ### Native argument repair contract (#2007-59f6)
 
-The native tool's advertised `inputSchema` is enforced before dispatch, both for
-direct tools and `call_tool`, on HTTP and MCP-over-ACP. Action enums and standard
-`if`/`then` requirements describe conditional fields (for example `ui tab` needs
-`id`, `title`, and exactly one of `html`/`url`). A local-only JSON Schema validator
-uses those same definitions; validation cannot fetch external schema references.
+Native argument contracts are enforced before dispatch, both for direct tools
+and `call_tool`, on HTTP and MCP-over-ACP. The server keeps the complete private
+JSON Schema, including action-dependent requirements (for example `ui tab` needs
+`id`, `title`, and exactly one of `html`/`url`). Validation cannot fetch external
+schema references.
+
+Advertised `inputSchema` objects have no root `oneOf`, `anyOf`, or `allOf`:
+Anthropic tool clients reject that shape. Full listing, lazy search, and exact
+schema lookup publish the same flat action enum and properties. Conditional
+requirements are in description text; nested parameter alternatives use `anyOf`.
+The private validator still enforces exclusive alternatives and required fields
+before any effect starts, including grouped workflow actions and agent task handles.
 Static rejection returns a tool error with:
 
 - `code: "invalid_arguments"`, `outcome: "rejected"`, `effect: "not_started"`;
@@ -2781,4 +2788,4 @@ measurement is not a claim about product-wide token or latency savings.
 `session action=input` also accepts only `pty_description` (string or null).
 This updates or clears the context-bar description without sending PTY bytes.
 
-Managed `agent action=launch` uses the same advertised pre-dispatch static contract as other native actions. Discovery includes the disjoint receipt-read and creation forms, exclusive workspace shapes, and nested spawn argument types. Invalid calls return structured `invalid_arguments` with `effect=not_started` before the launch journal or PTY is touched.
+Managed `agent action=launch` uses the same private pre-dispatch static contract as other native actions. Discovery describes the disjoint receipt-read and creation forms, workspace alternatives, and nested spawn argument types; the server enforces exclusivity. Invalid calls return structured `invalid_arguments` with `effect=not_started` before the launch journal or PTY is touched.

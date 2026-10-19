@@ -1626,9 +1626,9 @@ mod critic_story_tool_text {
             .expect("story tool")
             .clone();
         let description = definition["description"].as_str().unwrap_or_default();
-        let variants = definition["inputSchema"]["properties"]["input"]["oneOf"]
+        let variants = definition["inputSchema"]["properties"]["input"]["anyOf"]
             .as_array()
-            .expect("oneOf");
+            .expect("anyOf");
         let mut missing = Vec::new();
         for variant in variants {
             let action = &variant["properties"]["action"];
