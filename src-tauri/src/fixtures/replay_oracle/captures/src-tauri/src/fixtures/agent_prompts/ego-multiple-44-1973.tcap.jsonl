@@ -25,8 +25,8 @@
 {"record":25,"state":{"shell":1,"agent":"working","awaiting":false,"question":null,"confident":false,"last_question":null,"choice_sig":null,"fullscreen":false}}
 {"record":27,"state":{"shell":1,"agent":"working","awaiting":false,"question":null,"confident":false,"last_question":null,"choice_sig":null,"fullscreen":false}}
 {"record":28,"event":{"type":"question","prompt_text":"","confident":true,"_turn_epoch":0}}
-{"record":28,"state":{"shell":1,"agent":"awaiting_input","awaiting":true,"question":"","confident":true,"last_question":"","choice_sig":null,"fullscreen":false}}
-{"record":29,"state":{"shell":1,"agent":"awaiting_input","awaiting":true,"question":"","confident":true,"last_question":"","choice_sig":null,"fullscreen":false}}
+{"record":28,"state":{"shell":1,"agent":"awaiting_input","awaiting":true,"question":"","confident":true,"last_question":null,"choice_sig":null,"fullscreen":false}}
+{"record":29,"state":{"shell":1,"agent":"awaiting_input","awaiting":true,"question":"","confident":true,"last_question":null,"choice_sig":null,"fullscreen":false}}
 {"record":31,"event":{"type":"choice-prompt","title":"Which release checks should we run?","options":[{"key":"1","label":"[ ] Parser regression Replay the recorded terminal output","highlighted":true,"destructive":false},{"key":"2","label":"[ ] Mobile answer controls Verify the mobile question card","highlighted":false,"destructive":false}],"selection_mode":"toggle-enter","dismiss_key":"cancel","_turn_epoch":0}}
-{"record":31,"state":{"shell":1,"agent":"awaiting_input","awaiting":true,"question":"Which release checks should we run?","confident":true,"last_question":"","choice_sig":"Which release checks should we run?|1,2|[ ] Parser regression Replay the recorded terminal output|[ ] Mobile answer controls Verify the mobile question card","fullscreen":false}}
+{"record":31,"state":{"shell":1,"agent":"awaiting_input","awaiting":true,"question":"Which release checks should we run?","confident":true,"last_question":null,"choice_sig":"Which release checks should we run?|1,2|[ ] Parser regression Replay the recorded terminal output|[ ] Mobile answer controls Verify the mobile question card","fullscreen":false}}
 {"ring_len":1648}

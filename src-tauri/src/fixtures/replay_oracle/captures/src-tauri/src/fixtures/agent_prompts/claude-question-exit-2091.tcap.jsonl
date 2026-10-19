@@ -23,6 +23,7 @@
 {"record":21,"state":{"shell":1,"agent":"working","awaiting":false,"question":null,"confident":false,"last_question":null,"choice_sig":null,"fullscreen":false}}
 {"record":22,"state":{"shell":1,"agent":"working","awaiting":false,"question":null,"confident":false,"last_question":null,"choice_sig":null,"fullscreen":false}}
 {"record":23,"state":{"shell":1,"agent":"working","awaiting":false,"question":null,"confident":false,"last_question":null,"choice_sig":null,"fullscreen":false}}
+{"record":24,"event":{"type":"progress","state":0,"_turn_epoch":0}}
 {"record":24,"state":{"shell":1,"agent":"working","awaiting":false,"question":null,"confident":false,"last_question":null,"choice_sig":null,"fullscreen":false}}
 {"record":25,"state":{"shell":1,"agent":"working","awaiting":false,"question":null,"confident":false,"last_question":null,"choice_sig":null,"fullscreen":false}}
 {"record":26,"state":{"shell":1,"agent":"working","awaiting":false,"question":null,"confident":false,"last_question":null,"choice_sig":null,"fullscreen":false}}
@@ -34,6 +35,7 @@
 {"record":32,"state":{"shell":1,"agent":"working","awaiting":false,"question":null,"confident":false,"last_question":null,"choice_sig":null,"fullscreen":false}}
 {"record":33,"state":{"shell":1,"agent":"working","awaiting":false,"question":null,"confident":false,"last_question":null,"choice_sig":null,"fullscreen":false}}
 {"record":36,"state":{"shell":1,"agent":"working","awaiting":false,"question":null,"confident":false,"last_question":null,"choice_sig":null,"fullscreen":false}}
+{"record":37,"event":{"type":"progress","state":3,"_turn_epoch":0}}
 {"record":37,"state":{"shell":1,"agent":"working","awaiting":false,"question":null,"confident":false,"last_question":null,"choice_sig":null,"fullscreen":false}}
 {"record":38,"state":{"shell":1,"agent":"working","awaiting":false,"question":null,"confident":false,"last_question":null,"choice_sig":null,"fullscreen":false}}
 {"record":39,"event":{"type":"status-line","task_name":"Finagling","full_line":"✶ Finagling… (running UserPromptSubmit hooks… 0/4 · 0s)","time_info":null,"token_info":null,"_turn_epoch":0}}
@@ -135,11 +137,11 @@
 {"record":131,"event":{"type":"user-input","content":"","line":-1,"_turn_epoch":0}}
 {"record":131,"state":{"shell":1,"agent":"working","awaiting":false,"question":null,"confident":false,"last_question":null,"choice_sig":null,"fullscreen":false}}
 {"record":132,"event":{"type":"question","prompt_text":"","confident":true,"_turn_epoch":0}}
-{"record":132,"state":{"shell":1,"agent":"awaiting_input","awaiting":true,"question":"","confident":true,"last_question":"","choice_sig":null,"fullscreen":false}}
-{"record":133,"state":{"shell":1,"agent":"awaiting_input","awaiting":true,"question":"","confident":true,"last_question":"","choice_sig":null,"fullscreen":false}}
-{"record":134,"state":{"shell":1,"agent":"awaiting_input","awaiting":true,"question":"","confident":true,"last_question":"","choice_sig":null,"fullscreen":false}}
-{"record":135,"state":{"shell":1,"agent":"awaiting_input","awaiting":true,"question":"","confident":true,"last_question":"","choice_sig":null,"fullscreen":false}}
-{"record":136,"state":{"shell":1,"agent":"awaiting_input","awaiting":true,"question":"","confident":true,"last_question":"","choice_sig":null,"fullscreen":false}}
+{"record":132,"state":{"shell":1,"agent":"awaiting_input","awaiting":true,"question":"","confident":true,"last_question":null,"choice_sig":null,"fullscreen":false}}
+{"record":133,"state":{"shell":1,"agent":"awaiting_input","awaiting":true,"question":"","confident":true,"last_question":null,"choice_sig":null,"fullscreen":false}}
+{"record":134,"state":{"shell":1,"agent":"awaiting_input","awaiting":true,"question":"","confident":true,"last_question":null,"choice_sig":null,"fullscreen":false}}
+{"record":135,"state":{"shell":1,"agent":"awaiting_input","awaiting":true,"question":"","confident":true,"last_question":null,"choice_sig":null,"fullscreen":false}}
+{"record":136,"state":{"shell":1,"agent":"awaiting_input","awaiting":true,"question":"","confident":true,"last_question":null,"choice_sig":null,"fullscreen":false}}
 {"record":137,"event":{"type":"question","prompt_text":"Enter to select · ↑/↓ to navigate · Esc to cancel","confident":true,"_turn_epoch":0}}
 {"record":137,"event":{"type":"choice-prompt","title":"Proceed with the isolated exit regression check?","options":[{"key":"1","label":"Yes","highlighted":true,"destructive":false},{"key":"2","label":"No","highlighted":false,"destructive":true},{"key":"3","label":"Type something.","highlighted":false,"destructive":false},{"key":"4","label":"Chat about this","highlighted":false,"destructive":false}],"selection_mode":"navigate-enter","dismiss_key":"cancel","_turn_epoch":0}}
 {"record":137,"state":{"shell":1,"agent":"awaiting_input","awaiting":true,"question":"Proceed with the isolated exit regression check?","confident":true,"last_question":"Enter to select · ↑/↓ to navigate · Esc to cancel","choice_sig":"Proceed with the isolated exit regression check?|1,2,3,4","fullscreen":false}}
@@ -147,12 +149,13 @@
 {"record":138,"state":{"shell":1,"agent":"awaiting_input","awaiting":true,"question":"Claude needs your permission","confident":true,"last_question":"Claude needs your permission","choice_sig":"Proceed with the isolated exit regression check?|1,2,3,4","fullscreen":false}}
 {"record":139,"state":{"shell":1,"agent":"awaiting_input","awaiting":true,"question":"Claude needs your permission","confident":true,"last_question":"Claude needs your permission","choice_sig":"Proceed with the isolated exit regression check?|1,2,3,4","fullscreen":false}}
 {"record":140,"state":{"shell":1,"agent":"awaiting_input","awaiting":true,"question":"Claude needs your permission","confident":true,"last_question":"Claude needs your permission","choice_sig":"Proceed with the isolated exit regression check?|1,2,3,4","fullscreen":false}}
+{"record":141,"event":{"type":"progress","state":0,"_turn_epoch":0}}
 {"record":141,"state":{"shell":1,"agent":"awaiting_input","awaiting":true,"question":"Claude needs your permission","confident":true,"last_question":"Claude needs your permission","choice_sig":"Proceed with the isolated exit regression check?|1,2,3,4","fullscreen":false}}
 {"record":142,"state":{"shell":1,"agent":"awaiting_input","awaiting":true,"question":"Claude needs your permission","confident":true,"last_question":"Claude needs your permission","choice_sig":"Proceed with the isolated exit regression check?|1,2,3,4","fullscreen":false}}
 {"record":143,"state":{"shell":1,"agent":"awaiting_input","awaiting":true,"question":"Claude needs your permission","confident":true,"last_question":null,"choice_sig":"Proceed with the isolated exit regression check?|1,2,3,4","fullscreen":false}}
 {"record":144,"event":{"type":"protocol-question-cleared"}}
 {"record":144,"event":{"type":"shell-state","state":"idle","agent_type":"claude"}}
-{"record":144,"event":{"type":"agent-block","action":"end","line":33,"_turn_epoch":0}}
+{"record":144,"event":{"type":"agent-block","action":"end","line":33,"on_alt_screen":false,"from_transcript_dump":false,"new_dump_generation":false,"_turn_epoch":0}}
 {"record":144,"state":{"shell":2,"agent":"working","awaiting":false,"question":null,"confident":false,"last_question":null,"choice_sig":"Proceed with the isolated exit regression check?|1,2,3,4","fullscreen":false}}
 {"record":145,"state":{"shell":2,"agent":"working","awaiting":false,"question":null,"confident":false,"last_question":null,"choice_sig":"Proceed with the isolated exit regression check?|1,2,3,4","fullscreen":false}}
 {"record":146,"state":{"shell":2,"agent":"working","awaiting":false,"question":null,"confident":false,"last_question":null,"choice_sig":"Proceed with the isolated exit regression check?|1,2,3,4","fullscreen":false}}

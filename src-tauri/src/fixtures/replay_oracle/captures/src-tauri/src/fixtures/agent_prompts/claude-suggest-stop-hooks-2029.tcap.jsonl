@@ -4,6 +4,7 @@
 {"record":2,"event":{"type":"shell-state","state":"busy","agent_type":"claude"}}
 {"record":2,"state":{"shell":1,"agent":"working","awaiting":false,"question":null,"confident":false,"last_question":null,"choice_sig":null,"fullscreen":false}}
 {"record":5,"state":{"shell":1,"agent":"working","awaiting":false,"question":null,"confident":false,"last_question":null,"choice_sig":null,"fullscreen":false}}
+{"record":6,"event":{"type":"progress","state":3,"_turn_epoch":0}}
 {"record":6,"state":{"shell":1,"agent":"working","awaiting":false,"question":null,"confident":false,"last_question":null,"choice_sig":null,"fullscreen":false}}
 {"record":7,"state":{"shell":1,"agent":"working","awaiting":false,"question":null,"confident":false,"last_question":null,"choice_sig":null,"fullscreen":false}}
 {"record":8,"event":{"type":"user-input","content":"","line":23,"_turn_epoch":0}}
@@ -78,7 +79,7 @@
 {"record":74,"state":{"shell":1,"agent":"working","awaiting":false,"question":null,"confident":false,"last_question":null,"choice_sig":null,"fullscreen":false}}
 {"record":75,"state":{"shell":1,"agent":"working","awaiting":false,"question":null,"confident":false,"last_question":null,"choice_sig":null,"fullscreen":false}}
 {"record":76,"event":{"type":"shell-state","state":"idle","agent_type":"claude"}}
-{"record":76,"event":{"type":"agent-block","action":"end","line":25,"_turn_epoch":0}}
+{"record":76,"event":{"type":"agent-block","action":"end","line":25,"on_alt_screen":false,"from_transcript_dump":false,"new_dump_generation":false,"_turn_epoch":0}}
 {"record":76,"state":{"shell":2,"agent":"working","awaiting":false,"question":null,"confident":false,"last_question":null,"choice_sig":null,"fullscreen":false}}
 {"record":77,"event":{"type":"shell-state","state":"busy","agent_type":"claude"}}
 {"record":77,"state":{"shell":1,"agent":"working","awaiting":false,"question":null,"confident":false,"last_question":null,"choice_sig":null,"fullscreen":false}}
@@ -86,6 +87,7 @@
 {"record":79,"state":{"shell":1,"agent":"working","awaiting":false,"question":null,"confident":false,"last_question":null,"choice_sig":null,"fullscreen":false}}
 {"record":80,"state":{"shell":1,"agent":"working","awaiting":false,"question":null,"confident":false,"last_question":null,"choice_sig":null,"fullscreen":false}}
 {"record":81,"state":{"shell":1,"agent":"working","awaiting":false,"question":null,"confident":false,"last_question":null,"choice_sig":null,"fullscreen":false}}
+{"record":82,"event":{"type":"progress","state":0,"_turn_epoch":0}}
 {"record":82,"state":{"shell":1,"agent":"working","awaiting":false,"question":null,"confident":false,"last_question":null,"choice_sig":null,"fullscreen":false}}
 {"record":83,"state":{"shell":1,"agent":"working","awaiting":false,"question":null,"confident":false,"last_question":null,"choice_sig":null,"fullscreen":false}}
 {"record":84,"state":{"shell":1,"agent":"working","awaiting":false,"question":null,"confident":false,"last_question":null,"choice_sig":null,"fullscreen":false}}

@@ -4,6 +4,7 @@
 {"record":2,"state":{"shell":0,"agent":"starting","awaiting":false,"question":null,"confident":false,"last_question":null,"choice_sig":null,"fullscreen":false}}
 {"record":3,"state":{"shell":0,"agent":"starting","awaiting":false,"question":null,"confident":false,"last_question":null,"choice_sig":null,"fullscreen":false}}
 {"record":4,"state":{"shell":0,"agent":"starting","awaiting":false,"question":null,"confident":false,"last_question":null,"choice_sig":null,"fullscreen":false}}
+{"record":5,"event":{"type":"progress","state":0,"_turn_epoch":0}}
 {"record":5,"state":{"shell":0,"agent":"starting","awaiting":false,"question":null,"confident":false,"last_question":null,"choice_sig":null,"fullscreen":false}}
 {"record":6,"state":{"shell":0,"agent":"starting","awaiting":false,"question":null,"confident":false,"last_question":null,"choice_sig":null,"fullscreen":false}}
 {"record":7,"event":{"type":"shell-state","state":"busy","agent_type":"claude"}}
@@ -16,6 +17,7 @@
 {"record":14,"state":{"shell":1,"agent":"working","awaiting":false,"question":null,"confident":false,"last_question":null,"choice_sig":null,"fullscreen":false}}
 {"record":16,"state":{"shell":1,"agent":"working","awaiting":false,"question":null,"confident":false,"last_question":null,"choice_sig":null,"fullscreen":false}}
 {"record":17,"state":{"shell":1,"agent":"working","awaiting":false,"question":null,"confident":false,"last_question":null,"choice_sig":null,"fullscreen":false}}
+{"record":18,"event":{"type":"progress","state":3,"_turn_epoch":0}}
 {"record":18,"state":{"shell":1,"agent":"working","awaiting":false,"question":null,"confident":false,"last_question":null,"choice_sig":null,"fullscreen":false}}
 {"record":19,"state":{"shell":1,"agent":"working","awaiting":false,"question":null,"confident":false,"last_question":null,"choice_sig":null,"fullscreen":false}}
 {"record":20,"event":{"type":"status-line","task_name":"Whirring","full_line":"✳ Whirring… (running UserPromptSubmit hooks… 0/4 · 0s)","time_info":null,"token_info":null,"_turn_epoch":0}}
@@ -107,7 +109,7 @@
 {"record":102,"state":{"shell":1,"agent":"working","awaiting":false,"question":null,"confident":false,"last_question":null,"choice_sig":null,"fullscreen":false}}
 {"record":103,"state":{"shell":1,"agent":"working","awaiting":false,"question":null,"confident":false,"last_question":null,"choice_sig":null,"fullscreen":false}}
 {"record":104,"event":{"type":"shell-state","state":"idle","agent_type":"claude"}}
-{"record":104,"event":{"type":"agent-block","action":"end","line":34,"_turn_epoch":0}}
+{"record":104,"event":{"type":"agent-block","action":"end","line":34,"on_alt_screen":false,"from_transcript_dump":false,"new_dump_generation":false,"_turn_epoch":0}}
 {"record":104,"state":{"shell":2,"agent":"working","awaiting":false,"question":null,"confident":false,"last_question":null,"choice_sig":null,"fullscreen":false}}
 {"record":105,"event":{"type":"shell-state","state":"busy","agent_type":"claude"}}
 {"record":105,"state":{"shell":1,"agent":"working","awaiting":false,"question":null,"confident":false,"last_question":null,"choice_sig":null,"fullscreen":false}}
@@ -116,6 +118,7 @@
 {"record":108,"state":{"shell":1,"agent":"working","awaiting":false,"question":null,"confident":false,"last_question":null,"choice_sig":null,"fullscreen":false}}
 {"record":109,"state":{"shell":1,"agent":"working","awaiting":false,"question":null,"confident":false,"last_question":null,"choice_sig":null,"fullscreen":false}}
 {"record":110,"state":{"shell":1,"agent":"working","awaiting":false,"question":null,"confident":false,"last_question":null,"choice_sig":null,"fullscreen":false}}
+{"record":111,"event":{"type":"progress","state":0,"_turn_epoch":0}}
 {"record":111,"state":{"shell":1,"agent":"working","awaiting":false,"question":null,"confident":false,"last_question":null,"choice_sig":null,"fullscreen":false}}
 {"record":112,"state":{"shell":1,"agent":"working","awaiting":false,"question":null,"confident":false,"last_question":null,"choice_sig":null,"fullscreen":false}}
 {"record":113,"state":{"shell":1,"agent":"working","awaiting":false,"question":null,"confident":false,"last_question":null,"choice_sig":null,"fullscreen":false}}
@@ -123,6 +126,7 @@
 {"record":116,"state":{"shell":1,"agent":"working","awaiting":false,"question":null,"confident":false,"last_question":null,"choice_sig":null,"fullscreen":false}}
 {"record":118,"state":{"shell":1,"agent":"working","awaiting":false,"question":null,"confident":false,"last_question":null,"choice_sig":null,"fullscreen":false}}
 {"record":120,"state":{"shell":1,"agent":"working","awaiting":false,"question":null,"confident":false,"last_question":null,"choice_sig":null,"fullscreen":false}}
+{"record":121,"event":{"type":"progress","state":3,"_turn_epoch":0}}
 {"record":121,"state":{"shell":1,"agent":"working","awaiting":false,"question":null,"confident":false,"last_question":null,"choice_sig":null,"fullscreen":false}}
 {"record":122,"state":{"shell":1,"agent":"working","awaiting":false,"question":null,"confident":false,"last_question":null,"choice_sig":null,"fullscreen":false}}
 {"record":123,"event":{"type":"status-line","task_name":"Recombobulating","full_line":"· Recombobulating… (running UserPromptSubmit hooks… 0/4 · 0s)","time_info":null,"token_info":null,"_turn_epoch":0}}
@@ -155,7 +159,7 @@
 {"record":148,"state":{"shell":1,"agent":"working","awaiting":false,"question":null,"confident":false,"last_question":null,"choice_sig":null,"fullscreen":false}}
 {"record":149,"state":{"shell":1,"agent":"working","awaiting":false,"question":null,"confident":false,"last_question":null,"choice_sig":null,"fullscreen":false}}
 {"record":150,"event":{"type":"shell-state","state":"idle","agent_type":"claude"}}
-{"record":150,"event":{"type":"agent-block","action":"end","line":40,"_turn_epoch":0}}
+{"record":150,"event":{"type":"agent-block","action":"end","line":40,"on_alt_screen":false,"from_transcript_dump":false,"new_dump_generation":false,"_turn_epoch":0}}
 {"record":150,"state":{"shell":2,"agent":"working","awaiting":false,"question":null,"confident":false,"last_question":null,"choice_sig":null,"fullscreen":false}}
 {"record":151,"event":{"type":"shell-state","state":"busy","agent_type":"claude"}}
 {"record":151,"state":{"shell":1,"agent":"working","awaiting":false,"question":null,"confident":false,"last_question":null,"choice_sig":null,"fullscreen":false}}
@@ -163,6 +167,7 @@
 {"record":153,"state":{"shell":1,"agent":"working","awaiting":false,"question":null,"confident":false,"last_question":null,"choice_sig":null,"fullscreen":false}}
 {"record":154,"state":{"shell":1,"agent":"working","awaiting":false,"question":null,"confident":false,"last_question":null,"choice_sig":null,"fullscreen":false}}
 {"record":155,"state":{"shell":1,"agent":"working","awaiting":false,"question":null,"confident":false,"last_question":null,"choice_sig":null,"fullscreen":false}}
+{"record":156,"event":{"type":"progress","state":0,"_turn_epoch":0}}
 {"record":156,"state":{"shell":1,"agent":"working","awaiting":false,"question":null,"confident":false,"last_question":null,"choice_sig":null,"fullscreen":false}}
 {"record":157,"state":{"shell":1,"agent":"working","awaiting":false,"question":null,"confident":false,"last_question":null,"choice_sig":null,"fullscreen":false}}
 {"record":158,"state":{"shell":1,"agent":"working","awaiting":false,"question":null,"confident":false,"last_question":null,"choice_sig":null,"fullscreen":false}}

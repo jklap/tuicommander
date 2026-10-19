@@ -335,15 +335,15 @@
 {"record":332,"state":{"shell":1,"agent":"working","awaiting":false,"question":null,"confident":false,"last_question":null,"choice_sig":null,"fullscreen":false}}
 {"record":333,"state":{"shell":1,"agent":"working","awaiting":false,"question":null,"confident":false,"last_question":null,"choice_sig":null,"fullscreen":false}}
 {"record":334,"event":{"type":"question","prompt_text":"","confident":true,"_turn_epoch":0}}
-{"record":334,"state":{"shell":1,"agent":"awaiting_input","awaiting":true,"question":"","confident":true,"last_question":"","choice_sig":null,"fullscreen":false}}
-{"record":335,"state":{"shell":1,"agent":"awaiting_input","awaiting":true,"question":"","confident":true,"last_question":"","choice_sig":null,"fullscreen":false}}
+{"record":334,"state":{"shell":1,"agent":"awaiting_input","awaiting":true,"question":"","confident":true,"last_question":null,"choice_sig":null,"fullscreen":false}}
+{"record":335,"state":{"shell":1,"agent":"awaiting_input","awaiting":true,"question":"","confident":true,"last_question":null,"choice_sig":null,"fullscreen":false}}
 {"record":336,"event":{"type":"choice-prompt","title":"Allow run python3 -c 'print(987654321)'?","options":[{"key":"y","label":"yes","highlighted":true,"destructive":false},{"key":"a","label":"yes, do not ask again for exec(python3 -c print(987654321))","highlighted":false,"destructive":false},{"key":"n","label":"no, say what to do instead","highlighted":false,"destructive":true},{"key":"e","label":"edit","highlighted":false,"destructive":false},{"key":"d","label":"details","highlighted":false,"destructive":false}],"_turn_epoch":0}}
-{"record":336,"state":{"shell":1,"agent":"awaiting_input","awaiting":true,"question":"Allow run python3 -c 'print(987654321)'?","confident":true,"last_question":"","choice_sig":"Allow run python3 -c 'print(987654321)'?|y,a,n,e,d","fullscreen":false}}
-{"record":338,"state":{"shell":1,"agent":"awaiting_input","awaiting":true,"question":"Allow run python3 -c 'print(987654321)'?","confident":true,"last_question":"","choice_sig":"Allow run python3 -c 'print(987654321)'?|y,a,n,e,d","fullscreen":false}}
-{"record":339,"state":{"shell":1,"agent":"awaiting_input","awaiting":true,"question":"Allow run python3 -c 'print(987654321)'?","confident":true,"last_question":"","choice_sig":"Allow run python3 -c 'print(987654321)'?|y,a,n,e,d","fullscreen":false}}
+{"record":336,"state":{"shell":1,"agent":"awaiting_input","awaiting":true,"question":"Allow run python3 -c 'print(987654321)'?","confident":true,"last_question":null,"choice_sig":"Allow run python3 -c 'print(987654321)'?|y,a,n,e,d","fullscreen":false}}
+{"record":338,"state":{"shell":1,"agent":"awaiting_input","awaiting":true,"question":"Allow run python3 -c 'print(987654321)'?","confident":true,"last_question":null,"choice_sig":"Allow run python3 -c 'print(987654321)'?|y,a,n,e,d","fullscreen":false}}
+{"record":339,"state":{"shell":1,"agent":"awaiting_input","awaiting":true,"question":"Allow run python3 -c 'print(987654321)'?","confident":true,"last_question":null,"choice_sig":"Allow run python3 -c 'print(987654321)'?|y,a,n,e,d","fullscreen":false}}
 {"record":340,"event":{"type":"choice-cleared","_turn_epoch":0}}
-{"record":340,"state":{"shell":1,"agent":"working","awaiting":false,"question":null,"confident":false,"last_question":"","choice_sig":null,"fullscreen":false}}
-{"record":341,"state":{"shell":1,"agent":"working","awaiting":false,"question":null,"confident":false,"last_question":"","choice_sig":null,"fullscreen":false}}
+{"record":340,"state":{"shell":1,"agent":"working","awaiting":false,"question":null,"confident":false,"last_question":null,"choice_sig":null,"fullscreen":false}}
+{"record":341,"state":{"shell":1,"agent":"working","awaiting":false,"question":null,"confident":false,"last_question":null,"choice_sig":null,"fullscreen":false}}
 {"record":342,"event":{"type":"question","prompt_text":"What should it do instead? (Enter alone just says no)","confident":true,"_turn_epoch":0}}
 {"record":342,"state":{"shell":1,"agent":"awaiting_input","awaiting":true,"question":"What should it do instead? (Enter alone just says no)","confident":true,"last_question":"What should it do instead? (Enter alone just says no)","choice_sig":null,"fullscreen":false}}
 {"record":344,"state":{"shell":1,"agent":"awaiting_input","awaiting":true,"question":"What should it do instead? (Enter alone just says no)","confident":true,"last_question":"What should it do instead? (Enter alone just says no)","choice_sig":null,"fullscreen":false}}
@@ -359,7 +359,7 @@
 {"record":352,"state":{"shell":1,"agent":"working","awaiting":false,"question":null,"confident":false,"last_question":null,"choice_sig":null,"fullscreen":false}}
 {"record":353,"state":{"shell":1,"agent":"working","awaiting":false,"question":null,"confident":false,"last_question":null,"choice_sig":null,"fullscreen":false}}
 {"record":354,"event":{"type":"shell-state","state":"idle","agent_type":"ego"}}
-{"record":354,"event":{"type":"agent-block","action":"end","line":22,"_turn_epoch":0}}
+{"record":354,"event":{"type":"agent-block","action":"end","line":22,"on_alt_screen":false,"from_transcript_dump":false,"new_dump_generation":false,"_turn_epoch":0}}
 {"record":354,"state":{"shell":2,"agent":"idle","awaiting":false,"question":null,"confident":false,"last_question":null,"choice_sig":null,"fullscreen":false}}
 {"record":355,"state":{"shell":2,"agent":"idle","awaiting":false,"question":null,"confident":false,"last_question":null,"choice_sig":null,"fullscreen":false}}
 {"record":356,"state":{"shell":2,"agent":"idle","awaiting":false,"question":null,"confident":false,"last_question":null,"choice_sig":null,"fullscreen":false}}
