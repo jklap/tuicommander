@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+- Reuse retained terminal pixels during whole-row history growth instead of redrawing every glyph, skip unchanged damaged rows repaint bounded cell spans, and merge equal background fills; invalidate reuse on geometry, theme, screen or marker-layout changes (#2040-16b2).
+
 - Reject automation profiles the runner cannot resolve, preserve host-local timezone defaults on creation, expose repair hints on invalid list rows, and notify the creator inbox once for failed runs, including pre-spawn failures (#2015-bdb3).
 - Create retry-safe one-shot automations with name, prompt, a relative delay and an explicit saved profile; the host resolves caller repository defaults and returns the saved fire time without extra clock/list/get calls (#2001-5c1f).
 - Persist global and per-repository PR visibility filters, including explicit Show overrides and inherited defaults (#1993).
@@ -21,6 +23,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - Publish typed Settings account enumeration and configured Ego interactive login start/status, with human terminal authentication and separate credential readback (#1790-1011).
 ### Fixed
+
+- Remove permanent query-engine and prompt-inspector narration while retaining status values and contextual warnings (#2052-c9d1).
+
+- Keep Remote Access settings and the mobile QR dialog available after local IP discovery fails, with an inline error and retry (#2049-2d50).
+
+- Use a theme-coloured monochrome icon in the Ideas panel heading instead of a platform emoji (#2048-5a9f).
+- Reuse unchanged worktree integration proofs during MCP listing instead of repeating per-checkout Git work; keep fresh safety fields and uncached removal checks (#2044-31f3).
+- Remove permanent setup narration from AI Chat, Ideas, Tasks setup and Worktrees while keeping their actions and state labels (#2050-2b8a).
 
 - Keep the code Copy control inside its own row above fenced answers, without clipping or covering wrapped text in desktop and mobile Chat (#2045-848c).
 

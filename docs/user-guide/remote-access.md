@@ -24,6 +24,10 @@ Once enabled, the settings panel shows the access URL: `http://<your-ip>:<port>`
 
 The settings panel shows a QR code for the access URL — scan it from a phone or tablet to connect quickly. The QR code uses your actual local IP address.
 
+If local IP discovery fails, the settings controls and QR dialog remain open. The
+network address area shows the error and a **Retry** action. Retry repeats address
+discovery without changing the saved remote-access configuration.
+
 ## What Works Remotely
 
 The browser client provides the same UI as the desktop app:

@@ -625,6 +625,7 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 		const workloadStart = isFrameWorkloadEnabled() ? performance.now() : 0;
 		const paintOptions = {
 			fullRepaint: fullRepaintNeeded,
+			viewportTop: frame.historyBase + frame.historySize - frame.displayOffset,
 			projection: viewportProjection,
 			dirtyIndices:
 				dirtyIndices &&
@@ -648,6 +649,7 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 				neutral: cachedNeutralSurface,
 				hidden,
 				fullRepaint: paintOptions.fullRepaint,
+				viewportTop: paintOptions.viewportTop,
 				projectionChanged,
 				dirtyIndices: paintOptions.dirtyIndices ? [...paintOptions.dirtyIndices] : undefined,
 				hiddenRows: [...markers.hidden],
@@ -1796,8 +1798,8 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 		if (decision.fullReplace) {
 			reconcileHealPending = false;
 			clearDetectedLinks();
-
-			fullRepaintNeeded = true;
+			// A full wire replacement is not a canvas invalidation. The renderer
+			// can retain matching pixels; geometry/screen/theme changes invalidate separately.
 		}
 		// Damage can include unchanged text (cursor, colours, or a full redraw).
 		// Compare before installing the new rows: clearing those matches while the
