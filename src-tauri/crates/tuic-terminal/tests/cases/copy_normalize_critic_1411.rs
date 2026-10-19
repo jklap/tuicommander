@@ -3,7 +3,7 @@ use tuic_terminal::terminal_grid::TerminalGrid;
 // Catches treating a content glyph as composer chrome after the drag omits the real prompt.
 #[test]
 fn partial_selection_keeps_literal_prompt_glyph_in_captured_input() {
-    let capture = include_str!("../src/fixtures/claude-prompt-copy-1411.txt");
+    let capture = include_str!("../../src/fixtures/claude-prompt-copy-1411.txt");
     let mut grid = TerminalGrid::new(5, 148, 0);
     let _ = grid.process(capture.replace('\n', "\r\n").as_bytes());
     let expected = "❯ la porta del piano terra non si apre piu, dipende da qualche script o errore del codice che la manda in blocco? nel senso che se digito il";

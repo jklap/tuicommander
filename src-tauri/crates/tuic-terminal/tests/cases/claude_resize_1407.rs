@@ -8,13 +8,13 @@ fn real_claude_resize_1407_does_not_duplicate_streaming_or_idle_answer() {
     for (name, capture, timeline) in [
         (
             "streaming",
-            include_bytes!("../src/fixtures/claude-resize-1407/streaming.tcap").as_slice(),
-            include_str!("../src/fixtures/claude-resize-1407/streaming-resizes.json"),
+            include_bytes!("../../src/fixtures/claude-resize-1407/streaming.tcap").as_slice(),
+            include_str!("../../src/fixtures/claude-resize-1407/streaming-resizes.json"),
         ),
         (
             "idle",
-            include_bytes!("../src/fixtures/claude-resize-1407/idle.tcap").as_slice(),
-            include_str!("../src/fixtures/claude-resize-1407/idle-resizes.json"),
+            include_bytes!("../../src/fixtures/claude-resize-1407/idle.tcap").as_slice(),
+            include_str!("../../src/fixtures/claude-resize-1407/idle-resizes.json"),
         ),
     ] {
         let decoded = decode_capture(capture).expect("recorded capture");

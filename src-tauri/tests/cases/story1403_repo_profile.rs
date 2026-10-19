@@ -1,5 +1,5 @@
 //! Repository selections must carry the machine ceiling; ego owns the clamp.
-mod acp_support;
+use crate::acp_support;
 
 use acp_support::{Fixture, authority};
 
@@ -35,7 +35,7 @@ async fn repo_yolo_profile_carries_machine_ceiling_and_recorded_warnings() {
         ]
     );
     let recorded: serde_json::Value =
-        serde_json::from_str(include_str!("fixtures/acp/ego-profile-ceiling.json")).unwrap();
+        serde_json::from_str(include_str!("../fixtures/acp/ego-profile-ceiling.json")).unwrap();
     assert_eq!(recorded["_meta"]["ego"]["effective"]["mode"], "default");
     assert_eq!(
         recorded["_meta"]["ego"]["effective"]["sandbox"],

@@ -17,7 +17,7 @@ use agent_client_protocol::schema::v1;
 use tokio::sync::broadcast::Receiver;
 use tuicommander_lib::acp::{AcpClientEvent, AcpNotice, AcpNoticeKind};
 
-mod acp_support;
+use crate::acp_support;
 
 use acp_support::{Fixture, PATIENCE, authority, text, until};
 

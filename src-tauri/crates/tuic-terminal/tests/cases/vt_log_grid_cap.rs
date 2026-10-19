@@ -37,7 +37,7 @@ fn log_keeps_each_new_line_after_grid_history_fills() {
 // The pre-cap replay is the differential oracle: stream bytes and geometry are identical.
 #[test]
 fn recorded_redraw_feeds_the_same_mobile_log_before_and_after_grid_cap() {
-    let bytes = include_bytes!("fixtures/coordinator.raw");
+    let bytes = include_bytes!("../fixtures/coordinator.raw");
     let mut short = VtLogBuffer::new(27, 71, 20_000);
     let mut capped = VtLogBuffer::new(27, 71, 20_000);
     fill(&mut short, 50);

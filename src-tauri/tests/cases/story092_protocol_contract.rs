@@ -11,7 +11,7 @@ use tuicommander_lib::acp::{
     EgoAcpConfig, build_initialize_request, capability_snapshot, launch_spec,
 };
 
-mod acp_support;
+use crate::acp_support;
 
 #[test]
 fn configured_ego_launch_is_direct_and_has_exact_argv() {

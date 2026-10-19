@@ -3,7 +3,7 @@ use tuicommander_lib::acp::{
     AcpAttachmentState, AcpClientEvent, AcpHoldState, AcpTurnState, EgoHoldRequest,
 };
 
-mod acp_support;
+use crate::acp_support;
 use acp_support::{Fixture, authority, text, until_settled};
 
 #[tokio::test]

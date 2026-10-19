@@ -9,7 +9,7 @@ use std::time::Duration;
 
 use tuicommander_lib::acp::AcpConnectionSettlementReason;
 
-mod acp_support;
+use crate::acp_support;
 
 use acp_support::{Fixture, PATIENCE, authority};
 
