@@ -667,26 +667,26 @@ export const StoriesDialog: Component<StoriesDialogProps> = (props) => {
 						>
 							Designer
 						</button>
-						<button
-							ref={closeButton}
-							type="button"
-							class={s.iconButton}
-							aria-label={t("stories.close", "Close Plans and Stories")}
-							onClick={props.onClose}
-						>
-							<svg
-								viewBox="0 0 16 16"
-								width="15"
-								height="15"
-								fill="none"
-								stroke="currentColor"
-								stroke-width="1.5"
-								aria-hidden="true"
-							>
-								<path d="M3 3l10 10M13 3 3 13" />
-							</svg>
-						</button>
 					</div>
+					<button
+						ref={closeButton}
+						type="button"
+						class={s.iconButton}
+						aria-label={t("stories.close", "Close Plans and Stories")}
+						onClick={props.onClose}
+					>
+						<svg
+							viewBox="0 0 16 16"
+							width="15"
+							height="15"
+							fill="none"
+							stroke="currentColor"
+							stroke-width="1.5"
+							aria-hidden="true"
+						>
+							<path d="M3 3l10 10M13 3 3 13" />
+						</svg>
+					</button>
 				</header>
 				<Show when={error()}>
 					<div class={s.error} role="alert">

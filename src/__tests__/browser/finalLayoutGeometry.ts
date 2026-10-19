@@ -46,6 +46,26 @@ export function finalLayoutGeometry(page: string) {
 			check(row.gap >= 7, `${row.name} Save has no field gap`);
 		}
 	}
+	if (page === "stories") {
+		// Catches: wrapping workflow actions pull Close out of the title's top-right slot.
+		const header = required('[role="dialog"] > header');
+		const title = required('[role="dialog"] > header h2');
+		const close = required('[aria-label="Close Plans and Stories"]');
+		const headerBounds = header.getBoundingClientRect();
+		const titleBounds = title.getBoundingClientRect();
+		const closeBounds = close.getBoundingClientRect();
+		const rightInset = parseFloat(getComputedStyle(header).paddingRight);
+		measurements.close = {
+			topDelta: closeBounds.top - titleBounds.top,
+			rightInset: headerBounds.right - closeBounds.right,
+			expectedRightInset: rightInset,
+		};
+		check(Math.abs(closeBounds.top - titleBounds.top) <= 1, "Stories Close leaves the title row");
+		check(
+			Math.abs(headerBounds.right - rightInset - closeBounds.right) <= 1,
+			"Stories Close leaves the header right inset",
+		);
+	}
 	if (page === "stories" && innerWidth <= 760) {
 		// Catches: action chrome squeezes the repository into five lines and wraps New plan.
 		const header = required('[role="dialog"] > header');
