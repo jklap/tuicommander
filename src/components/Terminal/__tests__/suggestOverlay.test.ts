@@ -643,3 +643,24 @@ it("keeps an unfinished later title open through hard wraps but not a new answer
 		{ row: 2, kind: "answer" },
 	]);
 });
+// Catches: a standalone fenced example is parsed as live protocol, or its closing
+// fence leaves the next real answer hidden from the shared desktop/mobile plan.
+it.each([
+	"⏺ Example protocol output:",
+	"intent: Explaining the protocol (Protocol example)",
+	"intent: Explaining the protocol",
+])("keeps standalone fenced protocol literal after %s and resumes after the closing fence", (prefix) => {
+	const get = rows([
+		[prefix, false],
+		["  ```text", false],
+		["  💬 Keep this literal prefix", false],
+		["  suggest: [ A | B ]", false],
+		["  intent: Literal intent (Example)", false],
+		["  ❯ Literal prompt", false],
+		["  ```", false],
+		["⏺ 💬 Real answer", false],
+	]);
+	const plan = planSuggestOverlay(8, get);
+	expect([...plan.answerMarkers]).toEqual([7]);
+	expect(plan.blocks.filter((block) => block.row > 0)).toEqual([{ row: 7, kind: "answer" }]);
+});

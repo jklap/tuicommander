@@ -137,6 +137,17 @@ arguments exit 2 before connecting. Managed callers send `$TUIC_SESSION` for
 peer binding; callers outside TUICommander register an external identity for
 that invocation.
 
+### Workflow actions
+
+`tuic workflow [<json>|-]` calls the grouped `workflow` MCP tool. Use a typed action envelope:
+
+```bash
+tuic workflow '{"action":"story","input":{"action":"list_plans"}}'
+tuic workflow '{"action":"run","input":{"action":"get","run_id":"run-id"}}'
+```
+
+The other actions are `proposal_create`, `report` and `launch`, each with its typed payload under `input`. Proposal creation requires the run's active bound coordinator and a stable `proposalKey`; retries return the same story. Ordinary story creation is not a substitute. Managed callers retain their caller binding. `tuic story` still calls the shared story service with `--project` support; `tuic automations` still calls the separate scheduler and works when `workflow` is disabled. The old workflow MCP names remain available until the catalogue cutover; they are not CLI aliases. Reconnect after installing the updated backend to discover the new tool.
+
 Register an existing local directory directly through MCP:
 
 ```bash
