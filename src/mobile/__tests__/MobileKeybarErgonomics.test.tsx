@@ -2,6 +2,7 @@
 
 import { cleanup, fireEvent, render, screen } from "@solidjs/testing-library";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import blockedReport from "../__fixtures__/claudeBlockedSuggestions2082.json";
 import { CommandInput } from "../components/CommandInput";
 import { SlashMenuOverlay } from "../components/SlashMenuOverlay";
 import { TerminalKeybar } from "../components/TerminalKeybar";
@@ -79,45 +80,75 @@ describe("mobile terminal controls", () => {
 		expect(screen.getByRole("button", { name: "More session actions" }).getAttribute("aria-expanded")).toBe("false");
 	});
 
-	it("shows Claude's actual choices without generic Yes or No buttons", () => {
-		const session: SessionInfo = {
-			session_id: "claude-question",
-			cwd: "/repo",
-			worktree_path: null,
-			worktree_branch: null,
-			state: {
-				agent_type: "claude",
-				awaiting_input: true,
-				question_confident: true,
-				rate_limited: false,
-				last_activity_ms: 1,
-				choice_prompt: {
-					title: "Which color do you prefer?",
-					selection_mode: "navigate-enter",
-					options: [
-						{ key: "1", label: "Red", highlighted: true, destructive: false },
-						{ key: "2", label: "Green", highlighted: false, destructive: false },
-					],
+	it.each([undefined, blockedReport.state.suggested_actions])(
+		"keeps native choices ahead of suggestions %j",
+		(suggestions) => {
+			const session: SessionInfo = {
+				session_id: "claude-question",
+				cwd: "/repo",
+				worktree_path: null,
+				worktree_branch: null,
+				state: {
+					agent_type: "claude",
+					suggested_actions: suggestions,
+					awaiting_input: true,
+					question_confident: true,
+					rate_limited: false,
+					last_activity_ms: 1,
+					choice_prompt: {
+						title: "Which color do you prefer?",
+						selection_mode: "navigate-enter",
+						options: [
+							{ key: "1", label: "Red", highlighted: true, destructive: false },
+							{ key: "2", label: "Green", highlighted: false, destructive: false },
+						],
+					},
 				},
-			},
-		};
+			};
+			render(() => (
+				<SessionDetailScreen
+					subscribeChatWake={() => () => {}}
+					session={session}
+					sessionExists={true}
+					onBack={() => {}}
+					onOpenFiles={() => {}}
+				/>
+			));
+			expect(screen.getByRole("button", { name: /2\s*Green/ })).toBeTruthy();
+			expect(screen.queryByRole("button", { name: "vpn su" })).toBeNull();
+			expect(screen.queryByRole("button", { name: "Yes" })).toBeNull();
+			expect(screen.queryByRole("button", { name: "No" })).toBeNull();
+		},
+	);
+
+	// Catches: progress-blocked waits hiding the report's actionable suggestions behind generic Yes/No.
+	it("blocked_report_suggestions_replace_generic_confirmations", () => {
 		render(() => (
 			<SessionDetailScreen
 				subscribeChatWake={() => () => {}}
-				session={session}
-				sessionExists={true}
+				session={blockedReport}
+				sessionExists
 				onBack={() => {}}
 				onOpenFiles={() => {}}
 			/>
 		));
-		expect(screen.getByRole("button", { name: /2\s*Green/ })).toBeTruthy();
+		for (const label of ["vpn su", "rb è giù, aspetta", "Mostra lo stato agenti"]) {
+			expect(screen.getByRole("button", { name: label })).toBeTruthy();
+		}
 		expect(screen.queryByRole("button", { name: "Yes" })).toBeNull();
 		expect(screen.queryByRole("button", { name: "No" })).toBeNull();
+		expect(screen.getByText(/Input/)).toBeTruthy();
 	});
 
 	it("keeps generic confirmations for an awaiting question without choices", () => {
 		render(() => (
-			<TerminalKeybar sessionId="plain-question" agentType="claude" awaitingInput={true} questionConfident={true} />
+			<SessionDetailScreen
+				subscribeChatWake={() => () => {}}
+				session={{ ...blockedReport, state: { ...blockedReport.state, suggested_actions: [] } }}
+				sessionExists
+				onBack={() => {}}
+				onOpenFiles={() => {}}
+			/>
 		));
 		expect(screen.getByRole("button", { name: "Yes" })).toBeTruthy();
 		expect(screen.getByRole("button", { name: "No" })).toBeTruthy();

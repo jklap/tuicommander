@@ -36,11 +36,11 @@ authors and communities behind each project.
 | cursor-icon | 1.2.0 | MIT OR Apache-2.0 OR Zlib |
 | dashmap | 6.2.1 | MIT |
 | deunicode | 1.6.2 | BSD-3-Clause |
-| dirs | 6.0.0 | MIT OR Apache-2.0 |
+| dirs | 7.0.0 | MIT OR Apache-2.0 |
 | drag | 2.1.1 | Apache-2.0 OR MIT |
 | flate2 | 1.1.10 | MIT OR Apache-2.0 |
 | futures-util | 0.3.33 | MIT OR Apache-2.0 |
-| gix | 0.85.0 | MIT OR Apache-2.0 |
+| gix | 0.89.0 | MIT OR Apache-2.0 |
 | glob | 0.3.4 | MIT OR Apache-2.0 |
 | grep-matcher | 0.1.9 | Unlicense OR MIT |
 | grep-regex | 0.1.14 | Unlicense OR MIT |
@@ -88,7 +88,7 @@ authors and communities behind each project.
 | serde_yaml | 0.9.34+deprecated | MIT OR Apache-2.0 |
 | sha2 | 0.11.0 | MIT OR Apache-2.0 |
 | sourcemap | 9.3.2 | BSD-3-Clause |
-| ssh2-config | 0.7.2 | MIT |
+| ssh2-config | 0.8.2 | MIT |
 | stop-words | 0.9.0 | MIT OR Apache-2.0 |
 | tar | 0.4.46 | MIT OR Apache-2.0 |
 | tauri | 2.12.1 | Apache-2.0 OR MIT |
