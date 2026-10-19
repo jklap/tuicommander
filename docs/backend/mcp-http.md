@@ -4,7 +4,7 @@
 
 The plugin settings IPC command and `POST /api/plugins/{id}/settings` dispatch to the same scoped Rust owner. Catalogue descriptors contain no stored values; secrets read as set/unset. `plugin-changed` carries only plugin IDs over desktop and SSE after a durable commit, scheduling existing reload callbacks. This adapter does not publish the general settings MCP tool.
 
-Slice F exposes `start_graph {target:{type:story|plan,id},expected_revision?,definition_id,definition_revision,request_id,limits?}` through the existing owning-daemon service. Story starts require the current native revision and pin the selected publication; the request ID is bound to its payload. Omitted limits use Rust defaults. Plan dispatch remains unavailable in this build and its start control says so. The `workflow_run` MCP tool uses an inline schema generated from `RunAction` and the public `RunCommand` variants; it returns the same scoped snapshots and cursor-ordered events as IPC/HTTP. Run history shows pinned activations, decisions/evidence, repair counters, pause targets and complete event payloads across pages. Graph recovery uses `resume_graph {execution_id,activation_id,resolution}` after answering pending input; pause and cancel use the existing sequence-fenced commands. Legacy runs offer inspection and cancellation in the UI. No new persistence or client scheduler is added.
+Slice F exposes `start_graph {target:{type:story|plan,id},expected_revision?,definition_id,definition_revision,request_id,limits?}` through the existing owning-daemon service. Story starts require the current native revision and pin the selected publication; the request ID is bound to its payload. Omitted limits use Rust defaults. Plan dispatch remains unavailable in this build and its start control says so. The `workflow action=run` MCP entry uses an inline schema generated from `RunAction` and the public `RunCommand` variants; it returns the same scoped snapshots and cursor-ordered events as IPC/HTTP. Run history shows pinned activations, decisions/evidence, repair counters, pause targets and complete event payloads across pages. Graph recovery uses `resume_graph {execution_id,activation_id,resolution}` after answering pending input; pause and cancel use the existing sequence-fenced commands. Legacy runs offer inspection and cancellation in the UI. No new persistence or client scheduler is added.
 
 ## Explicit repository registration
 
@@ -61,11 +61,15 @@ HTTP's access marker does not prove human identity, because loopback requests al
 
 Workflow definitions use the shared `/workflows/definition/action` HTTP route and `workflow_definition_action` desktop command. They are project-scoped and published by immutable revision; execution has its own API.
 
-`workflow_launch` takes `{input:{runId,attemptId,worktreePath,agentType,skills?,feedback?}}` from a bound local managed PTY. The worktree must be a registered branch checkout of the project, outside the archive pool, and cannot be the main checkout or have a Git operation in progress. Launch validation is separate from detached-orphan removal, which still refuses attached branch checkouts. Plan attempts use the caller's isolated worktree; story attempts require that run's active coordinator and bind a distinct registered worktree to the story before worker spawn. It renders the pinned prompt in Rust, reserves the spawn effect, launches through the existing managed-agent path, and binds the returned session and task handle to the durable attempt. A story worker requires the caller to own the run's active coordinator attempt. `workflow_report` takes `{input:AttemptReport}` with `contractVersion`, `runId`, `storyId`, `storyRevision`, `attemptId`, `generation`, `outcome`, `summary`, `criterionResults`, and `evidence`. The server derives the reporting PTY and project from the MCP connection, validates attempt ownership and revision, and records an idempotent run event. Plan-agent reports use `storyId=planId`, `storyRevision=0`, and no criterion results. Generic `agent send` and process exit are observations, never semantic completion reports.
+The grouped `workflow` MCP tool exposes five generated discriminated actions: `story`, `run`, `proposal_create`, `report` and `launch`. Pass the existing service action as `input` for `story` (`StoryAction`) and `run` (`RunAction`). The other three actions use their generated typed service inputs. The advertised schema is the pre-dispatch contract: missing, mistyped, cross-action and unknown fields are rejected before effects. The dispatcher reuses the existing handlers and their project, revision, ownership and local-launch checks; there is no new persistence owner.
 
-For `workflow_report`, a `needs_input` outcome requires `inputRequest {question,options}`. A completed reviewer report requires `review {decision,artifactDigest,findings}` with criterion-indexed findings. These fields are durable evidence; they do not promote a story to Done. After a committed story report, the active coordinator's inbox receives a `workflow_event` cursor with `runId`, `storyId` and `sequence`; the coordinator replays the run log rather than treating mail as an outcome.
+This is an additive rollout. The `story`, `workflow_run`, `workflow_story_create`, `workflow_report` and `workflow_launch` tools remain registered until story 2068 removes the old names. An existing member denial also denies and hides that member's grouped action. Disabling `workflow` hides and denies the grouped entry, not the separate `automations` scheduler. No saved denial or external policy rule is migrated in this slice. Review policy rules for the new `workflow` name before allowing it: it covers all five actions.
 
-`workflow_story_create` takes `{input:{runId,proposalKey,story}}` from the active bound plan coordinator. The story belongs to the run's plan and uses a `plan_step` origin. A proposal key is durable across retries: the same payload returns the same story, while a changed payload is rejected. The run records a bounded CreateStory effect before the story transaction and its outcome afterward.
+`workflow action=launch` takes `{input:{runId,attemptId,worktreePath,agentType,skills?,feedback?}}` from a bound local managed PTY. The worktree must be a registered branch checkout of the project, outside the archive pool, and cannot be the main checkout or have a Git operation in progress. Launch validation is separate from detached-orphan removal, which still refuses attached branch checkouts. Plan attempts use the caller's isolated worktree; story attempts require that run's active coordinator and bind a distinct registered worktree to the story before worker spawn. It renders the pinned prompt in Rust, reserves the spawn effect, launches through the existing managed-agent path, and binds the returned session and task handle to the durable attempt. A story worker requires the caller to own the run's active coordinator attempt. `workflow action=report` takes `{input:AttemptReport}` with `contractVersion`, `runId`, `storyId`, `storyRevision`, `attemptId`, `generation`, `outcome`, `summary`, `criterionResults`, and `evidence`. The server derives the reporting PTY and project from the MCP connection, validates attempt ownership and revision, and records an idempotent run event. Plan-agent reports use `storyId=planId`, `storyRevision=0`, and no criterion results. Generic `agent send` and process exit are observations, never semantic completion reports.
+
+For `workflow action=report`, a `needs_input` outcome requires `inputRequest {question,options}`. A completed reviewer report requires `review {decision,artifactDigest,findings}` with criterion-indexed findings. These fields are durable evidence; they do not promote a story to Done. After a committed story report, the active coordinator's inbox receives a `workflow_event` cursor with `runId`, `storyId` and `sequence`; the coordinator replays the run log rather than treating mail as an outcome.
+
+`workflow action=proposal_create` takes `{input:{runId,proposalKey,story}}` from the active bound plan coordinator. The story belongs to the run's plan and uses a `plan_step` origin. A proposal key is durable across retries: the same payload returns the same story, while a changed payload is rejected. The run records a bounded CreateStory effect before the story transaction and its outcome afterward.
 
 ## Project Progress reporting
 
@@ -907,7 +911,7 @@ say what was measured, not what the list costs today.
 | Tool | Actions | Default |
 |------|---------|---------|
 | `session` | list, create, submit, input, output, status, wait, resize, rename, close, kill, pause, resume | Enabled |
-| `agent` | spawn, wait, register, list_peers, send, inbox, subscribe, ack, unsubscribe | Enabled |
+| `agent` | spawn, wait, register, list_peers, send, inbox, subscribe, ack, unsubscribe, task_get, task_cancel | Enabled |
 | `task` | get, cancel | Enabled |
 | `remote` | preview, update | Enabled |
 | `repo` | list, active, status, branch_integrations, branch_integration, worktree_list, worktree_lifecycle, worktree_create, worktree_remove, orphan_cleanup_answer, branch_delete, progress_list | Enabled |
@@ -1048,7 +1052,7 @@ This applies both to direct `{upstream}__{tool}` calls and to the collapsed `cal
 meta-path. A malformed upstream value falls back to the native compact JSON text
 envelope so the response remains protocol-valid and inspectable.
 
-#### `task` tool — long-running orchestration past the 300s ceiling
+#### Agent task actions — long-running orchestration past the 300s ceiling
 
 `agent action=wait` and `session action=wait` are server-side blocking long-polls
 clamped to `WAIT_MAX_MS` (300 000 ms). An orchestrator supervising a peer that works
@@ -1061,9 +1065,12 @@ the outcome entirely.
 { "session_id": "…", "task_id": "…", "poll_interval_ms": 1000, "…": "…" }
 ```
 
-The handle is polled with `task action=get` instead of holding a wait open. This is
+The handle is polled with `agent action=task_get` instead of holding a wait open. This is
 purely additive — every field a pre-task client already read keeps its name and type,
 and a client that ignores `task_id` behaves exactly as before.
+The existing `task` tool stays available until the explicit catalogue cutover in
+story 2068. Both adapters use the same handler and registry. Existing `task` tool
+denials also block `agent task_get/task_cancel`; disabling `agent` blocks all of its actions.
 
 **Lifecycle.** A task is created `working` once the PTY is live (a refused or failed
 spawn leaves none). `mark_session_exited` (`pty.rs`) drives it to `completed` with
@@ -1079,12 +1086,12 @@ non-zero — so the outcome is recorded whether or not anyone was listening.
 The vocabulary is the MCP `2026-07-28` Tasks vocabulary from day one, so the standard
 `tasks/*` front door stays a serialization change rather than a semantic remap.
 
-**`task action=get`** returns `{task_id, status, status_message?, result?, error_detail?,
+**`agent action=task_get`** returns `{task_id, status, status_message?, result?, error_detail?,
 poll_interval_ms}`, absent optional fields omitted. A failed task reports its reason in
 `error_detail`, **not** `error` — a top-level `error` always means the call itself failed,
 so reusing it would make a successful poll look like a broken one.
 
-**`task action=cancel`** marks the task `cancelled` and does **not** kill the agent
+**`agent action=task_cancel`** marks the task `cancelled` and does **not** kill the agent
 (`session action=kill` does that). Cancelling an already-finished task is not an error:
 it reports the state that stands with `cancelled: false`, so a cancel racing the agent's
 exit never looks like a failure. Because terminal states are immutable, a cancel that

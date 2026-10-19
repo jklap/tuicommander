@@ -1,4 +1,4 @@
-import { fireEvent, render } from "@solidjs/testing-library";
+import { fireEvent, render, within } from "@solidjs/testing-library";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("../../../stores/appLogger", () => ({
@@ -118,6 +118,8 @@ describe("LocalMcpPanel", () => {
 		});
 		const view = render(() => <LocalMcpPanel />);
 		await vi.advanceTimersByTimeAsync(0);
+		expect(view.queryByRole("region", { name: "Sessions" })).toBeNull();
+		expect(view.queryByRole("region", { name: "Other tools" })).toBeNull();
 		const tip = view.getByText(/Long design help/);
 		const badge = tip.parentElement!;
 		vi.spyOn(badge, "getBoundingClientRect").mockReturnValue({ left: 100, top: 100, bottom: 116 } as DOMRect);
@@ -134,6 +136,61 @@ describe("LocalMcpPanel", () => {
 		tools = [];
 		await vi.advanceTimersByTimeAsync(3000);
 		expect(badge.isConnected).toBe(false);
+		view.unmount();
+	});
+
+	// Catches: domain grouping re-enables a saved denial or saves a heading instead of the wire name.
+	it("keeps saved denials across domain grouping, sibling edits and reload", async () => {
+		let saved = {
+			disabled_native_tools: ["task", "workflow_report", "debug", "unknown_tool"],
+			settings_mcp_enabled: false,
+		};
+		const groups = [
+			["Sessions", ["session"]],
+			["Agents and tasks", ["agent", "task"]],
+			["Repositories", ["repo"]],
+			[
+				"Workflows and stories",
+				["workflow", "story", "workflow_run", "workflow_story_create", "workflow_report", "workflow_launch"],
+			],
+			["Automations", ["automations"]],
+			["User interface and Design Mode", ["ui", "design_mode"]],
+			["Secrets", ["secret"]],
+			["Settings access", ["settings"]],
+			["Progress", ["progress"]],
+			["Rare tools", ["debug", "plugin_dev_guide"]],
+			["Conditional tools", ["voice", "telegram", "remote"]],
+			["Other tools", ["future_tool"]],
+		] as const;
+		const tools = groups.flatMap(([, names]) => names.map((name) => ({ name, summary: name, description: name })));
+		const base = vi.mocked(rpc).getMockImplementation();
+		vi.mocked(rpc).mockImplementation((command: string, args?: Record<string, unknown>) => {
+			if (command === "load_config") return Promise.resolve(structuredClone(saved));
+			if (command === "get_mcp_status") return Promise.resolve({ native_tools: tools });
+			return base?.(command, args) as Promise<never>;
+		});
+		mockInvoke.mockImplementation(async (command: string, args?: Record<string, unknown>) => {
+			if (command === "load_config") return structuredClone(saved);
+			if (command === "save_config") saved = structuredClone(args?.config as typeof saved);
+		});
+		let view = render(() => <LocalMcpPanel />);
+		await vi.advanceTimersByTimeAsync(0);
+		for (const [label, names] of groups) {
+			const section = within(view.getByRole("region", { name: label }));
+			expect(section.getAllByRole("checkbox").map((input) => input.getAttribute("aria-label"))).toEqual(names);
+		}
+		const task = view.getByRole("checkbox", { name: "task" }) as HTMLInputElement;
+		expect(task.checked).toBe(false);
+		fireEvent.click(view.getByRole("checkbox", { name: "agent" }));
+		await vi.advanceTimersByTimeAsync(0);
+		expect(saved.disabled_native_tools).toEqual(["task", "workflow_report", "debug", "unknown_tool", "agent"]);
+		view.unmount();
+		view = render(() => <LocalMcpPanel />);
+		await vi.advanceTimersByTimeAsync(0);
+		for (const name of ["task", "workflow_report", "debug", "agent", "settings"]) {
+			expect((view.getByRole("checkbox", { name }) as HTMLInputElement).checked).toBe(false);
+		}
+		expect((view.getByRole("checkbox", { name: "future_tool" }) as HTMLInputElement).checked).toBe(true);
 		view.unmount();
 	});
 

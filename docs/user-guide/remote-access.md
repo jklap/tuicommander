@@ -109,6 +109,10 @@ At phone widths up to 430 px, the session header keeps CLI/Chat one tap away.
 Open **More session actions** for **Start voice call** / **Stop voice call** (with the same handset icon as the header) and session tasks. Tablet
 headers keep these controls directly in the bar. Tap the session name for details.
 
+A choice answer stays bound to the terminal that showed the question, even if you
+leave the detail screen while its keys are being sent. A failed send shows an error
+and enables the choice buttons again. Send and Queue also keep their original terminal.
+
 For Claude sessions on a phone, tap **Chat** in the session header. This switches the reading surface without closing the terminal or
 clearing its history; returning to CLI follows the latest output. Expand the tool activity and edit to read its **Old**
 and **New** text. Tab stops align at four spaces. Swipe the edit block sideways

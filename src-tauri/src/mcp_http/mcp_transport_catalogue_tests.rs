@@ -230,6 +230,7 @@ async fn native_tool_definitions_are_the_one_surviving_family() {
             "remote",
             "repo",
             "story",
+            "workflow",
             "workflow_run",
             "workflow_story_create",
             "workflow_report",
