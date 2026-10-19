@@ -27,7 +27,7 @@ describe("ptyOpenUrl store", () => {
 
 	it("subscribes to the pty-open-url event", () => {
 		const calls = vi.mocked(subscribeEvents).mock.calls;
-		const types = calls[calls.length - 1][0];
+		const types = calls.at(-1)![0];
 		expect(Object.keys(types)).toEqual(["pty-open-url"]);
 	});
 
