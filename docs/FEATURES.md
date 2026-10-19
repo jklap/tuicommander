@@ -268,7 +268,8 @@ Right-click an HTTP(S) terminal link (including localhost) and choose **Start in
 MCP worktree creation registers the new workspace without moving a caller whose
 cwd is outside it. Agents working through `git -C` can record an association with
 `session action=declare_worktree worktree_path=/absolute/path`. That association
-does not override cwd for tab placement or removal. Removing or recycling a
+sets only the caller’s tab placement without changing shell cwd. Later cwd reports
+and restore keep that placement while the declared checkout exists. Removing or recycling a
 worktree closes only terminals whose current cwd lies inside it; unrelated tabs
 filed under a stale workspace survive and are re-homed. See [MCP backend](backend/mcp-http.md).
 

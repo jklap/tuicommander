@@ -1028,6 +1028,11 @@ once (no automatic retry or queue). See output-parser.md for the wire contract.
 
 ### ego transcript Chat view
 
+The export reader checks the child exit status before reporting an absent header.
+An incompatible executable that refuses `--after` returns an export failure with
+its configured path and status, not a misleading transcript-format error. A
+successful empty export still reports the missing v1 header.
+
 The foreground ego PID is matched to `lease.pid` in the process-owned
 `EGO_HOME/sessions`; no newest-file fallback is used. A failed environment read
 fails closed rather than selecting the host's default ego store. The configured

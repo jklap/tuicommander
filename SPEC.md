@@ -436,8 +436,9 @@ MCP callers can declare an existing linked worktree through
 `session action=declare_worktree worktree_path=/absolute/path`. Ownership comes
 from the immutable PTY launch directory and registered Git worktrees. The
 caller-only association persists under stable `TUIC_SESSION`, survives restart
-and does not change shell cwd or acquire cleanup ownership. Tab placement follows
-cwd, not this association, during creation, OSC 7, reconnect and restore. Removing
+and does not change shell cwd or acquire cleanup ownership. Explicit declarations
+own tab placement during OSC 7, reconnect and restore while the matching checkout
+exists. Creation without declaration remains cwd-based. Removing
 or recycling a worktree closes only terminals whose current cwd lies inside that
 checkout. A stale sidebar membership never authorizes closing an unrelated tab.
 
