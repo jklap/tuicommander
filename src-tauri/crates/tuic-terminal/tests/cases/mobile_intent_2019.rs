@@ -4,7 +4,7 @@ use tuic_terminal::vt_log::VtLogBuffer;
 #[test]
 fn mobile_log_preserves_wrapped_claude_intent_head_and_tail() {
     let fixture: serde_json::Value = serde_json::from_str(include_str!(
-        "../../../../src/dev/fixtures/claude-intent-2019.json"
+        "../../../../../src/dev/fixtures/claude-intent-2019.json"
     ))
     .unwrap();
     let text = fixture["text"].as_str().unwrap();
