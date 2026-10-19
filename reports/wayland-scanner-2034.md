@@ -4,14 +4,18 @@ Story: 2034-6823. Verified on 2026-10-19 from base `f48e9a3291`.
 
 ## Decision
 
-Retain the local patch until a Linux desktop build passes. The assigned rb host
-is unavailable because the VPN is down. Native generator tests do not establish
-Linux client/backend ABI compatibility. Acceptance criterion 2 explicitly permits
-retaining the fork and reporting this blocker.
+Replace the local patch with registry wayland-scanner 0.31.11. The Linux desktop
+build and all five upstream generator/parser tests passed on rb on 2026-10-19.
+The resolved graph keeps quick-xml 0.41.0, wayland-client 0.31.15 and
+wayland-backend 0.3.17. Only the scanner version and source change.
 
-No dependency version, generated output, runtime code, or license notice changes
-in this commit. This is a dependency chore, not a runtime defect; no artificial
-RED regression test was added.
+Remove the patch declaration, workspace exclusion and scanner fork files. The
+MIT license is unchanged; `THIRD_PARTY_NOTICES.md` has no scanner-specific entry
+or reference to its removed license file. Other patches and notices stay intact.
+
+This is a dependency chore, not a runtime defect; no artificial RED regression
+test was added. The initial evidence below records the earlier VPN blocker and
+native checks. The Linux continuation resolves that blocker.
 
 ## Published upstream source
 
@@ -103,18 +107,51 @@ These tests compare generated code against the published golden assets and cover
 both ordinary XML and headerless XML. They ran on macOS, not Linux. No desktop
 instance, browser, or backend process was started.
 
-## Remaining integration gate
+## Linux continuation: completed gate
 
-When rb is available, evaluate removal in an isolated candidate change:
+Continued from commit `49b8c18a7e` with the candidate removal applied. The
+lockfile change is limited to scanner 0.31.10 (path) becoming 0.31.11 (registry),
+with the published archive checksum above. No other locked package changed.
 
-1. Remove the Wayland scanner patch declaration and its explanatory comments,
-   remove its workspace exclusion, and resolve upstream 0.31.11 in Cargo.lock.
-2. Verify the resolved Linux source graph selects the registry scanner and
-   quick-xml 0.41 while retaining stable client/backend versions.
-3. Run the Linux desktop build and generated-interface checks before committing
-   fork retirement. Run batch clippy/full gates on rb.
-4. Retire the fork files and check affected license notices only after the Linux
-   gate passes. Leave unrelated patches and their shared license files intact.
+Ran one serialized command on rb through
+`~/Gits/personal/orchestrator/tools/build/build-slot.sh --remote bash -lc ...`.
+The command body was:
 
-Criteria 1 and 3 remain unverified. Criterion 2 is satisfied by retaining the fork
-and reporting the unavailable Linux gate. The story is not complete.
+```sh
+set -euo pipefail
+cargo tree --locked --manifest-path src-tauri/Cargo.toml -i wayland-scanner
+cargo tree --locked --manifest-path src-tauri/Cargo.toml -p wayland-scanner
+cargo tree --locked --manifest-path src-tauri/Cargo.toml -p wayland-backend --depth 0
+scanner=$(find "$HOME/.cargo/registry/src" \
+  -path "*/wayland-scanner-0.31.11/Cargo.toml" -print -quit)
+test -n "$scanner"
+scripts/with-test-tmp.sh cargo test --manifest-path "$scanner" --lib tests::
+cargo build --locked --manifest-path src-tauri/Cargo.toml --bin tuicommander
+```
+
+Result: exit 0, `RB_BOX_DIRTY=no`. Evidence is retained at
+`~/Gits/.tmp/rb/20261019T212635Z-11967/` and
+`~/Gits/.tmp/chore-2034b-linux.log`.
+
+The consumer graph matches the retained graph above, except its root is now
+registry `wayland-scanner v0.31.11 (proc-macro)` rather than the patched path.
+The client, protocols, WLR protocols, clipboard and arboard versions are unchanged.
+Scanner dependencies still resolve to proc-macro2 1.0.107, quote 1.0.47,
+quick-xml 0.41.0, memchr 2.8.3 and unicode-ident 1.0.24. Backend remains 0.3.17.
+
+All five upstream tests listed above passed on Linux: compilation 1.93 seconds,
+test execution 0.06 seconds. They use the published crate's own test lockfile
+(which selects proc-macro2 1.0.106, quote 1.0.46 and memchr 2.8.2), not the
+application lockfile. The application build separately compiles the generated
+interfaces with its locked dependency graph.
+
+The default-feature Linux desktop binary build passed in 11 minutes 36 seconds
+in the dev profile. Its output includes scanner 0.31.11, client 0.31.15,
+protocols 0.32.13 and WLR protocols 0.3.12. This establishes compile/link
+compatibility with the retained client/backend versions; it is not a live Wayland
+compositor test, release package build or full application test-suite run.
+
+Static checks: the manifest and lockfile parse as TOML; only the scanner lock
+entry changes; no active manifest or notice references the retired fork. The
+instruction-link check passes. No desktop instance, browser or backend was
+started. No additional Rust build is needed for the evidence-only report edit.
