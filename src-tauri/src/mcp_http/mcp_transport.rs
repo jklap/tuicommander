@@ -49,6 +49,8 @@ use super::mcp_transport_ancillary::resolve_mcp_origin_session;
 #[cfg(test)]
 use super::mcp_transport_ancillary::resolve_toast_sound;
 #[cfg(test)]
+use super::mcp_transport_ancillary::resolve_workflow_worktree;
+#[cfg(test)]
 use super::mcp_transport_ancillary::sanitize_branch_for_suggested_prompt;
 #[cfg(test)]
 use super::mcp_transport_ancillary::worktree_remove_success_response;
