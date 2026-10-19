@@ -268,8 +268,11 @@ unmerged PRs, mismatched heads, and unavailable API data never prove deletion.
 The request uses the repository-bound GitHub account and host. An incomplete
 pagination read is unknown and is not cached; monitoring reuses definitive
 answers for 300 seconds, while removal always asks again.
-MCP worktree listing uses those monitoring proofs too, keyed by current refs,
-without resolving the full worktree inventory again for each entry. Its dirt,
+MCP worktree listing uses local monitoring proofs keyed by current refs without
+resolving the full worktree inventory again for each entry. It reads GitHub proof
+from the existing definitive-answer cache only; a miss stays locally unproven and
+never starts network I/O. Background monitoring may populate the cache, while
+destructive preflights still ask freshly. Its dirt,
 fingerprint and submodule fields are still inspected freshly. A checkout HEAD
 that differs from its branch ref bypasses the proof cache; destructive lifecycle
 preflights always bypass it.

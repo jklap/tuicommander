@@ -489,6 +489,94 @@ async fn github_dispatch_reports_missing_and_unknown_actions() {
     );
 }
 
+/// Catches: a cold listing waits on GitHub network proof behind the CLI's 3s deadline.
+/// A loopback HTTP proxy rejects any attempted connection, without contacting GitHub.
+#[tokio::test]
+async fn native_mcp_worktree_list_never_queries_uncached_github_proofs() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    let config = tempfile::tempdir().unwrap();
+    let _guard = crate::config::set_config_dir_override(config.path().to_path_buf());
+    let (_temp, repo, _) = branch_delete_fixture();
+    crate::git_cli::git_cmd(&repo)
+        .args(["checkout", "main"])
+        .run()
+        .unwrap();
+    let checkout = _temp.path().join("cold-proof");
+    crate::git_cli::git_cmd(&repo)
+        .args([
+            "worktree",
+            "add",
+            "-b",
+            "cold-proof",
+            checkout.to_str().unwrap(),
+        ])
+        .run()
+        .unwrap();
+    branch_delete_commit(&checkout, "own.txt", "unmerged work\n");
+    crate::git_cli::git_cmd(&repo)
+        .args([
+            "remote",
+            "add",
+            "origin",
+            "https://github.com/fixture/never-contact.git",
+        ])
+        .run()
+        .unwrap();
+
+    let proxy = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let proxy_url = format!("http://{}", proxy.local_addr().unwrap());
+    let requests = Arc::new(AtomicUsize::new(0));
+    let observed = Arc::clone(&requests);
+    let proxy_task = tokio::spawn(async move {
+        while let Ok((mut socket, _)) = proxy.accept().await {
+            let mut bytes = [0; 4096];
+            socket.read(&mut bytes).await.unwrap();
+            observed.fetch_add(1, Ordering::Relaxed);
+            socket
+                .write_all(
+                    b"HTTP/1.1 502 Bad Gateway\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+                )
+                .await
+                .unwrap();
+        }
+    });
+    let mut state = test_state();
+    Arc::get_mut(&mut state).unwrap().http_client = reqwest::Client::builder()
+        .proxy(reqwest::Proxy::all(proxy_url).unwrap())
+        .build()
+        .unwrap();
+    // Synthetic cached token prevents any external credential lookup. The proxy
+    // rejects CONNECT before TLS, so the token never leaves this process.
+    *state.github.token.write() = Some("synthetic-fixture-token".into());
+    let response = handle_worktree(
+        &state,
+        &serde_json::json!({"action":"worktree_list", "path":repo}),
+        false,
+    )
+    .await;
+    proxy_task.abort();
+    let _ = proxy_task.await;
+    assert_eq!(
+        requests.load(Ordering::Relaxed),
+        0,
+        "cold listing attempted GitHub network I/O"
+    );
+    assert_eq!(
+        response["cold-proof"]["lifecycle_status"]["commit_status"], "unmerged",
+        "{response}"
+    );
+    assert_eq!(
+        response["cold-proof"]["lifecycle_status"]["dirty_files"], 0,
+        "{response}"
+    );
+    assert!(
+        response["cold-proof"]["lifecycle_status"]["dirty_fingerprint"].is_string(),
+        "{response}"
+    );
+}
+
 /// Catches repeated inventory/integration subprocesses for unchanged linked
 /// worktrees on the listing path; fresh dirt and fingerprints must still move.
 #[tokio::test]

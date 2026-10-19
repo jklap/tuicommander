@@ -7,21 +7,22 @@ import { terminalsStore } from "./terminals";
 
 /** A validated declaration owns display placement, never cwd or removal authority. */
 export function getDeclaredTerminalWorkspace(terminalId: string): { repoPath: string; workspaceId: string } | null {
-	const terminal = terminalsStore.get(terminalId);
-	if (!terminal?.repoPath || !terminal.tuicSession) return null;
-	const repo = repositoriesStore.get(terminal.repoPath);
-	const declaration = repo?.declaredWorktrees?.[terminal.tuicSession];
-	if (!declaration) return null;
-	const workspace = repo?.workspaces[declaration.workspaceId];
-	// Removed or replaced checkouts retract the association, even before a refresh saves it.
-	if (
-		!workspace ||
-		workspace.worktreePath !== declaration.worktreePath ||
-		workspace.worktreePath === terminal.repoPath
-	) {
-		return null;
+	const peer = terminalsStore.get(terminalId)?.tuicSession;
+	if (!peer) return null;
+	// Reconnect initially derives repoPath from actual cwd, which may now be in
+	// another repo or unregistered. The stable declaration owns its containing repo.
+	for (const repoPath of repositoriesStore.getPaths()) {
+		const repo = repositoriesStore.get(repoPath);
+		const declaration = repo?.declaredWorktrees?.[peer];
+		if (!declaration) continue;
+		const workspace = repo?.workspaces[declaration.workspaceId];
+		// Removed or replaced checkouts retract the association before a refresh saves it.
+		if (!workspace || workspace.worktreePath !== declaration.worktreePath || workspace.worktreePath === repoPath) {
+			continue;
+		}
+		return { repoPath, workspaceId: declaration.workspaceId };
 	}
-	return { repoPath: terminal.repoPath, workspaceId: declaration.workspaceId };
+	return null;
 }
 
 /**

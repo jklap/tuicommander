@@ -1373,7 +1373,12 @@ uses the same classifier as the sidebar and `repo action=worktree_lifecycle`.
 Inventory and per-checkout inspection run on the blocking pool. Listing reuses
 its inventory and the sidebar's ref-keyed integration proofs and cached GitHub
 answers, instead of repeating unchanged integration subprocesses for every
-checkout. Dirt, fingerprints and submodule commit counts remain fresh; the
+checkout. GitHub evidence is cache-only on this request: a cache miss keeps the
+conservative local classification, and normal monitoring can populate the existing
+definitive-answer cache. Listing never starts a GitHub network lookup; this avoids
+waiting on API pagination behind the native CLI response deadline. Fresh Git and
+filesystem inspection can still take time, so this is not a hard wall-clock bound.
+Dirt, fingerprints and submodule commit counts remain fresh; the
 response fields are unchanged. If checkout HEAD differs from its branch ref,
 listing classifies that HEAD freshly. Removal preflights remain uncached:
 
@@ -2207,8 +2212,9 @@ caller snapshot moves to the target workspace; sibling snapshots are preserved.
 After a restart or WebView reconnect, HTTP `GET /sessions` and IPC
 `list_active_sessions` return the declared `worktree_path` and `worktree_branch`
 while `cwd` remains the reported shell directory. The frontend restores tab
-placement from the persisted declaration when its workspace id and checkout path
-still match. Declaration does not acquire
+placement from the persisted stable `TUIC_SESSION` declaration across registered
+repositories, independent of the current cwd-derived owner, when its workspace id
+and checkout path still match. Declaration does not acquire
 worktree cleanup ownership.
 A concurrent repository edit can return a configuration conflict; retry the
 declaration after refreshing rather than overwriting that edit.

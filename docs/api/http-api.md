@@ -2984,8 +2984,9 @@ caller snapshot moves to the target workspace; sibling snapshots are preserved.
 After a restart or WebView reconnect, HTTP `GET /sessions` and IPC
 `list_active_sessions` return the declared `worktree_path` and `worktree_branch`
 while `cwd` remains the actual shell directory. The frontend restores placement
-from the persisted declaration when the workspace id and checkout path still
-match. Declaration does not acquire worktree cleanup ownership.
+from the persisted stable caller declaration across registered repositories,
+independent of a changed cwd-derived repository, when the workspace id and checkout
+path still match. Declaration does not acquire worktree cleanup ownership.
 A concurrent repository edit can return a configuration conflict; retry the
 declaration after refreshing rather than overwriting that edit.
 

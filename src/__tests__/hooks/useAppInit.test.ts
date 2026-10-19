@@ -191,7 +191,7 @@ describe("initApp", () => {
 		expect(toast?.message).toContain("Open in Browser");
 	});
 	beforeEach(({ task }) => {
-		if (/^(adopts a local MCP-spawned|keeps local reconnected)/.test(task.name)) {
+		if (/^(adopts a local MCP-spawned|keeps local reconnected|reconnect_preserves_declaration)/.test(task.name)) {
 			vi.spyOn(appLogger, "info").mockImplementation(() => {});
 			vi.spyOn(appLogger, "debug").mockImplementation(() => {});
 			for (const level of ["warn", "error"] as const) {
@@ -747,6 +747,39 @@ describe("initApp", () => {
 		repositoriesStore.setActive("/repos/alpha");
 		expect(tabs.getVisibleIds("/repos/alpha|main")).toContain(tabId);
 	});
+
+	// Catches: reconnect searches declarations only under cwd-derived repo B or null, losing repo A's placement.
+	it.each(["/repo-b/src", "/unregistered/src"])(
+		"reconnect_preserves_declaration_after_cross_repo_cwd (%s)",
+		async (cwd) => {
+			repositoriesStore._testSetHydrated(true);
+			repositoriesStore.add({ path: "/repo-a", displayName: "repo-a" });
+			repositoriesStore.setWorkspace("/repo-a", "main", { worktreePath: "/repo-a" });
+			repositoriesStore.setWorkspace("/repo-a", "declared", { worktreePath: "/repo-a__wt/declared" });
+			repositoriesStore.setDeclaredWorktree("/repo-a", "stable-declared-peer", {
+				workspaceId: "declared",
+				branch: "declared",
+				worktreePath: "/repo-a__wt/declared",
+			});
+			repositoriesStore.add({ path: "/repo-b", displayName: "repo-b" });
+			repositoriesStore.setWorkspace("/repo-b", "main", { worktreePath: "/repo-b" });
+			await initApp(
+				createMockDeps({
+					pty: {
+						listActiveSessions: vi
+							.fn()
+							.mockResolvedValue([{ session_id: "declared-pty", tuic_session: "stable-declared-peer", cwd }]),
+						close: vi.fn().mockResolvedValue(undefined),
+					},
+				}),
+			);
+			const id = terminalsStore.getTerminalForSession("declared-pty")!;
+			expect(repositoriesStore.findOwnerForTerminal(id)).toEqual({ repoPath: "/repo-a", workspaceId: "declared" });
+			expect(terminalsStore.get(id)?.repoPath).toBe("/repo-a");
+			expect(terminalsStore.get(id)?.cwd).toBe(cwd);
+			expect(globalWorkspaceStore.getScopeMembers(MANUAL_SCOPE)).not.toContain(id);
+		},
+	);
 
 	it("re-adopts surviving PTY sessions", async () => {
 		const deps = createMockDeps({
