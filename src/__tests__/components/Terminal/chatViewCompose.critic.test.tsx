@@ -158,20 +158,45 @@ describe("Chat Compose input", () => {
 		expect(view.container.querySelector(".cm-editor")).toBeNull();
 	});
 
-	// Catches: always-open Chat ignoring a smart prompt because its open flag never changes.
-	it("replaces_chat_text_from_the_terminal_ref_without_opening_cli_compose", async () => {
+	// Catches: always-open Chat ignoring a smart prompt because its open flag never changes,
+	// or wiping the draft the user is writing (user decision: Chat appends like CLI Compose).
+	it("appends_below_the_chat_draft_from_the_terminal_ref_without_opening_cli_compose", async () => {
 		const id = addTerminal();
 		const view = render(() => <Terminal id={id} cwd="/repo" alwaysVisible />);
 		fireEvent.click(view.getByRole("button", { name: "Chat" }));
 		const cm = await readyEditor(view.container);
 		typeDraft(view.container, "Old draft");
 		terminalsStore.get(id)?.ref?.openComposeWithText?.("Review this change");
-		expect(cm.state.doc.toString()).toBe("Review this change");
+		await waitFor(() => expect(cm.state.doc.toString()).toBe("Old draft\n\nReview this change"));
+		expect(editor(view.container)).toBe(cm);
 		cm.contentDOM.blur();
 		terminalsStore.get(id)?.ref?.focus();
 		expect(cm.hasFocus).toBe(true);
 		fireEvent.click(view.getByRole("button", { name: "CLI" }));
 		expect(view.container.querySelector(".cm-editor")).toBeNull();
+	});
+
+	// Catches: the append path swallowing a prompt fired into an EMPTY Chat input (no leading blank lines).
+	it("fills_an_empty_chat_input_with_the_prompt_without_a_separator", async () => {
+		const id = addTerminal();
+		const view = render(() => <Terminal id={id} cwd="/repo" alwaysVisible />);
+		fireEvent.click(view.getByRole("button", { name: "Chat" }));
+		const cm = await readyEditor(view.container);
+		terminalsStore.get(id)?.ref?.openComposeWithText?.("Review this change");
+		await waitFor(() => expect(cm.state.doc.toString()).toBe("Review this change"));
+	});
+
+	// Catches: a second prompt replacing the first instead of stacking below it.
+	it("stacks_a_second_prompt_below_the_first_in_the_chat_input", async () => {
+		const id = addTerminal();
+		const view = render(() => <Terminal id={id} cwd="/repo" alwaysVisible />);
+		fireEvent.click(view.getByRole("button", { name: "Chat" }));
+		const cm = await readyEditor(view.container);
+		typeDraft(view.container, "Draft");
+		terminalsStore.get(id)?.ref?.openComposeWithText?.("First");
+		await waitFor(() => expect(cm.state.doc.toString()).toBe("Draft\n\nFirst"));
+		terminalsStore.get(id)?.ref?.openComposeWithText?.("Second");
+		await waitFor(() => expect(cm.state.doc.toString()).toBe("Draft\n\nFirst\n\nSecond"));
 	});
 
 	// Catches: shortcut/dismiss paths hiding the only Chat input, or Escape focusing a hidden grid.
