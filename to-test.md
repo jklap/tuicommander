@@ -2546,11 +2546,11 @@ Needs an iPhone (iOS 16.4+, 18.4+ preferred), the desktop TUICommander running a
 ## Plugin review follow-up (#1756)
 
 - [ ] After the existing provider configuration migration, reload GitHub Work, GitLab and Jira twice. Verify one registration per account, and verify that rejected startup reports its error. The read-only live snapshot on 2026-10-15 reported GitLab/Jira loaded, but GitHub Work failed with `Configurable plugin requires a settings schema`; no reload was attempted.
-- [ ] Set and use a project ID through the approved plugin settings UI. Tasks setup contains project fields, but the audited Plugins tab does not expose a settings schema form.
-- [ ] After Jira cancellation is implemented, resolve a Jira URL and cancel its in-flight request. The resolver passes a signal, but the audited provider `detail(ref)`, client request and host-fetch adapter do not propagate it.
+- [ ] Set and use a project ID through the approved plugin settings UI. _(Correction 2026-10-20: current main and plugin pin `56659df3` include schema-backed Jira/GitLab defaults; the earlier missing-form observation is historical, not an outstanding implementation gap.)_
+- [ ] Resolve a Jira URL and cancel its in-flight request. _(Correction 2026-10-20: current main and plugin pin `56659df3` propagate cancellation through resolver, provider, client and host HTTP; the remaining gap is live loaded-plugin evidence.)_
 - [ ] Install an incompatible plugin in an isolated verification environment and check its refusal message. Catalogue/provider boundary checks passed 38/38 and loader minimum-version checks passed 3/3 (25 filtered) through build-slot on 2026-10-15; these are not native install E2E evidence.
 - [ ] Once GitHub Work loads with an authorized test account, invoke a read-only review action through core and verify it reaches the account-bound provider. No vendor writes are authorized.
-- [ ] Same-version stale-copy detection requires an approved source-content identity contract before its E2E check: the audited catalogue update decision compares versions only.
+- [ ] Check same-version stale-copy detection in a supported isolated loaded-plugin runtime. _(Correction 2026-10-20: current main includes catalogue payload identity and installed hashing; version-only comparison is historical. The `tuic-remote` plus Vite path still skips user-plugin loading in `loadUserPlugins`, so it cannot supply this story's required loaded-plugin proof.)_
 
 - [ ] #1756-4d42: after Boss restarts `make dev` (Rust does not hot-reload), resolve a Jira URL and cancel while headers/body are pending; confirm no late result and active requests stop. No live restart was performed by w-1756.
 
