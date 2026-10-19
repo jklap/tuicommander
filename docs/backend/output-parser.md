@@ -732,8 +732,11 @@ The shared `intent_marker.json` grammar defines the intent anchor and title
 boundary for Rust capture and desktop/mobile tinting. The last complete, non-nested
 parenthesis group on the logical row is the title. Its closing parenthesis ends
 the intent even when ordinary prose follows without whitespace. Earlier
-parenthesis groups remain in the description. Title-less rows keep their existing
-hard-break completion behavior.
+parenthesis groups remain in the description. An unfinished later opening
+parenthesis keeps the title incomplete, so a repaint or hard-wrapped title is
+not replaced by an earlier aside. Desktop tinting resolves the complete
+soft-wrapped logical line before mapping the boundary back to physical cells.
+Title-less rows keep their existing hard-break completion behavior.
 
 The parser does not remove terminal bytes. Desktop tint stops at the closing
 cell, including when the title wraps; mobile keeps trailing spans and links outside

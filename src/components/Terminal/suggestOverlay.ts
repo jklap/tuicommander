@@ -24,7 +24,12 @@ const INTENT_RE = /^intent:\s+\S/;
  */
 export const INTENT_HIGHLIGHT_RE = new RegExp(`${intentMarker.anchor}[\\t ]+`);
 /** Same title boundary as Rust capture; rendering never invents a second delimiter. */
-export const INTENT_TITLE_RE = new RegExp(intentMarker.title);
+const INTENT_TITLE_RE = new RegExp(intentMarker.title);
+/** Boundary excludes the trailing prose consumed to reject an unfinished later group. */
+export function intentTitleEnd(body: string): number | undefined {
+	const title = INTENT_TITLE_RE.exec(body);
+	return title ? title[1].length + title[2].length + 2 : undefined;
+}
 /**
  * The answer marker an agent prefixes to every sentence that directly answers
  * the user (💬). Matched on row text, which carries no escape sequences — bold,
@@ -355,29 +360,39 @@ export function planSuggestOverlay(
 			}
 			row = last;
 		} else if (INTENT_HIGHLIGHT_RE.test(text)) {
-			// Ink also hard-wraps with cursor moves and indentation, without isWrapped.
+			// Choose the title over a whole soft-wrapped logical line, never a
+			// physical fragment that happens to close an earlier aside.
 			let body = "";
 			let prefix = INTENT_HIGHLIGHT_RE.exec(text)![0].length;
-			for (; ; row++) {
+			const extent: { row: number; snapshot: RowSnapshot; start: number; prefix: number }[] = [];
+			let boundary: number | undefined;
+			for (;;) {
 				const current = getRow(row)!;
-				const before = body.length;
+				extent.push({ row, snapshot: current, start: body.length, prefix });
 				body += current.text.slice(prefix);
-				const closed = INTENT_TITLE_RE.exec(body);
-				const end = closed ? closed[0].length - before + prefix : undefined;
-				const partial = end !== undefined && current.text.slice(end).trim() !== "";
-				const endColumn = partial ? (current.endColumn?.(end!) ?? end!) : undefined;
-				blocks.push(endColumn === undefined ? { row, kind: "intent" } : { row, kind: "intent", endColumn });
-				parts.push(`i${row}${endColumn === undefined ? "" : `:${endColumn}`}`);
-				if (closed) break;
 				prefix = 0;
-				if (row + 1 >= totalRows) break;
-				const next = getRow(row + 1);
-				if (!next || next.text.trim() === "") break;
-				if (next.isWrapped) continue;
+				const next = row + 1 < totalRows ? getRow(row + 1) : null;
+				if (next?.isWrapped) {
+					row++;
+					continue;
+				}
+				boundary = intentTitleEnd(body);
+				if (boundary !== undefined || !next || next.text.trim() === "") break;
+				// Ink also hard-wraps with cursor moves and indentation.
+				if (!ANSWER_CONTINUATION_RE.test(next.text) || isAnswerBoundary(next.text) || ANSWER_MARKER_RE.test(next.text))
+					break;
 				body += " ";
-				if (!ANSWER_CONTINUATION_RE.test(next.text)) break;
-				if (OUTPUT_ROW_RE.test(next.text) || ANSWER_MARKER_RE.test(next.text) || PROMPT_ROW_RE.test(next.text)) break;
-				if (SUGGEST_ANCHOR_RE.test(next.text) || INTENT_HIGHLIGHT_RE.test(next.text)) break;
+				row++;
+			}
+			for (const part of extent) {
+				if (boundary !== undefined && part.start >= boundary) break;
+				const end = boundary === undefined ? undefined : boundary - part.start + part.prefix;
+				const partial = end !== undefined && part.snapshot.text.slice(end).trim() !== "";
+				const endColumn = partial ? (part.snapshot.endColumn?.(end!) ?? end!) : undefined;
+				blocks.push(
+					endColumn === undefined ? { row: part.row, kind: "intent" } : { row: part.row, kind: "intent", endColumn },
+				);
+				parts.push(`i${part.row}${endColumn === undefined ? "" : `:${endColumn}`}`);
 			}
 		}
 	}

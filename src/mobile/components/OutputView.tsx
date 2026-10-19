@@ -1,5 +1,5 @@
 import { createEffect, createMemo, createSignal, For, type JSX, onCleanup, onMount, Show } from "solid-js";
-import { INTENT_HIGHLIGHT_RE, INTENT_TITLE_RE } from "../../components/Terminal/suggestOverlay";
+import { INTENT_HIGHLIGHT_RE, intentTitleEnd } from "../../components/Terminal/suggestOverlay";
 import { appLogger } from "../../stores/appLogger";
 import { type PtySubscription, subscribePty } from "../../transport";
 import { mobileFontSizes } from "../mobileFontSize";
@@ -367,8 +367,8 @@ export function OutputView(props: OutputViewProps) {
 		}
 		// VS15 is display-only but still occupies a UTF-16 offset in styledRange.
 		const anchor = INTENT_HIGHLIGHT_RE.exec(text.replaceAll("\uFE0E", " "));
-		const title = anchor ? INTENT_TITLE_RE.exec(text.slice(anchor[0].length)) : null;
-		const end = title ? anchor![0].length + title[0].length : text.length;
+		const boundary = anchor ? intentTitleEnd(text.slice(anchor[0].length)) : undefined;
+		const end = boundary !== undefined ? anchor![0].length + boundary : text.length;
 		const partial = !!anchor && text.slice(end).trim() !== "";
 		const isIntent = !!anchor;
 		const marker = isIntent && !partial ? "intent" : undefined;

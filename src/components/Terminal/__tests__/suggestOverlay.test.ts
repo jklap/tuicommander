@@ -606,3 +606,40 @@ it("paints only real terminal cells through a title closure beside ordinary pros
 	expect(container.firstElementChild?.getAttribute("data-terminal-marker")).toBe("intent");
 	expect((container.firstElementChild as HTMLElement).style.width).toBe("264px");
 });
+
+it("resolves an aside and title across the complete soft-wrapped logical line", () => {
+	// Catches: the first closed aside ending tint before the real title on a later physical row.
+	for (const width of [20, 200]) {
+		for (const trailing of ["", "Next sentence with ordinary prose"]) {
+			const intent = "intent: checking (local) configuration (Config)";
+			const text = intent + trailing;
+			const snapshots: RowSnapshot[] = [];
+			for (let offset = 0; offset < text.length; offset += width) {
+				snapshots.push({ text: text.slice(offset, offset + width), isWrapped: offset > 0 });
+			}
+			const plan = planSuggestOverlay(snapshots.length, (index) => snapshots[index] ?? null);
+			const expected = [];
+			for (let row = 0; row * width < intent.length; row++) {
+				const end = intent.length - row * width;
+				expected.push(
+					end < snapshots[row].text.length ? { row, kind: "intent", endColumn: end } : { row, kind: "intent" },
+				);
+			}
+			expect(plan.blocks).toEqual(expected);
+		}
+	}
+});
+
+it("keeps an unfinished later title open through hard wraps but not a new answer", () => {
+	// Catches: an earlier aside truncating hard-wrap tint or consuming the next answer.
+	const snapshots = [
+		{ text: "intent: checking (local) configuration (Config", isWrapped: false },
+		{ text: "  review)Next sentence", isWrapped: false },
+		{ text: "  💬 A new answer", isWrapped: false },
+	];
+	expect(planSuggestOverlay(snapshots.length, (index) => snapshots[index] ?? null).blocks).toEqual([
+		{ row: 0, kind: "intent" },
+		{ row: 1, kind: "intent", endColumn: 9 },
+		{ row: 2, kind: "answer" },
+	]);
+});

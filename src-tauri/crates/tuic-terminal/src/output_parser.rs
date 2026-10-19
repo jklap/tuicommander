@@ -1746,7 +1746,7 @@ pub fn dewrap_intent_continuation_with_rows<'a>(
     (std::borrow::Cow::Owned(kept.join("\n")), absorbed)
 }
 
-/// True when the row contains a closed `(title)`, even with trailing prose.
+/// True when the last group is closed, with no unfinished later title.
 pub fn intent_row_is_complete(row: &str) -> bool {
     INTENT_TITLE_RE.is_match(row.trim_end())
 }
@@ -4639,6 +4639,30 @@ Enter to select · ↑/↓ to navigate · Esc to cancel";
             get_intent_title(&events).as_deref(),
             Some("Allineamento Agent2")
         );
+    }
+
+    #[test]
+    fn intent_aside_does_not_close_an_unfinished_later_title() {
+        // Catches: an earlier aside publishing a false title during repaint or hard wrap.
+        let incomplete = "intent: checking (local) configuration (Config";
+        assert!(!intent_row_is_complete(incomplete));
+        assert_eq!(get_intent_title(&parse_intent_events(incomplete)), None);
+        for input in [
+            "intent: checking (local) configuration (Config\n  review)",
+            "intent: checking (local) configuration (\n  Config)Next sentence",
+        ] {
+            let events = parse_intent_events(input);
+            assert_eq!(
+                get_intent(&events).as_deref(),
+                Some("checking (local) configuration")
+            );
+            let expected = if input.contains("review") {
+                "Config review"
+            } else {
+                "Config"
+            };
+            assert_eq!(get_intent_title(&events).as_deref(), Some(expected));
+        }
     }
 
     #[test]
