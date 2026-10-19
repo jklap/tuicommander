@@ -67,3 +67,49 @@ async fn captured_codex_plan_question_reaches_answer_controls() {
     );
     assert!(canceled, "capture includes the real question before Ctrl+C");
 }
+
+/// Catches: an unanswered enforced approval losing awaiting or its three controls on repaint.
+#[tokio::test]
+async fn codex_enforced_approval_stays_awaiting_without_answer() {
+    let mut opened = false;
+    let mut answered = false;
+    let mut repaints = 0;
+    let mut final_choices = false;
+    replay_native_question(
+        "codex-enforced-open-2075.tcap",
+        "codex",
+        |record, session| {
+            if session.choice_prompt.is_some() && !answered {
+                opened = true;
+            }
+            if opened && !answered {
+                assert!(
+                    session.awaiting_input && session.question_confident,
+                    "open approval lost awaiting at {}us: {session:?}",
+                    record.elapsed_us
+                );
+                let prompt = session
+                    .choice_prompt
+                    .as_ref()
+                    .expect("open approval lost native controls");
+                assert_eq!(prompt.options.len(), 3);
+                repaints += 1;
+                if record.direction == crate::pty_capture::CaptureDirection::Input {
+                    assert_eq!(
+                        record.data, b"1",
+                        "only approve-once follows the open interval"
+                    );
+                    answered = true;
+                }
+            }
+            final_choices = session.choice_prompt.is_some();
+        },
+    );
+    assert!(opened, "real approval must export native controls");
+    assert!(repaints > 2, "capture must include unanswered repaints");
+    assert!(answered, "capture must include the real approve-once key");
+    assert!(
+        !final_choices,
+        "approval must retire after the command runs"
+    );
+}
