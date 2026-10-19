@@ -28,7 +28,7 @@
 .dates { font: var(--font-xs) var(--font-mono); color: var(--fg-secondary); }
 .track { position: relative; flex: 1; min-width: 0; }
 .bar { position: absolute; top: 12px; bottom: 12px; min-width: 4px; border-radius: var(--radius-md); background: color-mix(in srgb, var(--accent) 25%, var(--bg-tertiary)); border: 1px solid var(--accent); box-sizing: border-box; overflow: hidden; }
-.bar > span { padding: 8px; line-height: 30px; white-space: nowrap; font-size: var(--font-xs); }
+.bar > span { display: block; overflow: hidden; text-overflow: ellipsis; padding: 0 8px; line-height: 30px; white-space: nowrap; font-size: var(--font-xs); }
 .bar[data-tone="success"] { border-color: var(--success); background: color-mix(in srgb, var(--success) 25%, var(--bg-tertiary)); }
 .bar[data-tone="warning"] { border-color: var(--warning); }
 .bar[data-tone="danger"] { border-color: var(--error); }

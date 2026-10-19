@@ -84,3 +84,5 @@
 .incidentIds { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 4px 12px; margin: 8px 0; color: var(--fg-muted); font: var(--font-xs) var(--font-mono); }
 .incidentIds dd { margin: 0; overflow-wrap: anywhere; }
 .incidentNext { margin: 12px 0 0; color: var(--fg-secondary); font-size: var(--font-sm); white-space: pre-wrap; overflow-wrap: anywhere; }
+
+.error button { flex-shrink: 0; white-space: nowrap; }
