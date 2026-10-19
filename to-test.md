@@ -2615,3 +2615,5 @@ Needs an iPhone (iOS 16.4+, 18.4+ preferred), the desktop TUICommander running a
 
 - [ ] After the next planned desktop rebuild, confirm desktop startup and browser/mobile static pages still load. Story 2041-04c4 moves Tauri context construction into the binary; no restart was performed by the agent.
 - [x] Mobile Markdown review send (#2042-a71b): 360×800 agent-browser fixture check ticks a checkbox, saves a block comment, sends one path-and-count prompt, and displays transient queued feedback with amber commented-block highlighting; screenshots are in the orchestrator report. The fixture uses real components with an isolated transport, not a live backend round trip.
+
+- [ ] Mobile CLI on a real phone: answer paragraphs show a continuous green gutter instead of protocol speech bubbles; verify native text selection and touch scrolling. Browser evidence at 390×844 is retained under `~/Gits/.tmp/2070/` (#2070-773d).
