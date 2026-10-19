@@ -71,3 +71,13 @@ All six existing fix stories include authentic-evidence requirements, named RED 
 5. **Already checked:** the coordinator reports all four final parity sessions closed. R/parity-cleanup.json documents the earlier multiple-choice cleanup. This report starts no session and touches no Boss session.
 
 One additional throwaway session cannot establish missing agent-specific desktop delivery for all four agents. Completion requires the coordinator to authorize and collect the missing evidence, or explicitly revise the audit's acceptance scope. No unavailable cell is silently waived.
+
+## Isolated follow-up attempt (21:18–21:26 local time)
+
+The coordinator authorized fresh disposable sessions to fill unknown cells, using a private headless backend and same-source Vite. The main-checkout build was refused by build-slot's protected-checkout gate. The coordinator then supplied the TUIC-created read-only build source `tuicommander__wt/chore-live-check-main`, revision `445fd7d9475638479f234a42f8d82e07acd8f44a`. Its native headless build succeeded through build-slot/mbx (2m55s build, preceded by 100s admission wait). No installed binary was replaced.
+
+The backend used private port 22021; Vite used 22022. Backend HOME and temporary paths were under `~/Gits/.tmp/results/close-2021-live/`, not Boss's config. Backend and Vite HTTP probes returned 200. The mandated shared-browser wrapper initially created owned tab `59F685D750AB3C921392660F1334877A`, but navigation/eval then timed out. A full-budget recovery produced: `agent-browser --cdp 57162 --pin-tab --json open ... timed out after 60 seconds`. See `~/Gits/.tmp/results/close-2021-browser-recovery.log` and `close-2021-live/browser-transcript.txt`. No alternative browser transport was used to claim DOM evidence.
+
+The four HTTP spawn receipts and `startup.json` are retained under `close-2021-live/`. Grok reached a native colour question. Claude stopped at its external-instruction import decision, Codex at an update notice, and ego exited with `read-only directory: cannot enforce a read-only directory beneath a writable root`. Startup gates are not question-parity passes. No permission or sandbox override was used to evade ego's rejection.
+
+No new matrix cell is checked from this attempt. Three still-live owned PTYs were deleted; ego was already absent. `sessions-after-cleanup.json` is an empty list. The exact owned browser target was closed through its CDP cleanup endpoint; the shared Chrome process was left intact. The named agent-browser daemon close timed out and is recorded in `process-cleanup.json`; backend and Vite received SIGTERM. Criterion 2 remains open pending working browser automation and an approved ego launch configuration.
