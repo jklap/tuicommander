@@ -289,6 +289,8 @@ When TUICommander receives a worktree creation event while the active terminal i
 
 If the repo has a Setup Script configured, it runs in the background after creation and its outcome isn't included in the creation response. Poll `repo action=worktree_setup_status path=<repo> branch=<branch>` for `{state: "running" | "not_configured" | "completed" | "unknown"}` (plus `exit_code`/`error` once completed) instead of assuming success.
 
+Workflow runs and automations are the exception: they wait for the Setup Script and fail the run if it cannot run or exits non-zero, so an unattended agent never starts in a half-set-up worktree.
+
 Warming (see "Warm Linked Worktrees" above) runs the same way — in the
 background, not before this response returns — so `instructions.warm_artifacts`
 in the creation response reports `status: "pending"`. Poll `repo

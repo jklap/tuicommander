@@ -2943,6 +2943,12 @@ chain for the same `(repoPath, branch)` replaced it. The same applies to MCP
 `repo action=worktree_create` (poll with `action=worktree_setup_status`) and
 `POST /sessions/worktree`, which also warms now.
 
+The one exception is the unattended daemon path used by workflow runs and
+automations (`create_daemon_workflow_worktree`): it waits for the chain and
+fails the run when the Setup Script cannot run, panics, or exits non-zero, so an
+agent never starts in a half-set-up worktree. It is not reachable through this
+endpoint.
+
 The warm copies up to `tuic_git::cow::WARM_COPY_CONCURRENCY` (4) directories at
 a time and is skipped when `warm_ignored_directories` resolves `false` for the
 repo (per-repo setting, then `.tuic.json`, then the global repo default, which
