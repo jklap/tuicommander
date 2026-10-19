@@ -122,9 +122,15 @@ export const RemoteQrDialog: Component<{ onClose: () => void }> = (props) => {
 					<Show when={localIps.error}>
 						<div class={s.discoveryFailure}>
 							<p role="alert">Local IP discovery failed: {String(localIps.error)}</p>
-							<button type="button" onClick={() => void Promise.resolve(refetchLocalIps()).catch(() => {})}>
-								Retry
-							</button>
+							<div class={`${d.actions} ${s.retryActions}`}>
+								<button
+									type="button"
+									class={d.cancelBtn}
+									onClick={() => void Promise.resolve(refetchLocalIps()).catch(() => {})}
+								>
+									Retry
+								</button>
+							</div>
 						</div>
 					</Show>
 					<Show when={(availableIps()?.length ?? 0) > 1}>

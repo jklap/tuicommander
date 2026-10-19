@@ -620,7 +620,9 @@ export const StoriesDialog: Component<StoriesDialogProps> = (props) => {
 				<header class={s.header}>
 					<div>
 						<h2>{t("stories.title", "Plans and Stories")}</h2>
-						<span class={s.project}>{props.project}</span>
+						<span class={s.project} title={props.project}>
+							{props.project}
+						</span>
 					</div>
 					<div class={s.headerActions}>
 						<button
