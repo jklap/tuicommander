@@ -65,7 +65,9 @@ describe("createWorktreeRemovalCoordinator", () => {
 
 	/** A coordinator with real solid signals for the removingBranches lock and
 	 *  mock-everything-else deps. Every dialog defaults to "confirmed". */
-	function makeCoordinator(depOverrides: { dialogs?: Record<string, unknown>; lifecycle?: unknown } = {}) {
+	function makeCoordinator(
+		depOverrides: { dialogs?: Record<string, unknown>; lifecycle?: unknown; isGitRepo?: boolean } = {},
+	) {
 		const [removingBranches, setRemovingBranches] = createSignal<Set<string>>(new Set());
 		const statusMessages: string[] = [];
 		const removeWorktree = vi.fn().mockResolvedValue({});
@@ -74,9 +76,10 @@ describe("createWorktreeRemovalCoordinator", () => {
 		const confirmRemoveLockedWorktree = vi.fn().mockResolvedValue(true);
 		const confirmRemoveBusyWorktree = vi.fn().mockResolvedValue(true);
 		const closeTerminal = vi.fn().mockResolvedValue(undefined);
+		const getInfo = vi.fn().mockResolvedValue({ is_git_repo: depOverrides.isGitRepo ?? false });
 
 		const coordinator = createWorktreeRemovalCoordinator({
-			repo: { removeWorktree, getWorkspaceLifecycle },
+			repo: { removeWorktree, getWorkspaceLifecycle, getInfo },
 			dialogs: {
 				confirmRemoveWorktree,
 				confirmRemoveLockedWorktree,
@@ -378,6 +381,49 @@ describe("createWorktreeRemovalCoordinator", () => {
 			await coordinator.handleRemoveWorkspace(REPO, WORKSPACE);
 
 			expect(removeWorktree).toHaveBeenCalledWith(REPO, WORKSPACE, true, true, false, "fp-1");
+		});
+	});
+
+	it("drops a row whose worktree git forgot and whose directory is gone", async () => {
+		await testInScopeAsync(async () => {
+			setupWorkspace();
+			const { coordinator, removeWorktree, confirmRemoveWorktree, statusMessages } = makeCoordinator({
+				lifecycle: { removalSafety: "unknown", error: `No workspace found for id '${WORKSPACE}' in '${REPO}'` },
+			});
+
+			await coordinator.handleRemoveWorkspace(REPO, WORKSPACE);
+
+			expect(removeWorktree).not.toHaveBeenCalled();
+			expect(confirmRemoveWorktree).not.toHaveBeenCalled();
+			expect(repositoriesStore.get(REPO)?.workspaces[WORKSPACE]).toBeUndefined();
+			expect(statusMessages.at(-1)).toContain("no longer exists on disk");
+		});
+	});
+
+	it("keeps a forgotten-by-git row when its directory is still on disk", async () => {
+		await testInScopeAsync(async () => {
+			setupWorkspace();
+			const { coordinator } = makeCoordinator({
+				isGitRepo: true,
+				lifecycle: { removalSafety: "unknown", error: `No workspace found for id '${WORKSPACE}' in '${REPO}'` },
+			});
+
+			await coordinator.handleRemoveWorkspace(REPO, WORKSPACE);
+
+			expect(repositoriesStore.get(REPO)?.workspaces[WORKSPACE]).toBeDefined();
+		});
+	});
+
+	it("keeps a forgotten-by-git row that still has an attached terminal", async () => {
+		await testInScopeAsync(async () => {
+			setupWorkspace({ terminals: ["term-1"] });
+			const { coordinator } = makeCoordinator({
+				lifecycle: { removalSafety: "unknown", error: `No workspace found for id '${WORKSPACE}' in '${REPO}'` },
+			});
+
+			await coordinator.handleRemoveWorkspace(REPO, WORKSPACE);
+
+			expect(repositoriesStore.get(REPO)?.workspaces[WORKSPACE]).toBeDefined();
 		});
 	});
 

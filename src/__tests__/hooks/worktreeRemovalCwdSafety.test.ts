@@ -48,6 +48,7 @@ describe("worktree removal cwd authority", () => {
 			repo: {
 				removeWorktree: vi.fn(async () => undefined),
 				getWorkspaceLifecycle: async () => ({ dirtyFiles: 0, commitStatus: "merged", removalSafety: "safe" }),
+				getInfo: async () => ({ is_git_repo: true }),
 			},
 			dialogs: { confirmRemoveWorktree: async () => true },
 			closeTerminal,
