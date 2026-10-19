@@ -1991,9 +1991,11 @@ mod session_placement_tests {
             .into_iter()
             .find(|r| r.session_id == "restored-pty")
             .unwrap();
+        // The declared path is stored resolved; the scratch root can sit under a
+        // symlink (macOS /var -> /private/var), so compare against the resolved path.
         assert_eq!(
             row.worktree_path.as_deref().map(std::path::Path::new),
-            Some(worktree.as_path())
+            Some(worktree.canonicalize().unwrap().as_path())
         );
         assert_eq!(row.worktree_branch.as_deref(), Some("feature"));
         assert_eq!(row.cwd.as_deref(), Some(root_path));

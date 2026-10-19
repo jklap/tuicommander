@@ -2794,7 +2794,14 @@ async fn mcp_run_history_matches_owner_event_cursor() {
     let config = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
     let _guard = crate::config::set_config_dir_override(config.path().into());
     let project = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
-    let path = project.path().to_string_lossy().to_string();
+    // Run ownership resolves the project path; the scratch root can sit under a
+    // symlink (macOS /var -> /private/var), so the plan must name the resolved path.
+    let path = project
+        .path()
+        .canonicalize()
+        .unwrap()
+        .to_string_lossy()
+        .to_string();
     let state = test_state();
     state
         .mcp
