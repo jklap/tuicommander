@@ -1127,7 +1127,7 @@ transition; a debug record names that ordering and the pending queue depth.
 
 ### Process snapshot: native first, `ps` only as a fallback
 
-The shared process snapshot (`pty.rs` `process_tree_snapshot`, refreshed at
+The shared process snapshot (`pty/screen.rs` `process_tree_snapshot`, refreshed at
 most once a second while a probe or tracked child demands it; also the
 idle-close guard's `live_bg_runner_commands`) is read natively through
 `tuic_core::process_info`: macOS `proc_listallpids` + `PROC_PIDT_SHORTBSDINFO`
