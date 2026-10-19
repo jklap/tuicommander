@@ -857,7 +857,7 @@ the tab, or the app restarted) reverts to *virtual* rather than 404ing forever.
 ```
 GET /tmux/topology?label=<label>
 ```
-Full graph for one label: `{"sessions":[{"id":"$0","name":"...","active_window":"@0","windows":[{"id":"@0","name":"...","index":0,"active_pane":"%0","panes":[{"id":"%0","index":0,"title":null,"cwd":null,"tuic_session_id":null}]}]}]}`. `tuic_session_id: null` means the pane's id has been allocated but no PTY has been spawned for it yet.
+Full graph for one label: `{"sessions":[{"id":"$0","name":"...","active_window":"@0","windows":[{"id":"@0","name":"...","index":0,"active_pane":"%0","panes":[{"id":"%0","index":0,"title":null,"cwd":null,"tuic_session_id":null}]}]}]}`. `tuic_session_id: null` means the pane's id has been allocated but no PTY has been spawned for it yet. Each materialized pane also carries `foreground_is_shell`: `true` when the pane's own shell owns the PTY foreground (no job running — including a shell that is busy with its startup or a precmd hook such as direnv), `false` when a job or an agent does, and absent when it can't be told (virtual pane, non-shell root, failed process lookup). The CLI's `respawn-pane -k` sends its interrupt (Ctrl+C) only when the field is not `true`.
 
 ```
 POST /tmux/sessions
@@ -911,7 +911,7 @@ virtual) teammate learns its lead; a lead already recorded is never overwritten.
 PUT /tmux/panes/:id?label=<label>
 { "title": "teammate-1" }
 ```
-Records the pane's title and, if materialised and the title changed, renames its TUIC tab as a backend-originated rename (emits `session-renamed`, like MCP `session action=rename`). An empty or missing title only updates the pane record.
+Records the pane's title and, if materialised and the title changed, renames its TUIC tab as a backend-originated rename (emits `session-renamed`, like MCP `session action=rename`). An empty title (`select-pane -T ""`) clears the pane's title and, when the tab still shows the title this shim gave it, clears the tab's name too (not custom any more, so OSC titles may name it again; emits `session-renamed` with `name: null`) — a name the user gave the tab is never cleared. A missing title (plain `select-pane -t X`) changes nothing.
 
 ```
 DELETE /tmux/panes/:id?label=<label>
