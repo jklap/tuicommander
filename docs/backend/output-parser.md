@@ -480,6 +480,8 @@ ParsedEvent::ChoicePrompt {
 
 **Destructive flag:** labels matching `"no"`, `"cancel"`, `"reject"`, `"abort"`, `"deny"`, or the prefixes `"don't"` / `"do not"` are flagged so the PWA overlay and plugins can style them as destructive.
 
+**Claude native titles:** `parse_claude_ask_user_question` uses the nearest nonblank title row above option 1 of the active form, not a question-mark suffix. Imperative titles such as `Pick a colour` export the same ordered choices and `navigate-enter` contract as question-mark titles. The column-zero Ink footer remains mandatory outside the Submit review; indented quoted footers do not establish a form. The authentic `claude-imperative-title-2074.tcap` captures the title, option descriptions, native Green answer and return to the composer.
+
 **Claude multi-question forms:** every tab (`← ☒ Lista  ☐ Branch  ✔ Submit →`) parses as its own prompt. The closing Submit review has no `Enter to select` footer, so `parse_claude_ask_user_question` anchors on the column-zero tab bar and ends at the next separator row (`claude-askuser-multi-question-20261012.tcap`). The mobile choice buttons re-arm whenever the prompt title or labels change, not only when the prompt disappears.
 
 **Flow:** the payload is stored on `SessionState.choice_prompt` and dispatched via `pluginRegistry.dispatchStructuredEvent("choice-prompt", …)`. Animated status-line updates preserve the prompt and its `awaiting_input` lifecycle; resolution, disappearance, replacement, and PTY exit clear it. A disappearing or resolved dialog emits `choice-cleared` so frontend and plugin consumers do not retain stale state. Single-key replies should go through `sendPtyKey()` in `src/utils/sendCommand.ts`, never raw `text + \r`.

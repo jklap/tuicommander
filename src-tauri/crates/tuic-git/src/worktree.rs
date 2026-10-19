@@ -1444,7 +1444,7 @@ fn lifecycle_branch_merge(
             .and_then(|repo| {
                 repo.rev_parse_single(format!("refs/heads/{branch}").as_str())
                     .ok()
-                    .map(|id| id.to_string() == tip)
+                    .map(|id| id == tip)
             })
             .unwrap_or(false);
     if branch_matches_head {

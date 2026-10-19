@@ -351,6 +351,7 @@ themselves mark the tab as awaiting input; TUICommander requires explicit
 permission, approval, or waiting-for-input wording, an agent hook, or a verified
 question on screen.
 Questions inside a wrapped suggested follow-up action do not mark the tab as awaiting input.
+On mobile, a blocked report can keep its **Input** state and still offer suggested follow-up actions. These actions replace generic Yes/No buttons. Native dialog choices take priority over suggestions; without either, generic confirmations remain available.
 Canceling a Codex approval with Esc clears its question indicator when Codex returns to its composer.
 
 ### Queueing Follow-up Commands
