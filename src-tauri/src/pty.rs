@@ -3960,6 +3960,13 @@ pub(crate) fn spawn_reader_thread(
     state: Arc<AppState>,
     tuic_session: Option<String>,
 ) {
+    // HTTP/MCP and generic shell spawns already bind the child's inherited
+    // TUIC_SESSION before starting this reader. Use that same live identity
+    // when the caller has no explicit one, including restored stable identities
+    // that differ from the PTY key. Native hook ownership stays fail-closed.
+    let tuic_session = tuic_session.or_else(|| {
+        crate::mcp_http::session::live_tuic_sessions_by_pty(&state).remove(&session_id)
+    });
     let silence = Arc::new(Mutex::new(SilenceState::new()));
     let running = Arc::new(AtomicBool::new(true));
 

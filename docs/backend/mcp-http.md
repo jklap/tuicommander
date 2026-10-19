@@ -249,6 +249,15 @@ uncapping the server.
 
 ### Session Management
 
+HTTP and MCP agent readers resolve their inherited `TUIC_SESSION` from the live
+PTY identity binding when no explicit reader identity is supplied. Generic HTTP
+shell readers use the same boundary. This lets native Codex hooks bind their exact
+Chat transcript without relaxing foreign-owner, live-PID, rollout-id or cwd checks.
+HTTP/IPC and MCP session lists copy PTY metadata and release the PTY mutex and
+map guard before validating native bindings. Validation probes the live PTY again;
+keeping the row lock during that probe would deadlock a bound Codex terminal.
+
+
 | Method | Path | Description |
 |--------|------|-------------|
 | `GET` | `/sessions` | List active PTY sessions |

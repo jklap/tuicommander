@@ -127,13 +127,16 @@ pub(crate) fn local_session_rows(state: &AppState) -> Vec<SessionInfo> {
         .session_maps
         .sessions
         .iter()
-        .map(|entry| {
-            let session_id = entry.key().clone();
+        .map(|entry| entry.key().clone())
+        .collect::<Vec<_>>()
+        .into_iter()
+        .filter_map(|session_id| {
+            let entry = state.session_maps.sessions.get(&session_id)?;
             let session = entry.value().lock();
             let declared = tuic_by_pty
                 .get(&session_id)
                 .and_then(|peer| super::session_placement::declared_worktree(&repositories, peer));
-            SessionInfo {
+            let mut row = SessionInfo {
                 cwd: session.cwd.clone(),
                 worktree_path: declared.as_ref().map(|(path, _)| path.clone()).or_else(|| {
                     session
@@ -165,10 +168,16 @@ pub(crate) fn local_session_rows(state: &AppState) -> Vec<SessionInfo> {
                     .get(&session_id)
                     .map(|value| value.value().clone())
                     .filter(|parent| !super::mcp_transport::is_pending_parent(parent)),
-                state: state.session_state_with_shell(&session_id),
+                state: None,
                 connection_id: None,
                 session_id,
-            }
+            };
+            // Native Codex validation probes the live PTY again. Release both
+            // the session mutex and map guard before taking that snapshot.
+            drop(session);
+            drop(entry);
+            row.state = state.session_state_with_shell(&row.session_id);
+            Some(row)
         })
         .collect()
 }
