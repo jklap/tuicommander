@@ -1385,7 +1385,7 @@ pub(crate) fn queue_peer_notice(
 
 #[derive(serde::Deserialize, serde::Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct WorkflowLaunchInput {
+pub(super) struct WorkflowLaunchInput {
     pub(super) run_id: String,
     attempt_id: String,
     pub(super) worktree_path: String,
@@ -1462,7 +1462,26 @@ fn launch_workflow_agent(
     launch_workflow_effect(state, addr, mcp_session_id, input, &owner, false)
 }
 
-fn launch_workflow_effect(
+/// Resolve the worktree a workflow worker will run in: a registered isolated
+/// branch checkout of the owning project, spelled canonically. Detached
+/// checkouts and the main checkout are refused — workflow worktrees are created
+/// with `worktree add -b`. (The orphan-removal validator, `validate_worktree_path`,
+/// is deliberately NOT used here: it demands a detached HEAD, which refused every
+/// branch worktree; `validate_branch_worktree_path` also refuses a checkout mid
+/// Git operation.)
+pub(super) fn resolve_workflow_worktree(owner: &str, requested: &str) -> Result<String, String> {
+    let worktree = std::path::Path::new(requested)
+        .canonicalize()
+        .map_err(|error| format!("resolve workflow worktree: {error}"))?;
+    let worktree = worktree.to_string_lossy().to_string();
+    if worktree == owner {
+        return Err("workflow agents require an isolated worktree".into());
+    }
+    crate::worktree::validate_branch_worktree_path(owner, &worktree)?;
+    Ok(worktree)
+}
+
+pub(super) fn launch_workflow_effect(
     state: &Arc<AppState>,
     addr: SocketAddr,
     mcp_session_id: Option<&str>,
@@ -1473,14 +1492,7 @@ fn launch_workflow_effect(
     if input.agent_type.trim().is_empty() || input.agent_type.len() > 128 {
         return Err("invalid workflow agent type".into());
     }
-    let worktree = std::path::Path::new(&input.worktree_path)
-        .canonicalize()
-        .map_err(|error| format!("resolve workflow worktree: {error}"))?;
-    let worktree = worktree.to_string_lossy().to_string();
-    if worktree == owner {
-        return Err("workflow agents require an isolated worktree".into());
-    }
-    crate::worktree::validate_branch_worktree_path(owner, &worktree)?;
+    let worktree = resolve_workflow_worktree(owner, &input.worktree_path)?;
     let store = crate::workflows::RunStore::open()?;
     let run = store.snapshot(&input.run_id)?;
     if run.project != owner {
@@ -2706,6 +2718,11 @@ pub(crate) async fn create_daemon_workflow_worktree(
     .map_err(|(_, value)| value.0.to_string())
     .and_then(|(created, setup_failure)| {
         if let Some(error) = setup_failure {
+            // DEFERRED (2026-10-19) — the worktree (and its warm entry) is left
+            // behind when the Setup Script fails: the caller only receives the
+            // error string, so a failed workflow/automation run leaves an
+            // orphan worktree on disk. Decide whether to remove it here or to
+            // surface its path; kept as is on purpose until that is decided.
             return Err(error);
         }
         Ok(DaemonWorkspace {
