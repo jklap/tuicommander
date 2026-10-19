@@ -636,12 +636,6 @@ export const UpstreamMcpPanel: Component = () => {
 					</button>
 				}
 			>
-				<div class={s.group}>
-					<p class={s.hint}>
-						Proxy external MCP servers through TUIC. Their tools appear prefixed as <code>{"{name}__{tool}"}</code>.
-					</p>
-				</div>
-
 				<MachineSelector value={machine()} label="Upstreams on" onChange={setMachine} />
 
 				{/* Add upstream form */}
@@ -720,7 +714,7 @@ export const UpstreamMcpPanel: Component = () => {
 										data-setting-id="upstreams.servers.{id}.auth.token"
 										type="password"
 										class={s.input}
-										placeholder="API key for remote MCP servers (optional, stored in OS keychain)"
+										placeholder="API key (optional)"
 										value={form().credential}
 										onInput={(e) => setForm((f) => ({ ...f, credential: e.currentTarget.value }))}
 									/>
@@ -836,7 +830,7 @@ export const UpstreamMcpPanel: Component = () => {
 				{/* Upstream list */}
 				<Show when={upstreams().length === 0 && !showAdd()}>
 					<p class={s.hint} style={{ color: "var(--text-dimmed)" }}>
-						No upstream servers configured. Click <strong>+</strong> to add one.
+						No upstream servers configured.
 					</p>
 				</Show>
 
@@ -1081,7 +1075,7 @@ export const UpstreamMcpPanel: Component = () => {
 															onInput={(e) => setEditForm((f) => ({ ...f, credential: e.currentTarget.value }))}
 														/>
 														<p class={s.hint} style={{ margin: "2px 0 0" }}>
-															Stored in OS keychain. Leave blank to keep current token.
+															Leave blank to keep current token.
 														</p>
 														<button
 															data-non-setting="Typed upstream credential or OAuth workflow"

@@ -162,10 +162,7 @@ export const NotificationsTab: Component = () => {
 							min={0}
 							max={100}
 							suffix="%"
-							hint={t(
-								"notifications.hint.masterVolume",
-								"Overall volume for all notification sounds — release the slider to hear a preview",
-							)}
+							hint={t("notifications.hint.masterVolume", "Overall volume for all notification sounds")}
 						/>
 					</ExpertSetting>
 
@@ -249,9 +246,6 @@ export const NotificationsTab: Component = () => {
 						<h4 class={s.notificationEventsHeading}>
 							<label>{t("notifications.label.notificationEvents", "Notification Events")}</label>
 						</h4>
-						<p class={s.hint} style={{ "margin-bottom": "12px" }}>
-							{t("notifications.hint.notificationEvents", "Choose which events play a sound")}
-						</p>
 						<For each={sounds}>
 							{(sound) => (
 								<SettingRow label={sound.label}>

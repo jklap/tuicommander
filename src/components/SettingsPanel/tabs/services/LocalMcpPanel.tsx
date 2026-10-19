@@ -61,19 +61,7 @@ export const LocalMcpPanel: Component = () => {
 				scope="This machine"
 				breadcrumb="Integrations / MCP"
 			/>
-			<SectionCard
-				title="Server connections"
-				description="Local HTTP API and upstream MCP servers share this machine’s integration settings."
-			>
-				<div class={s.group}>
-					<p class={s.hint}>
-						{t(
-							"services.hint.httpDescription",
-							"Serves the REST API and MCP protocol for AI agents and automation tools",
-						)}
-					</p>
-				</div>
-
+			<SectionCard title="Server connections">
 				<SettingRow label={t("services.label.serverStatus", "Server Status")}>
 					{() => (
 						<>
@@ -89,13 +77,7 @@ export const LocalMcpPanel: Component = () => {
 					)}
 				</SettingRow>
 
-				<SettingRow
-					label={t("services.label.mcpConnection", "MCP Connection")}
-					hint={t(
-						"services.hint.mcpConnection",
-						"AI agents connect via the tuic-bridge sidecar. MCP configs are auto-installed in supported agents (Claude Code, Cursor, etc.).",
-					)}
-				>
+				<SettingRow label={t("services.label.mcpConnection", "MCP Connection")}>
 					{() => <StatusBadge label="tuic-bridge" />}
 				</SettingRow>
 
@@ -226,10 +208,6 @@ export const LocalMcpPanel: Component = () => {
 						}}
 					</For>
 				</Show>
-
-				<p class={s.hint} style={{ "margin-top": "16px", color: "var(--text-dimmed)" }}>
-					{t("services.hint.autoSave", "Settings are saved automatically when changed")}
-				</p>
 			</SectionCard>
 		</div>
 	);

@@ -723,10 +723,6 @@ export const RemoteAccessPanel: Component = () => {
 						</p>
 					</div>
 				</Show>
-
-				<p class={s.hint} style={{ "margin-top": "16px", color: "var(--text-dimmed)" }}>
-					{t("services.hint.autoSave", "Settings are saved automatically when changed")}
-				</p>
 			</SectionCard>
 			<Show when={tokenDialog.dialogState()}>
 				{(dialog) => (

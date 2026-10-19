@@ -478,10 +478,7 @@ const SpeechRecognition: Component = () => {
 					</ExpertSetting>
 				</Show>
 
-				<SettingRow
-					label={t("dictation.languageLabel", "Language")}
-					hint={t("dictation.languageHint", "Auto-detect works well for most languages.")}
-				>
+				<SettingRow label={t("dictation.languageLabel", "Language")}>
 					{(id, descriptionId) => (
 						<>
 							<Select
@@ -528,10 +525,7 @@ const SpeechRecognition: Component = () => {
 						max={50}
 						step={1}
 						formatValue={(v) => `${v}%`}
-						hint={t(
-							"dictation.rmsHint",
-							"Audio quieter than this never reaches Whisper. Raise it until room noise stays below the marker; lower it if quiet speech is rejected.",
-						)}
+						hint={t("dictation.rmsHint", "Audio below this level is ignored.")}
 					/>
 				</ExpertSetting>
 

@@ -71,7 +71,7 @@ export const CatalogueFieldEditor: Component<{ field: Field; path: string; repos
 		if (!stored) return;
 		setRevision(snapshot.revision);
 		setValue(() => stored.stored);
-		setNotice(`Source: ${stored.source}. ${field().effect}`);
+		setNotice(`Source: ${stored.source}.`);
 	}
 	onCleanup(settingsRefresh.register({ section: field().store, read, apply: adopt }));
 	onCleanup(() => {
@@ -235,53 +235,57 @@ export const CatalogueFieldEditor: Component<{ field: Field; path: string; repos
 						}
 					/>
 				</Show>
-				<Show when={field().nullable && !options()}>
-					<button
-						data-setting-id={field().id as SettingId}
-						class={s.testBtn}
-						disabled={busy()}
-						onClick={() => edit(null)}
-					>
-						Use null / inherit
-					</button>
-				</Show>
-				<button
-					data-setting-id={field().id as SettingId}
-					class={s.testBtn}
-					disabled={busy() || !dirty()}
-					onClick={() => void save()}
-				>
-					Save setting
-				</button>
-				<Show when={(field().operations as readonly string[]).includes("reset")}>
-					<button
-						data-setting-id={field().id as SettingId}
-						class={s.testBtn}
-						disabled={busy()}
-						onClick={() => void save(true)}
-					>
-						Reset to owner default
-					</button>
-				</Show>
 			</Show>
-			<button
-				data-non-setting="Read the owner snapshot; optionally discard this editor draft"
-				class={s.testBtn}
-				disabled={busy()}
-				onClick={() => void reload()}
-			>
-				{dirty() ? "Discard draft and reload" : "Reload owner"}
-			</button>
-			<Show when={proposal()}>
+			<div class={s.catalogueActions} role="group" aria-label="Setting actions">
+				<Show when={revision()}>
+					<Show when={field().nullable && !options()}>
+						<button
+							data-setting-id={field().id as SettingId}
+							class={s.testBtn}
+							disabled={busy()}
+							onClick={() => edit(null)}
+						>
+							Use null / inherit
+						</button>
+					</Show>
+					<button
+						data-setting-id={field().id as SettingId}
+						class={s.testBtn}
+						disabled={busy() || !dirty()}
+						onClick={() => void save()}
+					>
+						Save setting
+					</button>
+					<Show when={(field().operations as readonly string[]).includes("reset")}>
+						<button
+							data-setting-id={field().id as SettingId}
+							class={s.testBtn}
+							disabled={busy()}
+							onClick={() => void save(true)}
+						>
+							Reset to owner default
+						</button>
+					</Show>
+				</Show>
 				<button
-					data-setting-id={field().id as SettingId}
+					data-non-setting="Read the owner snapshot; optionally discard this editor draft"
 					class={s.testBtn}
 					disabled={busy()}
-					onClick={() => void save(false, true)}
+					onClick={() => void reload()}
 				>
-					Ask for confirmation
+					{dirty() ? "Discard draft and reload" : "Reload owner"}
 				</button>
-			</Show>
+				<Show when={proposal()}>
+					<button
+						data-setting-id={field().id as SettingId}
+						class={s.testBtn}
+						disabled={busy()}
+						onClick={() => void save(false, true)}
+					>
+						Ask for confirmation
+					</button>
+				</Show>
+			</div>
 			<p class={s.hint} role="status">
 				{notice()}
 			</p>
@@ -321,11 +325,11 @@ export const AllSettingsTab: Component<{ initialSetting?: string }> = (props) =>
 			<SettingPageHeader
 				title="All settings"
 				breadcrumb="Application / Expert"
-				description="Typed catalogue fields, including settings without a dedicated page. Existing records use stable keys, never array indexes. Credentials and structured domain records remain in their dedicated editors."
+				description="Settings without a dedicated page."
 				scope="Current instance / machine"
 			/>
 			<SectionCard title="Catalogue inspector">
-				<label class={s.group}>
+				<label class={`${s.group} ${s.catalogueLabel}`}>
 					Setting
 					<Select
 						data-non-setting="Select an owner field to inspect"
@@ -350,7 +354,7 @@ export const AllSettingsTab: Component<{ initialSetting?: string }> = (props) =>
 						.filter(({ part }) => part.startsWith("{"))}
 				>
 					{({ part, index }) => (
-						<label class={s.group}>
+						<label class={`${s.group} ${s.catalogueLabel}`}>
 							Existing record {part}
 							<Input
 								data-non-setting="Bind a catalogue path to an existing stable record key"
@@ -361,7 +365,7 @@ export const AllSettingsTab: Component<{ initialSetting?: string }> = (props) =>
 					)}
 				</For>
 				<Show when={field().owner === "repository"}>
-					<label class={s.group}>
+					<label class={`${s.group} ${s.catalogueLabel}`}>
 						Registered repository
 						<Select
 							data-non-setting="Select the repository settings owner"
@@ -376,7 +380,7 @@ export const AllSettingsTab: Component<{ initialSetting?: string }> = (props) =>
 					</label>
 				</Show>
 				<Show when={field().store === "ego" && field().owner === "profile"}>
-					<label class={s.group}>
+					<label class={`${s.group} ${s.catalogueLabel}`}>
 						Ego profile (empty uses machine)
 						<Input
 							data-non-setting="Select an existing Ego profile owner"

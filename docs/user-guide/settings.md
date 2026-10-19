@@ -31,6 +31,10 @@ groups the pages by task:
 The **AI Chat** page is shown only while **Experimental Features** is on (see
 [AI Chat](#ai-chat)).
 
+Settings uses short labels and behavior descriptions. Implementation ownership and persistence details stay in the documentation rather than page introductions. Repeated scope chips and permanent usage walkthroughs are omitted. Catalogue labels have space above their controls, and header scope badges stay within the page width. Catalogue actions use a wrapping row with 8px gaps and 8px clearance below the field separator; the field effect appears once beneath its name, while the status line reports only the value source.
+
+On narrow screens, the page selector truncates long names before its arrow. Settings reserves the same scrollbar space on every page, including plugin loading and error states. Help badges follow the final line of wrapped labels, and repository color actions keep the shared right alignment.
+
 Plugin pages show their source plugin ID below the page title and in the navigation tooltip. The Settings header, navigation and footer stay visible while plugin values load. Loading and read errors appear only inside the native editor; switching pages does not load a plugin iframe. Unloading a plugin removes its page and search entries.
 
 ## Search

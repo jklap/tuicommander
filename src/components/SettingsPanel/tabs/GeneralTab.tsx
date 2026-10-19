@@ -238,10 +238,7 @@ export const GeneralTab: Component<{ onOpenAiChat?: () => void }> = (props) => {
 											"Install the TUIC CLI to control TUICommander from any terminal or script. Open files and URLs as tabs, manage PTY sessions, and query repository status. Useful for scripting automation.",
 										)
 							}
-							help={t(
-								"general.hint.cliInfo",
-								"The TUIC CLI lets you control TUICommander from any terminal or script. Open files and URLs as tabs, manage PTY sessions (create, list, send input, read output), and query repository status. Useful for scripting automation.",
-							)}
+							help={t("general.hint.cliInfo", "Control terminals, tabs and repositories from scripts.")}
 						>
 							{() => (
 								<div>
@@ -284,10 +281,7 @@ export const GeneralTab: Component<{ onOpenAiChat?: () => void }> = (props) => {
 										)
 							}
 							error={mdkbError() ?? undefined}
-							help={t(
-								"general.hint.codeIntelligenceInfo",
-								"Integrates with MDKB to provide code navigation features in the editor: Cmd+Click go-to-definition, Shift+F12 find references, and symbol outline. Also serves as a persistent memory manager for AI agents, fully integrated with TUICommander. MDKB indexes your repositories and exposes a local daemon for fast lookups.",
-							)}
+							help={t("general.hint.codeIntelligenceInfo", "Code navigation, symbol outlines and agent memory.")}
 						>
 							{() => (
 								<Show

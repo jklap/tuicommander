@@ -1609,7 +1609,6 @@ export const AgentsTab: Component<AgentsTabProps> = (props) => {
 									: "This machine"
 							}
 							breadcrumb="Agents / Terminal agents"
-							source="Terminal (PTY) launch settings. AI Chat uses separate ACP settings."
 						/>
 						<div class={a.machineScope}>
 							<MachineSelector
@@ -1718,10 +1717,7 @@ export const AgentsTab: Component<AgentsTabProps> = (props) => {
 const EgoPermissionsSection: Component = () => {
 	const configStore = useAgentConfig();
 	return (
-		<SectionCard
-			title="ego permissions"
-			description="Terminal launches and managed spawns only. Approval policy and filesystem confinement are separate choices."
-		>
+		<SectionCard title="ego permissions" description="Permissions for new terminal sessions.">
 			<div class={a.permissionRows}>
 				<div class={s.helpLabel}>
 					<label for="ego-permission-mode">Permissions</label>
@@ -1776,10 +1772,7 @@ const EgoPermissionsSection: Component = () => {
 						{(option) => <option value={option.value}>{option.label}</option>}
 					</For>
 				</Select>
-				<p class={s.hint}>
-					Applies to new terminal launches and managed spawns, including resumes. Overrides matching raw flags. AI Chat
-					uses its own ACP settings.
-				</p>
+				<p class={s.hint}>Applies to new terminal launches and managed spawns, including resumes.</p>
 			</div>
 		</SectionCard>
 	);

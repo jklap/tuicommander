@@ -24,6 +24,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Publish typed Settings account enumeration and configured Ego interactive login start/status, with human terminal authentication and separate credential readback (#1790-1011).
 ### Fixed
 
+- Remove implementation commentary and repeated usage hints from Settings, keep compact page names clear of the selector arrow, and prevent clipped header badges, tight catalogue labels and touching action buttons, and show catalogue effects only once (#2047-e20c).
+
+- Keep Settings help beside wrapped labels, match narrow plugin header widths across loading states, and align repository color actions (#2046-5c34).
 - Remove permanent query-engine and prompt-inspector narration while retaining status values and contextual warnings (#2052-c9d1).
 
 - Keep Remote Access settings and the mobile QR dialog available after local IP discovery fails, with an inline error and retry (#2049-2d50).
