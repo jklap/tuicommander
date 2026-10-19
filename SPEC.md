@@ -742,6 +742,7 @@ Some frontend-only stores persist to localStorage:
 - [x] Session uploads live under TUIC data, with launch grants and session-end cleanup; startup reclaims only provably dead owners, preserving concurrent instances; ego invocation-scoped binary-file read roots remain unsupported (#1833-aa60).
 - [x] Shared mobile composer + menu: attach file, camera capture, supported queue/commands and Chat draft parking; browser mic inside the text box (#1880-d7ff).
 - [x] Mobile Companion PWA (searchable sessions, live output, question reply including Codex interactive choices, activity feed)
+- [x] Mobile blocked reports keep their Input state while current suggested actions replace generic Yes/No controls; native dialog choices retain priority (#2082-f782).
 - [x] Automatic mobile resume evidence: bounded per-tab lifecycle/viewport/root/stream trail, acknowledged backend-log upload after an abnormal prior document; original iPhone grey-screen cause remains unproven (#1900-5ff6)
   - [x] Compact bare attachment icon left of the session composer; smaller mic and Send sit inside its right border (#1719-ff5d)
   - [x] Files tree search, hidden-folder ordering, long-path preview, and full-height wrapped editing
