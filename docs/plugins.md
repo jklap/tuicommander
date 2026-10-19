@@ -1573,7 +1573,7 @@ The Settings panel has a **Plugins** tab with two sub-tabs:
 
 - Shows plugins from the community registry (fetched from GitHub)
 - "Install" button downloads and installs directly
-- "Update available" badge when a newer version exists
+- "Update available" badge when a newer version exists or equal-version payloads differ
 - "Refresh" button forces a new registry fetch (normally cached for 1 hour)
 
 ### Enable/Disable
@@ -1611,9 +1611,11 @@ TUICommander registers the `tuic://` URL scheme for external integration:
 
 The registry is a JSON file hosted on GitHub (`sstraus/tuicommander-plugins` repo). The app fetches it on demand (Browse tab) with a 1-hour TTL cache.
 
-Registry entries include: `id`, `name`, `description`, `author`, `latestVersion`, `minAppVersion`, `capabilities`, `downloadUrl`.
+Registry entries include: `id`, `name`, `description`, `author`, `latestVersion`, `minAppVersion`, `capabilities`, `downloadUrl`, and optional `contentSha256`.
 
-The Browse tab compares installed versions to detect available updates.
+The Browse and Installed tabs compare versions and, at the same version, payload identities. Rust recomputes installed `contentSha256` during discovery; a manifest cannot supply it. A missing identity keeps version-only behavior, and a newer installed version is never downgraded.
+
+The community packager generates `contentSha256` from sorted UTF-8 relative paths (using `/`), NUL, each file's lowercase hexadecimal SHA-256, and LF. It hashes that complete sequence again with SHA-256. Directories named `data`, `node_modules`, `scripts`, `.claude`, `.git`, and files matching `package*.json` are excluded. Thus user settings and ZIP timestamps do not cause updates. Internal symlinks or unreadable files leave the installed identity unknown; the plugin can still load. This is content identity, not publisher authentication. The raw source catalogue can precede release completion; wait for the plugin release workflow before installing.
 
 ## Per-Plugin Error Logging
 

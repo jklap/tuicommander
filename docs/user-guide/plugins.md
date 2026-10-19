@@ -200,3 +200,11 @@ Async plugin startup completes before the plugin is marked as loaded. Startup fa
 Cancelling Jira URL resolution stops its in-flight HTTP requests. Plugins can also cancel their own HTTP requests; unloading a plugin cancels its active requests.
 
 Jira and GitLab expose a default project in their schema-driven plugin settings page. Jira uses a project ID; GitLab accepts a project path or ID. A project saved for an account in Tasks setup takes precedence. The default applies after the plugin reloads; empty means no fallback project. Account bindings remain in `data/work-items.json`, while these defaults use the settings service in `data/config.json`.
+
+### Same-version updates
+
+An Update badge can also mean that installed payload files differ from the
+catalogue at the same version. User settings in `data/` do not cause this badge.
+The app computes installed identity when it discovers plugins; Refresh updates
+the catalogue. Older catalogue entries without a payload digest use version-only
+comparison. A newer locally installed version is not downgraded.

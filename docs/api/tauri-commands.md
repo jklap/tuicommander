@@ -599,7 +599,7 @@ JavaScript `String.slice` semantics for ASCII, accented text, and non-BMP emoji.
 
 | Command | Args | Returns | Description |
 |---------|------|---------|-------------|
-| `list_user_plugins` | -- | `Vec<PluginManifest>` | List valid plugin manifests |
+| `list_user_plugins` | -- | `Vec<PluginManifest>` | List valid plugin manifests with backend-derived optional `contentSha256` |
 | `get_plugin_readme_path` | `id` | `Option<String>` | Get plugin README.md path |
 | `read_plugin_data` | `plugin_id, path` | `Option<String>` | Read plugin data file |
 | `write_plugin_data` | `plugin_id, path, content` | `()` | Write plugin data file |

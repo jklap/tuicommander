@@ -2620,3 +2620,9 @@ Needs an iPhone (iOS 16.4+, 18.4+ preferred), the desktop TUICommander running a
 - [x] Mobile Markdown review send (#2042-a71b): 360×800 agent-browser fixture check ticks a checkbox, saves a block comment, sends one path-and-count prompt, and displays transient queued feedback with amber commented-block highlighting; screenshots are in the orchestrator report. The fixture uses real components with an isolated transport, not a live backend round trip.
 
 - [ ] Mobile CLI on a real phone: answer paragraphs show a continuous green gutter instead of protocol speech bubbles; verify native text selection and touch scrolling. Browser evidence at 390×844 is retained under `~/Gits/.tmp/2070/` (#2070-773d).
+
+## Plugin review integration (#1756-4d42)
+
+- [ ] After the Rust restart and plugin catalogue publication, install a plugin, edit its installed `main.js` without changing its version, rediscover it and refresh Browse: both Installed and Browse offer Update. Restore from the catalogue and confirm the badge clears; editing only `data/config.json` must not offer an update.
+- [ ] Reload GitHub/GitLab/Jira twice: one registration each; rejected async startup reports its error. Set and use Jira/GitLab default projects through plugin Settings (account-specific projects take precedence); capture the settings page. Resolve a Jira URL and cancel an in-flight detail request.
+- [ ] Remaining original live checks: switch repos during scans, change composer during retry/wakeup reads, open same-name CSV/DOCX/XLSX files in different repos, refuse an incompatible real plugin, and route an account-authorized GitHub review/action through the core ports. Module tests do not satisfy these live E2Es.
