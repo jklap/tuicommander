@@ -90,8 +90,8 @@ pub(crate) fn live_tuic_sessions_by_pty(
     by_pty
 }
 
-/// Publish managed-agent creation to the native frontend at the same boundary
-/// for HTTP and MCP spawns.
+/// Publish PTY creation to the native frontend at the same boundary for
+/// generic HTTP sessions and HTTP/MCP agent spawns.
 #[cfg(feature = "desktop")]
 pub(super) fn emit_native_agent_session_created(
     emit: impl FnOnce(&str, serde_json::Value),
@@ -862,6 +862,25 @@ fn spawn_pty_launch(
     state: Arc<AppState>,
     launch: PtyLaunch,
 ) -> Result<String, (StatusCode, Json<serde_json::Value>)> {
+    #[cfg(feature = "desktop")]
+    let app_handle = state.app_handle.read().clone();
+    spawn_pty_launch_with_emitter(
+        state,
+        launch,
+        #[cfg(feature = "desktop")]
+        |event, payload| {
+            if let Some(app) = app_handle {
+                let _ = app.emit(event, payload);
+            }
+        },
+    )
+}
+
+fn spawn_pty_launch_with_emitter(
+    state: Arc<AppState>,
+    launch: PtyLaunch,
+    #[cfg(feature = "desktop")] emit: impl FnOnce(&str, serde_json::Value),
+) -> Result<String, (StatusCode, Json<serde_json::Value>)> {
     let PtyLaunch {
         shell,
         cwd,
@@ -1019,17 +1038,15 @@ fn spawn_pty_launch(
     spawn_reader_thread(reader, paused, session_id.clone(), state, None);
 
     #[cfg(feature = "desktop")]
-    if let Some(app) = state_ref.app_handle.read().as_ref() {
-        let _ = app.emit(
-            "session-created",
-            serde_json::json!({
-                "session_id": session_id,
-                "tuic_session": requested.tuic_session,
-                "cwd": cwd,
-                "display_name": null,
-            }),
-        );
-    }
+    emit_native_agent_session_created(
+        emit,
+        &state_ref,
+        &session_id,
+        cwd.as_deref(),
+        None,
+        None,
+        None,
+    );
 
     Ok(session_id)
 }
@@ -2655,6 +2672,41 @@ pub(super) async fn get_session_shell_family(
 
 #[cfg(test)]
 mod tests {
+    // Catches: POST /sessions binds the PTY key but publishes null to native
+    // tabs, so later worktree declarations cannot find the caller.
+    #[cfg(feature = "desktop")]
+    #[tokio::test]
+    async fn generic_post_sessions_created_event_retains_bound_identity() {
+        let state = super::super::tests::test_state();
+        let mut emitted = None;
+        let result = super::spawn_pty_launch_with_emitter(
+            state.clone(),
+            super::PtyLaunch {
+                shell: crate::test_support::host_shell().0.into(),
+                cwd: None,
+                rows: 24,
+                cols: 80,
+                worktree: None,
+                // Same absent caller identity as create_session (POST /sessions).
+                requested: super::RequestedIdentity::default(),
+                direct: None,
+            },
+            |event, payload| {
+                assert_eq!(event, "session-created");
+                emitted = Some(payload);
+            },
+        );
+        let session_id = result.expect("generic POST /sessions PTY must spawn");
+        let bound = super::live_tuic_sessions_by_pty(&state)
+            .remove(&session_id)
+            .expect("generic session must bind its identity");
+        crate::pty::close_pty_core(&state, &session_id, false);
+        let payload = emitted.expect("generic native creation must publish");
+        assert_eq!(bound, session_id);
+        assert_eq!(payload["session_id"], session_id);
+        assert_eq!(payload["tuic_session"], bound);
+    }
+
     // Catches: native MCP/HTTP creation omits the live identity, so a new tab
     // cannot match its caller's worktree declaration until reconnect.
     #[cfg(feature = "desktop")]

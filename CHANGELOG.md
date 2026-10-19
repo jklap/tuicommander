@@ -6,7 +6,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
-- Publish and retain the stable session identity for newly spawned native MCP and HTTP agents so a worktree declaration moves the live sidebar tab, not only its saved restore record (#2044-31f3).
+- Publish and retain the stable session identity for newly spawned native MCP/HTTP agents and generic HTTP sessions so a worktree declaration moves the live sidebar tab, not only its saved restore record (#2044-31f3).
 
 - Add `ui design_*` MCP actions with the existing Design Mode ownership, host grants and saved denials; keep the old tool until the explicit 2068 catalogue cutover (#2067-e708).
 - List and allow `remote`, `voice` and `telegram` only when their owning connection/configuration is available; share discovery and call gates and notify clients when conditions change (#2066-516c, #2067-e708).

@@ -45,7 +45,7 @@
 
 ## Live spawned caller declaration (2044-31f3) — Rust restart and updated frontend required
 
-- [ ] After Boss manually restarts the Rust backend and loads the updated frontend, spawn a native MCP agent and an HTTP agent in an isolated instance. Declare an existing worktree from each caller and confirm only its live tab moves, with unchanged process cwd and stable placement after reconnect. Native session-created now carries the backend-bound identity; the installed backend was not restarted by this peer.
+- [ ] After Boss manually restarts the Rust backend and loads the updated frontend, spawn a native MCP agent, an HTTP agent and a generic `POST /sessions` terminal in an isolated instance. Declare an existing worktree from each caller and confirm only its live tab moves, with unchanged process cwd and stable placement after reconnect. Native session-created now carries the backend-bound identity; the installed backend was not restarted by this peer.
 
 ## Declaration into a newly discovered workspace (2044-31f3) — Rust restart required
 
