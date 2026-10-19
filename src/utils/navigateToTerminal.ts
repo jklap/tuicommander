@@ -3,7 +3,6 @@ import { paneLayoutStore } from "../stores/paneLayout";
 import { repositoriesStore } from "../stores/repositories";
 import { paneLayoutKey } from "../stores/savedPaneLayouts";
 import { terminalsStore } from "../stores/terminals";
-import { assignTabToActiveGroup } from "./paneTabAssign";
 
 /**
  * Navigate to a terminal: switch repo/branch context, activate the terminal,
@@ -50,9 +49,6 @@ export function navigateToTerminal(id: string): void {
 	terminalsStore.setActive(id);
 
 	if (paneLayoutStore.isSplit()) {
-		if (!paneLayoutStore.getGroupForTab(id)) {
-			assignTabToActiveGroup(id, "terminal");
-		}
 		const groupId = paneLayoutStore.getGroupForTab(id);
 		if (groupId) {
 			paneLayoutStore.setActiveGroup(groupId);

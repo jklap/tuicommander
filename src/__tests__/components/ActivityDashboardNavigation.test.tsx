@@ -1,6 +1,7 @@
 import { fireEvent, render, screen } from "@solidjs/testing-library";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ActivityDashboard } from "../../components/ActivityDashboard/ActivityDashboard";
+import { TerminalArea } from "../../components/TerminalArea";
 import { activityDashboardStore } from "../../stores/activityDashboard";
 import { appLogger } from "../../stores/appLogger";
 import { globalWorkspaceStore, MANUAL_SCOPE } from "../../stores/globalWorkspace";
@@ -12,6 +13,16 @@ import { navigateToTerminal } from "../../utils/navigateToTerminal";
 import { globalWorkspaceTabIds } from "../../utils/paneTabOrder";
 import { makeTerminal } from "../helpers/store";
 import "../mocks/tauri";
+
+// Keep the real TerminalArea visibility logic; replace only terminal transport/rendering.
+vi.mock("../../components/Terminal", () => ({
+	Terminal: (props: { id: string }) => (
+		<span data-testid={`terminal-${props.id}`}>{terminalsStore.get(props.id)?.sessionId}</span>
+	),
+}));
+vi.mock("../../components/PaneTree/PaneTree", () => ({ PaneNodeView: () => <div /> }));
+vi.mock("../../hooks/useFileDrop", () => ({ useFileDrop: () => ({ attachTo: () => {}, isDragging: () => false }) }));
+vi.mock("../../components/TipOfTheDay/TipOfTheDay", () => ({ default: () => null }));
 
 const repoPath = "/activity-navigation";
 
@@ -90,8 +101,8 @@ describe("Activity Dashboard session navigation", () => {
 		expect(terminalsStore.state.activeId).toBe(previous);
 	});
 
-	// Catches: opening an undocked session hides the split while the old pane title remains selected.
-	it("docks_an_owned_session_without_rebinding_the_previous_pane", () => {
+	// Catches: opening an undocked session leaves the previous session visible or rebinds its content.
+	it("shows_an_owned_session_without_rebinding_the_previous_pane", () => {
 		const previous = coordinator();
 		const agent = terminalsStore.add(makeTerminal({ name: "worker", sessionId: "worker-session" }));
 		repositoriesStore.addTerminalToWorkspace(repoPath, "main", agent);
@@ -99,15 +110,27 @@ describe("Activity Dashboard session navigation", () => {
 		paneLayoutStore.setRoot({ type: "leaf", id: group });
 		paneLayoutStore.setActiveGroup(group);
 		paneLayoutStore.addTab(group, { id: previous, type: "terminal" });
-		const sibling = paneLayoutStore.split(group, "horizontal")!;
+		paneLayoutStore.split(group, "horizontal");
 		paneLayoutStore.setActiveGroup(group);
+
+		render(() => (
+			<TerminalArea
+				onTerminalFocus={() => {}}
+				onCloseTab={() => {}}
+				onOpenFilePath={() => {}}
+				onContextMenu={() => {}}
+			/>
+		));
 
 		navigateToTerminal(agent);
 
-		expect(paneLayoutStore.state.groups[group].tabs.map((tab) => tab.id)).toEqual([previous, agent]);
-		expect(paneLayoutStore.state.groups[group].activeTabId).toBe(agent);
-		expect(paneLayoutStore.state.groups[sibling]).toBeDefined();
+		expect(screen.getByTestId(`terminal-${agent}`).closest(".terminal-pane")?.classList.contains("active")).toBe(true);
+		expect(screen.getByTestId(`terminal-${agent}`).textContent).toBe("worker-session");
+		expect(screen.getByTestId(`terminal-${previous}`).closest(".terminal-pane")?.classList.contains("active")).toBe(
+			false,
+		);
 		expect(terminalsStore.get(previous)?.sessionId).toBe("coordinator-session");
+		expect(terminalsStore.get(previous)?.name).toBe("COORDINATOR");
 	});
 
 	// Catches: opening another workspace's session inserts it into the previous workspace's split.

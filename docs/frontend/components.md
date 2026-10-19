@@ -715,9 +715,10 @@ system and never turns an absent provider value into zero.
 
 Dashboard row navigation uses the shared `navigateToTerminal` path. It opens the
 manual Global Workspace for parked sessions before activating their content,
-leaves that workspace for a repository session that is not a member, and docks
-undocked terminals when a split layout is active. Existing tab/session bindings
-are preserved. Notification and detached-dashboard navigation use the same path.
+leaves that workspace for a repository session that is not a member, and focuses
+its existing pane group when present. Undocked terminals use the full-page overlay
+without changing the split layout being left. Existing tab/session bindings are
+preserved. Notification and detached-dashboard navigation use the same path.
 
 Activity Dashboard uses a 500px inline overlay and the same compact row layout
 in its detached window. On startup and reopening, saved detached geometry cannot
