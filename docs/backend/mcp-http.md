@@ -1468,6 +1468,17 @@ while the directories are copied (up to `tuic_git::cow::WARM_COPY_CONCURRENCY`
 at a time), then `phase: "file_sync_and_setup_script"`. A repo whose
 `warm_ignored_directories` setting is off skips the copy; its final status is
 `done` with a `skipped` reason.
+
+**Exception: unattended workflow and automation launches.** The daemon path
+that creates a worktree for a workflow run or an automation
+(`create_daemon_workflow_worktree`) does not use the background mode. It waits
+for the whole chain (warm, file sync, Setup Script) and fails the run when the
+Setup Script cannot run, when its task panics, or when it exits non-zero
+(`Setup Script failed: <error>`, `Setup Script chain panicked: <error>`,
+`Setup Script exited with code N: <stderr tail>`), so an unattended agent never
+starts in a half-set-up worktree. Interactive creation (MCP, HTTP, desktop) is
+unchanged: it returns before the chain runs and reports the outcome through the
+event.
 Every created workspace is a linked worktree: Git refs and objects remain
 shared with the parent, while `instructions.warm_artifacts.warmed_directories`
 reports how many ignored directories arrived warm. Parent tracked changes are
