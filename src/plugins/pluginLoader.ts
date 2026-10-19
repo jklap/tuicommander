@@ -46,6 +46,8 @@ export interface PluginManifest {
 	id: string;
 	name: string;
 	version: string;
+	/** Backend-derived payload identity; never read from manifest.json. */
+	contentSha256?: string;
 	minAppVersion: string;
 	main: string;
 	description?: string;

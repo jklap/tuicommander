@@ -3285,3 +3285,6 @@ Modern stateless managed calls recover mail/project routing from their exact liv
 host-issued peer identity without model-driven registration. Unknown/headerless
 peers get bounded context-recovery guidance, not a guessed repository or identity.
 Existing explicit identity replacement and stranded-mail receipts remain intact.
+
+Plugin catalogue update detection compares equal-version payload identities as well
+as versions. Installed identity is computed by Rust and ignores mutable plugin data.

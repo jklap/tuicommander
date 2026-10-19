@@ -105,7 +105,7 @@ const PluginRow: Component<{ plugin: PluginState; onClose?: () => void; onOpenSe
 
 	const updateEntry = createMemo(() => {
 		const v = props.plugin.manifest?.version;
-		return v ? registryStore.hasUpdate(props.plugin.id, v) : null;
+		return v ? registryStore.hasUpdate(props.plugin.id, v, props.plugin.manifest?.contentSha256) : null;
 	});
 	const [updating, setUpdating] = createSignal(false);
 
@@ -288,7 +288,7 @@ const BrowseRow: Component<{ entry: RegistryEntry }> = (props) => {
 	const updateAvailable = () => {
 		const p = installed();
 		if (!p?.manifest?.version) return false;
-		return registryStore.hasUpdate(props.entry.id, p.manifest.version) !== null;
+		return registryStore.hasUpdate(props.entry.id, p.manifest.version, p.manifest.contentSha256) !== null;
 	};
 
 	const handleInstall = async () => {
