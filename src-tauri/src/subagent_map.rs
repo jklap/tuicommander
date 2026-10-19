@@ -752,7 +752,7 @@ pub(crate) fn transcript_source(
     let pid = crate::pty::session_leaf_pid(state, session_id)?;
     let config_dir =
         crate::agent_session::read_agent_env_overrides("claude", pid).remove("CLAUDE_CONFIG_DIR");
-    let uuid = crate::agent_session::discover_agent_session(
+    let uuid = crate::agent_session::discover_agent_session_blocking(
         "claude".to_owned(),
         cwd.clone(),
         Vec::new(),
