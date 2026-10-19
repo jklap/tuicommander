@@ -456,7 +456,7 @@ export function arrangeLayoutState(current: PaneLayoutState, sessionIds: string[
 		if (existing) {
 			existing.tabs = existing.tabs.filter((t) => t.id !== sessionId);
 			if (existing.activeTabId === sessionId) {
-				existing.activeTabId = existing.tabs[existing.tabs.length - 1].id;
+				existing.activeTabId = existing.tabs.at(-1)!.id;
 			}
 		}
 		groups[newId] = { id: newId, tabs: [{ ...tab }], activeTabId: sessionId };

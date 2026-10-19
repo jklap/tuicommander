@@ -34,7 +34,7 @@ describe("sendTextToSession", () => {
 
 		// The writer passed to sendCommand must invoke() write_pty for this session.
 		const calls = mockSendCommand.mock.calls;
-		const writer = calls[calls.length - 1][0] as (data: string) => Promise<void>;
+		const writer = calls.at(-1)![0] as (data: string) => Promise<void>;
 		await writer("hello");
 		expect(mockInvoke).toHaveBeenCalledWith("write_pty", { sessionId: "s1", data: "hello" });
 	});

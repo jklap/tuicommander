@@ -212,7 +212,7 @@ describe("SelectionTab", () => {
 		const { getByText } = render(() => <SelectionTab />);
 		fireEvent.click(getByText("Add rule"));
 		const persisted = mockSetSmartSelectionRules.mock.calls[0][0] as { name: string }[];
-		expect(persisted[persisted.length - 1]?.name).toBe("New rule");
+		expect(persisted.at(-1)?.name).toBe("New rule");
 	});
 
 	it("removes a rule", () => {

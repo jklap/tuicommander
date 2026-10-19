@@ -123,9 +123,9 @@ export function reconcileTerminalRows(next: TerminalRow[], prev?: readonly Termi
  *  than the no-selection case, which always resolves to an end of the list. */
 export function moveActivitySelection(ids: readonly string[], current: string | null, delta: 1 | -1): string | null {
 	if (ids.length === 0) return null;
-	if (current === null) return delta > 0 ? ids[0] : ids[ids.length - 1];
+	if (current === null) return delta > 0 ? ids[0] : ids.at(-1)!;
 	const i = ids.indexOf(current);
-	if (i === -1) return delta > 0 ? ids[0] : ids[ids.length - 1];
+	if (i === -1) return delta > 0 ? ids[0] : ids.at(-1)!;
 	const next = i + delta;
 	if (next < 0 || next >= ids.length) return ids[i];
 	return ids[next];

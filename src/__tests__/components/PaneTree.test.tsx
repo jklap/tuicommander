@@ -191,7 +191,7 @@ describe("PaneTree", () => {
 
 			const menus = container.querySelectorAll(".menu");
 			expect(menus.length).toBeGreaterThan(0);
-			const promoteItem = Array.from(menus[menus.length - 1].querySelectorAll(".label")).find(
+			const promoteItem = Array.from(Array.from(menus).at(-1)!.querySelectorAll(".label")).find(
 				(l) => l.textContent === "Promote to Global Workspace",
 			);
 			expect(promoteItem).toBeDefined();
@@ -220,7 +220,7 @@ describe("PaneTree", () => {
 			fireEvent.contextMenu(tab);
 
 			const menus = container.querySelectorAll(".menu");
-			const removeItem = Array.from(menus[menus.length - 1].querySelectorAll(".label")).find(
+			const removeItem = Array.from(Array.from(menus).at(-1)!.querySelectorAll(".label")).find(
 				(l) => l.textContent === "Remove from Global Workspace",
 			);
 			expect(removeItem).toBeDefined();
