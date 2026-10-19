@@ -1,3 +1,7 @@
+## gix 0.89 migration (2038-b4c9) — Rust restart required
+
+- [ ] After Boss manually restarts `make dev` or installs `make build`, verify repository status counts, blame attribution and linked-worktree rows in an isolated repository. This dependency and Rust adapter change does not hot-reload; this peer did not restart or replace the running desktop.
+
 ## Codex enforced approval retention (2075-aa2f) — Rust restart required
 
 - [ ] After Boss manually restarts `make dev` or installs `make build`, open an enforced Codex command approval, leave it unanswered, and confirm desktop and mobile retain all three native choices through delayed idle notifications. Approve once, refuse and cancel separate harmless requests; controls must retire after each answer. The running desktop does not hot-reload this Rust change and was not restarted by this peer.
