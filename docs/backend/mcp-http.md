@@ -907,7 +907,7 @@ say what was measured, not what the list costs today.
 | Tool | Actions | Default |
 |------|---------|---------|
 | `session` | list, create, submit, input, output, status, wait, resize, rename, close, kill, pause, resume | Enabled |
-| `agent` | spawn, wait, register, list_peers, send, inbox, subscribe, ack, unsubscribe | Enabled |
+| `agent` | spawn, wait, register, list_peers, send, inbox, subscribe, ack, unsubscribe, task_get, task_cancel | Enabled |
 | `task` | get, cancel | Enabled |
 | `remote` | preview, update | Only with a connected remote server |
 | `repo` | list, active, status, branch_integrations, branch_integration, worktree_list, worktree_lifecycle, worktree_create, worktree_remove, orphan_cleanup_answer, branch_delete, progress_list | Enabled |
@@ -1069,7 +1069,7 @@ This applies both to direct `{upstream}__{tool}` calls and to the collapsed `cal
 meta-path. A malformed upstream value falls back to the native compact JSON text
 envelope so the response remains protocol-valid and inspectable.
 
-#### `task` tool — long-running orchestration past the 300s ceiling
+#### Agent task actions — long-running orchestration past the 300s ceiling
 
 `agent action=wait` and `session action=wait` are server-side blocking long-polls
 clamped to `WAIT_MAX_MS` (300 000 ms). An orchestrator supervising a peer that works
@@ -1082,9 +1082,12 @@ the outcome entirely.
 { "session_id": "…", "task_id": "…", "poll_interval_ms": 1000, "…": "…" }
 ```
 
-The handle is polled with `task action=get` instead of holding a wait open. This is
+The handle is polled with `agent action=task_get` instead of holding a wait open. This is
 purely additive — every field a pre-task client already read keeps its name and type,
 and a client that ignores `task_id` behaves exactly as before.
+The existing `task` tool stays available until the explicit catalogue cutover in
+story 2068. Both adapters use the same handler and registry. Existing `task` tool
+denials also block `agent task_get/task_cancel`; disabling `agent` blocks all of its actions.
 
 **Lifecycle.** A task is created `working` once the PTY is live (a refused or failed
 spawn leaves none). `mark_session_exited` (`pty.rs`) drives it to `completed` with
@@ -1100,12 +1103,12 @@ non-zero — so the outcome is recorded whether or not anyone was listening.
 The vocabulary is the MCP `2026-07-28` Tasks vocabulary from day one, so the standard
 `tasks/*` front door stays a serialization change rather than a semantic remap.
 
-**`task action=get`** returns `{task_id, status, status_message?, result?, error_detail?,
+**`agent action=task_get`** returns `{task_id, status, status_message?, result?, error_detail?,
 poll_interval_ms}`, absent optional fields omitted. A failed task reports its reason in
 `error_detail`, **not** `error` — a top-level `error` always means the call itself failed,
 so reusing it would make a successful poll look like a broken one.
 
-**`task action=cancel`** marks the task `cancelled` and does **not** kill the agent
+**`agent action=task_cancel`** marks the task `cancelled` and does **not** kill the agent
 (`session action=kill` does that). Cancelling an already-finished task is not an error:
 it reports the state that stands with `cancelled: false`, so a cancel racing the agent's
 exit never looks like a failure. Because terminal states are immutable, a cancel that

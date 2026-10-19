@@ -2631,6 +2631,15 @@ pub(super) fn handle_agent_unified_with_parent_cwd(
         Err(e) => return e,
     };
     match action {
+        "task_get" | "task_cancel" => {
+            let mut task_args = args.clone();
+            task_args["action"] = serde_json::json!(if action == "task_get" {
+                "get"
+            } else {
+                "cancel"
+            });
+            handle_task(state, addr, &task_args, mcp_session_id)
+        }
         "spawn" => {
             handle_agent_with_parent_cwd(state, addr, args, mcp_session_id, managed_parent_cwd)
         }

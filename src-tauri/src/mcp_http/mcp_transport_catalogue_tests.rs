@@ -538,26 +538,45 @@ fn debug_tool_includes_sessions_action() {
     );
 }
 
+// Catches: expanded discovery exposes optional tools without owner configuration.
 #[test]
 fn merged_tools_collapse_false_returns_all_native_tools() {
+    let dir = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+    let _guard = crate::config::set_config_dir_override(dir.path().to_path_buf());
+    // No voice/Telegram configuration files or live remote connections. All
+    // ordinary tools are enabled; Design Mode has no armed owner for this caller.
     let state = test_state();
-    assert!(!state.config.read().collapse_tools);
+    {
+        let mut config = state.config.write();
+        config.disabled_native_tools.clear();
+        config.settings_mcp_enabled = true;
+        config.progress_tracking = true;
+        config.collapse_tools = false;
+    }
 
     let merged = merged_tool_definitions(&state, None, None);
     let names = tool_names(&merged);
-
-    // Design Mode is visible only to the armed owner, not an unbound caller.
-    let native: Vec<_> = tool_names(&native_tool_definitions())
-        .into_iter()
-        .filter(|name| name != "design_mode")
-        .collect();
     assert_eq!(
-        names, native,
-        "collapse_tools=false should return every native tool visible to this caller"
-    );
-    assert!(
-        names.len() > 3,
-        "baseline native tool set must exceed 3 tools"
+        names,
+        vec![
+            "automations",
+            "secret",
+            "session",
+            "agent",
+            "task",
+            "repo",
+            "story",
+            "workflow_run",
+            "workflow_story_create",
+            "workflow_report",
+            "workflow_launch",
+            "progress",
+            "ui",
+            "plugin_dev_guide",
+            "settings",
+            "debug",
+        ],
+        "expanded discovery must return exactly the tools available to this unconfigured caller"
     );
 }
 

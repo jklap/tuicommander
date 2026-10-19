@@ -465,7 +465,14 @@ fn session_action_requires_blocking_pool(action: &str) -> bool {
 fn agent_action_requires_blocking_pool(action: &str) -> bool {
     matches!(
         action,
-        "spawn" | "send" | "inbox" | "subscribe" | "ack" | "unsubscribe"
+        "spawn"
+            | "send"
+            | "inbox"
+            | "subscribe"
+            | "ack"
+            | "unsubscribe"
+            | "task_get"
+            | "task_cancel"
     )
 }
 
@@ -527,6 +534,18 @@ async fn dispatch_mcp_tool_call_with_context(
     }
     if let Some(error) = super::mcp_transport_catalogue::native_tool_unavailability(state, name) {
         return serde_json::json!({"error": error});
+    }
+    // Preserve the task owner's denial for its agent aliases as well.
+    if name == "agent"
+        && matches!(args["action"].as_str(), Some("task_get" | "task_cancel"))
+        && state
+            .config
+            .read()
+            .disabled_native_tools
+            .iter()
+            .any(|d| d == "task")
+    {
+        return serde_json::json!({"error": format!("Tool '{}' is disabled by configuration", name)});
     }
     if let Some(action) = args["action"].as_str()
         && let Some(replacement) = removed_native_action_replacement(name, action)
