@@ -261,7 +261,7 @@ same-file = "1.0.6"
 keepawake = "0.6"
 # Keep the Rust/npm updater pair on the tested 2.11 line.
 # DEFERRED (2026-10-19) — updater 2.14 still uses ZIP 4; its Windows ZIP extraction
-# reaches RUSTSEC-2026-0367/0368/0369. No compatible ZIP 9 parent release exists.
+# can reach RUSTSEC-2026-0367/0368/0369. Accepted scope is in .cargo/audit.toml.
 tauri-plugin-updater = { version = "~2.11.0", optional = true }
 tauri-plugin-process = { version = "2", optional = true }
 tauri-plugin-deep-link = { version = "2", optional = true }

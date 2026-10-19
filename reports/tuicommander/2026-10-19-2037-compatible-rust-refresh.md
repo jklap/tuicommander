@@ -164,3 +164,74 @@ suppression was applied. A dated comment at the updater dependency records this
 remaining blocker, and `to-test.md` records the post-rebuild application checks.
 The third acceptance criterion still cannot be checked without a coordinator
 scope/criterion decision.
+
+
+## Accepted residual updater exception — 2026-10-20
+
+The coordinator authorized only the three remaining updater ZIP 4 advisory
+exceptions after verifying release-format and signature-order constraints. This
+supersedes the earlier pending audit decision, not the unsuppressed scan results.
+
+### Release payload format
+
+`src-tauri/tauri.conf.json:70` sets `bundle.createUpdaterArtifacts` to **true**,
+not `"v1Compatible"`. Tauri utils 2.10.1 `src/config.rs:1549-1554` distinguishes the
+legacy zipped-v1 setting from the boolean updater setting. The release job uses
+`pnpm tauri` with `includeUpdaterJson: true` in `.github/workflows/release.yml`.
+The recorded release fixture independently confirms Windows updater URLs point
+to `TUICommander_1.7.6_x64-setup.exe`, not a ZIP:
+`src-tauri/test-fixtures/updater/stable-manifest.json:32,36`.
+
+Thus the configured release flow provides a Windows executable installer and
+does not invoke `extract_zip`. The previous finding established a capability in
+the upstream Windows installer for ZIP payloads, not that TUIC publishes such
+payloads. No live Windows packaging run was performed here.
+
+### Signature verification before extraction
+
+In tauri-plugin-updater 2.11.0 `src/updater.rs`:
+
+1. `download` verifies the complete byte buffer at line **740** and returns it
+   only after verification succeeds at line **742**.
+2. `download_and_install` awaits that verified download at line **766**, then
+   calls `install` at line **767**.
+3. `verify_signature` decodes the minisign public key and signature at lines
+   **1524-1529**, and calls `public_key.verify` at line **1532**.
+4. Only the later Windows install path calls `extract_zip` and its extraction
+   API at line **972**. TUIC uses `pendingUpdate.downloadAndInstall` in
+   `src/stores/updater.ts:262`.
+
+This guarantee is for TUIC's download-and-install path. The upstream standalone
+`install(bytes)` entry point does not itself verify arbitrary caller bytes.
+Even if the release flow changed to signed ZIP payloads, exploiting these
+updater extraction advisories through the current TUIC call would require a
+malicious update validly signed by the trusted release key.
+
+### Configuration, audit, and notices
+
+Added only RUSTSEC-2026-0367, RUSTSEC-2026-0368, and RUSTSEC-2026-0369 to the
+existing `src-tauri/.cargo/audit.toml`. The comment records the parent version
+constraint, both acceptance reasons, review date, and
+`DEFERRED (2026-10-20)` removal condition: remove when the updater uses ZIP >=9.
+The direct application ZIP readers remain on ZIP 9. No historical ignore was
+restored. Cargo-audit ignores advisory IDs globally, not per parent; this
+exception is justified only for the remaining updater ZIP 4 graph.
+
+Canonical audit command on rb, matching make/CI config discovery:
+
+```sh
+cd src-tauri && cargo audit
+```
+
+**Passed (exit 0)** with the three documented exceptions and seven existing
+maintenance/unsoundness warnings. Receipt `20261019T222124Z-8494`,
+`stale=no`, `box_dirty=no`; log `~/Gits/.tmp/chore-2037-accepted-audit.log`.
+The prior audit commands from the repository root intentionally showed the
+unsuppressed findings; future validation must use the crate working directory
+so Cargo reads the shared audit configuration.
+
+Ran `node scripts/third-party-notices.mjs` locally through build-slot and mbx
+(metadata only), then `node scripts/third-party-notices.mjs --check`: passed.
+Only the reqwest, rusqlite, rustls, and ZIP direct-version rows changed.
+No application code or lockfile changed after the passing ZIP-domain tests and
+all-target clippy, so those results remain relevant.
