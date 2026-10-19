@@ -176,8 +176,15 @@ non-shell probes retain the previous identity and do not revoke registration.
 Each session spawns a dedicated reader thread that reads from the PTY master fd:
 
 ```rust
-spawn_reader_thread(reader, paused, session_id, app, state)
+spawn_reader_thread(reader, paused, session_id, state, tuic_session)
 ```
+
+Readers without an explicit identity resolve it from the live PTY binding before
+processing output. This includes HTTP agent spawns, MCP agent spawns and generic
+HTTP shell sessions. The identity matches the inherited `TUIC_SESSION` and the
+`session-created` event, including a restored identity that differs from the PTY
+key. Native Codex hook ownership checks remain exact; an unbound reader does not
+accept a self-announced owner.
 
 **Processing pipeline per read:**
 
@@ -980,7 +987,7 @@ new runtime PTY ids, so their read grants point to fresh storage.
 
 Suggest choices are published once when the agent is ready, including while background descendants keep the shell busy. The completion lifecycle event still waits for an idle shell and settled background work; publishing choices does not release that gate.
 
-Pending follow-up choices survive a working spinner until the turn has settled. While the shell is busy, public Claude session snapshots use that same settled-completion predicate, so a retained final marker does not report completed/idle during active Claude Stop hooks. A final `suggest:` marker may share a Claude redraw with its spinner; this is not a new turn. Working evidence can still reopen an idle or delivered completion (including a blocking Stop hook or a Codex internal continuation).
+Pending follow-up choices survive a working spinner until they are published, including a Stop-hook repaint after Claude has already emitted its idle hook. Reopening working state retracts completion but retains undelivered choices for the same input epoch; published choices and choices from a submitted previous turn are discarded. While the shell is busy, public Claude session snapshots use that same settled-completion predicate, so a retained final marker does not report completed/idle during active Claude Stop hooks. A final `suggest:` marker may share a Claude redraw with its spinner; this is not a new turn. Working evidence can still reopen an idle or delivered completion (including a blocking Stop hook or a Codex internal continuation).
 
 ### Background desktop visibility and remote observers
 

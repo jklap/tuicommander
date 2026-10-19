@@ -1,0 +1,166 @@
+- generic
+  - generic
+    - generic
+      - SvgRoot "TUICommander"
+        - StaticText "TUICommander"
+        - StaticText "TUICommander"
+        - StaticText "TUICommander"
+      - button "A Sidebar layout: auto (rich for a short list or a finger) — click for compact" [ref=e89]
+        - StaticText "A"
+        - StaticText "Sidebar layout: auto (rich for a short list or a finger) — click for compact"
+      - button "Show only repos with open terminals" [ref=e90]
+      - button "Hide Sidebar (⌘[)" [ref=e91]
+    - button "No earlier terminal" [disabled, ref=e84]
+      - StaticText "No earlier terminal"
+    - button "No later terminal" [disabled, ref=e85]
+      - StaticText "No later terminal"
+    - button "Live 2044 fixture / chore/sidebar-reality-2044" [ref=e86]
+      - image
+      - StaticText "Live 2044 fixture"
+      - StaticText "/"
+      - StaticText "chore/sidebar-reality-2044"
+    - button "Plans and Stories" [ref=e87]
+    - generic
+      - button "Smart Prompts Library" [ref=e102]
+        - image
+      - button "Worktree: chore/sidebar-reality-2044" [ref=e92]
+        - image
+        - StaticText "Worktree: chore/sidebar-reality-2044"
+      - button "1" [ref=e93]
+        - image
+        - StaticText "1"
+    - button "Command palette" [expanded=false, ref=e88]
+      - image
+  - generic
+    - complementary
+      - button "LIVE 2044 FIXTURE Repository options Add worktree" [ref=e94]
+        - StaticText "LIVE 2044 FIXTURE"
+        - generic
+          - button "Repository options" [ref=e113]
+            - StaticText "⋯"
+            - StaticText "Repository options"
+          - button "Add worktree" [ref=e114]
+            - StaticText "+"
+            - StaticText "Add worktree"
+      - StaticText "⎇ "
+      - StaticText "chore/sidebar-reality-2044"
+      - StaticText "chore/sidebar-reality-2044"
+      - StaticText "2"
+      - StaticText "worktrees"
+      - generic [ref=e103] clickable [cursor:pointer]
+        - image
+        - StaticText "main"
+        - StaticText "main · Last commit: 9m · 4 uncommitted files (staged, unstaged or untracked) would be discarded by removing this workspace. · HEAD is merged; destructive confirmation required"
+        - button "Add terminal" [ref=e120]
+          - StaticText "+"
+          - StaticText "Add terminal"
+        - StaticText "9m"
+        - StaticText "Last commit"
+      - generic [ref=e104] clickable [cursor:pointer]
+        - image
+        - StaticText "chore/live-agent-2044"
+        - StaticText "chore/live-agent-2044 · Last commit: 9m · Clean working tree; HEAD is the default branch tip — no commits of its own; safe to remove · Clean working tree; HEAD is the default branch tip — no commits of its own; safe to remove"
+        - generic
+          - button "Add terminal" [ref=e121]
+            - StaticText "+"
+            - StaticText "Add terminal"
+          - button "Remove worktree" [ref=e122]
+            - StaticText "×"
+            - StaticText "Remove worktree"
+        - StaticText "9m"
+        - StaticText "Last commit"
+      - generic [ref=e105] clickable [cursor:pointer]
+        - image
+        - button "Show or hide agents (1)" [expanded=true, ref=e115]
+          - StaticText "Show or hide agents"
+        - StaticText "chore/sidebar-reality-2044"
+        - StaticText "chore/sidebar-reality-2044"
+        - generic
+          - button "Add terminal" [ref=e123]
+            - StaticText "+"
+            - StaticText "Add terminal"
+          - button "Remove worktree" [ref=e124]
+            - StaticText "×"
+            - StaticText "Remove worktree"
+      - group "Terminal tabs"
+        - button "εgo: Run exactly this exec argv once: [\"/opt/homebrew/bin/python3\", \"/Users/stefano.s" [ref=e106]
+          - StaticText "εgo"
+          - StaticText "<1m"
+          - StaticText "εgo: Run exactly this exec argv once: [\"/opt/homebrew/bin/python3\", \"/Users/stefano.s"
+      - button "Pull Pull latest changes" [ref=e95]
+        - image
+        - StaticText "Pull"
+        - StaticText "Pull latest changes"
+      - button "Push Push commits" [ref=e96]
+        - image
+        - StaticText "Push"
+        - StaticText "Push commits"
+      - button "Fetch Fetch from all remotes" [ref=e97]
+        - image
+        - StaticText "Fetch"
+        - StaticText "Fetch from all remotes"
+      - button "Stash Stash changes" [ref=e98]
+        - image
+        - StaticText "Stash"
+        - StaticText "Stash changes"
+      - button "Add Repository Add Repository" [ref=e99]
+        - image
+        - StaticText "Add Repository"
+        - StaticText "Add Repository"
+      - button "Help" [ref=e100]
+        - image
+        - StaticText "Help"
+      - button "Settings" [ref=e101]
+        - image
+        - StaticText "Settings"
+    - main
+      - generic
+        - button "Scroll tabs left" [ref=e116]
+          - image
+        - generic [ref=e117] clickable [cursor:pointer]
+          - StaticText "●"
+          - StaticText "PTY · "
+          - StaticText "εgo"
+          - button "×" [ref=e125]
+        - button "Scroll tabs right" [ref=e118]
+          - image
+      - button "+" [ref=e107]
+      - generic
+        - generic
+          - group "Terminal view"
+            - button "CLI" [ref=e128]
+            - button "Chat" [disabled, ref=e129]
+          - generic [ref=e126] clickable [cursor:pointer]
+            - StaticText "CONTEXT"
+            - StaticText "Intent: Run exactly this exec argv once: [\"/opt/homebrew/bin/python3\", \"/Users/stefano.s · Prompt: Run exactly this exec argv once: [\"/opt/homebrew/bin/python3\", \"/Users/stefano.straus/Gits/.tmp/results/live-2044-isolated/fixture-repo/agent-reality-actions.py\"]. Create and declare the disposable worktree with this script. Keep cwd unchanged. Then report the result and remain in the terminal."
+            - image
+          - generic
+            - generic
+              - Canvas
+              - Canvas [ref=e130] focusable [tabindex]
+              - Canvas
+          - generic [ref=e127] clickable [cursor:pointer]
+            - image
+            - StaticText "Compose ⌘I"
+      - generic
+        - generic
+          - StaticText "100"
+          - StaticText "%"
+          - StaticText "Ready"
+          - generic [ref=e119] clickable [cursor:pointer]
+            - StaticText "~/Gits/.tmp/results/live-2044-isolated/fixture-repo"
+          - generic
+            - image
+            - StaticText "ego"
+        - button "7" [ref=e108]
+          - image
+          - StaticText "7"
+        - button "Toggle Ideas Panel (⌘⌥N)" [ref=e109]
+          - image
+        - button "File Browser (⌘E)" [ref=e110]
+          - image
+        - button "Markdown (⌘⇧M)" [ref=e111]
+          - image
+        - button "8" [ref=e112]
+          - image
+          - StaticText "8"

@@ -835,6 +835,8 @@ one dropped frame corrupts every frame after it.
 GET /events?types=repo-changed,pty-parsed&stream_id=<uuid>
 ```
 
+Browser clients share one reference-counted stream per backend URL per page across `listen()` and `subscribeEvents()`. Consumer-specific filtering and cleanup do not create extra connections. Reconnect and late filter installation finish before consumer snapshot resync. Two mobile tabs use two SSE connections, leaving ordinary HTTP/1.1 capacity; an unlimited number of tabs is not guaranteed.
+
 Broadcasts server-side events to all browser/mobile clients. Supports optional `?types=` query parameter for comma-separated event name filtering. Omitting `types` asks for every event; sending it empty is an empty allowlist and delivers none. Uses monotonic event IDs and 15-second keep-alive pings.
 
 `stream_id` is a client-chosen id for the connection. With one, `types` is only the
@@ -3177,7 +3179,10 @@ and the equivalent desktop IPC) include optional
 hook evidence passes live PID, rollout id and cwd validation. Omission retracts
 exactness; clients must not substitute a heuristic discovery ID. The existing
 `GET /sessions/:id/chat-view` route repeats validation on every Codex read and
-returns `not_bound` when evidence is missing or stale.
+returns `not_bound` when evidence is missing or stale. Native hook binding also
+applies to PTYs created through the HTTP agent route, MCP agent spawn and generic
+`POST /sessions`: their readers use the live identity inherited by the child, not
+an absent transport caller identity.
 
 ### Desktop close notification
 

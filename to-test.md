@@ -1,6 +1,9 @@
 ## Codex enforced approval retention (2075-aa2f) — Rust restart required
 
 - [ ] After Boss manually restarts `make dev` or installs `make build`, open an enforced Codex command approval, leave it unanswered, and confirm desktop and mobile retain all three native choices through delayed idle notifications. Approve once, refuse and cancel separate harmless requests; controls must retire after each answer. The running desktop does not hot-reload this Rust change and was not restarted by this peer.
+## HTTP and MCP Codex binding (2081-ac1f) — Rust restart required
+
+- [ ] After Boss manually restarts `make dev` or installs `make build`, spawn disposable Codex terminals through HTTP and MCP, submit a prompt and verify desktop/mobile Chat reads each terminal’s own transcript. Include Codex launched inside a generic HTTP shell terminal. Confirm HTTP/desktop and MCP session lists remain responsive after native binding. This peer did not restart or replace the running desktop; reader changes require a rebuilt backend.
 
 ## Compact MCP guidance (2069-7347) — Rust restart required
 
@@ -61,9 +64,11 @@
 ## Automation profile validation and failure mail (2015-bdb3) — Rust restart required
 
 - [ ] After Boss restarts `make dev` or installs `make build`, use an isolated instance to reject an unknown saved profile with valid-profile choices. Remove a profile after saving and confirm list exposes `run_config_error` with no next run. A failed agent-created run must send its creator one inbox message with run id and reason even before spawn; repeated publication must not resend it. The installed backend was not restarted by this peer.
-## Mobile suggest dismissal (2029-994d)
+## Mobile suggest dismissal (2029-994d) — Rust restart required
 
-- [ ] In the updated mobile frontend, tap one suggestion. Confirm all chips disappear immediately, stay hidden through unrelated session activity and the next poll, and a later suggestion list (including identical labels after the backend clear) appears. Disconnect before choosing: exhausted retries must show the existing Send failed notice, not imply success. The 390×844 worktree page rendered, but real-backend fetches timed out and direct HTTP returned 401. Before/after tap screenshots are not available; no credentials were read. No Rust restart is required.
+- [ ] After Boss rebuilds/restarts the Rust app, verify Claude publishes `suggest: [ Reply alpha | Reply beta ]` after Stop hooks settle. At 390×844, tap Reply alpha and confirm all old chips disappear and stay gone after the next poll and an ACK-only response. Final recorded-stream tests and isolated backend submission checks pass, but the Mac locked during the final rebuild: Chrome reports `visibilityState=hidden`, so final trusted-click/poll screenshots remain unverified. Earlier screenshots expose the pre-boundary history-repaint defect, not a final pass. Evidence: `~/Gits/.tmp/results/fix2029-live/`.
+- [ ] Verify a genuinely later list, including identical labels after the backend clear, appears. Disconnect before choosing: exhausted retries must show the existing Send failed notice. Targeted component tests cover both cases; desktop behavior is unchanged.
+
 ## ego title and enforced approval parity (2028-6999) — Rust restart required
 
 - [ ] After Boss manually restarts `make dev` or installs `make build`, verify ego question titles exclude skill/provider diagnostics and working rows. Check a default-mode CLI-enforced command approval on desktop/mobile: native keys appear, tapping No opens the explanation prompt without submitting it, and a subsequent bare Enter refuses and clears the wait. Confirm an answered selector stays cleared while its retained rows scroll after protocol busy. Replay evidence does not verify updated live UI rendering. The exact historical provider-notice adjacency was not reproduced.
@@ -2645,3 +2650,11 @@ Needs an iPhone (iOS 16.4+, 18.4+ preferred), the desktop TUICommander running a
 - [ ] Reload GitHub/GitLab/Jira twice: one registration each; rejected async startup reports its error. Set and use Jira/GitLab default projects through plugin Settings (account-specific projects take precedence); capture the settings page. Resolve a Jira URL and cancel an in-flight detail request.
 - [ ] Remaining original live checks: switch repos during scans, change composer during retry/wakeup reads, open same-name CSV/DOCX/XLSX files in different repos, refuse an incompatible real plugin, and route an account-authorized GitHub review/action through the core ports. Module tests do not satisfy these live E2Es.
 - [ ] #2072-adf9: After a manual `make dev` restart or release rebuild, reconnect Claude Code and confirm ToolSearch finds agent, session, repo, and ui; send one agent message. Rust schemas do not hot-reload.
+
+## Mobile Codex Chat (#2076-8190)
+
+- [ ] On a real phone, open a Codex session with an exact native-hook transcript binding. Switch CLI → Chat → CLI and confirm the existing header, composer and question controls remain touch-usable. Browser verification does not prove phone touch behavior.
+
+## Mobile Grok Chat (#2077-b132)
+
+- [ ] On a real phone, open a registry-bound Grok session and switch CLI → Chat → CLI. Confirm the existing question controls and composer remain touch-usable. Worktree browser evidence does not prove phone touch behavior.
