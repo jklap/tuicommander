@@ -1,6 +1,9 @@
 ## Compact MCP guidance (2069-7347) — Rust restart required
 
 - [ ] After Boss manually restarts `make dev` or installs `make build`, reconnect a cached MCP client and confirm session/agent/repo/ui/voice/telegram/automations advertise `help` where their owner is available. `action=help` returns the complete guide; disabled/unconfigured owners still refuse it. This peer did not restart or replace the running desktop. Automated tests cover catalogue lookup, complete guidance and owner gates.
+## UI Design Mode actions (2067-e708) — Rust restart required
+
+- [ ] After Boss manually restarts `make dev` or installs `make build`, reconnect MCP and use `ui design_start` with the target terminal and page URL. Verify browser commands remain limited to the armed recipient/repository and extension host grants. The separate `design_mode` tool remains until story 2068. This peer did not restart the backend.
 
 ## Conditional MCP tools (2066-516c, 2067-e708) — Rust restart required
 

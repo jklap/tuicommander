@@ -146,6 +146,8 @@ per cell and the configured history limit still apply.
 
 ### 1.0 Design Mode for agent terminals
 
+Agents can use `ui action=design_start/stop/status/reload/navigate/screenshot/errors/eval` with the same armed-recipient ownership and extension host grants. Existing Design Mode denials remain effective. The separate `design_mode` tool stays until the explicit catalogue cutover in story 2068.
+
 The extension sends a heartbeat every five seconds. A stale mode stops after 60 seconds without a heartbeat, or ten minutes after Start if the extension has not connected. Agents can request a page reload with `design_mode action=reload repo_path=<repoPath>`; the worker reloads the reviewed tab once per new sequence.
 
 Right-click an HTTP(S) terminal link (including localhost) and choose **Start in Design Mode**, then **Edge** or **Chrome**, to open that exact page with the terminal agent connected. Agent coordinators use `design_mode action=start session_id=<terminal> url=<page>` for layout work; stop uses the returned `repoPath`.

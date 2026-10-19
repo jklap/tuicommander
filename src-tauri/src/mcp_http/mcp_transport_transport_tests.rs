@@ -6024,3 +6024,140 @@ async fn mcp_outcome_record_groups_parent_but_preserves_targets_and_utf8_cost() 
     }
     assert!(!projection.to_string().contains("recipient-"));
 }
+
+// Catches: UI regrouping bypasses the armed caller/repository boundary or the
+// previous Design Mode denial, or maps a lifecycle action to ordinary UI behavior.
+#[cfg(all(unix, feature = "desktop"))]
+#[tokio::test]
+async fn ui_design_actions_preserve_caller_repository_and_saved_denials() {
+    let state = test_state();
+    insert_managed_test_session(&state, "owner", "/repo");
+    insert_managed_test_session(&state, "other", "/repo");
+    state
+        .mcp
+        .to_session
+        .insert("owner-mcp".into(), "owner".into());
+    state
+        .mcp
+        .to_session
+        .insert("other-mcp".into(), "other".into());
+    let manager = crate::design_mode::manager(&state).await;
+    manager.arm_extension("/repo".into(), "owner".into()).await;
+    let actions = ["stop", "reload", "navigate", "screenshot", "errors", "eval"];
+    for action in actions {
+        for (caller, repo) in [("other-mcp", "/repo"), ("owner-mcp", "/other")] {
+            let reply = handle_mcp_tool_call(
+                &state,
+                loopback_addr(),
+                "call_tool",
+                &serde_json::json!({"tool_name":"ui","arguments":{
+                    "action":format!("design_{action}"),"repo_path":repo,
+                    "url":"http://localhost:3000", "script":"document.title"
+                }}),
+                Some(caller),
+            )
+            .await;
+            assert_eq!(
+                reply["error"], "Design Mode not armed for this session",
+                "{action}: {reply}"
+            );
+        }
+    }
+    let status = handle_mcp_tool_call(
+        &state,
+        loopback_addr(),
+        "ui",
+        &serde_json::json!({"action":"design_status"}),
+        Some("owner-mcp"),
+    )
+    .await;
+    assert_eq!(status[0]["repoPath"], "/repo", "{status}");
+    assert_eq!(status[0]["sessionId"], "owner", "{status}");
+    for disabled in ["ui", "design_mode"] {
+        state.config.write().disabled_native_tools = vec![disabled.into()];
+        for action in [
+            "design_start",
+            "design_status",
+            "design_stop",
+            "design_eval",
+        ] {
+            let reply = handle_mcp_tool_call(
+                &state,
+                loopback_addr(),
+                "ui",
+                &serde_json::json!({
+                    "action":action,"session_id":"owner","repo_path":"/repo","script":"1"
+                }),
+                Some("owner-mcp"),
+            )
+            .await;
+            assert_eq!(
+                reply["error"],
+                format!("Tool '{disabled}' is disabled by configuration"),
+                "{reply}"
+            );
+        }
+    }
+    state.config.write().disabled_native_tools.clear();
+    let stopped = handle_mcp_tool_call(
+        &state,
+        loopback_addr(),
+        "ui",
+        &serde_json::json!({"action":"design_stop","repo_path":"/repo"}),
+        Some("owner-mcp"),
+    )
+    .await;
+    assert!(stopped.get("error").is_none(), "{stopped}");
+    let status = handle_mcp_tool_call(
+        &state,
+        loopback_addr(),
+        "ui",
+        &serde_json::json!({"action":"design_status"}),
+        Some("owner-mcp"),
+    )
+    .await;
+    assert_eq!(status["error"], "Design Mode not armed for this session");
+}
+
+// Catches: flat advertised UI fields cannot express Design Mode requests, or
+// missing required fields reach the browser owner instead of static validation.
+#[tokio::test]
+async fn ui_design_contract_is_discoverable_and_validates_before_dispatch() {
+    let state = test_state();
+    let schema = handle_get_tool_schema(&state, &serde_json::json!({"tool_name":"ui"}));
+    for action in [
+        "design_start",
+        "design_stop",
+        "design_status",
+        "design_reload",
+        "design_navigate",
+        "design_screenshot",
+        "design_errors",
+        "design_eval",
+    ] {
+        assert!(
+            schema["inputSchema"]["properties"]["action"]["enum"]
+                .as_array()
+                .unwrap()
+                .contains(&serde_json::json!(action)),
+            "{action}"
+        );
+    }
+    for field in ["session_id", "repo_path", "browser", "script", "url"] {
+        assert!(
+            schema["inputSchema"]["properties"].get(field).is_some(),
+            "{field}"
+        );
+    }
+    for args in [
+        serde_json::json!({"action":"design_start"}),
+        serde_json::json!({"action":"design_stop"}),
+        serde_json::json!({"action":"design_navigate","repo_path":"/repo"}),
+        serde_json::json!({"action":"design_eval","repo_path":"/repo"}),
+        serde_json::json!({"action":"design_start","session_id":"owner","browser":"unknown"}),
+    ] {
+        let reply = handle_mcp_tool_call(&state, loopback_addr(), "ui", &args, None).await;
+        assert_eq!(reply["code"], "invalid_arguments", "{args}: {reply}");
+        assert_eq!(reply["effect"], "not_started", "{reply}");
+    }
+}

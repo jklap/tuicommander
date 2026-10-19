@@ -2620,6 +2620,7 @@ async fn conditional_configured_telegram_preserves_caller_authority() {
 
 // Catches: shortening the catalogue drops a rule instead of moving it to help.
 // Oracle: descriptions recorded from d4882b0f6c before the catalogue rewrite.
+// UI updated verbatim from main 06f115ae14 for the added 2067 Design Mode actions.
 #[tokio::test]
 async fn native_help_preserves_every_displaced_rule_2069() {
     let dir = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
