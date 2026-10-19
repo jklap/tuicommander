@@ -1592,19 +1592,51 @@ fn every_documented_action_constant_matches_schema_and_description() {
     }
 }
 
-/// After `rebuild_tool_search_index`, the cache contains every native
-/// tool from `native_tool_definitions()`.
+// Catches: index rebuild exposes unconfigured optional tools or drops available tools.
 #[test]
 fn rebuild_tool_search_index_populates_all_native_tools() {
+    let dir = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+    let _guard = crate::config::set_config_dir_override(dir.path().to_path_buf());
+    // No voice/Telegram configuration files or live remote connections. The
+    // shared index retains Design Mode; discovery applies its per-caller grant.
     let state = test_state();
+    {
+        let mut config = state.config.write();
+        config.disabled_native_tools.clear();
+        config.settings_mcp_enabled = true;
+        config.progress_tracking = true;
+        config.collapse_tools = false;
+    }
     rebuild_tool_search_index(&state);
     let idx = state.mcp.tool_search_index.read();
-    let native_count = native_tool_definitions().as_array().unwrap().len();
-    assert_eq!(idx.len(), native_count);
-    // Spot-check a few well-known native tools by name.
-    assert!(idx.get_schema("session").is_some());
-    assert!(idx.get_schema("repo").is_some());
-    assert!(idx.get_schema("agent").is_some());
+    let names: Vec<_> = idx
+        .entries()
+        .iter()
+        .map(|entry| entry.name.as_str())
+        .collect();
+    assert_eq!(
+        names,
+        vec![
+            "automations",
+            "design_mode",
+            "secret",
+            "session",
+            "agent",
+            "task",
+            "repo",
+            "story",
+            "workflow_run",
+            "workflow_story_create",
+            "workflow_report",
+            "workflow_launch",
+            "progress",
+            "ui",
+            "plugin_dev_guide",
+            "settings",
+            "debug",
+        ],
+        "index rebuild must contain exactly the tools available with unconfigured owners"
+    );
 }
 
 /// After mutating `disabled_native_tools` and rebuilding, the disabled
