@@ -113,11 +113,11 @@ mod tests {
         std::fs::write(plugin.join("manifest.json"), r#"{"id":"example","name":"Example","version":"1.0.0","minAppVersion":"0.1.0","main":"main.js","contentSha256":"spoofed"}"#).unwrap();
         std::fs::write(plugin.join("main.js"), b"original").unwrap();
         let before = crate::plugins::list_user_plugins().pop().unwrap();
-        assert_ne!(before.content_sha256.as_deref(), Some("spoofed"));
+        assert_ne!(before.content_digest.as_deref(), Some("spoofed"));
         std::fs::write(plugin.join("main.js"), b"replacement").unwrap();
         let after = crate::plugins::list_user_plugins().pop().unwrap();
         assert_eq!(before.version, after.version);
-        assert!(before.content_sha256.is_some());
-        assert_ne!(before.content_sha256, after.content_sha256);
+        assert!(before.content_digest.is_some());
+        assert_ne!(before.content_digest, after.content_digest);
     }
 }

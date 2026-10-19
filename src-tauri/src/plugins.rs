@@ -215,7 +215,7 @@ pub struct PluginManifest {
         skip_serializing_if = "Option::is_none",
         rename = "contentSha256"
     )]
-    pub content_sha256: Option<String>,
+    pub content_digest: Option<String>,
     #[serde(rename = "minAppVersion")]
     pub min_app_version: String,
     pub main: String,
@@ -635,7 +635,7 @@ pub fn list_user_plugins() -> Vec<PluginManifest> {
         }
 
         let mut manifest = manifest;
-        manifest.content_sha256 = crate::plugin_content::digest(&path).ok();
+        manifest.content_digest = crate::plugin_content::digest(&path).ok();
         manifests.push(manifest);
     }
 
@@ -996,7 +996,7 @@ fn finalize_plugin_install(
         &format!("Installed plugin \"{}\" v{}", manifest.id, manifest.version),
     );
     let mut installed = manifest.clone();
-    installed.content_sha256 = crate::plugin_content::digest(&target.path).ok();
+    installed.content_digest = crate::plugin_content::digest(&target.path).ok();
     Ok(installed)
 }
 
@@ -1728,7 +1728,7 @@ mod tests {
             id: dir_name.to_string(),
             name: "Test Plugin".to_string(),
             version: "1.0.0".to_string(),
-            content_sha256: None,
+            content_digest: None,
             min_app_version: "0.3.0".to_string(),
             main: "main.js".to_string(),
             description: None,
