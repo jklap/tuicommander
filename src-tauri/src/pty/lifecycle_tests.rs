@@ -3576,3 +3576,21 @@ fn standby_observer_disconnect_retains_timeout_grace() {
         assert_eq!(standby_session(&fixture.state, "standby-job"), Ok(false));
     }
 }
+
+// Catches: completion reopening loses unpublished choices, or reoffers delivered ones.
+#[test]
+fn suggest_reopen_preserves_only_undelivered_choices_and_submission_discards_them() {
+    for delivered in [false, true] {
+        let mut sl = SilenceState::new();
+        sl.mark_suggest_candidate(vec!["Reply alpha".into(), "Reply beta".into()], 7);
+        sl.pending_suggest_emitted = delivered;
+        sl.reopen_suggest_completion();
+        assert!(!sl.completion_declared_for_epoch(7));
+        assert_eq!(sl.pending_suggest_items.is_some(), !delivered);
+        if !delivered {
+            assert_eq!(sl.pending_suggest_turn_epoch, 7);
+        }
+        sl.reset_suggest_memory();
+        assert!(sl.drain_pending_suggest().is_none());
+    }
+}

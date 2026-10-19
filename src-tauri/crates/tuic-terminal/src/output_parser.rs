@@ -407,6 +407,17 @@ impl OutputParser {
         rows: &[crate::vt_log::ChangedRow],
         agent_active: bool,
     ) -> Vec<ParsedEvent> {
+        self.parse_clean_lines_with_suggest_floor(rows, agent_active, None)
+    }
+
+    /// Keep historical suggestions above a submitted composer out of this turn
+    /// without suppressing unrelated event types from those same changed rows.
+    pub fn parse_clean_lines_with_suggest_floor(
+        &mut self,
+        rows: &[crate::vt_log::ChangedRow],
+        agent_active: bool,
+        suggest_floor: Option<usize>,
+    ) -> Vec<ParsedEvent> {
         let mut events = Vec::new();
         // Join rows into a single string so multi-line parsers (rate_limit, etc.) work.
         // Individual row texts are already clean — no ANSI stripping required.
@@ -477,7 +488,15 @@ impl OutputParser {
         // logical line. The token is fully self-contained (bounded by `[ … ]`),
         // so there is no parser-owned cross-chunk buffer — dedup against the last
         // emission to avoid re-firing while the same suggest stays on screen.
-        if let Some((evt, _canonical)) = parse_suggest_with_line(&joined, agent_active)
+        let current_suggest_rows = suggest_floor.map(|floor| {
+            rows.iter()
+                .filter(|row| row.row_index > floor)
+                .map(|row| row.text.replace('`', ""))
+                .collect::<Vec<_>>()
+                .join("\n")
+        });
+        let suggest_text = current_suggest_rows.as_deref().unwrap_or(&joined);
+        if let Some((evt, _canonical)) = parse_suggest_with_line(suggest_text, agent_active)
             && let ParsedEvent::Suggest { ref items } = evt
             && self.last_suggest_items.as_ref() != Some(items)
         {
@@ -1846,7 +1865,7 @@ fn parse_suggest_with_line(clean: &str, agent_active: bool) -> Option<(ParsedEve
     let content_cow = dewrap_suggest_content(kw_cow.as_ref());
     // Pass 3: the bracketed list itself wrapped across physical rows because the
     // token is wider than the terminal (e.g. a ~78-col `suggest: [ … ]` on a
-    // 76-col window). Rejoin the newlines inside the first `[ … ]` so the
+    // 76-col window). Rejoin the newlines inside the latest `[ … ]` so the
     // single-row SUGGEST_RE can match. Bounded by the closing `]`, a small row
     // window, and nested-bracket rejection so surrounding output is never
     // absorbed.
@@ -1855,8 +1874,10 @@ fn parse_suggest_with_line(clean: &str, agent_active: bool) -> Option<(ParsedEve
     if !clean.contains("suggest:") {
         return None;
     }
-    // Single match: column-0 `suggest: [ … ]` on one row, no nested brackets.
-    let caps = SUGGEST_RE.captures(clean)?;
+    // A full-screen repaint can include completed turns above the current
+    // response. The lowest complete marker is the latest choice list; choosing
+    // the first would republish consumed suggestions when Claude redraws history.
+    let caps = SUGGEST_RE.captures_iter(clean).last()?;
     let items: Vec<String> = caps[1]
         .split('|')
         .map(|s| s.trim().to_string())
@@ -1920,7 +1941,7 @@ const MAX_WRAP_ROWS: usize = 4;
 /// VT buffer has split the list with `\n` (a token wider than the terminal,
 /// e.g. ~78 cols of items on a 76-col window), so the overlay never fires.
 /// We reconstruct the logical line by collapsing newlines (and the horizontal
-/// whitespace the wrap leaves behind) inside the first `[ … ]` into single
+/// whitespace the wrap leaves behind) inside the latest `[ … ]` into single
 /// spaces.
 ///
 /// Because a terminal hard-wrap is column-based, it may break mid-word; the
@@ -1949,7 +1970,7 @@ fn dewrap_suggest_brackets(text: &str) -> std::borrow::Cow<'_, str> {
         // A newline plus the horizontal whitespace surrounding it.
         static ref WRAP_WS_RE: regex::Regex = regex::Regex::new(r"[\t ]*\n[\t ]*").unwrap();
     }
-    let Some(m) = SUGGEST_OPEN_RE.find(text) else {
+    let Some(m) = SUGGEST_OPEN_RE.find_iter(text).last() else {
         return std::borrow::Cow::Borrowed(text);
     };
     let content_start = m.end(); // byte index just after the opening `[`
@@ -4928,6 +4949,48 @@ Enter to select · ↑/↓ to navigate · Esc to cancel";
         let events = parser.parse("suggest: [   Fix test  |  Refactor  |  Add docs   ]");
         let items = get_suggest(&events).expect("should parse");
         assert_eq!(items, vec!["Fix test", "Refactor", "Add docs"]);
+    }
+
+    // Catches: a repainted historical marker wins over the current response,
+    // including when the latest list needs bounded terminal dewrapping.
+    #[test]
+    fn suggest_repaint_uses_latest_complete_list() {
+        for latest in [
+            "suggest: [ New alpha | New beta ]",
+            "suggest: [ New alpha |\n  New beta ]",
+            "⏺ suggest: [ New alpha | New beta ]",
+        ] {
+            let text = format!("suggest: [ Old alpha | Old beta ]\nresponse\n{latest}");
+            let events = OutputParser::new().parse(&text);
+            assert_eq!(
+                get_suggest(&events),
+                Some(vec!["New alpha".into(), "New beta".into()])
+            );
+        }
+    }
+
+    // Catches: rearming content dedup accepts a consumed marker above the
+    // submitted prompt, or incorrectly blocks identical fresh choices below it.
+    #[test]
+    fn suggest_floor_excludes_history_but_allows_identical_fresh_choices() {
+        let mut parser = OutputParser::new();
+        let marker = "suggest: [ Reply alpha | Reply beta ]";
+        let mut rows = vec![crate::vt_log::ChangedRow {
+            row_index: 0,
+            text: marker.into(),
+        }];
+        assert!(
+            get_suggest(&parser.parse_clean_lines_with_suggest_floor(&rows, true, Some(1)))
+                .is_none()
+        );
+        rows.push(crate::vt_log::ChangedRow {
+            row_index: 2,
+            text: marker.into(),
+        });
+        assert_eq!(
+            get_suggest(&parser.parse_clean_lines_with_suggest_floor(&rows, true, Some(1))),
+            Some(vec!["Reply alpha".into(), "Reply beta".into()])
+        );
     }
 
     #[test]
