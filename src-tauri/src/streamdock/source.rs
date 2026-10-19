@@ -122,8 +122,13 @@ mod tests {
     fn label_prefers_term_alias_over_display_name_and_cwd() {
         let src = source();
         tests_support::insert_dummy_session(&src.state, "s1");
-        src.state.session_maps.sessions.get("s1").unwrap().lock().display_name =
-            Some("A Display Name".to_string());
+        src.state
+            .session_maps
+            .sessions
+            .get("s1")
+            .unwrap()
+            .lock()
+            .display_name = Some("A Display Name".to_string());
         src.state
             .session_maps
             .term_aliases
@@ -144,7 +149,13 @@ mod tests {
     fn label_falls_back_to_display_name_when_no_term_alias() {
         let src = source();
         tests_support::insert_dummy_session(&src.state, "s2");
-        src.state.session_maps.sessions.get("s2").unwrap().lock().display_name = Some("My Session".to_string());
+        src.state
+            .session_maps
+            .sessions
+            .get("s2")
+            .unwrap()
+            .lock()
+            .display_name = Some("My Session".to_string());
 
         let snap = src
             .snapshot()
