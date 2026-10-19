@@ -95,6 +95,29 @@ it.each([
 	expect(writes).toEqual([key]);
 });
 
+// Catches: capturing the prompt changes the legacy numeric path to omit Enter,
+// or sends an extra Enter to a dialog that handles its numeric shortcut itself.
+it.each([
+	{ dismissKey: undefined, expected: ["2", "\r"] },
+	{ dismissKey: "cancel", expected: ["2"] },
+])("submits legacy numeric choices with dismiss key $dismissKey", async ({ dismissKey, expected }) => {
+	const prompt: ChoicePrompt = {
+		...form("Which color?", ["Red", "Blue"]),
+		selection_mode: undefined,
+		dismiss_key: dismissKey,
+	};
+	const { container } = render(() => (
+		<CommandInput sessionId="legacy-dialog" agentType="claude" choicePrompt={prompt} />
+	));
+	fireEvent.click(buttonFor(container, "Blue"));
+	// The shortcut is immediate; only its acknowledgement separates a legacy Enter.
+	expect(writes).toEqual(["2"]);
+	// Drain all follow-up keys before asserting the complete answer, including
+	// an unwanted Enter that a prefix-only assertion would miss.
+	await new Promise((resolve) => setTimeout(resolve, 0));
+	expect(writes).toEqual(expected);
+});
+
 // Catches: sending "10" to ego toggles option 1 instead of option 10,
 // because its raw selector binds single digits only.
 it("navigates and toggles ego options beyond the single-digit shortcuts", async () => {
