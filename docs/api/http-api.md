@@ -787,7 +787,7 @@ the tab, or the app restarted) reverts to *virtual* rather than 404ing forever.
 ```
 GET /tmux/topology?label=<label>
 ```
-Full graph for one label: `{"sessions":[{"id":"$0","name":"...","active_window":"@0","windows":[{"id":"@0","name":"...","index":0,"active_pane":"%0","panes":[{"id":"%0","index":0,"title":null,"cwd":null,"tuic_session_id":null}]}]}]}`. `tuic_session_id: null` means the pane's id has been allocated but no PTY has been spawned for it yet.
+Full graph for one label: `{"sessions":[{"id":"$0","name":"...","active_window":"@0","windows":[{"id":"@0","name":"...","index":0,"active_pane":"%0","panes":[{"id":"%0","index":0,"title":null,"cwd":null,"tuic_session_id":null}]}]}]}`. `tuic_session_id: null` means the pane's id has been allocated but no PTY has been spawned for it yet. Each materialized pane also carries `foreground_is_shell`: `true` when the pane's own shell owns the PTY foreground (no job running — including a shell that is busy with its startup or a precmd hook such as direnv), `false` when a job or an agent does, and absent when it can't be told (virtual pane, non-shell root, failed process lookup). The CLI's `respawn-pane -k` sends its interrupt (Ctrl+C) only when the field is not `true`.
 
 ```
 POST /tmux/sessions
