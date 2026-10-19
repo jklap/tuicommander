@@ -12588,6 +12588,134 @@ fn the_ack_prefixed_intent_reaches_a_session() {
     );
 }
 
+fn replay_ego_slash_menu(name: &str, expected: &[&str], final_commands: &[&str]) {
+    use crate::pty_capture::CaptureDirection::{Input, Output};
+    let capture =
+        crate::pty_capture::decode_capture(&agent_prompt_fixture(name)).expect("real ego capture");
+    let (rows, cols) = capture.geometry.expect("capture geometry");
+    let sid = "ego-slash-filter";
+    let (state, silence) = chunk_trace_state(sid);
+    state
+        .grid
+        .vt_log_buffers
+        .insert(sid.into(), Mutex::new(VtLogBuffer::new(rows, cols, 2000)));
+    let mut events = state.event_bus.subscribe();
+    let mut processor = ChunkProcessor::new(None, None);
+    let mut draft = String::new();
+    let mut checked = Vec::new();
+    for record in capture.records {
+        if record.direction == Input && !record.data.starts_with(b"\x1b") {
+            // Inspect the settled output before the next recorded user edit.
+            let items = state
+                .session_maps
+                .session_states
+                .get(sid)
+                .unwrap()
+                .slash_menu_items
+                .clone()
+                .unwrap_or_default();
+            match draft.as_str() {
+                "/" if record.data == b"g" => {
+                    assert!(items.iter().any(|item| item.command == "/help"));
+                    checked.push("broad");
+                }
+                "/g" | "/go" | "/goa" if !record.data.contains(&0x7f) => {
+                    assert_eq!(
+                        items
+                            .iter()
+                            .map(|item| item.command.as_str())
+                            .collect::<Vec<_>>(),
+                        ["/goal"],
+                        "draft {draft}"
+                    );
+                    checked.push("single");
+                }
+                "/goal" => {
+                    assert!(
+                        items.is_empty(),
+                        "exact command must retract the previous menu"
+                    );
+                    checked.push("exact");
+                }
+                "/gz" => {
+                    assert!(
+                        items.is_empty(),
+                        "zero matches must retract the single result"
+                    );
+                    checked.push("zero");
+                }
+                "/zz" => {
+                    assert!(
+                        items.is_empty(),
+                        "unmatched text must not restore an old menu"
+                    );
+                    checked.push("unmatched");
+                }
+                _ => {}
+            }
+            for byte in record.data {
+                match byte {
+                    0x7f => {
+                        draft.pop();
+                    }
+                    0x15 => draft.clear(),
+                    _ => draft.push(char::from(byte)),
+                }
+            }
+            state
+                .session_maps
+                .slash_mode
+                .insert(sid.into(), AtomicBool::new(draft.starts_with('/')));
+        } else if record.direction == Output {
+            processor.process_chunk(
+                &String::from_utf8_lossy(&record.data),
+                &silence,
+                sid,
+                &state,
+            );
+            while let Ok(event) = events.try_recv() {
+                crate::state::tests_support::apply_replay_event(&state, &event);
+            }
+        }
+    }
+    assert_eq!(checked, expected);
+    let items = state
+        .session_maps
+        .session_states
+        .get(sid)
+        .unwrap()
+        .slash_menu_items
+        .clone()
+        .unwrap_or_default();
+    assert_eq!(
+        items
+            .iter()
+            .map(|item| item.command.as_str())
+            .collect::<Vec<_>>(),
+        final_commands
+    );
+}
+
+// Catches: the accumulator retains a broad menu after single matches or exact completion.
+#[test]
+fn recorded_ego_slash_menu_replaces_and_retracts_cached_items() {
+    replay_ego_slash_menu(
+        "ego-slash-filter-2030.tcap",
+        &["broad", "single", "single", "single", "exact", "unmatched"],
+        &[],
+    );
+}
+
+// Catches: zero matches keep the previous result, or clearing prevents a new menu from appearing.
+#[test]
+fn recorded_ego_slash_menu_zero_matches_clear_and_reopen() {
+    replay_ego_slash_menu(
+        "ego-slash-zero-2030.tcap",
+        &["broad", "single", "zero", "broad", "single"],
+        &["/goal"],
+    );
+}
+
 /// Screens the fixtures do not contain: a choice dialog, an Ink question
 /// footer, a status-line HUD BELOW the input box, and a slash menu. Each is
 /// fed through the real `process_chunk`; the assertion is the set of event

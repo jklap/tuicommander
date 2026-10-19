@@ -1075,3 +1075,11 @@ transcript v1 contract; older executables return an unavailable reason.
 ### Exact soft-wrap text boundaries
 
 Grid text and styled log extraction preserve trailing cells on WRAPLINE rows. Those spaces are source content, not padding. MCP text output concatenates these rows without inserting a separator. Styled HTTP, WebSocket and IPC log rows include `wrapped: boolean`; a finalized row can still continue into the current screen. Only non-wrapped row tails are trimmed.
+
+### Slash-menu replacement and retraction
+
+The chunk processor parses the current screen while the input FSM is in slash
+mode. A single filtered command is a valid menu. A previously published menu
+gets one empty `SlashMenu` event when the menu disappears or slash mode ends,
+so the shared session state cannot retain an older list. Empty-menu retraction
+is not emitted repeatedly during busy output. No mobile-only filter is used.
