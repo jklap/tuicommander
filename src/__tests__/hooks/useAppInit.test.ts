@@ -25,7 +25,7 @@ import { reconcileTerminalOwnership } from "../../stores/terminalOwnership";
 import { terminalsStore } from "../../stores/terminals";
 import { toastsStore } from "../../stores/toasts";
 import * as transport from "../../transport";
-import { makeTerminal } from "../helpers/store";
+import { makeTerminal, testInScopeAsync } from "../helpers/store";
 import { mockInvoke } from "../mocks/tauri";
 
 function resetStores() {
@@ -134,6 +134,53 @@ describe("initApp", () => {
 		});
 	});
 
+	// Catches: live session adoption drops tuic_session, so declarations cannot move a new worker's sidebar tab.
+	it("live_created_caller_declaration_moves_only_its_tab_without_changing_cwd", async () => {
+		const handlers = new Map<string, (event: { payload: unknown }) => void>();
+		vi.mocked(listen).mockImplementation(((event: string, handler: (event: { payload: unknown }) => void) => {
+			handlers.set(event, handler);
+			return Promise.resolve(vi.fn());
+		}) as unknown as typeof listen);
+		repositoriesStore.add({ path: "/repo", displayName: "Repo" });
+		repositoriesStore.setWorkspace("/repo", "main", { worktreePath: "/repo", isMain: true });
+		await initApp(createMockDeps());
+		const { useWorktreeSwitchPrompt } = await import("../../hooks/useWorktreeSwitchPrompt");
+		await testInScopeAsync(async () => {
+			useWorktreeSwitchPrompt({ handleBranchSelect: vi.fn(), closeTerminalsForBranch: vi.fn() });
+			await Promise.resolve();
+			const created = handlers.get("session-created")!;
+			const caller = {
+				payload: { session_id: "caller-pty", tuic_session: "stable-caller", cwd: "/repo", agent_type: "ego" },
+			};
+			created(caller);
+			created({
+				payload: { session_id: "sibling-pty", tuic_session: "stable-sibling", cwd: "/repo", agent_type: "ego" },
+			});
+			const callerId = terminalsStore.findBySessionId("caller-pty")!;
+			const siblingId = terminalsStore.findBySessionId("sibling-pty")!;
+			const declared = {
+				payload: {
+					creator_session: "caller-pty",
+					spawn_session: false,
+					repo_path: "/repo",
+					workspace_id: "feature",
+					branch: "feature",
+					worktree_path: "/repo__wt/feature",
+					kind: "worktree",
+				},
+			};
+			handlers.get("session-worktree-declared")!(declared);
+			expect(repositoriesStore.findOwnerForTerminal(callerId)?.workspaceId).toBe("feature");
+			created(caller);
+			handlers.get("session-worktree-declared")!(declared);
+			reconcileTerminalOwnership();
+			expect(repositoriesStore.get("/repo")?.workspaces.feature.terminals).toEqual([callerId]);
+			expect(repositoriesStore.findOwnerForTerminal(siblingId)?.workspaceId).toBe("main");
+			expect(terminalsStore.get(callerId)).toMatchObject({ cwd: "/repo", tuicSession: "stable-caller" });
+			expect(terminalsStore.getCount()).toBe(2);
+		});
+	});
+
 	// Catches: HTTP/MCP creation being confused with execution on another machine.
 	it("adopts a local MCP-spawned agent without marking its Chat remote", async () => {
 		let created: ((event: { payload: unknown }) => void) | undefined;
@@ -191,7 +238,11 @@ describe("initApp", () => {
 		expect(toast?.message).toContain("Open in Browser");
 	});
 	beforeEach(({ task }) => {
-		if (/^(adopts a local MCP-spawned|keeps local reconnected|reconnect_preserves_declaration)/.test(task.name)) {
+		if (
+			/^(live_created_caller_declaration|adopts a local MCP-spawned|keeps local reconnected|reconnect_preserves_declaration)/.test(
+				task.name,
+			)
+		) {
 			vi.spyOn(appLogger, "info").mockImplementation(() => {});
 			vi.spyOn(appLogger, "debug").mockImplementation(() => {});
 			for (const level of ["warn", "error"] as const) {
