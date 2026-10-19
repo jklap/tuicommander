@@ -1,4 +1,5 @@
-import { createSignal, For, Show } from "solid-js";
+import { createSignal, For, onMount, Show } from "solid-js";
+import { AGENTS, type AgentConfig, type AgentType } from "../../agents";
 import { Input } from "../../components/ui/Input";
 import { Select } from "../../components/ui/Select";
 import { appLogger } from "../../stores/appLogger";
@@ -12,25 +13,38 @@ interface NewSessionSheetProps {
 	onCreated?: (sessionId: string) => void;
 }
 
-const AGENTS = [
-	{ id: "claude", label: "Claude Code" },
-	{ id: "codex", label: "Codex" },
-	{ id: "gemini", label: "Gemini" },
-] as const;
-
 function repoName(path: string): string {
 	const parts = path.split("/");
 	return parts.at(-1)! || path;
 }
 
 export function NewSessionSheet(props: NewSessionSheetProps) {
-	const [agent, setAgent] = createSignal<(typeof AGENTS)[number]["id"]>("claude");
+	const [agents, setAgents] = createSignal<AgentConfig[]>([]);
+	const [agent, setAgent] = createSignal<AgentType>();
+	const [detecting, setDetecting] = createSignal(true);
+	const [detectionError, setDetectionError] = createSignal<string>();
+	onMount(async () => {
+		try {
+			const candidates = Object.values(AGENTS).filter((entry) => entry.type !== "git" && entry.type !== "api");
+			const detections = await rpc<Record<string, { path: string | null }>>("detect_all_agent_binaries", {
+				binaries: candidates.map((entry) => entry.binary),
+			});
+			const installed = candidates.filter((entry) => !!detections[entry.binary]?.path);
+			setAgents(installed);
+			setAgent(installed[0]?.type);
+		} catch (err) {
+			const message = err instanceof Error ? err.message : String(err);
+			setDetectionError(`Could not detect installed agents: ${message}`);
+		} finally {
+			setDetecting(false);
+		}
+	});
 	const [query, setQuery] = createSignal("");
 	const [creating, setCreating] = createSignal(false);
 	const visibleRepos = () => props.repos.filter((repo) => repo.toLowerCase().includes(query().trim().toLowerCase()));
 
 	async function createSession(cwd: string) {
-		if (creating()) return;
+		if (creating() || detecting() || !agent()) return;
 		setCreating(true);
 		try {
 			const sessionId = await rpc<string>("spawn_agent", {
@@ -77,11 +91,27 @@ export function NewSessionSheet(props: NewSessionSheetProps) {
 				<Select
 					id="new-session-agent"
 					class={styles.field}
-					value={agent()}
-					onChange={(event) => setAgent(event.currentTarget.value as (typeof AGENTS)[number]["id"])}
+					value={agent() ?? ""}
+					disabled={detecting() || !agent() || creating()}
+					onChange={(event) => setAgent(event.currentTarget.value as AgentType)}
 				>
-					<For each={AGENTS}>{(choice) => <option value={choice.id}>{choice.label}</option>}</For>
+					<For each={agents()}>{(choice) => <option value={choice.type}>{choice.name}</option>}</For>
 				</Select>
+				<Show when={detecting()}>
+					<div class={styles.empty} role="status">
+						Detecting installed agents…
+					</div>
+				</Show>
+				<Show when={detectionError()}>
+					<div class={styles.empty} role="alert">
+						{detectionError()}
+					</div>
+				</Show>
+				<Show when={!detecting() && !detectionError() && agents().length === 0}>
+					<div class={styles.empty} role="status">
+						No installed agents found
+					</div>
+				</Show>
 				<label class={styles.fieldLabel} for="new-session-repo">
 					Repository
 				</label>
@@ -98,7 +128,11 @@ export function NewSessionSheet(props: NewSessionSheetProps) {
 					<Show when={visibleRepos().length > 0} fallback={<div class={styles.empty}>No matching repositories</div>}>
 						<For each={visibleRepos()}>
 							{(repo) => (
-								<button class={styles.repoItem} disabled={creating()} onClick={() => createSession(repo)}>
+								<button
+									class={styles.repoItem}
+									disabled={creating() || detecting() || !agent()}
+									onClick={() => createSession(repo)}
+								>
 									<span class={styles.repoName}>{repoName(repo)}</span>
 									<span class={styles.repoPath}>{repo}</span>
 								</button>
