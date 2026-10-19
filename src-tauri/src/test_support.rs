@@ -11,8 +11,8 @@ fn install_test_tls_provider() {
 
 pub(crate) use crate::fs::system32_exe;
 pub(crate) use tuic_test_support::{
-    dir_outside_home, fail_with_stderr_script, fake_ssh_script, host_shell, normalize_newlines,
-    print_var_script, replay_file_command, slashed, sleep_script, test_temp_root,
+    fail_with_stderr_script, fake_ssh_script, host_shell, normalize_newlines, print_var_script,
+    replay_file_command, slashed, sleep_script, test_temp_root,
 };
 
 /// A private per-test socket dir (`<socket root>/xxxx`): any socket name of up
