@@ -86,10 +86,6 @@ export const LocalMcpPanel: Component = () => {
 			</SectionCard>
 			<SectionCard title="TUIC Tools">
 				<div class={s.group}>
-					<p class={s.hint}>Native tools exposed via MCP. Disable tools to restrict what AI agents can access.</p>
-				</div>
-
-				<div class={s.group}>
 					<button
 						data-non-setting="Show the bridge integration instructions; not a preference"
 						class={s.mcpDisclosure}
@@ -139,10 +135,7 @@ export const LocalMcpPanel: Component = () => {
 				</div>
 
 				<ExpertSetting configKey="app.collapse_tools" value={collapseTools()}>
-					<SettingRow
-						label="Collapse tools — Speakeasy MCP (reduces AI context ~98%)"
-						hint="Discover tools on demand through search_tools, get_tool_schema and call_tool."
-					>
+					<SettingRow label="Collapse tools — Speakeasy MCP (reduces AI context ~98%)">
 						{(id, descriptionId) => (
 							<input
 								data-setting-id="app.collapse_tools"

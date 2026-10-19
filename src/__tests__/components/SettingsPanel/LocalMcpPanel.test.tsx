@@ -66,6 +66,21 @@ describe("LocalMcpPanel", () => {
 		});
 	});
 
+	// Catches: redundant MCP narration returning above the real visibility controls.
+	it("does not narrate native tools or on-demand discovery", async () => {
+		uiStore.setSettingsExpertMode(true);
+		const view = render(() => <LocalMcpPanel />);
+		await vi.advanceTimersByTimeAsync(0);
+		expect(view.getByRole("checkbox", { name: /Collapse tools/ })).toBeDefined();
+		for (const copy of [
+			"Native tools exposed via MCP. Disable tools to restrict what AI agents can access.",
+			"Discover tools on demand through search_tools, get_tool_schema and call_tool.",
+		])
+			expect(view.queryByText(copy)).toBeNull();
+		view.unmount();
+		uiStore.setSettingsExpertMode(false);
+	});
+
 	// Catches: a static UI inventory silently drops a newly registered backend tool.
 	it("renders every backend native tool, including new tools and full descriptions", async () => {
 		const view = render(() => <LocalMcpPanel />);

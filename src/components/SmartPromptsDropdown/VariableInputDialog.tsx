@@ -60,7 +60,6 @@ export const VariableInputDialog: Component<VariableInputDialogProps> = (props) 
 							return (
 								<label class={s.field}>
 									<span class={s.fieldName}>{`{${varName}}`}</span>
-									<span class={s.fieldDesc}>{desc}</span>
 									<input
 										ref={i() === 0 ? (el) => (firstInputRef = el) : undefined}
 										class={s.fieldInput}

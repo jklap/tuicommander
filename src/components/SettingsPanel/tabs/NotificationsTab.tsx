@@ -171,10 +171,7 @@ export const NotificationsTab: Component = () => {
 							configKey="notifications.audio_device"
 							value={notificationsStore.state.config.audio_device ?? null}
 						>
-							<SettingRow
-								label={t("notifications.label.audioDevice", "Audio Output Device")}
-								hint={`${t("notifications.hint.audioDevice", "Choose which speaker or output to use for notification sounds")}. ${t("notifications.hint.deviceMicPrompt", "macOS may ask for microphone access — the audio system requires it to enumerate output devices. Notifications never record audio.")}`}
-							>
+							<SettingRow label={t("notifications.label.audioDevice", "Audio Output Device")}>
 								{(id, descriptionId) => (
 									<div>
 										<Show

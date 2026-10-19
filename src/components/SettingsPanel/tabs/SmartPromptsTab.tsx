@@ -760,10 +760,7 @@ export const SmartPromptsTab: Component = () => {
 				scope="Application defaults"
 				breadcrumb="AI / Smart Prompts"
 			/>
-			<SectionCard
-				title="Background agent"
-				description="AI-powered actions from the toolbar, context menus and command palette. Enable, disable or customize each action."
-			>
+			<SectionCard title="Background agent">
 				<SettingRow
 					label="Headless Agent"
 					hint="Default agent for headless prompts. Individual prompts can override this in their settings."

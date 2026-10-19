@@ -353,9 +353,9 @@ export const AllSettingsTab: Component<{ initialSetting?: string }> = (props) =>
 						.map((part, index) => ({ part, index }))
 						.filter(({ part }) => part.startsWith("{"))}
 				>
-					{({ part, index }) => (
+					{({ index }) => (
 						<label class={`${s.group} ${s.catalogueLabel}`}>
-							Existing record {part}
+							Record
 							<Input
 								data-non-setting="Bind a catalogue path to an existing stable record key"
 								value={keys()[index] ?? ""}
