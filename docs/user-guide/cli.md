@@ -402,3 +402,7 @@ Automation templates (#1622-be11): the shared automation action accepts
 repository, run_config and optional timezone (host local by default).
 Drafts have fresh ids and start disabled; no definition or run is created until
 an explicit create action. These actions match across HTTP, IPC, MCP and CLI.
+
+### Design Mode through MCP UI actions
+
+Use `tuic mcp ui '{"action":"design_start","session_id":"<terminal>","url":"http://localhost:3000"}'` to start Design Mode. Browser commands use `design_stop`, `design_reload`, `design_navigate`, `design_screenshot`, `design_errors` or `design_eval` with `repo_path` from the lifecycle result; `design_navigate` also needs `url`, and `design_eval` needs `script`. `design_status` lists bindings for an armed caller. Caller ownership and extension host grants still apply. The old `tuic mcp design_mode` entry remains until the explicit catalogue cutover in story 2068; no client migration is required yet.
