@@ -1568,9 +1568,10 @@ pub(super) fn handle_session(
                 .and_then(|s| s.agent_type.clone());
 
             // Submitting text to a prefill-only agent is not a generic text+key
-            // pair. Codex/OpenCode require Ctrl-U framing, bracketed paste for
-            // multiline prompts, and a real scheduling gap before CR. Reuse the
-            // peer-injection recipe without changing Claude's working input path.
+            // pair. Codex/OpenCode need bracketed paste for multiline prompts and
+            // a real scheduling gap before CR (injected text is appended to the
+            // composer, never replaces it: no Ctrl-U). Reuse the peer-injection
+            // recipe without changing Claude's working input path.
             if !text.is_empty() && uses_agent_command_injection(agent_type.as_deref(), key_seq) {
                 if let Err(e) = crate::pty::write_agent_command_to_pty(state, session_id, text) {
                     return serde_json::json!({"error": e});

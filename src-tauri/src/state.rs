@@ -3343,16 +3343,13 @@ impl AppState {
         }
     }
 
-    /// Set a session's tab display name (`PUT /sessions/{id}/name`, or its
-    /// Tauri-command twin `set_session_name`). The single place both
-    /// transports' handlers call through, replacing the hand-duplicated
-    /// storage+guard logic that had drifted apart only in wrapper shape (not
-    /// substance) between `pty/commands.rs` and `mcp_http/session.rs`.
-    ///
-    /// Does NOT emit `session-renamed`: these renames start in the frontend
-    /// (see `AppEvent::SessionRenamed`'s doc comment), and emitting for them
-    /// would echo every name change straight back. Backend-originated renames
-    /// go through `rename_session_from_backend`, which does emit.
+    /// Store a session's tab display name and custom flag, with the
+    /// unchanged-value guard. Storage only: it never emits `session-renamed`
+    /// itself. Callers announce the change: the IPC/HTTP `set_session_name`
+    /// handlers (`PUT /sessions/{id}/name` and its Tauri-command twin) go
+    /// through `rename_session_from_frontend`, which emits only when this
+    /// reports a change; `clear_session_name_from_backend` and the OSC title
+    /// path (`osc_title::apply_osc_title`) announce their own changes too.
     ///
     /// Returns `false` when the session does not exist or nothing changed.
     pub(crate) fn set_session_display_name(
