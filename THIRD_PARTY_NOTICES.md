@@ -30,7 +30,7 @@ authors and communities behind each project.
 | chrono-tz | 0.10.4 | MIT OR Apache-2.0 |
 | clap | 4.6.3 | MIT OR Apache-2.0 |
 | console-subscriber | 0.5.0 | MIT |
-| cpal | 0.17.3 | Apache-2.0 |
+| cpal | 0.18.2 | Apache-2.0 |
 | croner | 4.0.1 | MIT |
 | ctor | 0.8.0 | Apache-2.0 OR MIT |
 | cursor-icon | 1.2.0 | MIT OR Apache-2.0 OR Zlib |
@@ -75,7 +75,7 @@ authors and communities behind each project.
 | reqwest | 0.13.4 | MIT OR Apache-2.0 |
 | rfd | 0.16.0 | MIT |
 | ring | 0.17.14 | Apache-2.0 AND ISC |
-| rodio | 0.22.2 | MIT OR Apache-2.0 |
+| rodio | 0.23.0 | MIT OR Apache-2.0 |
 | rusqlite | 0.40.1 | MIT |
 | rust-stemmers | 1.2.0 | MIT OR BSD-3-Clause |
 | rustls | 0.23.45 | Apache-2.0 OR ISC OR MIT |
