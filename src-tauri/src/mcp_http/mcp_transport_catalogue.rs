@@ -979,8 +979,8 @@ pub(super) fn filtered_native_tools(state: &Arc<AppState>) -> Vec<serde_json::Va
                     let action = variant["properties"]["action"]["const"]
                         .as_str()
                         .unwrap_or("");
-                    !workflow_member_tool(action)
-                        .is_some_and(|member| native_tool_unavailability(state, member).is_some())
+                    workflow_member_tool(action)
+                        .is_none_or(|member| native_tool_unavailability(state, member).is_none())
                 });
                 if variants.is_empty() {
                     return None;
