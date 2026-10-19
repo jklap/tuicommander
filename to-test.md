@@ -1,3 +1,7 @@
+## Paired native plugin refresh (2039-428c) — rebuild required
+
+- [ ] After Boss manually restarts a rebuilt backend or installs a signed package, verify notification permission and delivery, then the updater check/download/install flow and deferred relaunch. Rust/npm notification 2.7.0 and updater 2.14.0 are paired; Linux default-feature compilation and targeted tests pass, but macOS/Windows packaging and real OS integration still need release validation. This peer did not restart or replace the running app.
+
 ## Dirs dependency consolidation (2035-096f) — rebuild required
 
 - [ ] After Boss manually restarts a rebuilt `make dev` or installs `make build`, confirm the existing config, CLI/bridge connection and SSH aliases are unchanged. This dependency update does not load into the running backend; this peer did not restart or replace it. Targeted Linux tests cover config isolation, instance/socket paths, tilde expansion and SSH alias parsing.
