@@ -131,7 +131,14 @@ describe("NewSessionSheet", () => {
 		await fireEvent.click(view.getByRole("button", { name: /project-b/ }));
 		expect(rpc).toHaveBeenCalledWith("spawn_agent", {
 			pty_config: { cwd: "/home/user/project-b", rows: 24, cols: 80 },
-			agent_config: { cwd: "/home/user/project-b", agent_type: "codex", prompt: "", print_mode: false, args: [] },
+			agent_config: {
+				cwd: "/home/user/project-b",
+				agent_type: "codex",
+				binary_path: "/usr/local/bin/codex",
+				prompt: "",
+				print_mode: false,
+				args: [],
+			},
 		});
 		expect(onCreated).toHaveBeenCalledWith("new-session-id");
 		expect(onDismiss).toHaveBeenCalled();
@@ -202,7 +209,14 @@ describe("NewSessionSheet", () => {
 		await fireEvent.click(view.getByRole("button", { name: /project-a/ }));
 		expect(rpc).toHaveBeenCalledWith("spawn_agent", {
 			pty_config: { cwd: "/home/user/project-a", rows: 24, cols: 80 },
-			agent_config: { cwd: "/home/user/project-a", agent_type: "claude", prompt: "", print_mode: false, args: [] },
+			agent_config: {
+				cwd: "/home/user/project-a",
+				agent_type: "claude",
+				binary_path: "/usr/local/bin/claude",
+				prompt: "",
+				print_mode: false,
+				args: [],
+			},
 		});
 		expect(onDismiss).toHaveBeenCalled();
 	});
