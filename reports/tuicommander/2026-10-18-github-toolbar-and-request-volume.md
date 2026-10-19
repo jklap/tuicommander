@@ -173,3 +173,33 @@ The checked-in explicitly ignored Rust experiment and its fixture README provide
 an independent rerun path. Browser artifacts prove fixture routing/rendering,
 not a live GitHub account or the original historical report. Integration checks
 for 1993 are separate and recorded in its worklog.
+
+## Acceptance reconciliation: 2026-10-19 assigned peer
+
+The earlier audit kept all original criteria open because it treated complete
+rate-limit-shape coverage as part of the backoff criterion. That is stricter
+than the stated criterion. Criterion 2 is now checked in the main story store
+on existing evidence; no new production change or duplicate test is needed.
+
+The existing `measure_github_client_fixture_1995` test drives both 403 and 429
+through each of REST and GraphQL. It asserts that the next call fails without
+an HTTP receive, then that a call succeeds after `retry-after: 1` expires.
+The retained clean rb result and receiver trace above support that assertion
+for the pinned source commit, not a new run on the assigned peer branch.
+The source checks the account breaker before sending, retains its deadline,
+reads remaining/reset/retry headers, and slows the poller when its saved
+GraphQL budget is low. This meets the stated backoff criterion without
+claiming exhaustive response-shape coverage or secondary-limit safety.
+
+Criteria 1 and 3 remain open. The separated frontend/backend measurements
+are useful controlled-client counts, but not a simultaneous whole-app run
+with a real account and PR panels open. No missing-token blocker is asserted:
+the coordinator permits a process-local token from `gh auth token` for a
+read-only isolated client. No token was needed for this evidence review.
+
+MDKB search did not identify the historical blocked tab. The prior-session
+search tool failed on an unsupported session payload, so it supplied no
+additional report evidence. The exact tab identity, report timestamp and
+retained screenshot/recording plus a matching request/wait trace are still
+needed to attribute that historical wait. A new synthetic run cannot recover
+that information. The story remains open.
