@@ -15703,6 +15703,122 @@ async fn ego_second_recorded_intent_replaces_context_and_title_1964() {
     );
 }
 
+fn assert_recorded_claude_suggestions(
+    fixture: &str,
+    expected: Option<&[&str]>,
+) -> (Arc<AppState>, Arc<Mutex<SilenceState>>) {
+    let capture = crate::pty_capture::decode_capture(&agent_prompt_fixture(fixture)).unwrap();
+    let sid = "claude-suggest-2029";
+    let (state, silence) = chunk_trace_state(sid);
+    let (rows, cols) = capture.geometry.unwrap();
+    state
+        .grid
+        .vt_log_buffers
+        .insert(sid.into(), Mutex::new(VtLogBuffer::new(rows, cols, 2000)));
+    state
+        .session_maps
+        .session_states
+        .get_mut(sid)
+        .unwrap()
+        .agent_type = Some("claude".into());
+    silence.lock().startup_settled = true;
+    let mut events = state.event_bus.subscribe();
+    let mut processor = ChunkProcessor::new(None, None);
+    let mut utf8 = Utf8ReadBuffer::new();
+    let mut escapes = EscapeAwareBuffer::new();
+    let mut trace = Vec::new();
+    for (index, record) in capture.records.iter().enumerate() {
+        if record.direction == crate::pty_capture::CaptureDirection::Input {
+            if record.data == b"\r" {
+                note_submitted_input(&state, sid);
+            }
+            continue;
+        }
+        let text = utf8.push(&record.data);
+        let escaped = escapes.push(&text);
+        let (clean, _) = crate::state::strip_kitty_sequences(&escaped);
+        processor.process_chunk(&clean, &silence, sid, &state);
+        while let Ok(event) = events.try_recv() {
+            crate::state::tests_support::apply_replay_event(&state, &event);
+        }
+        let sl = silence.lock();
+        trace.push((
+            index,
+            sl.pending_suggest_items.clone(),
+            sl.completion_declared,
+            sl.cached_screen_activity,
+        ));
+    }
+    // Exercise the timer's publication boundary once the real final screen is ready.
+    assert_eq!(
+        silence.lock().cached_screen_activity,
+        AgentScreenActivity::Ready
+    );
+    let previous = state
+        .session_maps
+        .shell_states
+        .get(sid)
+        .unwrap()
+        .load(Ordering::Acquire);
+    if previous != SHELL_IDLE {
+        assert!(try_shell_transition(
+            &state, sid, previous, SHELL_IDLE, true
+        ));
+    }
+    emit_pending_suggest_if_idle(&state, &silence, sid);
+    while let Ok(event) = events.try_recv() {
+        crate::state::tests_support::apply_replay_event(&state, &event);
+    }
+    let snapshot = state.session_state_with_shell(sid).unwrap();
+    assert_eq!(
+        snapshot.suggested_actions,
+        expected.map(|items| items.iter().map(|item| (*item).to_string()).collect()),
+        "parsed choices must survive until REST publication; trace={trace:?}"
+    );
+
+    (state, silence)
+}
+
+// Catches: a hook idle followed by Stop-hook spinner repaints discards parsed choices.
+#[test]
+fn recorded_claude_suggest_survives_stop_hook_idle_then_spinner() {
+    let sid = "claude-suggest-2029";
+    let (state, silence) = assert_recorded_claude_suggestions(
+        "claude-suggest-stop-hooks-2029.tcap",
+        Some(&["Reply alpha", "Reply beta"]),
+    );
+    let mut events = state.event_bus.subscribe();
+    // Submission consumes the real published list. A subsequent timer/poll must
+    // not resurrect the retained payload from before the Stop hooks settled.
+    note_submitted_input(&state, sid);
+    emit_pending_suggest_if_idle(&state, &silence, sid);
+    while let Ok(event) = events.try_recv() {
+        crate::state::tests_support::apply_replay_event(&state, &event);
+    }
+    assert!(
+        state
+            .session_state_with_shell(sid)
+            .unwrap()
+            .suggested_actions
+            .is_none()
+    );
+}
+
+// Catches: a full Claude repaint republishes the first turn instead of its latest choices.
+#[test]
+fn recorded_claude_latest_suggest_replaces_repainted_history() {
+    assert_recorded_claude_suggestions(
+        "claude-suggest-two-turns-2029.tcap",
+        Some(&["Test another marker", "Test the 💬 prefix", "Done testing"]),
+    );
+}
+
+// Catches: a response without choices resurrects the consumed historical marker.
+#[test]
+fn recorded_claude_reply_without_suggest_keeps_consumed_history_cleared() {
+    assert_recorded_claude_suggestions("claude-suggest-consumed-2029.tcap", None);
+}
+
 /// Catches: the native ego title closure leaking following prose into the
 /// accumulated intent consumed by desktop CONTEXT and remote/mobile snapshots.
 #[cfg(unix)]

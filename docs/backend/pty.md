@@ -176,8 +176,15 @@ non-shell probes retain the previous identity and do not revoke registration.
 Each session spawns a dedicated reader thread that reads from the PTY master fd:
 
 ```rust
-spawn_reader_thread(reader, paused, session_id, app, state)
+spawn_reader_thread(reader, paused, session_id, state, tuic_session)
 ```
+
+Readers without an explicit identity resolve it from the live PTY binding before
+processing output. This includes HTTP agent spawns, MCP agent spawns and generic
+HTTP shell sessions. The identity matches the inherited `TUIC_SESSION` and the
+`session-created` event, including a restored identity that differs from the PTY
+key. Native Codex hook ownership checks remain exact; an unbound reader does not
+accept a self-announced owner.
 
 **Processing pipeline per read:**
 
@@ -381,6 +388,12 @@ PTY identity applies Claude's primary-screen environment control only while that
 Grid WebSocket attachment sends the existing viewport as a full frame, including history metadata, without waiting for new PTY output. If a live grid watch has no available frame, the server sends `{"type":"grid-replay-empty"}` so an idle empty session completes replay explicitly. The client bounds initial replay to 15 seconds and reconnects with a persistent error toast when replay stalls or decoding fails. Healthy idle sessions have no subsequent-output deadline.
 
 `spawn_headless_reader_thread()` — used for HTTP-created sessions (no Tauri app handle). Same pipeline but skips Tauri event emission; only writes to ring buffer and WebSocket. Includes `extract_question_line()` for silence-based question detection, session lifecycle events (`session-created`, `session-closed`), and full output parser integration.
+
+Generic HTTP sessions (`POST /sessions`) and native MCP/HTTP agent spawns publish
+the backend-bound `tuic_session` in `session-created`, matching SSE and session-list
+rows. Generic sessions without a requested identity use their bound PTY key. Live tabs use that identity
+to match worktree declarations without changing the process cwd. Unbound sessions
+publish a null identity. All three native producers share the emission boundary.
 
 Named agent sessions propagate their stable `display_name` through the
 `session-created` event. That launch label is a replaceable base title: OSC and
@@ -974,7 +987,7 @@ new runtime PTY ids, so their read grants point to fresh storage.
 
 Suggest choices are published once when the agent is ready, including while background descendants keep the shell busy. The completion lifecycle event still waits for an idle shell and settled background work; publishing choices does not release that gate.
 
-Pending follow-up choices survive a working spinner until the turn has settled. While the shell is busy, public Claude session snapshots use that same settled-completion predicate, so a retained final marker does not report completed/idle during active Claude Stop hooks. A final `suggest:` marker may share a Claude redraw with its spinner; this is not a new turn. Working evidence can still reopen an idle or delivered completion (including a blocking Stop hook or a Codex internal continuation).
+Pending follow-up choices survive a working spinner until they are published, including a Stop-hook repaint after Claude has already emitted its idle hook. Reopening working state retracts completion but retains undelivered choices for the same input epoch; published choices and choices from a submitted previous turn are discarded. While the shell is busy, public Claude session snapshots use that same settled-completion predicate, so a retained final marker does not report completed/idle during active Claude Stop hooks. A final `suggest:` marker may share a Claude redraw with its spinner; this is not a new turn. Working evidence can still reopen an idle or delivered completion (including a blocking Stop hook or a Codex internal continuation).
 
 ### Background desktop visibility and remote observers
 

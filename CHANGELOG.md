@@ -8,6 +8,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - Export Claude native question titles without a question mark, including `Pick a colour`, with ordered desktop and mobile answer choices (#2074-b0dc).
 
+- Bind native Codex hooks for HTTP/MCP-spawned agents and generic HTTP terminals using their live inherited session identity; preserve exact owner validation and prevent bound-session listing deadlocks (#2081-ac1f).
+- Share browser event subscriptions across session, Chat, Markdown, dictation and speech consumers so two mobile tabs leave HTTP/1.1 capacity for state reads and permission answers (#2078-464b).
+
+- Desktop terminal Chat now shows active native question and permission choices without submitting Compose drafts (#2079-78fa).
+- Expose bound Grok terminal Chat on mobile and share the supported-adapter check with desktop, without changing exact transcript binding or native question controls (#2077-b132).
+
+- Expose the existing bound Codex terminal Chat view in the mobile session header, with the same PTY controls and backend binding refusal (#2076-8190).
+
+- Publish and retain the stable session identity for newly spawned native MCP/HTTP agents and generic HTTP sessions so a worktree declaration moves the live sidebar tab, not only its saved restore record (#2044-31f3).
 - Open parked Activity Dashboard sessions in their own Global Workspace tabs instead of displaying their content under the current repository tab; preserve existing session bindings (#2080-d401).
 - Shorten agent-facing MCP descriptions for session, agent, repo, ui, voice, telegram and automations; preserve complete guidance through each tool’s `action=help`, without changing Settings copy or owner gates (#2069-7347).
 
@@ -46,6 +55,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - Publish typed Settings account enumeration and configured Ego interactive login start/status, with human terminal authentication and separate credential readback (#1790-1011).
 ### Fixed
+
+- Preserve Claude follow-up suggestions through Stop-hook repaints after an early idle hook, so mobile receives the chips and can consume the list after a tap (#2029-994d).
 
 - Detect installed plugin payload differences even when the catalogue version is unchanged.
 

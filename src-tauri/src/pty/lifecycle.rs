@@ -2149,6 +2149,19 @@ impl SilenceState {
         self.completion_turn_epoch = 0;
     }
 
+    /// Working evidence retracts completion, not an undelivered choice list.
+    /// Claude's idle hook can precede its last Stop-hook spinner repaint; the
+    /// pending choices still belong to this turn and must reach the ready UI.
+    /// Submitted input uses reset_suggest_memory and discards them instead.
+    pub(super) fn reopen_suggest_completion(&mut self) {
+        if self.pending_suggest_emitted {
+            self.reset_suggest_memory();
+        } else {
+            self.completion_declared = false;
+            self.completion_turn_epoch = 0;
+        }
+    }
+
     #[cfg(test)]
     pub(crate) fn completion_declared(&self) -> bool {
         self.completion_declared
@@ -2615,7 +2628,7 @@ pub(super) fn apply_working_evidence(
             // Claude can emit Stop/suggest before a blocking Stop hook finishes;
             // Codex can start an internal continuation without a PTY submission.
             // Current semantic movement is stronger than either stale boundary.
-            sl.reset_suggest_memory();
+            sl.reopen_suggest_completion();
         }
         sl.note_working_screen();
         invalidate_background_probe_boundary_locked(state, session_id);
