@@ -203,3 +203,79 @@ additional report evidence. The exact tab identity, report timestamp and
 retained screenshot/recording plus a matching request/wait trace are still
 needed to attribute that historical wait. A new synthetic run cannot recover
 that information. The story remains open.
+
+
+## Joined live-account observation: 2026-10-19
+
+The coordinator requested a joined current-behavior observation and explicitly
+rejected historical criterion 3: the original tab identity and trace cannot
+be recovered. That rejection does not attribute the historical wait to GitHub.
+
+The final native run joins the production browser `App`, stores, HTTP command
+mapping/router, SSE subscriptions, poller and reqwest client in one dev harness.
+A test-only AppState/config root and temporary empty Git repository keep writes
+under this worktree. The temporary origin is
+`https://github.com/tauri-apps/tauri.git`, with real open PRs. No desktop instance,
+installed configuration or Boss session is used. A loopback TLS receiver
+forwards only read-only requests to live GitHub, using a process-local token
+from `gh auth token`. It retains no token or authorization headers. Live API
+responses, receiver metadata, browser transcripts and screenshots are retained
+in the ignored evidence directory.
+
+| Scenario in the same App run | Actual window | REST receives | GraphQL receives | GraphQL requests/minute |
+| --- | ---: | ---: | ---: | ---: |
+| Idle, no PR panel | 60.002623 s | 0 | 1 batch | 0.99996 |
+| Open GitHub panel and expand one PR, then leave mounted for 60 s | 63.321365 s including trusted clicks | 0 | 2: PR action state and CI checks | 1.89509 |
+
+The browser reports `document.visibilityState` as `visible` at each window
+start. Counts use request-arrival timestamps and the exact numeric window
+boundaries, not phase labels or assumed cadence. Three cold-start requests
+(two concurrent viewer lookups and one batch) precede the idle window. A batch
+at 78.562513 s falls in the setup gap before the PR window starts at 79.350361 s;
+another at 142.978691 s falls just after it ends at 142.671725 s. Neither is
+silently folded into a different window. All eight recorded upstream requests
+returned HTTP 200. The selected native harness completed in 195.74 s; the
+complete driver exited 0 in 195.771 s, including cleanup.
+
+This measures one repository and one account, not an account-wide maximum or
+a secondary-limit guarantee. The idle window includes normal App startup
+follow-up activity; it is not a fully quiescent steady-state benchmark. The
+local query rate was low in this observation, but other clients can spend the
+same account budget. No historic root-cause claim follows from current rates.
+
+Final evidence root in this worktree:
+`.tmp/github-live-1995/run-67ac27c2/`.
+
+- `summary.json`: actual boundaries, counts, normalized rates and success.
+- `receiver-trace.json`, `response-*.json`: actual arrivals and live replies.
+- `frontend-trace.ndjson`, `transcript.txt`, `idle.png`, `pr-open.png`: joined UI
+  transport activity and trusted panel/detail opening.
+- `source-sha256.json` plus copied harness/driver/config: exact observed inputs.
+  The base commit is `641348de7` plus these new test-only files; this is not
+  falsely presented as a clean-commit run.
+- Native compile log:
+  `~/Gits/.tmp/chore-1995-native-harness-arrival-build.log`.
+- Final observation log:
+  `~/Gits/.tmp/chore-1995-joined-tauri-final.log`.
+
+An earlier joined run against `openai/codex` (`run-24a2cf01`) passed and observed
+1 GraphQL request in 60.003475 s idle and 3 in 63.356253 s including PR opening.
+A subsequent driver check (`run-e6d368da`) exposed a recorder defect: it appended
+rows only after upstream responses completed, so a request arriving at 76.059 s
+was absent from the idle snapshot ending at 77.208 s. Its printed zero-idle
+count is invalid. The final receiver now records arrivals before awaiting the
+upstream and updates status afterward, including failed upstream attempts.
+That is a test-support correction, not a product behavior change.
+
+Two setup attempts (`run-a9cccaae` and `run-9184f7ae`) exited 1 without usable
+volume windows because the expected PR trigger did not become available.
+They retain their artifacts and cleaned up; they are not passing observations.
+The latter had live replies but did not establish the UI state, so it was not
+used to claim volume coverage. The final workload uses a different public
+repository with available PRs. No assertion or product logic was weakened.
+
+The explicitly ignored `observe_joined_live_github_1995` harness and the two
+`scripts/observe-github-volume-1995.*` files preserve the procedure. Criterion 1
+now has joined real-client evidence; criterion 2 retains the existing 403/429
+fixture evidence; criterion 3 is rejected by the coordinator. No production
+behavior, timeout or feature flag changed.
