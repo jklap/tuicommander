@@ -3496,6 +3496,41 @@ describe("transport", () => {
 			expect(sent).toHaveLength(2);
 		});
 
+		it("flushes the newest cell pixel size with the newest dimensions", async () => {
+			// Catches: the queued flush spreading an older call's args, so a DPR change
+			// during a resize burst sends new rows/cols with a stale cell size.
+			const { rpc } = await import("../transport");
+
+			const sent: Array<{ rows: number; cell_width_px?: number; cell_height_px?: number }> = [];
+			let releaseFirst: (() => void) | undefined;
+			const firstSent = new Promise<void>((resolve) => {
+				releaseFirst = resolve;
+			});
+			globalThis.fetch = vi.fn().mockImplementation((_url: string, init: { body: string }) => {
+				const { rows, cell_width_px, cell_height_px } = JSON.parse(init.body);
+				sent.push({ rows, cell_width_px, cell_height_px });
+				const settle = sent.length === 1 ? firstSent : Promise.resolve();
+				return settle.then(() => ({
+					ok: true,
+					headers: new Headers({ "content-type": "application/json" }),
+					text: vi.fn().mockResolvedValue("{}"),
+				}));
+			});
+
+			const resizes = [
+				rpc("resize_pty", { sessionId: "s1", rows: 10, cols: 40, cellWidthPx: 8, cellHeightPx: 16 }),
+				rpc("resize_pty", { sessionId: "s1", rows: 20, cols: 80, cellWidthPx: 16, cellHeightPx: 32 }),
+				rpc("resize_pty", { sessionId: "s1", rows: 30, cols: 120, cellWidthPx: 24, cellHeightPx: 48 }),
+			];
+			releaseFirst?.();
+			await Promise.all(resizes);
+
+			expect(sent).toEqual([
+				{ rows: 10, cell_width_px: 8, cell_height_px: 16 },
+				{ rows: 30, cell_width_px: 24, cell_height_px: 48 },
+			]);
+		});
+
 		it("keeps one session's resize out of another's", async () => {
 			// The queue is keyed per session for the same reason the write queue is:
 			// collapsing across sessions would drop a real resize, not a stale one.

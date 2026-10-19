@@ -121,7 +121,15 @@ function reapDrainedQueue<P>(
 }
 
 const _writeQueues = new Map<string, CoalescingQueue<string[]>>();
-const _resizeQueues = new Map<string, CoalescingQueue<{ rows: number; cols: number }>>();
+/** Everything a resize says about the grid: the newest call owns all four, so a
+ *  DPR change mid-burst never pairs new rows/cols with an older cell pixel size. */
+interface ResizePayload {
+	rows: number;
+	cols: number;
+	cellWidthPx: number | undefined;
+	cellHeightPx: number | undefined;
+}
+const _resizeQueues = new Map<string, CoalescingQueue<ResizePayload>>();
 
 /** Two connections to the same session id are two different backends. */
 function queueKeyFor(sessionId: string, connectionId?: string): string {
@@ -202,8 +210,15 @@ export function rpc<T>(command: string, args: Record<string, unknown> = {}, expl
 			return coalescedRpc(
 				_resizeQueues,
 				queueKeyFor(sessionId, connectionId),
-				{ rows: args.rows, cols: args.cols },
+				{
+					rows: args.rows,
+					cols: args.cols,
+					cellWidthPx: typeof args.cellWidthPx === "number" ? args.cellWidthPx : undefined,
+					cellHeightPx: typeof args.cellHeightPx === "number" ? args.cellHeightPx : undefined,
+				},
 				(_pending, next) => next,
+				// The flush may run with an older call's `args`; every grid field
+				// comes from the payload, which is always the newest call's.
 				(dims) => rpcImpl<T>(command, { ...args, ...dims }, connectionId),
 			) as Promise<T>;
 		}
