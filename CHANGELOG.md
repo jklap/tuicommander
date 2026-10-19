@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+- Group native MCP switches in Settings by domain, with separate rare and conditional sections; preserve tool names, saved denials and Settings opt-in (#2063-baa9).
+
 - Resolve ego session discovery through its per-PID index and held writer lease without scanning historical sessions; retain legacy lookup only when the index is absent (#2058-0d0e).
 
 - Keep GitHub network proof lookups off the worktree-list request path; use cached definitive answers or conservative local classification, with fresh checkout safety fields (#2044-31f3).
