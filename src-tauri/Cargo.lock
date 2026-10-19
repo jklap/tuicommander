@@ -8047,12 +8047,12 @@ dependencies = [
 
 [[package]]
 name = "ssh2-config"
-version = "0.7.2"
+version = "0.8.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f52f961ebce11d2717ec6e69447d97e62ead57a4bf1016fcf4d707d09e957530"
+checksum = "7220846f1080bafaf80204d7268f7e2a1fb0609e34520d2edc3e75cfc55f4c38"
 dependencies = [
  "bitflags 2.13.1",
- "dirs 6.0.0",
+ "dirs 7.0.0",
  "glob",
  "log",
  "thiserror 2.0.19",
@@ -9420,7 +9420,7 @@ dependencies = [
 name = "tuic-bridge"
 version = "2.0.0"
 dependencies = [
- "dirs 6.0.0",
+ "dirs 7.0.0",
  "serde_json",
  "tempfile",
  "tokio",
@@ -9433,7 +9433,7 @@ name = "tuic-cli"
 version = "2.0.0"
 dependencies = [
  "clap",
- "dirs 6.0.0",
+ "dirs 7.0.0",
  "serde_json",
  "tempfile",
  "tuic-ipc",
@@ -9446,7 +9446,7 @@ name = "tuic-core"
 version = "2.0.0"
 dependencies = [
  "bm25",
- "dirs 6.0.0",
+ "dirs 7.0.0",
  "jsonc-parser",
  "keyring",
  "lazy_static",
@@ -9532,7 +9532,7 @@ name = "tuic-terminal"
 version = "2.0.0"
 dependencies = [
  "alacritty_terminal",
- "dirs 6.0.0",
+ "dirs 7.0.0",
  "lazy_static",
  "parking_lot",
  "regex",
@@ -9582,7 +9582,7 @@ dependencies = [
  "croner",
  "ctor 0.8.0",
  "dashmap",
- "dirs 6.0.0",
+ "dirs 7.0.0",
  "drag",
  "flate2",
  "futures-util",

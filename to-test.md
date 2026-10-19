@@ -1,3 +1,6 @@
+## Dirs dependency consolidation (2035-096f) — rebuild required
+
+- [ ] After Boss manually restarts a rebuilt `make dev` or installs `make build`, confirm the existing config, CLI/bridge connection and SSH aliases are unchanged. This dependency update does not load into the running backend; this peer did not restart or replace it. Targeted Linux tests cover config isolation, instance/socket paths, tilde expansion and SSH alias parsing.
 ## gix 0.89 migration (2038-b4c9) — Rust restart required
 
 - [ ] After Boss manually restarts `make dev` or installs `make build`, verify repository status counts, blame attribution and linked-worktree rows in an isolated repository. This dependency and Rust adapter change does not hot-reload; this peer did not restart or replace the running desktop.
