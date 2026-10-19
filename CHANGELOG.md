@@ -8,6 +8,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - Export Claude native question titles without a question mark, including `Pick a colour`, with ordered desktop and mobile answer choices (#2074-b0dc).
 
+- Keep unanswered Codex enforced command approvals and all three native answer controls active when a delayed idle hook arrives (#2075-aa2f).
 - Bind native Codex hooks for HTTP/MCP-spawned agents and generic HTTP terminals using their live inherited session identity; preserve exact owner validation and prevent bound-session listing deadlocks (#2081-ac1f).
 - Share browser event subscriptions across session, Chat, Markdown, dictation and speech consumers so two mobile tabs leave HTTP/1.1 capacity for state reads and permission answers (#2078-464b).
 

@@ -2353,6 +2353,32 @@ impl ChunkProcessor {
                             &payload,
                         ),
                         "state" => {
+                            // A delayed Codex completion can arrive while its native
+                            // enforced approval is still open (#2075). It cannot settle
+                            // that unanswered dialog. Require both the current native
+                            // shape and its still-active controls: real answer input
+                            // retires the controls before a subsequent idle is accepted.
+                            let open_codex_approval = payload == "idle"
+                                && agent_type.as_deref() == Some("codex")
+                                && state
+                                    .session_maps
+                                    .session_states
+                                    .get(session_id)
+                                    .is_some_and(|session| {
+                                        session.awaiting_input && session.choice_prompt.is_some()
+                                    })
+                                && matches!(
+                                    crate::output_parser::parse_choice_prompt(&screen_buf),
+                                    Some(ParsedEvent::ChoicePrompt { title, .. })
+                                        if title == "Would you like to run the following command?"
+                                );
+                            if open_codex_approval {
+                                tracing::warn!(
+                                    session_id,
+                                    "Ignoring delayed idle while native Codex approval is unanswered"
+                                );
+                                continue;
+                            }
                             // idle/busy drive the shell-state machine; awaiting is
                             // ignored here (it's a separate field). The awaiting_input
                             // field is driven by Question/UserInput events instead.
