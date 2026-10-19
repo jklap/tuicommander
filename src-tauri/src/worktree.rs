@@ -43,6 +43,14 @@ static PR_PROOFS: std::sync::LazyLock<moka::sync::Cache<(PathBuf, String, String
             .build()
     });
 
+/// Listing must not wait for GitHub behind the native CLI response deadline.
+/// A miss is unproven; normal monitoring may populate this same definitive cache.
+pub(crate) fn merged_github_pr_proves_tip_cached(repo: &Path, branch: &str, tip: &str) -> bool {
+    PR_PROOFS
+        .get(&(repo.to_path_buf(), branch.to_owned(), tip.to_owned()))
+        .unwrap_or(false)
+}
+
 /// Sidebar monitoring variant: every repository refresh asked GitHub about every
 /// unmerged branch (one paginated GraphQL lookup each), many times a minute under agent
 /// writes. A definitive answer is reused for `PR_PROOF_TTL`; a failed lookup is
@@ -1698,6 +1706,22 @@ mod tests {
     use tuic_git::test_fixtures::{
         base_branch_of, dirty_worktree_with, setup_test_repo, worktree_with,
     };
+
+    // Catches: a cached proof for another branch/tip (or a miss) invents merged status.
+    #[test]
+    fn listing_pr_proof_requires_matching_definitive_cached_answer() {
+        let repo = tempfile::tempdir().unwrap();
+        let path = repo.path();
+        assert!(!merged_github_pr_proves_tip_cached(path, "branch", "tip"));
+        PR_PROOFS.insert((path.to_path_buf(), "branch".into(), "tip".into()), true);
+        assert!(merged_github_pr_proves_tip_cached(path, "branch", "tip"));
+        assert!(!merged_github_pr_proves_tip_cached(path, "other", "tip"));
+        assert!(!merged_github_pr_proves_tip_cached(
+            path, "branch", "new-tip"
+        ));
+        PR_PROOFS.insert((path.to_path_buf(), "branch".into(), "tip".into()), false);
+        assert!(!merged_github_pr_proves_tip_cached(path, "branch", "tip"));
+    }
 
     // Catches: every sidebar refresh re-running `gh api graphql` per unmerged branch
     // (answered definitively before), while a failed lookup must stay retryable.

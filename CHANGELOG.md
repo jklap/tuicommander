@@ -6,6 +6,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+- Keep GitHub network proof lookups off the worktree-list request path; use cached definitive answers or conservative local classification, with fresh checkout safety fields (#2044-31f3).
+
+- Keep an agent tab under its explicitly declared worktree despite unchanged shell cwd, later cwd reports and saved-tab restore; preserve sibling tabs and cwd-based removal safety (#2044-31f3).
 - Export the title and clean answer labels from Codex native `/plan` questions instead of retaining an unrelated waiting title (#2026-9178).
 
 - Reuse retained terminal pixels during whole-row history growth instead of redrawing every glyph, skip unchanged damaged rows repaint bounded cell spans, and merge equal background fills; invalidate reuse on geometry, theme, screen or marker-layout changes (#2040-16b2).
