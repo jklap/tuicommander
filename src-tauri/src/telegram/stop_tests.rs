@@ -325,7 +325,7 @@ async fn stop_cannot_cross_pair_or_managed_write_before_bookkeeping() {
                 .unwrap()
                 .store(crate::pty::SHELL_BUSY, std::sync::atomic::Ordering::Release);
             runtime.update(stop(1111111, draft)).await.unwrap();
-            assert_eq!(*bytes.lock().unwrap(), b"\x15replacement\r");
+            assert_eq!(*bytes.lock().unwrap(), b"replacement\r");
             crate::mcp_http::session::apply_input_bookkeeping(
                 &runtime.state,
                 PEER,

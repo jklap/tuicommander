@@ -7179,7 +7179,8 @@ fn swallowed_enter_on_a_long_codex_brief_is_retried_from_the_paste_placeholder()
     let inputs: Vec<usize> = (0..records.len())
         .filter(|&i| records[i].direction == Input)
         .collect();
-    // Ctrl-U, brief, first Enter, second Enter.
+    // The recorded inputs: Ctrl-U (the injector of that era cleared the line
+    // first; injection no longer sends it), brief, first Enter, second Enter.
     assert_eq!(inputs.len(), 4);
     let brief = String::from_utf8(records[inputs[1]].data.clone()).unwrap();
     // The capture predates the bracketed long-Codex payload: the brief was typed
