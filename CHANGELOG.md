@@ -66,6 +66,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Publish typed Settings account enumeration and configured Ego interactive login start/status, with human terminal authentication and separate credential readback (#1790-1011).
 ### Fixed
 
+- Replace stale slash-command lists with a single filtered match, and dismiss the list when the agent closes completion, including ego `/go` and `/goal` (#2030-84bb).
 - Refresh Settings readers after legacy upstream credential and OAuth owner writes, including durable partial-vault failures, connection password edits, deployment pairing-token creation and deployment-mode changes (#1989-22fe).
 - Dismiss the mobile suggestion list as soon as a chip is picked, without restoring it from session activity updates; re-arm after the backend clears or replaces the list and show the existing send-failure notice if submission fails (#2029-994d).
 

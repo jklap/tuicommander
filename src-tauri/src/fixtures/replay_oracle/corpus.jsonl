@@ -43,6 +43,8 @@
 {"fixture":"src-tauri/src/fixtures/agent_prompts/ego-single-120-1973.tcap","events":28}
 {"fixture":"src-tauri/src/fixtures/agent_prompts/ego-single-44-1973.tcap","events":28}
 {"fixture":"src-tauri/src/fixtures/agent_prompts/ego-single-question-20261012.tcap","events":20}
+{"fixture":"src-tauri/src/fixtures/agent_prompts/ego-slash-filter-2030.tcap","events":47}
+{"fixture":"src-tauri/src/fixtures/agent_prompts/ego-slash-zero-2030.tcap","events":38}
 {"fixture":"src-tauri/src/fixtures/agent_prompts/goose-1.49.0-idle.tcap","events":97}
 {"fixture":"src-tauri/src/fixtures/agent_prompts/goose-1.49.0-interrupted.tcap","events":80}
 {"fixture":"src-tauri/src/fixtures/agent_prompts/goose-1.49.0-mid-turn.tcap","events":137}

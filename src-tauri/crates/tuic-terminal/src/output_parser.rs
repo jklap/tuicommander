@@ -2086,8 +2086,12 @@ fn dewrap_suggest_keyword(text: &str) -> std::borrow::Cow<'_, str> {
 ///    /clear     Clear conversation history
 /// ```
 ///
-/// Requires at least 2 consecutive matching rows from the bottom of the screen.
+/// Called only while the input FSM is in slash mode. A filtered menu may have
+/// just one matching row at the bottom of the screen.
 /// Highlighted item: detected by `❯` prefix or falls back to first item.
+// DEFERRED (2026-10-19) — Codex 0.162.1 paints completion above its composer and
+// status line, with a `›` selection marker. Supporting that distinct layout is
+// outside the ego single-match/retraction fix; live evidence is in story 2030-84bb.
 pub fn parse_slash_menu(screen_rows: &[String]) -> Option<ParsedEvent> {
     lazy_static::lazy_static! {
         // Each menu row: optional leading whitespace, optional ❯ marker, /command, 2+ spaces, description
@@ -2133,7 +2137,7 @@ pub fn parse_slash_menu(screen_rows: &[String]) -> Option<ParsedEvent> {
     // Reverse to restore top-to-bottom order (we scanned bottom-to-top).
     items.reverse();
 
-    if items.len() < 2 {
+    if items.is_empty() {
         return None;
     }
 
@@ -5616,6 +5620,44 @@ Enter to select · ↑/↓ to navigate · Esc to cancel";
         screen
     }
 
+    // Catches: a one-result ego completion is discarded, leaving the old broad menu cached.
+    #[test]
+    fn recorded_ego_slash_filter_keeps_the_single_goal_match() {
+        let bytes = std::fs::read(
+            std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("../../src/fixtures/agent_prompts/ego-slash-filter-2030.tcap"),
+        )
+        .unwrap();
+        let capture = crate::pty_capture::decode_capture(&bytes).unwrap();
+        let (rows, cols) = capture.geometry.unwrap();
+        let mut grid = crate::terminal_grid::TerminalGrid::new(rows, cols, 2000);
+        let mut typed = String::new();
+        let mut checked = false;
+        for record in capture.records {
+            if record.direction == crate::pty_capture::CaptureDirection::Input {
+                if record.data == b"a" && typed == "/go" {
+                    let screen = grid.screen_text_rows();
+                    assert!(screen.iter().any(|row| row.trim() == "| /go"));
+                    let ParsedEvent::SlashMenu { items } = parse_slash_menu(&screen)
+                        .expect("the real /go screen must replace the unfiltered menu")
+                    else {
+                        panic!("expected slash menu");
+                    };
+                    assert_eq!(items.len(), 1);
+                    assert_eq!(items[0].command, "/goal");
+                    checked = true;
+                    break;
+                }
+                if !record.data.starts_with(b"\x1b") {
+                    typed.push_str(std::str::from_utf8(&record.data).unwrap());
+                }
+            } else {
+                grid.process(&record.data);
+            }
+        }
+        assert!(checked, "capture must contain the /go boundary");
+    }
+
     #[test]
     fn test_slash_menu_claude_code_basic() {
         let screen = make_screen(
@@ -5666,12 +5708,13 @@ Enter to select · ↑/↓ to navigate · Esc to cancel";
     }
 
     #[test]
-    fn test_slash_menu_single_row_not_detected() {
+    fn test_slash_menu_single_filtered_row_detected() {
         let screen = make_screen(&["   /help      Get help with using Claude Code"], 24);
-        assert!(
-            parse_slash_menu(&screen).is_none(),
-            "single row should not trigger menu"
-        );
+        let Some(ParsedEvent::SlashMenu { items }) = parse_slash_menu(&screen) else {
+            panic!("a filtered menu can contain only one command");
+        };
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].command, "/help");
     }
 
     #[test]

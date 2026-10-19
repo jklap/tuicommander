@@ -1303,6 +1303,8 @@ struct ChunkProcessor {
     /// Dedup: last emitted ChoicePrompt signature (title + option keys).
     /// Prevents re-emit on repaint while the dialog stays on screen.
     last_choice_prompt_sig: Option<String>,
+    /// Whether a published slash menu still needs an explicit retraction.
+    slash_menu_visible: bool,
     /// A busy hook cleared the choice; wait for a dialog-row repaint before
     /// admitting the same signature again, so stale screen cells cannot re-arm it.
     choice_prompt_needs_repaint: bool,
@@ -1455,6 +1457,7 @@ impl ChunkProcessor {
             last_question_text: None,
             raw_carry: String::new(),
             last_choice_prompt_sig: None,
+            slash_menu_visible: false,
             choice_prompt_needs_repaint: false,
             session_cwd,
             pending_planfiles: Vec::new(),
@@ -2689,13 +2692,18 @@ impl ChunkProcessor {
             .slash_mode
             .get(session_id)
             .is_some_and(|v| v.load(std::sync::atomic::Ordering::Relaxed));
-        if slash_on && let Some(screen) = screen_cache {
-            // This runs in the per-PTY-chunk hot path. Do not log each parse:
-            // a stale slash-mode flag during sustained output previously sent
-            // thousands of identical records through the application logger,
-            // adding avoidable lock/contention pressure to terminal delivery.
-            if let Some(evt) = crate::output_parser::parse_slash_menu(screen) {
-                events.push(evt);
+        if let Some(screen) = screen_cache {
+            let menu = slash_on
+                .then(|| crate::output_parser::parse_slash_menu(screen))
+                .flatten();
+            if let Some(event) = menu {
+                self.slash_menu_visible = true;
+                events.push(event);
+            } else if self.slash_menu_visible {
+                // Exact commands and zero matches close completion without a
+                // submitted line. Retract once, not on every busy output chunk.
+                self.slash_menu_visible = false;
+                events.push(ParsedEvent::SlashMenu { items: Vec::new() });
             }
         }
 

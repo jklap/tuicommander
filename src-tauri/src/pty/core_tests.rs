@@ -12588,6 +12588,134 @@ fn the_ack_prefixed_intent_reaches_a_session() {
     );
 }
 
+fn replay_ego_slash_menu(name: &str, expected: &[&str], final_commands: &[&str]) {
+    use crate::pty_capture::CaptureDirection::{Input, Output};
+    let capture =
+        crate::pty_capture::decode_capture(&agent_prompt_fixture(name)).expect("real ego capture");
+    let (rows, cols) = capture.geometry.expect("capture geometry");
+    let sid = "ego-slash-filter";
+    let (state, silence) = chunk_trace_state(sid);
+    state
+        .grid
+        .vt_log_buffers
+        .insert(sid.into(), Mutex::new(VtLogBuffer::new(rows, cols, 2000)));
+    let mut events = state.event_bus.subscribe();
+    let mut processor = ChunkProcessor::new(None, None);
+    let mut draft = String::new();
+    let mut checked = Vec::new();
+    for record in capture.records {
+        if record.direction == Input && !record.data.starts_with(b"\x1b") {
+            // Inspect the settled output before the next recorded user edit.
+            let items = state
+                .session_maps
+                .session_states
+                .get(sid)
+                .unwrap()
+                .slash_menu_items
+                .clone()
+                .unwrap_or_default();
+            match draft.as_str() {
+                "/" if record.data == b"g" => {
+                    assert!(items.iter().any(|item| item.command == "/help"));
+                    checked.push("broad");
+                }
+                "/g" | "/go" | "/goa" if !record.data.contains(&0x7f) => {
+                    assert_eq!(
+                        items
+                            .iter()
+                            .map(|item| item.command.as_str())
+                            .collect::<Vec<_>>(),
+                        ["/goal"],
+                        "draft {draft}"
+                    );
+                    checked.push("single");
+                }
+                "/goal" => {
+                    assert!(
+                        items.is_empty(),
+                        "exact command must retract the previous menu"
+                    );
+                    checked.push("exact");
+                }
+                "/gz" => {
+                    assert!(
+                        items.is_empty(),
+                        "zero matches must retract the single result"
+                    );
+                    checked.push("zero");
+                }
+                "/zz" => {
+                    assert!(
+                        items.is_empty(),
+                        "unmatched text must not restore an old menu"
+                    );
+                    checked.push("unmatched");
+                }
+                _ => {}
+            }
+            for byte in record.data {
+                match byte {
+                    0x7f => {
+                        draft.pop();
+                    }
+                    0x15 => draft.clear(),
+                    _ => draft.push(char::from(byte)),
+                }
+            }
+            state
+                .session_maps
+                .slash_mode
+                .insert(sid.into(), AtomicBool::new(draft.starts_with('/')));
+        } else if record.direction == Output {
+            processor.process_chunk(
+                &String::from_utf8_lossy(&record.data),
+                &silence,
+                sid,
+                &state,
+            );
+            while let Ok(event) = events.try_recv() {
+                crate::state::tests_support::apply_replay_event(&state, &event);
+            }
+        }
+    }
+    assert_eq!(checked, expected);
+    let items = state
+        .session_maps
+        .session_states
+        .get(sid)
+        .unwrap()
+        .slash_menu_items
+        .clone()
+        .unwrap_or_default();
+    assert_eq!(
+        items
+            .iter()
+            .map(|item| item.command.as_str())
+            .collect::<Vec<_>>(),
+        final_commands
+    );
+}
+
+// Catches: the accumulator retains a broad menu after single matches or exact completion.
+#[test]
+fn recorded_ego_slash_menu_replaces_and_retracts_cached_items() {
+    replay_ego_slash_menu(
+        "ego-slash-filter-2030.tcap",
+        &["broad", "single", "single", "single", "exact", "unmatched"],
+        &[],
+    );
+}
+
+// Catches: zero matches keep the previous result, or clearing prevents a new menu from appearing.
+#[test]
+fn recorded_ego_slash_menu_zero_matches_clear_and_reopen() {
+    replay_ego_slash_menu(
+        "ego-slash-zero-2030.tcap",
+        &["broad", "single", "zero", "broad", "single"],
+        &["/goal"],
+    );
+}
+
 /// Screens the fixtures do not contain: a choice dialog, an Ink question
 /// footer, a status-line HUD BELOW the input box, and a slash menu. Each is
 /// fed through the real `process_chunk`; the assertion is the set of event
@@ -13441,6 +13569,115 @@ mod grid_delivery_tests {
             "show changed grid or scroll position"
         );
         assert_eq!(u32::from_le_bytes(expected[7..11].try_into().unwrap()), 5);
+    }
+
+    /// Catches: synchronous session discovery blocking input and unrelated frame
+    /// consumers on the transport thread while a busy terminal keeps redrawing.
+    /// The FIFO supplies controlled filesystem backpressure, not agent output.
+    #[cfg(unix)]
+    #[tokio::test(flavor = "current_thread")]
+    async fn slow_session_discovery_does_not_stall_input_echo_or_other_frames() {
+        use std::io::{Read, Write};
+        use std::os::unix::ffi::OsStrExt;
+        use std::time::{Duration, Instant};
+        use tower::ServiceExt;
+
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+        let _busy_rx = grid_session(&state, "redrawing-agent");
+        let mut other_rx = grid_session(&state, "other-terminal");
+        let stop_busy = start_ticker(&state, "redrawing-agent");
+        let stop_other = start_ticker(&state, "other-terminal");
+        let feed_busy = feed_continuously(&state, "redrawing-agent");
+        let feed_other = feed_continuously(&state, "other-terminal");
+        other_rx.changed().await.unwrap();
+
+        // A real kernel PTY with its slave retained: the line discipline echoes
+        // input without a shell, executable scan, or invented application reply.
+        let pair = native_pty_system()
+            .openpty(PtySize {
+                rows: 24,
+                cols: 80,
+                pixel_width: 0,
+                pixel_height: 0,
+            })
+            .unwrap();
+        let mut reader = pair.master.try_clone_reader().unwrap();
+        let mut writer = pair.master.take_writer().unwrap();
+        let (echo_tx, echo_rx) = tokio::sync::oneshot::channel();
+        let echo_thread = std::thread::spawn(move || {
+            let mut byte = [0];
+            let result = reader.read_exact(&mut byte).map(|()| byte);
+            let _ = echo_tx.send(result);
+        });
+
+        let dir = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+        let session_dir = dir
+            .path()
+            .join("sessions/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa");
+        std::fs::create_dir_all(&session_dir).unwrap();
+        let lease = session_dir.join("lease");
+        let c_path = std::ffi::CString::new(lease.as_os_str().as_bytes()).unwrap();
+        assert_eq!(unsafe { libc::mkfifo(c_path.as_ptr(), 0o600) }, 0);
+        let (opened_tx, opened_rx) = tokio::sync::oneshot::channel();
+        let lease_thread = std::thread::spawn(move || {
+            // open() returns only when production discovery reaches this lease.
+            let file = std::fs::OpenOptions::new().write(true).open(lease).unwrap();
+            let _ = opened_tx.send(Instant::now());
+            std::thread::sleep(Duration::from_millis(800));
+            drop(file);
+        });
+        let request = axum::http::Request::builder()
+            .method("POST")
+            .uri("/agent/discover-session")
+            .header("content-type", "application/json")
+            .body(axum::body::Body::from(
+                serde_json::json!({
+                    "agentType": "ego", "cwd": dir.path(), "claimedIds": [],
+                    "agentPid": u32::MAX,
+                    "envOverrides": { "EGO_HOME": dir.path() }
+                })
+                .to_string(),
+            ))
+            .unwrap();
+        let router = crate::mcp_http::build_router(state.clone(), false, true);
+        let discovery = tokio::spawn(async move { router.oneshot(request).await.unwrap() });
+        let blocked_at = opened_rx.await.expect("discovery must reach the lease");
+        other_rx.borrow_and_update();
+        let (echo, next_frame) = tokio::join!(
+            async {
+                run_bounded_pty_input(move || writer.write_all(b"x").map_err(|e| e.to_string()))
+                    .await
+                    .unwrap();
+                let bytes = echo_rx.await.unwrap().unwrap();
+                (bytes, blocked_at.elapsed())
+            },
+            async {
+                other_rx.changed().await.unwrap();
+                blocked_at.elapsed()
+            }
+        );
+        let response = discovery.await.unwrap();
+        for stop in [stop_busy, stop_other, feed_busy, feed_other] {
+            stop.store(true, Ordering::Relaxed);
+        }
+        lease_thread.join().unwrap();
+        echo_thread.join().unwrap();
+        assert_eq!(response.status(), axum::http::StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), 1024)
+            .await
+            .unwrap();
+        assert_eq!(&body[..], b"null", "no match must retain the wire response");
+        assert_eq!(echo.0, *b"x", "kernel did not echo the submitted byte");
+        // This is a transport-service bound, NOT native keyboard-to-paint timing.
+        assert!(
+            echo.1 < Duration::from_millis(200),
+            "input echo waited {:?} behind discovery",
+            echo.1
+        );
+        assert!(
+            next_frame < Duration::from_millis(200),
+            "other session frame waited {next_frame:?} behind discovery"
+        );
     }
 
     #[cfg(feature = "desktop")]

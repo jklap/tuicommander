@@ -68,3 +68,40 @@ Coordinator pixel inspection of the first captures found the code Copy control
 clipped by a one-line answer block. Story #2045-848c records the browser RED,
 CSS cause and correction. Use the [corrected captures](chat-code-copy-2045/README.md)
 for the final layout review; the earlier images above retain the defect evidence.
+
+## Current source and capture audit — 2026-10-19
+
+The feature remains implemented at audit base `fe226587cf`. No new application
+change or regression test is needed. Current source locations supersede the older
+line numbers above:
+
+- `useSessionChatView.tsx:24` allows an existing Claude session without a frontend
+  discovered session ID. Later work also enables ego; this audit does not change it.
+- `useSessionChatView.tsx:60-70` mounts `TerminalChatTranscript` and injects the wake.
+- `SessionDetailScreen.tsx:333` mounts the switch; lines 539-541 mount Chat and
+  keep OutputView mounted with `visible={!chat.active()}`.
+- `useSessions.ts:195-198` dispatches Chat wakes from the existing SSE subscription.
+- `TerminalChatTranscript.tsx:26-53` gates refreshes while hidden and releases its
+  watcher on cleanup. `Transcript.tsx:565-568` catches up on touch release only
+  while following; lines 739-740 use that handler for touch end and cancellation.
+
+A fresh capture-only run of `scripts/check-chat-code-copy-layout.py` through the
+build slot exited 0. It used one named stealth-browser session against this
+worktree's Vite, captured five 390 × 844 presentations, then closed its tab,
+browser daemon and Vite process. Evidence is outside the repository at
+`/Users/stefano.straus/Gits/.tmp/results/1770-3e28/current/`: mobile dark, mobile
+light, desktop narrow dark, mobile long code and desktop long code PNGs,
+`measurements.json`, `transcript.txt` and `vite.log`.
+
+Every measured document width is 390 px. Short code blocks have equal client
+and scroll heights of 54 px; long blocks have equal heights of 134 px. The Copy
+button bottom is 342.7890625 px; first code lines begin at 348.2890625 px on mobile
+and 347.2890625 px on desktop. These are Chromium DOM measurements, not pixel
+inspection, physical-phone performance or live-session transport evidence.
+
+No RED/GREEN, Vitest, TypeScript or Rust run was made: only documentation changed,
+and existing implementation tests were inspected rather than rerun. Historical
+test-change explanations were added to the main story store after checking the
+original `6dae12fbe7` diff. The real-phone 2,000-entry timing criterion remains
+open; an image-capable reviewer must inspect the new captures before checking
+the visual criterion.

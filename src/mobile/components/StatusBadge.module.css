@@ -26,6 +26,12 @@
   animation: pulse-badge 1.5s ease infinite;
 }
 
+:global(html[data-theme="vscode-light"]) .question {
+  color: var(--fg-primary);
+  /* Fading the whole badge would erase the small label's AA contrast. */
+  animation: none;
+}
+
 .error {
   background: rgba(244, 135, 113, 0.15);
   color: var(--error);
