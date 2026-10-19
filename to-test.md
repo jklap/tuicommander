@@ -1,3 +1,7 @@
+## Audio dependency alignment (2036-f740) — Rust restart and hardware required
+
+- [ ] [HUMAN] After Boss manually restarts `make dev` or installs `make build`, record and transcribe speech with the default and a named microphone; check the meter and stop/drain behavior. Include an integer-only microphone if available. CPAL 0.18 prefers 48 kHz and may rank high-precision formats above I16; capture must continue using a supported F32/I16 configuration.
+- [ ] [HUMAN] Play all notification tones at low and high volume on the default and a named output; confirm no end click and missing named output falls back. Play an Edge MP3 reply, pause/resume it, interrupt it and play the next reply. This peer did not restart or use Boss's desktop or claim real microphone/speaker validation.
 ## Claude imperative question title (2074-b0dc) — Rust restart required
 
 - [x] Worktree verification: real Claude `Pick a colour` without a question mark exports the title and five ordered controls to REST, mobile and desktop PTY Chat. One Green click reaches Claude, clears awaiting and leaves another session unchanged. Mobile evidence: `fix-2074-live-10`; desktop-width Vite component evidence after merging 2079: `fix-2074-desktop-3`, both under `~/Gits/.tmp/results/`. The desktop check mounts the production component and lifecycle consumer, not the full desktop shell.
