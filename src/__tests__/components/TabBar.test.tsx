@@ -938,7 +938,7 @@ describe("TabBar", () => {
 
 		fireEvent.contextMenu(tab);
 		let menus = container.querySelectorAll(".menu");
-		const promoteItem = Array.from(menus[menus.length - 1].querySelectorAll(".label")).find(
+		const promoteItem = Array.from(Array.from(menus).at(-1)!.querySelectorAll(".label")).find(
 			(l) => l.textContent === "Add to Global Workspace",
 		);
 		expect(promoteItem).toBeDefined();
@@ -947,7 +947,7 @@ describe("TabBar", () => {
 
 		fireEvent.contextMenu(tab);
 		menus = container.querySelectorAll(".menu");
-		const removeItem = Array.from(menus[menus.length - 1].querySelectorAll(".label")).find(
+		const removeItem = Array.from(Array.from(menus).at(-1)!.querySelectorAll(".label")).find(
 			(l) => l.textContent === "Remove from Global Workspace",
 		);
 		expect(removeItem).toBeDefined();

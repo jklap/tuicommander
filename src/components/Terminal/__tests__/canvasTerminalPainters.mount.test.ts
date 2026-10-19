@@ -103,7 +103,7 @@ function overlayCtx(
 	contexts: WeakMap<HTMLCanvasElement, CanvasRenderingContext2D>,
 ): CanvasRenderingContext2D {
 	const canvases = container.querySelectorAll("canvas");
-	const overlay = canvases[canvases.length - 1] as HTMLCanvasElement;
+	const overlay = Array.from(canvases).at(-1) as HTMLCanvasElement;
 	const ctx = contexts.get(overlay);
 	if (!ctx) throw new Error("overlay canvas has no captured 2D context");
 	return ctx;

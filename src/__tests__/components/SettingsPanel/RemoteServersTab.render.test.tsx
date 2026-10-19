@@ -157,7 +157,7 @@ describe("RemoteServersTab", () => {
 		// Click Edit on the OTHER row without closing the first — the editor
 		// must switch to showing connection-b, not keep showing connection-a.
 		const editButtonsAfterFirstOpen = getAllByTitle("Edit");
-		fireEvent.click(editButtonsAfterFirstOpen[editButtonsAfterFirstOpen.length - 1]);
+		fireEvent.click(editButtonsAfterFirstOpen.at(-1)!);
 		await flushMicrotasks();
 
 		expect(getByDisplayValue("connection-b")).toBeTruthy();

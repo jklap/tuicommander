@@ -233,7 +233,7 @@ export function useTerminalContextMenus(options: TerminalContextMenuOptions): {
 				// Claude Code fullscreen session running after the last real shell
 				// block) — their executionLine/endLine are not valid buffer rows.
 				const anchoredBlocks = rowAnchoredBlocks(term?.commandBlocks ?? []);
-				const lastBlock = anchoredBlocks[anchoredBlocks.length - 1];
+				const lastBlock = anchoredBlocks.at(-1);
 				if (
 					!term?.ref ||
 					!lastBlock ||
