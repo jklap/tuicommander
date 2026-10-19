@@ -1,3 +1,7 @@
+## Workflow MCP grouping (2065-dcc5) — Rust restart required
+
+- [ ] After Boss manually restarts `make dev` or installs `make build`, reconnect MCP and confirm the grouped `workflow` schema exposes story, run, proposal_create, report and launch. Legacy tools remain available; `tuic workflow` uses the new entry and `tuic automations` stays independent. The running backend was not restarted by this peer.
+
 ## Agent task operations (2064-6385) — Rust restart required
 
 - [ ] After Boss manually restarts `make dev` or installs `make build`, reconnect MCP and confirm `agent task_get/task_cancel` appear; cancelling an owned spawned task must leave its terminal running. The installed backend was not restarted by this peer.

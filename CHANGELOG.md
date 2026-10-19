@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+- Add the typed `workflow` MCP tool and `tuic workflow` CLI with story, run, proposal_create, report and launch actions; reuse existing handlers, retain proposal idempotency and member denials, and keep legacy tools until cutover. Automations remains separate (#2065-dcc5).
+
 - Add `agent task_get/task_cancel` using the existing task service, with spawning-owner checks, immutable final outcomes and cancellation that leaves the PTY running; retain the current `task` tool until the catalogue cutover (#2064-6385).
 - Group native MCP switches in Settings by domain, with separate rare and conditional sections; preserve tool names, saved denials and Settings opt-in (#2063-baa9).
 

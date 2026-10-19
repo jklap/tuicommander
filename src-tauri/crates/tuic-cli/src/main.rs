@@ -53,6 +53,8 @@ enum Command {
     },
     /// Apply a shared automation action (JSON object, or - for stdin)
     Automations { arguments: Option<String> },
+    /// Apply a typed workflow action (JSON object, or - for stdin)
+    Workflow { arguments: Option<String> },
     /// Call a server-owned MCP tool with JSON arguments
     Mcp {
         /// MCP tool name (for example agent or session)
@@ -415,6 +417,7 @@ fn dispatch(cmd: Command) -> Result<(), String> {
             command,
         } => bg::run(&log, &caller, &command),
         Command::Automations { arguments } => cmd_mcp("automations", arguments.as_deref()),
+        Command::Workflow { arguments } => cmd_mcp("workflow", arguments.as_deref()),
         Command::Mcp { tool, arguments } => cmd_mcp(&tool, arguments.as_deref()),
         Command::Diff { file_a, file_b } => cmd_diff(&file_a, &file_b),
         Command::Ls { json } => cmd_ls(json),
@@ -1768,6 +1771,20 @@ mod tests {
         }
     }
     use serde_json::json;
+
+    // Catches: workflow CLI arguments parsed as story JSON or sent to automations.
+    #[test]
+    fn workflow_cli_accepts_the_grouped_action_envelope() {
+        for arguments in [r#"{"action":"story","input":{"action":"list_plans"}}"#, "-"] {
+            let cli =
+                Cli::try_parse_from(["tuic", "workflow", arguments]).expect("workflow command");
+            assert!(
+                matches!(cli.command, Some(Command::Workflow { arguments: Some(value) }) if value == arguments)
+            );
+        }
+        let cli = Cli::try_parse_from(["tuic", "automations", r#"{"action":"list"}"#]).unwrap();
+        assert!(matches!(cli.command, Some(Command::Automations { .. })));
+    }
 
     #[test]
     fn story_cli_accepts_a_typed_action_and_project() {
