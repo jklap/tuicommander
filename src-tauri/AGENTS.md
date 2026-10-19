@@ -1515,7 +1515,7 @@ finished, idle teammate as `{type: "teammate", status: "running"}` for as long a
 exists (minutes), and a teammate's completion fires **no hook in the lead** (it is its own Claude
 session; `SubagentStart`/`SubagentStop` never fire for it). So a teammate counts as work only
 while its own terminal is busy: `tuic-hook` sends `bgtasksummary` (`type/status*N` pairs),
-`pty.rs` stores `DeclaredTaskSummary`, and `SilenceState::declared_background_work_for_epoch_with`
+`pty/lifecycle.rs` stores `DeclaredTaskSummary` in `SilenceState`, and `SilenceState::declared_background_work_for_epoch_with`
 takes a lazy closure backed by `AppState::lead_teammates_may_be_working(lead, declared)` (tmux
 topology + shell-state atomics only — never a `SilenceState` lock, which the caller holds). It is
 fail-safe: more declared teammates than linked panes means "working", so a missing link is never

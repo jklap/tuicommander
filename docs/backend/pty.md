@@ -962,7 +962,7 @@ The fix has three parts, all additive and fail-safe:
 1. `tuic-hook` also emits `bgtasksummary`: the same array as distinct `type/status` pairs with
    counts (`teammate/running*2,shell/completed`) — bounded by distinct pairs, so it cannot lose
    a late `running` to the 512-byte payload cap the way the joined-status `bgtasks` can.
-2. `pty.rs` stores it as `SilenceState::declared_task_summary` (`DeclaredTaskSummary {
+2. `pty/lifecycle.rs` stores it as `SilenceState::declared_task_summary` (`DeclaredTaskSummary {
    non_teammate_running, teammate_running }`), written right after the `bgtasks` declaration
    in the same hook fire and under the same turn epoch. It is authoritative for that fire —
    it sets or clears the declaration itself, repairing a `bgtasks` whose joined statuses were
