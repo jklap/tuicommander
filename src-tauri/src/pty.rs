@@ -762,7 +762,10 @@ fn fire_tool_error_if_ready(silence: &Mutex<SilenceState>, session_id: &str, sta
     let Some(text) = silence.lock().check_tool_error() else {
         return;
     };
-    state.session_maps.turn_error_flags.insert(session_id.to_string(), ());
+    state
+        .session_maps
+        .turn_error_flags
+        .insert(session_id.to_string(), ());
     let parsed = ParsedEvent::ToolError { matched_text: text };
     if let Ok(json) = serde_json::to_value(&parsed) {
         #[cfg(feature = "desktop")]
@@ -1807,11 +1810,6 @@ struct ChunkProcessor {
     masked_data: Option<String>,
     /// An explicit idle marker asks the reader to flush after publishing this chunk.
     queued_idle_flush: bool,
-    /// A foreground command is running: set by OSC 133 `C`, cleared by `D`
-    /// (finished) and `A` (prompt). The `userwrap` verb is honoured only while
-    /// this is false — the zsh integration sends it from precmd, at the
-    /// prompt, never while a command such as `cat` or `ssh` is printing.
-    foreground_command_running: bool,
     parser: OutputParser,
     intent_break_parser: vte::Parser,
     /// Dedup: only emit StatusLine when task_name actually changes *within a
@@ -2039,14 +2037,14 @@ impl ChunkProcessor {
         }
         match edge {
             Some(ego_events::TurnEdge::Started) => {
-                self.handle_tuic_state("busy", session_id, state)
+                self.handle_tuic_state_unanchored("busy", session_id, state)
             }
             // The coarse frame ego writes just before `turn_end` already
             // closed a turn that owns nothing; closing it again here would
             // drop an injection claim the idle edge just took.
             Some(ego_events::TurnEdge::Ended) if ego_owns_work(state, session_id) => {
                 self.retire_tools();
-                self.handle_tuic_state("idle", session_id, state);
+                self.handle_tuic_state_unanchored("idle", session_id, state);
                 return true;
             }
             _ => {}
@@ -2114,7 +2112,6 @@ impl ChunkProcessor {
             queued_idle_flush: false,
             secret_mask: crate::secrets::StreamMask::default(),
             masked_data: None,
-            foreground_command_running: false,
             parser: OutputParser::new(),
             intent_break_parser: vte::Parser::new(),
             last_status_task: None,
@@ -2148,6 +2145,21 @@ impl ChunkProcessor {
             after_identity_sample: None,
             pending_open_urls: Vec::new(),
         }
+    }
+
+    /// `handle_tuic_state` for a state that carries no position in the PTY
+    /// stream: a hook receipt (`claude-hook`, `grok-hook`, …) or an ego turn edge
+    /// arrives out of band, so the turn-level command block it could open or
+    /// close has no row to anchor to. It is marked off the primary screen, which
+    /// every row-anchored consumer already ignores (`rowAnchoredBlocks`), and the
+    /// returned block event is dropped.
+    ///
+    /// DEFERRED (2026-11-17) — a receipt-driven idle/busy edge therefore draws no
+    /// turn-level block; the frame-driven `state=` path (which has a line) still
+    /// does. Thread the delivery-time line through `process_hook_frames` to anchor
+    /// these too.
+    fn handle_tuic_state_unanchored(&self, payload: &str, session_id: &str, state: &AppState) {
+        let _ = self.handle_tuic_state(payload, session_id, 0, true, state);
     }
 
     /// Handle OSC 7770 `state=idle|busy|prompt|error` from the TUIC protocol. Returns
@@ -2223,7 +2235,11 @@ impl ChunkProcessor {
                 // PostToolUseFailure or StopFailure hook) or the ToolError/ApiError
                 // text-pattern fallback becomes this block's red-tick exit code.
                 // Cleared unconditionally so it never leaks into the next turn.
-                let flagged = state.session_maps.turn_error_flags.remove(session_id).is_some();
+                let flagged = state
+                    .session_maps
+                    .turn_error_flags
+                    .remove(session_id)
+                    .is_some();
                 Some(ParsedEvent::AgentBlock {
                     action: "end".into(),
                     line,
@@ -3132,11 +3148,6 @@ impl ChunkProcessor {
                             .has_osc133_integration
                             .insert(session_id.to_string(), ());
                         self.handle_osc133_event(command, &params, session_id, state);
-                        match command {
-                            'C' => self.foreground_command_running = true,
-                            'A' | 'D' => self.foreground_command_running = false,
-                            _ => {}
-                        }
                         // Dual-emitted: there is no bus→window forwarder, so the
                         // desktop event and the bus push are two separate writes of
                         // one signal. The bus copy is what gives a browser/PWA
@@ -3198,9 +3209,14 @@ impl ChunkProcessor {
                                 .claude_hooks
                                 .receive(&payload, self.tuic_session.as_deref())
                             {
-                                self.handle_tuic_state(activity, session_id, state);
-                                tuic_events
-                                    .extend(tuic_state_awaiting_event(activity, line as i64));
+                                self.handle_tuic_state_unanchored(activity, session_id, state);
+                                tuic_events.extend(tuic_state_awaiting_event(
+                                    activity,
+                                    line as i64,
+                                    None,
+                                    None,
+                                    false,
+                                ));
                             }
                         }
                         "state"
@@ -3216,12 +3232,15 @@ impl ChunkProcessor {
                                 .receive(&payload, self.tuic_session.as_deref())
                             {
                                 explicit_idle_in_chunk |= activity == "idle";
-                                self.handle_tuic_state(activity, session_id, state);
+                                self.handle_tuic_state_unanchored(activity, session_id, state);
                                 // Queue every clear, including idle, in receipt order.
                                 // The accumulator may not have applied an earlier wait yet.
                                 if let Some(event) = tuic_state_awaiting_event(
                                     if activity == "idle" { "busy" } else { activity },
                                     line as i64,
+                                    None,
+                                    None,
+                                    false,
                                 ) {
                                     tuic_events.push(event);
                                 }
@@ -3325,7 +3344,9 @@ impl ChunkProcessor {
                                             .get(session_id)
                                             .is_some_and(|session| session.awaiting_input);
                                     if !waiting {
-                                        self.handle_tuic_state("busy", session_id, state);
+                                        self.handle_tuic_state_unanchored(
+                                            "busy", session_id, state,
+                                        );
                                     }
                                 }
                                 Some(
@@ -3339,15 +3360,17 @@ impl ChunkProcessor {
                                             "busy"
                                         };
                                     explicit_idle_in_chunk |= activity == "idle";
-                                    self.handle_tuic_state(activity, session_id, state);
+                                    self.handle_tuic_state_unanchored(activity, session_id, state);
                                     // Queue in wire order even if the accumulator has not seen the question yet.
-                                    tuic_events.extend(tuic_state_awaiting_event("busy", -1));
+                                    tuic_events.extend(tuic_state_awaiting_event(
+                                        "busy", -1, None, None, false,
+                                    ));
                                 }
                                 Some(codex_tools::Activity::Settled) => {
                                     // The lead stopped earlier; its last child ends the turn.
                                     // An open human wait is not touched.
                                     explicit_idle_in_chunk = true;
-                                    self.handle_tuic_state("idle", session_id, state);
+                                    self.handle_tuic_state_unanchored("idle", session_id, state);
                                 }
                                 None => {}
                             }
@@ -3409,7 +3432,11 @@ impl ChunkProcessor {
                             // session's life (UserPromptSubmit, every PreToolUse/
                             // PostToolUse, Stop...), so skip the allocation + DashMap
                             // write lock once it's already set.
-                            if !state.session_maps.has_tuic_state_integration.contains_key(session_id) {
+                            if !state
+                                .session_maps
+                                .has_tuic_state_integration
+                                .contains_key(session_id)
+                            {
                                 state
                                     .session_maps
                                     .has_tuic_state_integration
@@ -3575,7 +3602,10 @@ impl ChunkProcessor {
                             // cleared as an arbitrary non-zero sentinel exit code at the
                             // next busy→idle edge in `handle_tuic_state`; the actual
                             // payload value is intentionally never parsed here.
-                            state.session_maps.turn_error_flags.insert(session_id.to_string(), ());
+                            state
+                                .session_maps
+                                .turn_error_flags
+                                .insert(session_id.to_string(), ());
                         }
                         "bgtasks" => {
                             // From a Stop/StopFailure hook: `tuic-hook` scraped
@@ -3608,9 +3638,13 @@ impl ChunkProcessor {
                             let running = decoded.split(',').any(|status| {
                                 !status.is_empty() && !KNOWN_TERMINAL_BG_STATUSES.contains(&status)
                             });
-                            if let Some(turn_epoch) =
-                                state.session_maps.session_states.get(session_id).map(|s| s.turn_epoch)
-                                && let Some(silence) = state.session_maps.silence_states.get(session_id)
+                            if let Some(turn_epoch) = state
+                                .session_maps
+                                .session_states
+                                .get(session_id)
+                                .map(|s| s.turn_epoch)
+                                && let Some(silence) =
+                                    state.session_maps.silence_states.get(session_id)
                             {
                                 silence
                                     .lock()
@@ -3641,39 +3675,6 @@ impl ChunkProcessor {
                                 silence
                                     .lock()
                                     .set_declared_task_summary(summary, turn_epoch);
-                            }
-                        }
-                        "userwrap" => {
-                            // From the zsh deferred integration's `ask` branch
-                            // (see `shell_integration.rs`'s module doc comment):
-                            // the shell found the user's own `claude`/`codex`/
-                            // `goose` function with no recorded decision for its
-                            // fingerprint. Payload `<agent>:<fingerprint>`.
-                            // Terminal output is untrusted (any program can print
-                            // an OSC sequence), so both halves are validated
-                            // (agent allow-list, digits-and-dash fingerprint)
-                            // before use. Even a forged verb can only open the
-                            // consent dialog — wrapping still needs the user's
-                            // explicit answer. The shell only ever sends it from
-                            // precmd, so while OSC 133 says a foreground command
-                            // runs (between `C` and `D`/`A`) it is output from
-                            // that command — `cat` of a file, remote SSH output —
-                            // and is dropped. A sender that also forges `133;D`
-                            // first is stopped by the session binding:
-                            // `bound_userwrap_payload` accepts the payload only
-                            // when it carries this PTY's own `$TUIC_SESSION`.
-                            if self.foreground_command_running {
-                                tracing::debug!(
-                                    source = "pty",
-                                    session_id,
-                                    "ignoring userwrap while a foreground command runs"
-                                );
-                            } else if let Some((agent, fingerprint)) =
-                                crate::agent_wrap_prompt::bound_userwrap_payload(
-                                    state, session_id, &payload,
-                                )
-                            {
-                                crate::agent_wrap_prompt::request(state, agent, fingerprint);
                             }
                         }
                         // `ccsession`/`cwd`/`transcript`/`tool`/`notify`/`cctitle`/
@@ -4165,7 +4166,11 @@ impl ChunkProcessor {
         // idle↔busy-edge turn-level source (handle_tuic_state) is
         // authoritative and this is suppressed so the two can't produce
         // conflicting blocks.
-        if state.session_maps.has_tuic_state_integration.contains_key(session_id) {
+        if state
+            .session_maps
+            .has_tuic_state_integration
+            .contains_key(session_id)
+        {
             // Suppression can activate mid-turn (e.g. the hook installs a
             // beat after a `⏺` header already opened a heuristic block, since
             // UserPromptSubmit's busy event is the common but not only path
@@ -4488,7 +4493,10 @@ impl ChunkProcessor {
                 // still flags the block, a minor documented over-flagging risk.
                 // Already excluded above during startup grace via `suppress_this`.
                 ParsedEvent::ApiError { .. } => {
-                    state.session_maps.turn_error_flags.insert(session_id.to_string(), ());
+                    state
+                        .session_maps
+                        .turn_error_flags
+                        .insert(session_id.to_string(), ());
                 }
                 _ => {}
             }
@@ -6282,7 +6290,11 @@ pub(crate) fn spawn_reader_thread(
             // after the exit frame (desktop `pty-exit-{id}`, or the remote
             // per-session WS `exit` frame, which also disposes the socket)
             // finds no tab to apply to.
-            crate::osc_title::restore_base_on_exit(&state, &session_id, &processor.osc_title_base);
+            crate::osc_title::restore_base_on_exit(
+                &state,
+                &session_id,
+                &processor_cell.lock().osc_title_base,
+            );
             state.emit_pty_event(crate::state::AppEvent::PtyExit {
                 session_id: session_id.clone(),
             });

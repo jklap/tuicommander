@@ -19,7 +19,7 @@ async function flushSaves(): Promise<void> {
 
 function lastInvokeCall(cmd: string): unknown[] | undefined {
 	const calls = mockInvoke.mock.calls.filter((c: unknown[]) => c[0] === cmd);
-	return calls[calls.length - 1];
+	return calls.at(-1);
 }
 
 /** Shape of one entry as posted/read over the `save_repo_settings`/`load_repo_settings`

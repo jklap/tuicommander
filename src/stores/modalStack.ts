@@ -70,7 +70,7 @@ export function anyModalOpen(): boolean {
  * before acting, or a single keypress fires all of them at once.
  */
 export function isTopModal(id: number): boolean {
-	return stack.length > 0 && stack[stack.length - 1].id === id;
+	return stack.length > 0 && stack.at(-1)!.id === id;
 }
 
 /**
