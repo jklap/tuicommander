@@ -2016,6 +2016,191 @@ fn a_task_owned_by_another_identity_is_refused() {
     );
 }
 
+/// Catches: moving task cancellation to agent loses the spawning caller's ownership check.
+#[tokio::test]
+async fn agent_task_cancel_refuses_a_non_owner() {
+    let state = test_state();
+    let id = state
+        .tasks
+        .create(crate::tasks::TaskKind::AgentSpawn, "peer-a", None);
+    state.mcp.to_session.insert("mcp-b".into(), "peer-b".into());
+    for action in ["task_cancel", "task_get"] {
+        let refused = handle_mcp_tool_call(
+            &state,
+            "127.0.0.1:1".parse().unwrap(),
+            "agent",
+            &serde_json::json!({"action":action, "task_id":id}),
+            Some("mcp-b"),
+        )
+        .await;
+        assert_eq!(
+            refused["error"], "task_id is not owned by the calling identity",
+            "{action}: {refused}"
+        );
+    }
+    assert_eq!(
+        state.tasks.get(&id).unwrap().status,
+        crate::tasks::TaskStatus::Working
+    );
+}
+
+/// Catches: agent task actions bypass remote-control guards or lose headerless ownership.
+#[tokio::test]
+async fn agent_task_actions_keep_headerless_ownership_and_remote_cancel_guard() {
+    let state = test_state();
+    let id = state.tasks.create(
+        crate::tasks::TaskKind::AgentSpawn,
+        &task_owner_identity(None, Some("headerless")),
+        None,
+    );
+    let polled = handle_mcp_tool_call(
+        &state,
+        "8.8.8.8:1".parse().unwrap(),
+        "agent",
+        &serde_json::json!({"action":"task_get", "task_id":id}),
+        Some("headerless"),
+    )
+    .await;
+    assert_eq!(polled["status"], "working", "{polled}");
+    let refused = handle_mcp_tool_call(
+        &state,
+        "8.8.8.8:1".parse().unwrap(),
+        "agent",
+        &serde_json::json!({"action":"task_cancel", "task_id":id}),
+        Some("headerless"),
+    )
+    .await;
+    assert_eq!(
+        refused["error"],
+        "Task cancellation is restricted to localhost connections"
+    );
+    assert_eq!(
+        state.tasks.get(&id).unwrap().status,
+        crate::tasks::TaskStatus::Working
+    );
+}
+
+/// Catches: the new adapter rewrites completed/failed/cancelled outcomes on cancellation.
+#[tokio::test]
+async fn agent_task_cancel_preserves_every_final_outcome() {
+    use crate::tasks::{TaskKind, TaskStatus, TaskUpdate};
+    let state = test_state();
+    let owner = task_owner_identity(None, Some("owner"));
+    for status in [
+        TaskStatus::Completed,
+        TaskStatus::Failed,
+        TaskStatus::Cancelled,
+    ] {
+        let id = state.tasks.create(TaskKind::AgentSpawn, &owner, None);
+        state
+            .tasks
+            .set_status(
+                &id,
+                status,
+                TaskUpdate {
+                    result: Some(serde_json::json!({"exit_code":137})),
+                    error: Some("child failed".into()),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        let cancelled = handle_mcp_tool_call(
+            &state,
+            "127.0.0.1:1".parse().unwrap(),
+            "agent",
+            &serde_json::json!({"action":"task_cancel", "task_id":id}),
+            Some("owner"),
+        )
+        .await;
+        assert_eq!(cancelled["cancelled"], false, "{cancelled}");
+        assert_eq!(state.tasks.get(&id).unwrap().status, status);
+        let polled = handle_mcp_tool_call(
+            &state,
+            "127.0.0.1:1".parse().unwrap(),
+            "agent",
+            &serde_json::json!({"action":"task_get", "task_id":id}),
+            Some("owner"),
+        )
+        .await;
+        assert_eq!(polled["status"], cancelled["status"]);
+        assert_eq!(polled["result"]["exit_code"], 137);
+        assert_eq!(polled["error_detail"], "child failed");
+        assert!(polled.get("error").is_none(), "{polled}");
+    }
+}
+
+/// Catches: task_cancel is accidentally wired to session kill instead of task cancellation.
+#[tokio::test]
+async fn agent_task_cancel_does_not_kill_its_pty() {
+    let state = test_state();
+    let created = handle_session(&state, &serde_json::json!({"action":"create"}), None);
+    let session_id = created["session_id"]
+        .as_str()
+        .expect("test needs a real PTY");
+    let id = state.tasks.create(
+        crate::tasks::TaskKind::AgentSpawn,
+        &task_owner_identity(None, Some("owner")),
+        Some(session_id),
+    );
+    let cancelled = handle_mcp_tool_call(
+        &state,
+        "127.0.0.1:1".parse().unwrap(),
+        "agent",
+        &serde_json::json!({"action":"task_cancel", "task_id":id}),
+        Some("owner"),
+    )
+    .await;
+    let still_running = state.session_maps.sessions.contains_key(session_id);
+    kill_test_session(&state, session_id);
+    assert_eq!(cancelled["cancelled"], true, "{cancelled}");
+    assert!(
+        still_running,
+        "cancelling a task must leave its real PTY alive"
+    );
+    assert_eq!(
+        state.tasks.get(&id).unwrap().status,
+        crate::tasks::TaskStatus::Cancelled
+    );
+}
+
+/// Catches: an existing task denial becomes bypassable through the new agent actions.
+#[tokio::test]
+async fn agent_task_actions_honor_existing_tool_denials() {
+    for disabled in ["task", "agent"] {
+        let state = test_state();
+        let id = state.tasks.create(
+            crate::tasks::TaskKind::AgentSpawn,
+            &task_owner_identity(None, Some("owner")),
+            None,
+        );
+        state
+            .config
+            .write()
+            .disabled_native_tools
+            .push(disabled.into());
+        for action in ["task_get", "task_cancel"] {
+            let refused = handle_mcp_tool_call(
+                &state,
+                "127.0.0.1:1".parse().unwrap(),
+                "agent",
+                &serde_json::json!({"action":action, "task_id":id}),
+                Some("owner"),
+            )
+            .await;
+            assert!(
+                refused["error"]
+                    .as_str()
+                    .is_some_and(|error| error.contains("disabled by configuration")),
+                "{refused}"
+            );
+        }
+        assert_eq!(
+            state.tasks.get(&id).unwrap().status,
+            crate::tasks::TaskStatus::Working
+        );
+    }
+}
+
 #[test]
 fn task_cancel_is_final_and_leaves_the_agent_running() {
     use crate::tasks::{TaskKind, TaskStatus};
