@@ -9,7 +9,7 @@ import {
 	type UpstreamTransport,
 } from "../../../../transport";
 import { handleOpenUrl } from "../../../../utils/openUrl";
-import { randomId } from "../../../../utils/randomId";
+import { randomId, randomUuid } from "../../../../utils/randomId";
 import { ConfirmDialog } from "../../../ConfirmDialog";
 import { ConnectionStatusBadge } from "../../../shared/ConnectionStatusBadge";
 import { MachineSelector } from "../../MachineSelector";
@@ -107,7 +107,7 @@ const HeaderRows: Component<{
 				class={s.copyBtn}
 				title="Add secret header"
 				onClick={() =>
-					props.onChange([...props.rows, { name: "", credential_ref: crypto.randomUUID(), value: "", saved: false }])
+					props.onChange([...props.rows, { name: "", credential_ref: randomUuid(), value: "", saved: false }])
 				}
 			>
 				+
@@ -315,7 +315,7 @@ export const UpstreamMcpPanel: Component = () => {
 	async function saveHeaderRows(name: string, url: string, rows: HeaderRow[]): Promise<UpstreamHeader[]> {
 		const headers: UpstreamHeader[] = [];
 		for (const row of rows) {
-			const header = { name: row.name, credential_ref: row.value ? crypto.randomUUID() : row.credential_ref };
+			const header = { name: row.name, credential_ref: row.value ? randomUuid() : row.credential_ref };
 			if (row.value) await rpc("save_mcp_upstream_credential", { name, url, token: row.value, header }, machine());
 			headers.push(header);
 		}

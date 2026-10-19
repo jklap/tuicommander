@@ -5,6 +5,7 @@ import { appLogger } from "../../stores/appLogger";
 import { registerModal } from "../../stores/modalStack";
 import { workflowRunSignals } from "../../stores/workflowRunSignals";
 import { HttpRpcError, isTauri } from "../../transport";
+import { randomUuid } from "../../utils/randomId";
 import d from "../shared/dialog.module.css";
 import { WorkflowDesigner } from "../WorkflowDesigner/WorkflowDesigner";
 import { RunIncidents } from "./RunIncidents";
@@ -331,7 +332,7 @@ export const StoriesDialog: Component<StoriesDialogProps> = (props) => {
 			const reply = await callRun({
 				action: "command",
 				run_id: selected.id,
-				command_id: crypto.randomUUID(),
+				command_id: randomUuid(),
 				expected_sequence: selected.sequence,
 				command,
 			});
@@ -366,7 +367,7 @@ export const StoriesDialog: Component<StoriesDialogProps> = (props) => {
 			);
 			setPublishedChoices(choices);
 			setWorkflowChoice(choices[0]?.id ?? "");
-			startRequestId = crypto.randomUUID();
+			startRequestId = randomUuid();
 			setStartOpen(true);
 		} catch (cause) {
 			fail(cause);
@@ -709,7 +710,7 @@ export const StoriesDialog: Component<StoriesDialogProps> = (props) => {
 									value={workflowChoice()}
 									onChange={(event) => {
 										setWorkflowChoice(event.currentTarget.value);
-										startRequestId = crypto.randomUUID();
+										startRequestId = randomUuid();
 									}}
 								>
 									<For each={publishedChoices()}>
