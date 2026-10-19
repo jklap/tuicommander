@@ -80,5 +80,7 @@
 	border-color: var(--accent);
 }
 
-.discoveryFailure { min-width: 0; }
-.discoveryFailure p { color: var(--error); overflow-wrap: anywhere; }
+.discoveryFailure { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.discoveryFailure p { margin: 0; color: var(--error); overflow-wrap: anywhere; }
+.discoveryFailure .retryActions { padding: 0; border: 0; background: transparent; }
+.retryActions button { flex: none; }
