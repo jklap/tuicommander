@@ -87,6 +87,7 @@ import {
 	shouldFireReconcile,
 	snapLineHeight,
 	textSpanToCellRanges,
+	utf16SpanToCellRange,
 } from "./canvasTerminalUtils";
 import { installFrameTimingDebugHook, isFrameTimingEnabled, recordFrameTiming, resetFrameTiming } from "./frameTiming";
 import {
@@ -1019,7 +1020,7 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 	const markerPromptReads = new Set<number>();
 	let markerPromptGeneration = -1;
 	const cachedPlanCanvasMarkers = createCanvasMarkerPlanner();
-	const markerSnapshot = cachedMarkerSnapshot(rowText);
+	const markerSnapshot = cachedMarkerSnapshot(rowText, (row, end) => utf16SpanToCellRange(row, 0, end)[1]);
 	const NO_MARKERS: MarkerPlan = { hidden: new Set(), answerMarkers: new Set(), key: "", blocks: [] };
 	let lastMarkerPlan: MarkerPlan = NO_MARKERS;
 	/** The hidden set the main canvas was last painted with. */
@@ -1137,13 +1138,13 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 			return row === null ? [] : [{ ...block, row }];
 		});
 		const key = answerOverlayKey(
-			plan.key,
+			`${plan.key}:${m.cellWidth}`,
 			m.cellHeight,
 			blocks.map((block) => block.row),
 		);
 		if (key === lastSuggestOverlayKey) return;
 		lastSuggestOverlayKey = key;
-		paintOverlayBlocks(overlayRef, blocks, m.cellHeight);
+		paintOverlayBlocks(overlayRef, blocks, m.cellHeight, m.cellWidth);
 	}
 
 	function startBlink() {

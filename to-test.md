@@ -1,6 +1,9 @@
 ## Conditional MCP tools (2066-516c, 2067-e708) — Rust restart required
 
 - [ ] After Boss manually restarts the backend with `make dev` or installs `make build`, verify a downstream MCP client refreshes after remote connect/disconnect and Voice/Telegram configuration changes. Clients that ignore `notifications/tools/list_changed` need a reconnect. The running desktop does not load these Rust changes; this peer did not restart it. Conversation binding, Telegram registration and remote digest/session-loss confirmation remain required.
+## Joined intent title closure (2060-0ebe) — Rust restart required
+
+- [ ] After Boss manually restarts `make dev` or installs `make build`, check an intent followed immediately by ordinary prose on the same row. CONTEXT must contain only the intent description; desktop and mobile tint must stop at the title closure without hiding trailing prose. Include a title that wraps. This peer did not restart or replace the running desktop.
 ## Workflow MCP grouping (2065-dcc5) — Rust restart required
 
 - [ ] After Boss manually restarts `make dev` or installs `make build`, reconnect MCP and confirm the grouped `workflow` schema exposes story, run, proposal_create, report and launch. Legacy tools remain available; `tuic workflow` uses the new entry and `tuic automations` stays independent. The running backend was not restarted by this peer.
@@ -2620,3 +2623,5 @@ Needs an iPhone (iOS 16.4+, 18.4+ preferred), the desktop TUICommander running a
 - [x] Mobile Markdown review send (#2042-a71b): 360×800 agent-browser fixture check ticks a checkbox, saves a block comment, sends one path-and-count prompt, and displays transient queued feedback with amber commented-block highlighting; screenshots are in the orchestrator report. The fixture uses real components with an isolated transport, not a live backend round trip.
 
 - [ ] Mobile CLI on a real phone: answer paragraphs show a continuous green gutter instead of protocol speech bubbles; verify native text selection and touch scrolling. Browser evidence at 390×844 is retained under `~/Gits/.tmp/2070/` (#2070-773d).
+
+- [ ] #2072-adf9: After a manual `make dev` restart or release rebuild, reconnect Claude Code and confirm ToolSearch finds agent, session, repo, and ui; send one agent message. Rust schemas do not hot-reload.

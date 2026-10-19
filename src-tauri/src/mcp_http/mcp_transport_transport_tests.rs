@@ -545,7 +545,7 @@ fn story_tool_publishes_its_input_schema_and_tracking_only_actor_contract() {
     let definition = native_tool_named("story");
     let input = &definition["inputSchema"]["properties"]["input"];
     assert!(
-        input["oneOf"].as_array().is_some_and(|v| v.len() > 10),
+        input["anyOf"].as_array().is_some_and(|v| v.len() > 10),
         "the StoryAction variants must be published: {input}"
     );
     let description = definition["description"].as_str().unwrap_or_default();
