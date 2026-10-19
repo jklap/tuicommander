@@ -2310,3 +2310,240 @@ async fn work_item_rejects_credentials_in_provider_payload() {
     assert_eq!(response["error"], "Invalid work-item provider response");
     assert!(!response.to_string().contains("account-secret-sentinel"));
 }
+
+// Catches: proposal_create routed to ordinary create_story, losing retry deduplication.
+#[cfg(unix)]
+#[tokio::test]
+async fn workflow_proposal_create_retries_create_one_story() {
+    use crate::stories::{NewPlan, NewStory, StoryOrigin, StoryStore};
+    use crate::workflows::{
+        AgentBinding, EffectKind, RunCommand, RunLimits, RunStore, WorkflowKind, WorkflowStore,
+    };
+    let config = tempfile::tempdir().unwrap();
+    let _guard = crate::config::set_config_dir_override(config.path().to_path_buf());
+    let project = tempfile::tempdir().unwrap();
+    let path = project
+        .path()
+        .canonicalize()
+        .unwrap()
+        .to_string_lossy()
+        .to_string();
+    let state = test_state();
+    state
+        .mcp
+        .to_session
+        .insert("proposal-mcp".into(), TEST_UUID_A.into());
+    insert_managed_test_session(&state, "proposal-pty", &path);
+    state.bind_live_pty(TEST_UUID_A, "proposal-pty");
+    crate::repo_watcher::start_watching(&path, &state).unwrap();
+    let stories = StoryStore::open().unwrap();
+    let plan = stories
+        .create_plan(NewPlan {
+            project: path.clone(),
+            title: "Proposals".into(),
+            source: "plan.md".into(),
+        })
+        .unwrap();
+    let template = WorkflowStore::open()
+        .unwrap()
+        .seed_templates(&path)
+        .unwrap()
+        .into_iter()
+        .find(|d| d.kind == WorkflowKind::Plan)
+        .unwrap();
+    let runs = RunStore::open().unwrap();
+    let run = runs
+        .start_plan(&path, &plan.id, &template.id, 1, RunLimits::default())
+        .unwrap();
+    let started = runs
+        .command(
+            &run.id,
+            "coordinate",
+            RunCommand::StartPlanAgent {
+                node_id: "coordinate".into(),
+            },
+        )
+        .unwrap();
+    let attempt = started.snapshot.attempts.last().unwrap();
+    let reserved = runs
+        .command(
+            &run.id,
+            "spawn",
+            RunCommand::ReserveEffect {
+                key: format!("spawn:{}", attempt.id),
+                kind: EffectKind::SpawnAgent,
+            },
+        )
+        .unwrap();
+    runs.bind_agent(
+        &run.id,
+        &attempt.id,
+        AgentBinding {
+            session_id: "proposal-pty".into(),
+            task_id: None,
+            effect_id: reserved.snapshot.effects.last().unwrap().id.clone(),
+            prompt_contract_version: 1,
+            prompt_sha256: "a".repeat(64),
+            audit_preview: "coordinate".into(),
+        },
+    )
+    .unwrap();
+    let story = NewStory {
+        plan_id: plan.id.clone(),
+        title: "One proposal".into(),
+        criteria: vec!["Delivered".into()],
+        priority: 2,
+        origin: StoryOrigin::PlanStep { step: "one".into() },
+        file_scope: vec![],
+    };
+    let args = serde_json::json!({"action":"proposal_create", "input":{"runId":run.id,"proposalKey":"one","story":story}});
+    let addr = "127.0.0.1:12345".parse().unwrap();
+    let first = handle_mcp_tool_call(&state, addr, "workflow", &args, Some("proposal-mcp")).await;
+    assert!(
+        first["story"]["id"].is_string(),
+        "proposal must be created: {first}"
+    );
+    let retry = handle_mcp_tool_call(&state, addr, "workflow", &args, Some("proposal-mcp")).await;
+    assert_eq!(retry["story"]["id"], first["story"]["id"], "{retry}");
+    assert_eq!(stories.list_stories(&plan.id).unwrap().len(), 1);
+    let mut conflict = args.clone();
+    conflict["input"]["story"]["title"] = serde_json::json!("Different proposal");
+    let rejected =
+        handle_mcp_tool_call(&state, addr, "workflow", &conflict, Some("proposal-mcp")).await;
+    assert!(
+        rejected["error"].is_string(),
+        "conflicting key reuse must fail: {rejected}"
+    );
+    state
+        .mcp
+        .to_session
+        .insert("other-mcp".into(), TEST_UUID_B.into());
+    insert_managed_test_session(&state, "other-pty", &path);
+    state.bind_live_pty(TEST_UUID_B, "other-pty");
+    let rejected = handle_mcp_tool_call(&state, addr, "workflow", &args, Some("other-mcp")).await;
+    assert!(
+        rejected["error"].as_str().unwrap().contains("coordinator"),
+        "{rejected}"
+    );
+    assert_eq!(stories.list_stories(&plan.id).unwrap().len(), 1);
+}
+
+// Catches: an optional-field bag accepts malformed or cross-action inputs before owner effects.
+#[tokio::test]
+async fn workflow_typed_actions_reject_invalid_inputs_before_effects() {
+    let state = test_state();
+    let addr = "127.0.0.1:12345".parse().unwrap();
+    for args in [
+        serde_json::json!({"action":"story","input":{"action":"create_story"}}),
+        serde_json::json!({"action":"run","input":{"action":"get","run_id":4}}),
+        serde_json::json!({"action":"proposal_create","input":{"runId":"run","proposalKey":"key","story":{}}}),
+        serde_json::json!({"action":"report","input":{"runId":"run","outcome":"invented"}}),
+        serde_json::json!({"action":"launch","input":{"runId":"run","attemptId":"attempt","worktreePath":"/repo","agentType":false}}),
+        serde_json::json!({"action":"story","input":{"action":"list_plans"},"runId":"extra"}),
+        serde_json::json!({"action":"automation","input":{"action":"list"}}),
+    ] {
+        let result = handle_mcp_tool_call(&state, addr, "workflow", &args, None).await;
+        assert_eq!(result["code"], "invalid_arguments", "{args}: {result}");
+        assert_eq!(result["effect"], "not_started", "{args}: {result}");
+    }
+    // A valid nested action reaches its existing owner, rather than a different service.
+    for (action, input, error) in [
+        (
+            "story",
+            serde_json::json!({"action":"list_plans"}),
+            "story requires a bound live managed session",
+        ),
+        (
+            "run",
+            serde_json::json!({"action":"get","run_id":"missing"}),
+            "workflow_run requires a bound live managed session",
+        ),
+        (
+            "report",
+            serde_json::json!({"contractVersion":1,"runId":"run","storyId":"story","storyRevision":1,"attemptId":"attempt","generation":1,"outcome":"completed","summary":"Done","criterionResults":[],"evidence":[]}),
+            "workflow report requires a bound live managed session",
+        ),
+        (
+            "launch",
+            serde_json::json!({"runId":"run","attemptId":"attempt","worktreePath":"/repo","agentType":"claude"}),
+            "workflow launch requires a bound live managed session",
+        ),
+    ] {
+        let result = handle_mcp_tool_call(
+            &state,
+            addr,
+            "workflow",
+            &serde_json::json!({"action":action,"input":input}),
+            None,
+        )
+        .await;
+        assert_eq!(result["error"], error, "{result}");
+    }
+}
+
+// Catches: the grouped entry bypasses an old member denial, or workflow denial disables the scheduler.
+#[tokio::test]
+async fn workflow_denials_preserve_members_and_leave_automations_independent() {
+    let config = tempfile::tempdir().unwrap();
+    let _guard = crate::config::set_config_dir_override(config.path().to_path_buf());
+    let state = test_state();
+    let addr = "127.0.0.1:12345".parse().unwrap();
+    for (action, member) in [
+        ("story", "story"),
+        ("run", "workflow_run"),
+        ("proposal_create", "workflow_story_create"),
+        ("report", "workflow_report"),
+        ("launch", "workflow_launch"),
+    ] {
+        state.config.write().disabled_native_tools = vec![member.into()];
+        let result = handle_mcp_tool_call(
+            &state,
+            addr,
+            "workflow",
+            &serde_json::json!({"action":action,"input":{}}),
+            None,
+        )
+        .await;
+        assert_eq!(
+            result["error"], "Tool 'workflow' is disabled by configuration",
+            "{member}: {result}"
+        );
+        let tools = filtered_native_tools(&state);
+        let workflow = tools
+            .iter()
+            .find(|tool| tool["name"] == "workflow")
+            .unwrap();
+        assert!(
+            !workflow["inputSchema"]["oneOf"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|variant| variant["properties"]["action"]["const"] == action)
+        );
+    }
+    state.config.write().disabled_native_tools = vec!["workflow".into()];
+    let tools = filtered_native_tools(&state);
+    assert!(!tools.iter().any(|tool| tool["name"] == "workflow"));
+    assert!(tools.iter().any(|tool| tool["name"] == "automations"));
+    let listed = handle_mcp_tool_call(
+        &state,
+        addr,
+        "automations",
+        &serde_json::json!({"action":"list"}),
+        None,
+    )
+    .await;
+    assert!(listed.is_array(), "scheduler remains callable: {listed}");
+    let denied = handle_mcp_tool_call(
+        &state,
+        addr,
+        "workflow",
+        &serde_json::json!({"action":"story","input":{"action":"list_plans"}}),
+        None,
+    )
+    .await;
+    assert_eq!(
+        denied["error"],
+        "Tool 'workflow' is disabled by configuration"
+    );
+}

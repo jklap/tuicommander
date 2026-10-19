@@ -6502,6 +6502,7 @@ mod tests {
         "task",
         "repo",
         "story",
+        "workflow",
         "workflow_run",
         "workflow_story_create",
         "workflow_report",

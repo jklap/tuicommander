@@ -12,6 +12,7 @@ pub(super) fn complete_schema(tool: &mut Value) {
     let actions = match name.as_str() {
         "session" => Some(SESSION_ACTIONS),
         "agent" => Some(AGENT_ACTIONS),
+        "workflow" => Some(WORKFLOW_ACTIONS),
         "repo" => Some(REPO_ACTIONS),
         "task" => Some(TASK_ACTIONS),
         "ui" => Some(UI_ACTIONS),

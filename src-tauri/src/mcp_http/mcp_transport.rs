@@ -535,16 +535,17 @@ async fn dispatch_mcp_tool_call_with_context(
     if let Some(error) = super::mcp_transport_catalogue::native_tool_unavailability(state, name) {
         return serde_json::json!({"error": error});
     }
-    // Preserve the task owner's denial for its agent aliases as well.
-    if name == "agent"
-        && matches!(args["action"].as_str(), Some("task_get" | "task_cancel"))
-        && state
-            .config
-            .read()
-            .disabled_native_tools
-            .iter()
-            .any(|d| d == "task")
-    {
+    // Grouped actions retain the underlying owner's explicit tool denial.
+    if state.config.read().disabled_native_tools.iter().any(|d| {
+        (name == "workflow"
+            && Some(d.as_str())
+                == super::mcp_transport_catalogue::workflow_member_tool(
+                    args["action"].as_str().unwrap_or(""),
+                ))
+            || (d == "task"
+                && name == "agent"
+                && matches!(args["action"].as_str(), Some("task_get" | "task_cancel")))
+    }) {
         return serde_json::json!({"error": format!("Tool '{}' is disabled by configuration", name)});
     }
     if let Some(action) = args["action"].as_str()
@@ -755,6 +756,15 @@ async fn dispatch_mcp_tool_call_with_context(
             let sid = mcp_session_id.map(str::to_owned);
             run_blocking_handler(move || handle_story(&state, &args, sid.as_deref())).await
         }
+        "workflow" => {
+            let state = state.clone();
+            let args = args.clone();
+            let sid = mcp_session_id.map(str::to_owned);
+            run_blocking_handler(move || {
+                super::mcp_transport_ancillary::handle_workflow(&state, addr, &args, sid.as_deref())
+            })
+            .await
+        }
         "workflow_run" => {
             let state = state.clone();
             let args = args.clone();
@@ -821,7 +831,7 @@ async fn dispatch_mcp_tool_call_with_context(
             handle_call_tool(state, addr, args, mcp_session_id, managed_parent_cwd).await
         }
         _ => serde_json::json!({"error": format!(
-            "Unknown tool '{}'. Available: session, agent, task, remote, repo, story, progress, ui, plugin_dev_guide, settings, debug, voice, search_tools, get_tool_schema, call_tool", name
+            "Unknown tool '{}'. Available: session, agent, task, remote, repo, workflow, story, progress, ui, plugin_dev_guide, settings, debug, voice, search_tools, get_tool_schema, call_tool", name
         )}),
     }
 }

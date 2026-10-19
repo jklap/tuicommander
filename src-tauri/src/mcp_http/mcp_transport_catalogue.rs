@@ -355,6 +355,7 @@ const PLATFORM_TOOLS: &[&str] = &[
     "agent",
     "repo",
     "story",
+    "workflow",
     "task",
     "automations",
     "workflow_run",
@@ -436,6 +437,20 @@ pub(super) fn validate_mcp_repo_path(path: &str) -> Result<(), serde_json::Value
 }
 
 pub(super) const SESSION_ACTIONS: &str = "list, create, submit, force_retry, input, output, resize, rename, keep_open, suspend, close, kill, pause, resume, status, wait, declare_worktree";
+pub(super) const WORKFLOW_ACTIONS: &str = "story, run, proposal_create, report, launch";
+
+/// Preserve member denials during the additive period before the catalogue cutover.
+pub(super) fn workflow_member_tool(action: &str) -> Option<&'static str> {
+    match action {
+        "story" => Some("story"),
+        "run" => Some("workflow_run"),
+        "proposal_create" => Some("workflow_story_create"),
+        "report" => Some("workflow_report"),
+        "launch" => Some("workflow_launch"),
+        _ => None,
+    }
+}
+
 pub(super) const AGENT_ACTIONS: &str = "launch, spawn, register, list_peers, send, inbox, wait, subscribe, ack, unsubscribe, task_get, task_cancel";
 pub(super) const REPO_ACTIONS: &str = "list, add, active, status, branch_integrations, branch_integration, worktree_list, worktree_lifecycle, worktree_create, worktree_remove, orphan_cleanup_answer, branch_delete, progress_list, work_item, work_item_act";
 pub(super) const UI_ACTIONS: &str = "tab, toast, confirm, screenshot";
@@ -479,6 +494,10 @@ pub(super) const NATIVE_TOOL_SUMMARIES: &[(&str, &str)] = &[
     ),
     ("repo", "Inspect repositories and manage their worktrees."),
     ("story", "Read project stories and update their progress."),
+    (
+        "workflow",
+        "Manage stories, workflow runs and bound agent attempts.",
+    ),
     (
         "design_mode",
         "Start Design Mode at a terminal link for layout work.",
@@ -661,6 +680,11 @@ pub(super) fn native_tool_definitions() -> serde_json::Value {
             "inputSchema": { "type": "object", "properties": {
                 "input": crate::stories::story_action_schema()
             }, "required": ["input"] }
+        },
+        {
+            "name": "workflow",
+            "description": "Durable project work for the calling managed session. Actions: story (input=StoryAction), run (input=RunAction), proposal_create, report, launch. Each action has a generated typed input; unknown fields are rejected before effects. story reads and updates native stories and plans; run starts pinned published graphs and reads ordered run history. proposal_create requires the active bound coordinator and {runId,proposalKey,story}; retry the same key and payload to return the same story, never substitute ordinary story create. report submits the typed AttemptReport for this live session's bound attempt; it does not advance story status. launch binds a pinned workflow attempt to an isolated registered worktree and renders its role prompt. Existing project, revision, coordinator, attempt ownership and local launch checks apply. Scheduled definitions remain in the separate automations tool. Legacy story and workflow_* tools remain available until the catalogue cutover.",
+            "inputSchema": super::mcp_transport_ancillary::workflow_action_schema()
         },
         {
             "name": "workflow_run",
@@ -945,6 +969,28 @@ pub(super) fn filtered_native_tools(state: &Arc<AppState>) -> Vec<serde_json::Va
             (progress_tracking || name != "progress")
                 && (settings_enabled || name != "settings")
                 && native_tool_unavailability(state, name).is_none()
+        })
+        .filter_map(|mut tool| {
+            if tool["name"] == "workflow" {
+                let variants = tool["inputSchema"]["oneOf"]
+                    .as_array_mut()
+                    .expect("workflow variants");
+                variants.retain(|variant| {
+                    let action = variant["properties"]["action"]["const"]
+                        .as_str()
+                        .unwrap_or("");
+                    !workflow_member_tool(action).is_some_and(|member| disabled.contains(member))
+                });
+                if variants.is_empty() {
+                    return None;
+                }
+                let actions: Vec<_> = variants
+                    .iter()
+                    .map(|variant| variant["properties"]["action"]["const"].clone())
+                    .collect();
+                tool["inputSchema"]["properties"]["action"]["enum"] = serde_json::json!(actions);
+            }
+            Some(tool)
         })
         .collect()
 }

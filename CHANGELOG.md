@@ -7,6 +7,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 - List and allow `remote`, `voice` and `telegram` only when their owning connection/configuration is available; share discovery and call gates and notify clients when conditions change (#2066-516c, #2067-e708).
+- Add the typed `workflow` MCP tool and `tuic workflow` CLI with story, run, proposal_create, report and launch actions; reuse existing handlers, retain proposal idempotency and member denials, and keep legacy tools until cutover. Automations remains separate (#2065-dcc5).
+- Render mobile CLI answer markers as the desktop continuous green gutter instead of speech bubbles; preserve literal glyphs in prompts and code, including standalone fenced examples (#2070-773d).
+
 - Add `agent task_get/task_cancel` using the existing task service, with spawning-owner checks, immutable final outcomes and cancellation that leaves the PTY running; retain the current `task` tool until the catalogue cutover (#2064-6385).
 - Group native MCP switches in Settings by domain, with separate rare and conditional sections; preserve tool names, saved denials and Settings opt-in (#2063-baa9).
 
@@ -34,6 +37,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - Publish typed Settings account enumeration and configured Ego interactive login start/status, with human terminal authentication and separate credential readback (#1790-1011).
 ### Fixed
+
+- Keep mobile choice answers, queued drafts and delayed Enter writes bound to the session selected when tapped, even after navigation (#2021-30cd).
 
 - Report the configured ego executable and failed export status instead of blaming a missing transcript header when an older binary rejects Chat export (#2032-8dc3).
 - Show the mobile awaiting total only in the AWAITING tile, move waiting-session navigation to that tile, keep the per-session question banners, and remove the connected header narration (#2055-b727).
