@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+- Populate mobile New Session from installed registry agents, including ego; show detection failures and select the first installed agent (#2083-149c).
+
 - Export Claude native question titles without a question mark, including `Pick a colour`, with ordered desktop and mobile answer choices (#2074-b0dc).
 - Show mobile report suggestions instead of generic Yes/No confirmations while an agent is blocked; keep native dialog choices and the Input state (#2082-f782).
 
