@@ -35,6 +35,11 @@ const ALLOWED = new Map([
 	["src-tauri/src/config.rs", "recognized_temp_roots: classifies historical ghost rows already in users' repositories.json"],
 	["src-tauri/tauri.conf.json", "asset-protocol scope ($HOME/** skips dot-dirs); a product decision"],
 	["scripts/check-no-home-gits.mjs", "this guard's own self-test fixtures"],
+	// Main-only files (not test scratch) that predate this guard on the replayed tree:
+	["scripts/agent_capture/run.py", "under_gits(): capture-promotion paths must stay in the maintainer's checkout layout, not scratch"],
+	["scripts/chat-view-follow-proof.mjs", "locates the maintainer's browser-stealth wrapper, not scratch"],
+	["scripts/replay-oracle.sh", "locates the maintainer's build-slot runner on macOS, not scratch"],
+	["src-tauri/crates/tuic-terminal/src/fixtures/claude-dot-blink-1654.json", "recorded capture fixture: a prompt string, not filesystem access"],
 ]);
 
 const HOME_PATTERNS = [
