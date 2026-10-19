@@ -2644,6 +2644,11 @@ pub(crate) async fn create_daemon_workflow_worktree(
     .map_err(|(_, value)| value.0.to_string())
     .and_then(|(created, setup_failure)| {
         if let Some(error) = setup_failure {
+            // DEFERRED (2026-10-19) — the worktree (and its warm entry) is left
+            // behind when the Setup Script fails: the caller only receives the
+            // error string, so a failed workflow/automation run leaves an
+            // orphan worktree on disk. Decide whether to remove it here or to
+            // surface its path; kept as is on purpose until that is decided.
             return Err(error);
         }
         Ok(DaemonWorkspace {
