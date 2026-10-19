@@ -234,10 +234,5 @@ export function useSessions(onRecovered?: () => void) {
 		});
 	}
 
-	/** Count of sessions with pending questions */
-	function questionCount(): number {
-		return sessions().filter((s) => s.state?.awaiting_input).length;
-	}
-
-	return { sessions, loading, refreshing, error, authError, refresh, questionCount, markSeen, subscribeChatWake };
+	return { sessions, loading, refreshing, error, authError, refresh, markSeen, subscribeChatWake };
 }

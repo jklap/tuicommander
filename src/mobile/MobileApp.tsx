@@ -112,8 +112,9 @@ export default function MobileApp() {
 		line?: number;
 		root?: string;
 	} | null>(null);
-	const { sessions, loading, refreshing, error, authError, refresh, questionCount, markSeen, subscribeChatWake } =
-		useSessions(() => setRecoveryRevision((revision) => revision + 1));
+	const { sessions, loading, refreshing, error, authError, refresh, markSeen, subscribeChatWake } = useSessions(() =>
+		setRecoveryRevision((revision) => revision + 1),
+	);
 	const { updateAvailable, applyUpdate } = useVersionCheck();
 	ideasStore.hydrate();
 
@@ -176,15 +177,7 @@ export default function MobileApp() {
 				when={showDetail()}
 				fallback={
 					<>
-						<TopBar
-							notificationCount={questionCount()}
-							isConnected={error() === null}
-							onOpenSettings={() => setActiveTab("settings")}
-							onNotificationsClick={() => {
-								const waiting = sessions().find((session) => session.state?.awaiting_input);
-								if (waiting) navigateToSession(waiting.session_id);
-							}}
-						/>
+						<TopBar isConnected={error() === null} onOpenSettings={() => setActiveTab("settings")} />
 						{updateBanner()}
 						<QuestionBanner sessions={sessions()} onNavigate={navigateToSession} />
 						<main class={styles.content}>

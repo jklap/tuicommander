@@ -245,6 +245,10 @@ export function SessionsScreen(props: SessionsScreenProps) {
 				<HeroMetrics
 					activeCount={props.sessions.length}
 					awaitingCount={props.sessions.filter((s) => s.state?.awaiting_input).length}
+					onAwaitingClick={() => {
+						const waiting = props.sessions.find((session) => session.state?.awaiting_input);
+						if (waiting) props.onSelectSession(waiting.session_id);
+					}}
 				/>
 			</Show>
 
