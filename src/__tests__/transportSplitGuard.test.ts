@@ -6,7 +6,7 @@ import { reachableModules } from "./helpers/importGraph";
 /**
  * mobile.html never imports transportExtended.ts (that is the point of the
  * split — see its header), so a command mobile can call MUST be in
- * transport.ts's core COMMAND_TABLE: an extended-only command throws
+ * transport/commandTable.ts's core COMMAND_TABLE: an extended-only command throws
  * "No HTTP mapping for command" at its first call on a phone.
  *
  * This walks mobile's FULL module graph (lazy `import()` screens included)
@@ -37,7 +37,7 @@ const DELTA_WRITER = /createConfigDeltaWriter\s*(?:<[^()]*>)?\(\s*["'`]([a-z][a-
 
 describe("mobile never calls an extended-only command", () => {
 	const extended = tableKeys(read(join(ROOT, "src/transportExtended.ts")), "EXTENDED_COMMAND_TABLE");
-	const core = tableKeys(read(join(ROOT, "src/transport.ts")), "COMMAND_TABLE");
+	const core = tableKeys(read(join(ROOT, "src/transport/commandTable.ts")), "COMMAND_TABLE");
 	const files = reachableModules(join(ROOT, "src/mobile/index.tsx"), { includeDynamic: true });
 
 	it("parses both tables and walks the mobile graph (sanity)", () => {
