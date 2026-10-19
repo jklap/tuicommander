@@ -39,7 +39,7 @@ const FN_RE = /\bfn\s+([A-Za-z0-9_]+)/;
 /** `file::fn` -> why this site may keep its `ps` (and nothing else may). */
 const ALLOWED = new Map([
 	[
-		"src-tauri/src/pty.rs::ps_process_tree_snapshot",
+		"src-tauri/src/pty/screen.rs::ps_process_tree_snapshot",
 		"the ONE production exec: logged fallback for the native snapshot when it fails or a sudo subtree's argv is unreadable (user decisions Q1/Q5; remove once the native path has soaked)",
 	],
 	[
