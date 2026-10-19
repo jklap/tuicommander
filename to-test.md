@@ -1,3 +1,6 @@
+## ego Chat export diagnostics (2032-8dc3) — Rust restart required
+
+- [ ] After Boss manually restarts `make dev` or installs `make build`, verify an incompatible configured ego executable reports its path and failed export status. For the retained live failure, Settings points to `/Users/stefano.straus/bin/ego`, which rejects `--after`; select the transcript-capable `/Users/stefano.straus/.local/bin/ego`, then open Chat on a bound local ego session. Confirm the completed answer is shown and Chat stays open. This peer did not alter Settings, replace a binary, restart the app, or call desktop MCP tools.
 ## Agent session discovery (2057-2769) — Rust restart required
 
 - [ ] After Boss manually restarts `make dev` or installs `make build`, profile an isolated instance against about 1500 ego sessions and 10 polled ego terminals. Confirm discovery stays off the desktop main thread and repeated polls read only each bound lease. Check session ids after an ego restart and pid reuse. This peer did not restart or probe Boss's desktop; REALITY stays open for the coordinator.
