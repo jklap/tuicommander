@@ -93,6 +93,57 @@ scripts/with-test-tmp.sh cargo nextest run \
 
 No full suite, clippy, mutation, or unrelated frontend test ran.
 
+## Live trigger exploration, 2026-10-19
+
+The coordinator authorized live manipulation of one throwaway shell in the
+existing desktop, without restarting it. The shell was
+`a73a3680-7893-4f72-a740-2a86d16b6f9e` (`term-1035`, `width-2043-live`).
+It ran the installed interactive Claude Code 2.1.286 with Sonnet 5.5 and the
+normal profile. Prompts requested prose only, without tools or file changes.
+
+The experiment used existing UI handlers: sidebar/tab clicks, the terminal
+context menu's Split Right action, native menu-action dispatch, and the split
+divider's mouse handlers. No layout geometry was set directly in a store.
+Kernel measurements used `stty -f /dev/ttys012 size`; grid measurements used
+`terminal_styled_rows`. Right-edge indices below are zero-based.
+
+| Trigger/stage | Canvas CSS width | Grid columns | Kernel rows × columns | Observed agent rows |
+| --- | ---: | ---: | --- | --- |
+| Visible narrow launch, completed answer | 638 | 79 | 63 × 79 | Prose and composer reach index 78 |
+| Widen after completed answer | 1582 | 197 | 63 × 197 | Prose reflows; composer reaches 196 |
+| Switch to document tab | Hidden | 221 | 63 × 221 | Composer reaches 220 |
+| Return to Claude tab | 1774 | 221 | 63 × 221 | Prose reaches 220; composer reaches 220 |
+| Relaunch Claude while tab is hidden | Hidden | 221 | 64 × 221 | Composer reaches 220 |
+| Show hidden-launched Claude | 1774 | 221 | 63 × 221 | New answer reaches 220; composer reaches 220 |
+| New answer streaming in narrow split | 638 | 79 | 63 × 79 | New answer reaches 78 |
+| Rapid divider movement while streaming, ending wide | 1582 | 197 | 63 × 197 | New answer reaches 195; composer reaches 196 |
+
+These are three trigger variants: completed narrow output followed by widening
+and tab return; hidden launch followed by showing; and rapid resize during a
+new streaming answer. None reproduced a grid/kernel/agent width mismatch.
+The profile's status text has finite content; its stopping near column 89 in
+a wide pane is not evidence of an 80-column terminal. The composer rule and
+prose both extend beyond that point.
+
+Evidence is under `~/Gits/.tmp/2043-live-20261019/`: screenshots
+`01-narrow.png`, `02-wide.png`, `03-away.png`, `04-return.png`,
+`05-hidden-launch.png`, `06-hidden-return.png`, `07-stream-narrow.png`,
+`08-stream-wide.png`, and `09-stream-complete.png`, with matching JSON/grid
+and kernel files. `00-before.png` and `10-restored.png` record the surrounding
+UI state. Screenshots were captured from the desktop, but this agent had no
+image-view tool and did not visually inspect them. Thus no renderer-only
+visual pass is claimed. The asynchronous debug-log reader briefly returned an
+older result for stages 06 and 09; their JSON files were replaced with the
+completed, timestamped result before reporting.
+
+The throwaway session and its Claude process were closed. The backend session
+list and frontend terminal list no longer contain it. The original `term-904`
+view and side-panel settings were restored; the layout root and active group
+are null (no split). The debug layout snapshot still reports an unreferenced
+`g1` entry naming the removed test tab. This residual snapshot/state is noted,
+not silently presented as an exact restoration of the original empty groups
+map. No production code, installed binary, or running desktop was changed.
+
 ## Remaining gap
 
 A fresh occurrence must correlate the visible pane and rendered cells with the
