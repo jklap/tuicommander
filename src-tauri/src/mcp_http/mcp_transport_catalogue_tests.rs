@@ -46,6 +46,64 @@ fn advertised_native_schemas_have_no_root_combinators() {
             check("search_tools", top);
         }
     }
+    // Catches: an untagged wrapper hides a tagged action enum (settings
+    // transactions), or a flattened owner union loses its action-specific fields.
+    fn check_variant_fields(
+        private: &serde_json::Value,
+        advertised: &serde_json::Value,
+        name: &str,
+        failures: &mut Vec<String>,
+    ) {
+        if let Some(properties) = private["properties"].as_object() {
+            for (field, schema) in properties {
+                if advertised["properties"].get(field).is_none() {
+                    failures.push(format!("{name} loses field {field}"));
+                }
+                if field == "action" {
+                    let values: Vec<_> = schema
+                        .get("const")
+                        .into_iter()
+                        .chain(schema["enum"].as_array().into_iter().flatten())
+                        .collect();
+                    for action in values {
+                        if !advertised["properties"]["action"]["enum"]
+                            .as_array()
+                            .is_some_and(|actions| actions.contains(action))
+                        {
+                            failures.push(format!("{name} loses action {action}"));
+                        }
+                    }
+                }
+            }
+        }
+        // Follow only object-level wrappers, never parameter schemas.
+        for keyword in ["oneOf", "anyOf", "allOf"] {
+            if let Some(variants) = private[keyword].as_array() {
+                for variant in variants {
+                    check_variant_fields(variant, advertised, name, failures);
+                }
+            }
+        }
+    }
+    let advertised = native_tool_definitions();
+    for private in super::super::mcp_transport_catalogue::native_validation_tool_definitions()
+        .as_array()
+        .unwrap()
+    {
+        let name = private["name"].as_str().unwrap();
+        let public = advertised
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|tool| tool["name"] == name)
+            .unwrap();
+        check_variant_fields(
+            &private["inputSchema"],
+            &public["inputSchema"],
+            name,
+            &mut failures,
+        );
+    }
     assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
 

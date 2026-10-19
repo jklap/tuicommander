@@ -177,11 +177,28 @@ pub(super) fn advertise_schema(tool: &mut Value) {
         let Some(variants) = object.remove(keyword) else {
             continue;
         };
-        let variants = variants.as_array().expect("native action variants");
+        fn collect_object_alternatives<'a>(schema: &'a Value, objects: &mut Vec<&'a Value>) {
+            if schema.get("properties").is_some() {
+                objects.push(schema);
+            }
+            // Untagged envelopes and flattened owner enums can wrap tagged
+            // actions. Traverse their object-level unions, not field schemas.
+            for keyword in ["oneOf", "anyOf", "allOf"] {
+                if let Some(variants) = schema[keyword].as_array() {
+                    for variant in variants {
+                        collect_object_alternatives(variant, objects);
+                    }
+                }
+            }
+        }
+        let mut objects = Vec::new();
+        for variant in variants.as_array().expect("native action variants") {
+            collect_object_alternatives(variant, &mut objects);
+        }
         let mut fields: std::collections::BTreeMap<String, Vec<Value>> = Default::default();
         let mut actions = Vec::new();
         let mut required: Option<Vec<Value>> = None;
-        for variant in variants {
+        for variant in objects {
             let names = variant["required"].as_array().cloned().unwrap_or_default();
             required = Some(match required {
                 None => names,
@@ -193,8 +210,14 @@ pub(super) fn advertise_schema(tool: &mut Value) {
             if let Some(properties) = variant["properties"].as_object() {
                 for (name, property) in properties {
                     if name == "action" {
-                        if let Some(action) = property.get("const") {
-                            actions.push(action.clone());
+                        for action in property
+                            .get("const")
+                            .into_iter()
+                            .chain(property["enum"].as_array().into_iter().flatten())
+                        {
+                            if !actions.contains(action) {
+                                actions.push(action.clone());
+                            }
                         }
                     } else {
                         let options = fields.entry(name.clone()).or_default();
@@ -214,6 +237,10 @@ pub(super) fn advertise_schema(tool: &mut Value) {
             };
         }
         if !actions.is_empty() {
+            let required = required.get_or_insert_default();
+            if !required.iter().any(|field| field == "action") {
+                required.push(json!("action"));
+            }
             properties["action"] = json!({"type":"string", "enum":actions,
                 "description":"Select the action. Its required fields are described by the tool; the server validates the complete action contract before dispatch."});
         }
