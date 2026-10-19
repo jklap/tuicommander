@@ -260,6 +260,8 @@ notify = "8"
 same-file = "1.0.6"
 keepawake = "0.6"
 # Keep the Rust/npm updater pair on the tested 2.11 line.
+# DEFERRED (2026-10-19) — updater 2.14 still uses ZIP 4; its Windows ZIP extraction
+# reaches RUSTSEC-2026-0367/0368/0369. No compatible ZIP 9 parent release exists.
 tauri-plugin-updater = { version = "~2.11.0", optional = true }
 tauri-plugin-process = { version = "2", optional = true }
 tauri-plugin-deep-link = { version = "2", optional = true }
@@ -268,7 +270,7 @@ arboard = { version = "3.6.1", default-features = false, features = ["wayland-da
 tauri-plugin-global-shortcut = { version = "2", optional = true }
 drag = { version = "2.1", features = ["serde"], optional = true }
 # DEFERRED (2026-10-09) — trimming ZIP codecs would reject previously supported plugin archives.
-zip = "8"
+zip = "9"
 # Microsoft ships onnxruntime as a .tgz everywhere except Windows, and the
 # speech downloader takes one shared library out of it (`dictation::speech::
 # assets`). Already in the tree transitively; named here because we read it.
