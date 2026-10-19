@@ -20,6 +20,7 @@ interface WorktreeRemovalCoordinatorDeps {
 			overrideBusy?: boolean,
 		) => Promise<RemoveWorktreeResult | undefined>;
 		getWorkspaceLifecycle: (repoPath: string, workspaceId: string) => Promise<WorkspaceLifecycleStatus>;
+		getInfo: (path: string) => Promise<{ is_git_repo: boolean }>;
 	};
 	dialogs: {
 		confirmRemoveWorktree: (
@@ -50,6 +51,21 @@ function describeRemoveWorktreeSuccess(branchName: string, outcome: RemoveWorktr
 /** Owns worktree removal locking, force recovery, and store cleanup. */
 export function createWorktreeRemovalCoordinator(deps: WorktreeRemovalCoordinatorDeps) {
 	const { removingBranches, setRemovingBranches } = deps;
+
+	/** A sidebar row whose worktree git has forgotten (the backend preflight reports
+	 *  `No workspace found for id`) and whose checkout is gone from disk. */
+	const isStaleRegistration = async (
+		workspace: { worktreePath?: string | null; terminals: string[] },
+		preflightError: string | undefined,
+	): Promise<boolean> => {
+		if (!workspace.worktreePath || !preflightError?.startsWith("No workspace found for id")) return false;
+		if (branchActivitySummary(workspace.terminals).isBusy) return false;
+		try {
+			return !(await deps.repo.getInfo(workspace.worktreePath)).is_git_repo;
+		} catch {
+			return false;
+		}
+	};
 
 	/** `workspaceId` addresses the row and the backend. `branchName`, read off the
 	 *  record, is what the user sees in the confirm dialog and the status line —
@@ -88,6 +104,16 @@ export function createWorktreeRemovalCoordinator(deps: WorktreeRemovalCoordinato
 				return;
 			}
 			if (lifecycle.removalSafety === "unknown") {
+				// Git no longer lists this worktree (pruned / deleted by hand) and its
+				// directory is gone: nothing exists to verify or remove, so the only
+				// thing left is the stale sidebar row. Any terminal still attached keeps
+				// the normal refusal — the row is where the user finds it.
+				if (await isStaleRegistration(branch, lifecycle.error)) {
+					appLogger.info("git", `handleRemoveWorkspace: dropping stale registration`, { workspaceId });
+					repositoriesStore.removeWorkspace(repoPath, workspaceId);
+					deps.setStatusInfo(`Removed ${branchName}: its worktree no longer exists on disk`);
+					return;
+				}
 				deps.setStatusInfo(
 					`Cannot verify whether ${branchName} is safe to remove: ${lifecycle.error ?? "unknown state"}`,
 				);
