@@ -55,12 +55,7 @@ export const LocalMcpPanel: Component = () => {
 
 	return (
 		<div class={`${s.section} ${layout.page}`}>
-			<SettingPageHeader
-				title="MCP"
-				description="Local MCP connection, tool visibility and upstream servers."
-				scope="This machine"
-				breadcrumb="Integrations / MCP"
-			/>
+			<SettingPageHeader title="MCP" scope="This machine" breadcrumb="Integrations / MCP" />
 			<SectionCard title="Server connections">
 				<SettingRow label={t("services.label.serverStatus", "Server Status")}>
 					{() => (
@@ -161,9 +156,6 @@ export const LocalMcpPanel: Component = () => {
 						<label>
 							Native tools <ContextualHelp label="Native tools" />
 						</label>
-						<p class={s.hint}>
-							Choose which built-in tools MCP clients can call. Disabled tools are hidden from clients.
-						</p>
 					</div>
 					<For each={nativeTools}>
 						{(tool) => {

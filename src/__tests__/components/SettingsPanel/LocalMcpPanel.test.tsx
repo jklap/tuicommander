@@ -81,6 +81,19 @@ describe("LocalMcpPanel", () => {
 		uiStore.setSettingsExpertMode(false);
 	});
 
+	// Catches: page/card inventories returning as permanent MCP narration.
+	it.each([
+		"Local MCP connection, tool visibility and upstream servers.",
+		"Choose which built-in tools MCP clients can call. Disabled tools are hidden from clients.",
+	])("does not repeat MCP card contents: %s", async (copy) => {
+		const view = render(() => <LocalMcpPanel />);
+		await vi.advanceTimersByTimeAsync(0);
+		expect(view.getByRole("heading", { name: "TUIC Tools" })).toBeDefined();
+		expect(view.getByRole("checkbox", { name: "session" })).toBeDefined();
+		expect(view.queryByText(copy)).toBeNull();
+		view.unmount();
+	});
+
 	// Catches: a static UI inventory silently drops a newly registered backend tool.
 	it("renders every backend native tool, including new tools and full descriptions", async () => {
 		const view = render(() => <LocalMcpPanel />);
