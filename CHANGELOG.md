@@ -6,6 +6,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+- Desktop terminal Chat now shows active native question and permission choices without submitting Compose drafts (#2079-78fa).
 - Open parked Activity Dashboard sessions in their own Global Workspace tabs instead of displaying their content under the current repository tab; preserve existing session bindings (#2080-d401).
 - Shorten agent-facing MCP descriptions for session, agent, repo, ui, voice, telegram and automations; preserve complete guidance through each tool’s `action=help`, without changing Settings copy or owner gates (#2069-7347).
 

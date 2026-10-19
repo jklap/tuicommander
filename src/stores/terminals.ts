@@ -1,6 +1,7 @@
 import { batch, untrack } from "solid-js";
 import { createStore, produce } from "solid-js/store";
 import type { AgentType } from "../agents";
+import type { ChoicePrompt } from "../mobile/useSessions";
 import { rpc } from "../transport";
 import { getRepoConnection, setSessionConnectionLookup } from "../transportRuntime";
 import type { TerminalMatch } from "../types";
@@ -78,6 +79,8 @@ export interface TerminalData {
 	/** Legacy backend placement metadata; never overrides cwd for tab placement or cleanup. */
 	placementPath?: string | null;
 	awaitingInput: AwaitingInputType;
+	questionText?: string | null;
+	choicePrompt?: ChoicePrompt | null;
 	awaitingInputConfident: boolean; // High-confidence detection — don't clear on idle→busy
 	activity: boolean;
 	unseen: boolean; // Terminal completed work while user wasn't viewing it

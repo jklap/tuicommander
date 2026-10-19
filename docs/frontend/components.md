@@ -873,3 +873,5 @@ A non-empty composer refuses the retry; the status bar displays the error.
 Voice correction controls carry `corrections.replacements.{from}.from` and
 `corrections.replacements.{from}.to` catalogue identities. Import, add and remove
 retain the existing TextCorrector workflow; export does not change settings.
+
+Desktop `TerminalChatView` renders active native questions from the existing session lifecycle store below the shared transcript. `ChoicePromptOverlay` has an embedded layout; desktop and mobile share `sendNativeChoice` for agent-specific PTY keys. Compose drafts and ACP interaction state are not involved.

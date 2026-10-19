@@ -59,3 +59,9 @@
   color: var(--fg-secondary);
   font-size: var(--font-xs);
 }
+
+.nativeQuestion {
+  flex-shrink: 0;
+  max-height: 40vh;
+  overflow-y: auto;
+}

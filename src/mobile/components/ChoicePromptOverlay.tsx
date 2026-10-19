@@ -5,6 +5,7 @@ import styles from "./ChoicePromptOverlay.module.css";
 interface ChoicePromptOverlayProps {
 	prompt: ChoicePrompt;
 	disabled?: boolean;
+	embedded?: boolean;
 	onSelect: (key: string) => void;
 }
 
@@ -12,7 +13,7 @@ interface ChoicePromptOverlayProps {
  *  caller follows the backend's selection mode when sending PTY keys. */
 export function ChoicePromptOverlay(props: ChoicePromptOverlayProps) {
 	return (
-		<div class={styles.dropup}>
+		<div class={styles.dropup} classList={{ [styles.embedded]: props.embedded }}>
 			<div class={styles.title}>{props.prompt.title}</div>
 			<For each={props.prompt.options}>
 				{(option) => (
