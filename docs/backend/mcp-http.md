@@ -2687,6 +2687,13 @@ Client-side correlation/captured traces are needed to identify Codex attempts th
 never reached MCP or whose replies were lost. Do not evaluate transcript JavaScript
 to derive call counts. No OTel exporter is enabled by this feature.
 
+The [partial live recording](../../src-tauri/src/mcp_http/fixtures/outcomes-partial-2010.md)
+records a real ego-selected call with a server-retained client UUID, an application
+refusal, and a client disconnect over local IPC. It excludes response bodies and
+does not complete the four-outcome fixture: real client permission denial and
+rendering success still require recording. A successful speech-status read is
+not rendering evidence.
+
 ## Managed stateless reconnect context (#2008-5317)
 
 A modern `tools/call` without `mcp-session-id` can recover mail/project routing
