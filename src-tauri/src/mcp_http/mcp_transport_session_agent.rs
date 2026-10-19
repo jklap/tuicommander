@@ -2423,16 +2423,16 @@ pub(super) fn spawn_with_identity(
                 let print_mode = args["print_mode"].as_bool().unwrap_or(false);
                 let app_handle = state.app_handle.read().clone();
                 if !print_mode && let Some(ref app) = app_handle {
-                    let agent_type_val = effective_agent_type.as_deref();
-                    let _ = app.emit(
-                        "session-created",
-                        serde_json::json!({
-                            "session_id": session_id,
-                            "cwd": cwd_str,
-                            "agent_type": agent_type_val,
-                            "display_name": requested_name,
-                            "parent_session": published_parent,
-                        }),
+                    super::session::emit_native_agent_session_created(
+                        |event, payload| {
+                            let _ = app.emit(event, payload);
+                        },
+                        state,
+                        &session_id,
+                        cwd_str.as_deref(),
+                        effective_agent_type.as_deref(),
+                        requested_name.as_deref(),
+                        published_parent.as_deref(),
                     );
                 }
             }

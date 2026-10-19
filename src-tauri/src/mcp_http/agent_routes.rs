@@ -488,13 +488,16 @@ pub(super) async fn spawn_agent_session(
 
     #[cfg(feature = "desktop")]
     if let Some(app) = state_ref.app_handle.read().as_ref() {
-        let _ = app.emit(
-            "session-created",
-            serde_json::json!({
-                "session_id": session_id,
-                "cwd": body.cwd,
-                "display_name": null,
-            }),
+        super::session::emit_native_agent_session_created(
+            |event, payload| {
+                let _ = app.emit(event, payload);
+            },
+            &state_ref,
+            &session_id,
+            body.cwd.as_deref(),
+            body.agent_type.as_deref(),
+            None,
+            None,
         );
     }
 
