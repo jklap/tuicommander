@@ -50,6 +50,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Publish typed Settings account enumeration and configured Ego interactive login start/status, with human terminal authentication and separate credential readback (#1790-1011).
 ### Fixed
 
+- Preserve Claude follow-up suggestions through Stop-hook repaints after an early idle hook, so mobile receives the chips and can consume the list after a tap (#2029-994d).
+
 - Detect installed plugin payload differences even when the catalogue version is unchanged.
 
 - Keep mobile choice answers, queued drafts and delayed Enter writes bound to the session selected when tapped, even after navigation (#2021-30cd).
