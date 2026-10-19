@@ -60,6 +60,19 @@ describe("sidebar flow lifecycle (critic r7)", () => {
 		vi.useRealTimers();
 	});
 
+	it("a clock that went back reads at once instead of spinning a trailing timer", async () => {
+		// catches: waiting out the skew, whose >2^31-1 ms delay fires after 1 ms and re-arms forever
+		invokeMock.mockResolvedValue(flow("x"));
+		const store = await makeStore();
+		vi.setSystemTime(new Date("2026-10-19T12:00:00Z"));
+		await store.refreshSidebarFlow("/repo");
+		vi.setSystemTime(new Date("2026-09-19T12:00:00Z"));
+		await store.refreshSidebarFlow("/repo");
+		expect(flowCalls()).toBe(2);
+		expect(vi.getTimerCount()).toBe(0);
+		vi.useRealTimers();
+	});
+
 	it("a late older response is dropped once a newer one was applied", async () => {
 		// catches: last-arrival-wins, so a slow stale read overwrites the fresh flow
 		let resolveOld: (value: unknown) => void = () => {};
