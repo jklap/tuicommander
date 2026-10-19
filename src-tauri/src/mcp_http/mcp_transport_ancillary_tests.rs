@@ -3197,8 +3197,10 @@ async fn daemon_workflow_worktree_waits_for_the_setup_script_and_fails_on_its_er
 
     // Success: the script's side effect exists by the time the wrapper returns,
     // and the warm status is no longer pending (the whole chain finished).
-    let mut defaults = crate::config::RepoDefaultsConfig::default();
-    defaults.setup_script = "echo ready > setup.marker".into();
+    let defaults = crate::config::RepoDefaultsConfig {
+        setup_script: "echo ready > setup.marker".into(),
+        ..Default::default()
+    };
     crate::config::save_repo_defaults(crate::config::RepoDefaultsConfig::default(), defaults)
         .unwrap();
     let ok = create_daemon_workflow_worktree(
@@ -3220,8 +3222,10 @@ async fn daemon_workflow_worktree_waits_for_the_setup_script_and_fails_on_its_er
     crate::worktree::clear_warm(&ok_path);
 
     // Failure: a non-zero exit fails creation with the script's error.
-    let mut defaults = crate::config::RepoDefaultsConfig::default();
-    defaults.setup_script = "echo setup-went-wrong >&2; exit 3".into();
+    let defaults = crate::config::RepoDefaultsConfig {
+        setup_script: "echo setup-went-wrong >&2; exit 3".into(),
+        ..Default::default()
+    };
     crate::config::save_repo_defaults(crate::config::RepoDefaultsConfig::default(), defaults)
         .unwrap();
     let err = match create_daemon_workflow_worktree(
