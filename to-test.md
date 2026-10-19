@@ -1,3 +1,7 @@
+## ego Chat export diagnostics (2032-8dc3) — Rust restart required
+
+- [ ] After Boss manually restarts `make dev` or installs `make build`, verify an incompatible configured ego executable reports its path and failed export status. For the retained live failure, Settings points to `/Users/stefano.straus/bin/ego`, which rejects `--after`; select the transcript-capable `/Users/stefano.straus/.local/bin/ego`, then open Chat on a bound local ego session. Confirm the completed answer is shown and Chat stays open. This peer did not alter Settings, replace a binary, restart the app, or call desktop MCP tools.
+
 ## Canvas base-grid repaint reductions (2040-16b2) — load landed frontend
 
 - [ ] With the landed frontend in native WebKit, verify typing stays responsive during scrolling agent output and record keyboard-to-paint latency. Check normal history growth, a stationary spinner, colored trailing blanks, wide glyphs, combining marks and marker-filtered output. Worktree browser replay proves lower drawing-operation counts and identical reference pixels, not native timing or the ego printer's independent row-emission delay. No Rust restart is needed for these frontend-only changes; do not restart a live desktop merely for this check.
