@@ -20,7 +20,9 @@ export function TopBar(props: TopBarProps) {
 						title={connected() ? "Connected" : "Offline"}
 					/>
 				</div>
-				<span class={styles.subtitle}>{connected() ? "Manage your sessions" : "Reconnecting\u2026"}</span>
+				<Show when={!connected()}>
+					<span class={styles.subtitle}>Reconnecting…</span>
+				</Show>
 			</div>
 			<Show when={props.onOpenSettings}>
 				<button
