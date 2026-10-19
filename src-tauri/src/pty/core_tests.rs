@@ -2316,10 +2316,12 @@ fn osc133_b_is_a_noop() {
         session_id.to_string(),
         std::sync::atomic::AtomicU8::new(SHELL_BUSY),
     );
-    state.session_maps
+    state
+        .session_maps
         .shell_state_since_ms
         .insert(session_id.to_string(), std::sync::atomic::AtomicU64::new(0));
-    state.session_maps
+    state
+        .session_maps
         .has_osc133_integration
         .insert(session_id.to_string(), ());
 
@@ -8221,7 +8223,8 @@ fn setup_idle_session(session_id: &str) -> crate::state::AppState {
         session_id.to_string(),
         std::sync::atomic::AtomicU8::new(SHELL_IDLE),
     );
-    state.session_maps
+    state
+        .session_maps
         .shell_state_since_ms
         .insert(session_id.to_string(), std::sync::atomic::AtomicU64::new(0));
     state
@@ -8319,7 +8322,10 @@ fn handle_tuic_state_idle_edge_reads_and_clears_turn_error_flags() {
     let state = setup_idle_session(session_id);
     let proc = ChunkProcessor::new(None, None);
     let _ = proc.handle_tuic_state("busy", session_id, 10, false, &state);
-    state.session_maps.turn_error_flags.insert(session_id.to_string(), ());
+    state
+        .session_maps
+        .turn_error_flags
+        .insert(session_id.to_string(), ());
 
     let (_, block_event) = proc.handle_tuic_state("idle", session_id, 55, false, &state);
     match block_event {
@@ -8333,7 +8339,11 @@ fn handle_tuic_state_idle_edge_reads_and_clears_turn_error_flags() {
         other => panic!("expected AgentBlock end, got {other:?}"),
     }
     assert!(
-        state.session_maps.turn_error_flags.get(session_id).is_none(),
+        state
+            .session_maps
+            .turn_error_flags
+            .get(session_id)
+            .is_none(),
         "the flag must be cleared after being read, so it doesn't leak into the next turn"
     );
 
@@ -8375,7 +8385,10 @@ fn handle_tuic_state_busy_edge_clears_a_flag_that_arrived_too_late_for_the_previ
 
     // The delayed silence-timer detection for turn 1's error finally
     // fires, well after turn 1 already closed.
-    state.session_maps.turn_error_flags.insert(session_id.to_string(), ());
+    state
+        .session_maps
+        .turn_error_flags
+        .insert(session_id.to_string(), ());
 
     // Turn 2 starts — its busy edge must discard the stale flag rather
     // than letting it attach to turn 2's own idle transition.
@@ -8480,7 +8493,12 @@ fn heuristic_synthesizes_block_when_no_tuic_state_integration() {
         session_id.to_string(),
         Mutex::new(crate::state::VtLogBuffer::new(24, 80, 1000)),
     );
-    let silence = state.session_maps.silence_states.get(session_id).unwrap().clone();
+    let silence = state
+        .session_maps
+        .silence_states
+        .get(session_id)
+        .unwrap()
+        .clone();
     let mut processor = ChunkProcessor::new(None, None);
 
     processor.process_chunk("⏺ Bash(ls)\r\n", &silence, session_id, &state);
@@ -8503,10 +8521,16 @@ fn heuristic_suppressed_once_tuic_state_integration_observed() {
         session_id.to_string(),
         Mutex::new(crate::state::VtLogBuffer::new(24, 80, 1000)),
     );
-    state.session_maps
+    state
+        .session_maps
         .has_tuic_state_integration
         .insert(session_id.to_string(), ());
-    let silence = state.session_maps.silence_states.get(session_id).unwrap().clone();
+    let silence = state
+        .session_maps
+        .silence_states
+        .get(session_id)
+        .unwrap()
+        .clone();
     let mut processor = ChunkProcessor::new(None, None);
 
     processor.process_chunk("⏺ Bash(ls)\r\n", &silence, session_id, &state);
@@ -8530,7 +8554,12 @@ fn heuristic_block_open_before_suppression_is_closed_not_orphaned() {
         session_id.to_string(),
         Mutex::new(crate::state::VtLogBuffer::new(24, 80, 1000)),
     );
-    let silence = state.session_maps.silence_states.get(session_id).unwrap().clone();
+    let silence = state
+        .session_maps
+        .silence_states
+        .get(session_id)
+        .unwrap()
+        .clone();
     let mut processor = ChunkProcessor::new(None, None);
 
     // Open a heuristic block before integration is detected.
@@ -8538,7 +8567,8 @@ fn heuristic_block_open_before_suppression_is_closed_not_orphaned() {
     assert!(processor.last_agent_block_line.is_some());
 
     // Integration is now detected (simulating a hook event arriving late).
-    state.session_maps
+    state
+        .session_maps
         .has_tuic_state_integration
         .insert(session_id.to_string(), ());
 
@@ -8570,14 +8600,23 @@ fn api_error_sets_turn_error_flag() {
         session_id.to_string(),
         Mutex::new(crate::state::VtLogBuffer::new(24, 80, 1000)),
     );
-    let silence = state.session_maps.silence_states.get(session_id).unwrap().clone();
+    let silence = state
+        .session_maps
+        .silence_states
+        .get(session_id)
+        .unwrap()
+        .clone();
     silence.lock().startup_settled = true;
     let mut processor = ChunkProcessor::new(None, None);
 
     let input = "API Error: 500 {\"type\":\"error\",\"error\":{\"type\":\"api_error\",\"message\":\"Internal server error\"},\"request_id\":\"req_1\"}\r\n";
     processor.process_chunk(input, &silence, session_id, &state);
     assert!(
-        state.session_maps.turn_error_flags.get(session_id).is_some(),
+        state
+            .session_maps
+            .turn_error_flags
+            .get(session_id)
+            .is_some(),
         "an ApiError event must flag the session's turn as failed"
     );
 }
@@ -8595,7 +8634,11 @@ fn tool_error_sets_turn_error_flag() {
     }
     fire_tool_error_if_ready(&silence, session_id, &state);
     assert!(
-        state.session_maps.turn_error_flags.get(session_id).is_some(),
+        state
+            .session_maps
+            .turn_error_flags
+            .get(session_id)
+            .is_some(),
         "a genuinely turn-ending tool error must flag the session's turn as failed"
     );
 }
@@ -8615,7 +8658,11 @@ fn recovered_tool_error_does_not_set_turn_error_flag() {
     }
     fire_tool_error_if_ready(&silence, session_id, &state);
     assert!(
-        state.session_maps.turn_error_flags.get(session_id).is_none(),
+        state
+            .session_maps
+            .turn_error_flags
+            .get(session_id)
+            .is_none(),
         "a recovered error must not flag the block"
     );
 }
@@ -8629,13 +8676,28 @@ fn tuic_osc_toolfail_sets_turn_error_flag() {
         session_id.to_string(),
         Mutex::new(crate::state::VtLogBuffer::new(24, 80, 1000)),
     );
-    let silence = state.session_maps.silence_states.get(session_id).unwrap().clone();
+    let silence = state
+        .session_maps
+        .silence_states
+        .get(session_id)
+        .unwrap()
+        .clone();
     let mut processor = ChunkProcessor::new(None, None);
 
-    assert!(state.session_maps.turn_error_flags.get(session_id).is_none());
+    assert!(
+        state
+            .session_maps
+            .turn_error_flags
+            .get(session_id)
+            .is_none()
+    );
     processor.process_chunk("\x1b]7770;toolfail=1\x07", &silence, session_id, &state);
     assert!(
-        state.session_maps.turn_error_flags.get(session_id).is_some(),
+        state
+            .session_maps
+            .turn_error_flags
+            .get(session_id)
+            .is_some(),
         "a toolfail OSC event must flag the session's turn as failed"
     );
 }
@@ -8653,7 +8715,12 @@ fn tuic_osc_toolfail_with_non_numeric_payload_still_sets_the_flag() {
         session_id.to_string(),
         Mutex::new(crate::state::VtLogBuffer::new(24, 80, 1000)),
     );
-    let silence = state.session_maps.silence_states.get(session_id).unwrap().clone();
+    let silence = state
+        .session_maps
+        .silence_states
+        .get(session_id)
+        .unwrap()
+        .clone();
     let mut processor = ChunkProcessor::new(None, None);
 
     processor.process_chunk(
@@ -8662,7 +8729,13 @@ fn tuic_osc_toolfail_with_non_numeric_payload_still_sets_the_flag() {
         session_id,
         &state,
     );
-    assert!(state.session_maps.turn_error_flags.get(session_id).is_some());
+    assert!(
+        state
+            .session_maps
+            .turn_error_flags
+            .get(session_id)
+            .is_some()
+    );
 }
 
 /// One test per new verb, table-driven: each must reach the event bus as
@@ -8698,7 +8771,12 @@ fn tuic_osc_metadata_verbs_decode_and_emit_agent_metadata() {
             session_id.clone(),
             Mutex::new(crate::state::VtLogBuffer::new(24, 80, 1000)),
         );
-        let silence = state.session_maps.silence_states.get(&session_id).unwrap().clone();
+        let silence = state
+            .session_maps
+            .silence_states
+            .get(&session_id)
+            .unwrap()
+            .clone();
         let mut processor = ChunkProcessor::new(None, None);
 
         let mut rx = state.event_bus.subscribe();
@@ -9063,7 +9141,6 @@ fn percent_decode_osc_payload_tolerates_a_trailing_lone_percent() {
 fn percent_decode_osc_payload_tolerates_invalid_hex() {
     assert_eq!(percent_decode_osc_payload("abc%ZZdef"), "abc%ZZdef");
 }
-
 
 #[test]
 fn tuic_state_prompt_yields_userinput_clear_with_prompt_line() {
@@ -13356,7 +13433,10 @@ fn retraction_skips_a_session_with_a_live_choice_prompt() {
         dismiss_key: None,
         amend_key: None,
     });
-    state.session_maps.session_states.insert("s1".to_string(), session);
+    state
+        .session_maps
+        .session_states
+        .insert("s1".to_string(), session);
 
     let mut rx = state.event_bus.subscribe();
     emit_question_cleared_if_stale(&state, "s1");
@@ -14107,9 +14187,18 @@ fn cleanup_session_clears_transient_session_maps() {
         .term_aliases
         .insert(sid.to_string(), "alias".to_string());
     state.session_maps.exit_codes.insert(sid.to_string(), 0);
-    state.session_maps.has_osc133_integration.insert(sid.to_string(), ());
-    state.session_maps.has_tuic_state_integration.insert(sid.to_string(), ());
-    state.session_maps.turn_error_flags.insert(sid.to_string(), ());
+    state
+        .session_maps
+        .has_osc133_integration
+        .insert(sid.to_string(), ());
+    state
+        .session_maps
+        .has_tuic_state_integration
+        .insert(sid.to_string(), ());
+    state
+        .session_maps
+        .turn_error_flags
+        .insert(sid.to_string(), ());
     state
         .session_maps
         .pty_accent_colors
@@ -14141,7 +14230,10 @@ fn cleanup_session_clears_transient_session_maps() {
         "must not leak a permanent entry per session UUID"
     );
     assert!(
-        !state.session_maps.has_tuic_state_integration.contains_key(sid),
+        !state
+            .session_maps
+            .has_tuic_state_integration
+            .contains_key(sid),
         "must not leak a permanent entry per session UUID"
     );
     assert!(
