@@ -489,10 +489,43 @@ pub(crate) async fn get_topology(
 ) -> impl IntoResponse {
     let label = label_of(&q);
     let live = live_session_ids(&state);
-    let mut entry = state.tmux_servers.entry(label).or_default();
-    reconcile(&mut entry, &live);
-    let body = serde_json::to_value(&*entry).unwrap_or(serde_json::Value::Null);
+    let mut body = {
+        let mut entry = state.tmux_servers.entry(label).or_default();
+        reconcile(&mut entry, &live);
+        serde_json::to_value(&*entry).unwrap_or(serde_json::Value::Null)
+    };
+    // The topology guard is gone: `session_foreground_is_root_shell` locks a
+    // `PtySession`, which must never happen under it (see `resolve_pane_cwd`).
+    annotate_foreground_is_shell(&state, &mut body);
     (StatusCode::OK, Json(body))
+}
+
+/// Adds `foreground_is_shell` to every materialized pane of a serialized
+/// topology: `true` when the pane's shell itself owns the foreground, `false`
+/// when a job (or an agent) does, absent when the app cannot tell. The CLI's
+/// `respawn-pane -k` sends its interrupt (Ctrl+C) only when this is not `true`:
+/// a ^C aimed at a shell that is still running its startup (direnv evaluating
+/// `.envrc` from a precmd hook) kills that evaluation, and the launched agent
+/// then starts without the project's environment. A virtual pane has no
+/// session and no field.
+fn annotate_foreground_is_shell(state: &AppState, topology: &mut serde_json::Value) {
+    let Some(sessions) = topology["sessions"].as_array_mut() else {
+        return;
+    };
+    for pane in sessions
+        .iter_mut()
+        .filter_map(|s| s["windows"].as_array_mut())
+        .flatten()
+        .filter_map(|w| w["panes"].as_array_mut())
+        .flatten()
+    {
+        let Some(session_id) = pane["tuic_session_id"].as_str() else {
+            continue;
+        };
+        if let Some(is_shell) = crate::pty::session_foreground_is_root_shell(state, session_id) {
+            pane["foreground_is_shell"] = serde_json::Value::Bool(is_shell);
+        }
+    }
 }
 
 pub(crate) async fn create_tmux_session(
@@ -1993,6 +2026,90 @@ mod tests {
                 "no SessionRenamed without a prior select-pane -T, got {event:?}"
             );
         }
+    }
+
+    /// `respawn-pane -k`'s interrupt must never be aimed at a shell that is
+    /// merely busy starting up (direnv evaluating `.envrc` from a precmd hook:
+    /// the ^C kills it and the launched agent gets none of the project env).
+    /// The topology therefore reports, per materialized pane, whether the pane's
+    /// own shell still owns the foreground: true for an idle shell, false once a
+    /// job runs in it, absent for a virtual pane (no session to ask).
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn topology_reports_whether_a_panes_shell_or_a_job_owns_the_foreground() {
+        let state = super::super::tests::test_state();
+        let label = "test-topology-foreground-is-shell";
+        let (_window_id, pane_id) = new_virtual_session(&state, label).await;
+
+        let pane_of = |topology: &serde_json::Value| {
+            topology["sessions"][0]["windows"][0]["panes"][0].clone()
+        };
+        let virtual_topology = body_json(
+            get_topology(State(state.clone()), label_query(label))
+                .await
+                .into_response(),
+        )
+        .await;
+        assert!(
+            pane_of(&virtual_topology)
+                .get("foreground_is_shell")
+                .is_none(),
+            "a virtual pane has no session to ask: {virtual_topology}"
+        );
+
+        let materialized = materialize_pane(
+            State(state.clone()),
+            Path(pane_id),
+            label_query(label),
+            Json(MaterializePaneRequest {
+                cwd: None,
+                origin_session_id: None,
+            }),
+        )
+        .await
+        .into_response();
+        assert_eq!(materialized.status(), StatusCode::OK);
+        let session_id = body_json(materialized).await["tuic_session_id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+
+        let idle_topology = body_json(
+            get_topology(State(state.clone()), label_query(label))
+                .await
+                .into_response(),
+        )
+        .await;
+        assert_eq!(
+            pane_of(&idle_topology)["foreground_is_shell"],
+            serde_json::Value::Bool(true),
+            "an idle shell owns the foreground: {idle_topology}"
+        );
+
+        // A real foreground job: the pty's foreground process group moves off
+        // the shell, so the answer flips to false.
+        crate::mcp_http::session::write_pty_input_parts(&state, &session_id, &["sleep 30\n"])
+            .expect("write the job into the pane's shell");
+        let mut job_topology = serde_json::Value::Null;
+        for _ in 0..100 {
+            job_topology = body_json(
+                get_topology(State(state.clone()), label_query(label))
+                    .await
+                    .into_response(),
+            )
+            .await;
+            if pane_of(&job_topology)["foreground_is_shell"] == serde_json::Value::Bool(false) {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+        assert_eq!(
+            pane_of(&job_topology)["foreground_is_shell"],
+            serde_json::Value::Bool(false),
+            "a running job owns the foreground: {job_topology}"
+        );
+        // Don't leave the 30 s sleep behind.
+        let _ = crate::mcp_http::session::write_pty_input_parts(&state, &session_id, &["\x03"]);
     }
 
     /// The shell-readiness gate's integration point: a real `materialize()`

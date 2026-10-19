@@ -1660,6 +1660,44 @@ pub(crate) fn process_name_from_pid(pid: u32) -> Option<String> {
     }
 }
 
+/// Whether a shell session's own shell process owns the terminal foreground,
+/// i.e. no job (and no exec'd agent) is running in it. `Some(false)` means a
+/// real foreground job; `None` means the answer is unknown (unknown session, a
+/// non-shell root, or a process lookup that failed).
+///
+/// Read-only, unlike [`refresh_session_agent`]: it never touches
+/// `session_states`, so a topology read can call it freely. A shell that is
+/// busy running its own startup or a precmd hook (a slow `.zshrc.d`, direnv
+/// evaluating `.envrc`) is still the foreground here — that is not a job a
+/// caller may interrupt. The `tmux respawn-pane -k` shim keys its Ctrl+C off
+/// this (`tmux_routes::get_topology`).
+pub(crate) fn session_foreground_is_root_shell(state: &AppState, session_id: &str) -> Option<bool> {
+    let role = state
+        .session_maps
+        .session_states
+        .get(session_id)
+        .map(|s| s.spawn_root_role)
+        .unwrap_or_default();
+    if !matches!(role, crate::state::SpawnRootRole::Shell) {
+        return None;
+    }
+    let entry = state.session_maps.sessions.get(session_id)?;
+    let session = entry.value().lock();
+    let root = session._child.process_id()?;
+    #[cfg(not(windows))]
+    let foreground = session
+        .master
+        .process_group_leader()
+        .map(|pid| pid as u32)?;
+    #[cfg(windows)]
+    let foreground = deepest_descendant_pid(root)?;
+    let name = process_name_from_pid(foreground)?;
+    // exec replaces the shell's image without changing its PID, so equality
+    // with the root proves "shell" only when the image is not an agent
+    // (the same rule `refresh_session_agent` applies).
+    Some(foreground == root && classify_agent(&name).is_none())
+}
+
 static FOREGROUND_PROBE_GENERATION: AtomicU64 = AtomicU64::new(1);
 
 /// Discover and record the foreground agent for desktop and headless consumers.

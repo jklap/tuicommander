@@ -1,3 +1,7 @@
+## tmux `respawn-pane -k` no longer interrupts a shell's own startup (direnv) — Rust restart required
+
+- [ ] After a manual `make dev` restart (or `make build`) and a rebuilt `tuic`/`tmux` shim, start a Claude Code Agent Teams swarm in a repo whose `.envrc` is slow (commerce-journal) and confirm each teammate pane prints `direnv: loading` / `direnv: export …` with no `^C` and no `direnv: error signal: killed`, and that `echo "${DIRENV_DIR:+set} ${ATLASSIAN_API_TOKEN:+set}"` inside a teammate prints `set set`. Unit tests cover the CLI decision and the topology flag (including a real running job); the live race needs a real slow `.envrc`. Rust does not hot-reload, and `tuic-cli` is a sidecar, so both must be rebuilt.
+
 ## iPhone hands-free Now Playing (1670-fdc8)
 
 - [HUMAN] After landing and reloading the iPhone PWA, arm hands-free and lock the phone. Confirm the title is **TUICommander hands-free**; Pause holds the spoken reply and Play resumes at its position while the microphone stays active. Stop (if iOS exposes it) ends capture and drops queued replies. Also stop from the PWA and confirm controls no longer act on the ended session. Check a reply still uses media volume with the microphone open, then re-arm. Browser boundary tests cover registration, HTTP action routing and cleanup; physical iPhone audio/lock-screen behavior is unverified. No Rust change or backend restart is required.
