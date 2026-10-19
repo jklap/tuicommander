@@ -6,7 +6,7 @@ import MobileApp from "../MobileApp";
 
 const { rpc } = vi.hoisted(() => ({ rpc: vi.fn() }));
 
-vi.mock("../../transport", () => ({ rpc }));
+vi.mock("../../transport", () => ({ rpc, subscribeEvents: vi.fn(async () => () => {}) }));
 vi.mock("../../components/PtyOpenUrlHost/PtyOpenUrlHost", () => ({ PtyOpenUrlHost: () => null }));
 // MobileApp subscribes to the "wrap my shell function?" prompt at mount.
 vi.mock("../../stores/agentWrapPrompt", () => ({
