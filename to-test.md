@@ -2645,3 +2645,11 @@ Needs an iPhone (iOS 16.4+, 18.4+ preferred), the desktop TUICommander running a
 - [ ] Reload GitHub/GitLab/Jira twice: one registration each; rejected async startup reports its error. Set and use Jira/GitLab default projects through plugin Settings (account-specific projects take precedence); capture the settings page. Resolve a Jira URL and cancel an in-flight detail request.
 - [ ] Remaining original live checks: switch repos during scans, change composer during retry/wakeup reads, open same-name CSV/DOCX/XLSX files in different repos, refuse an incompatible real plugin, and route an account-authorized GitHub review/action through the core ports. Module tests do not satisfy these live E2Es.
 - [ ] #2072-adf9: After a manual `make dev` restart or release rebuild, reconnect Claude Code and confirm ToolSearch finds agent, session, repo, and ui; send one agent message. Rust schemas do not hot-reload.
+
+## Mobile Codex Chat (#2076-8190)
+
+- [ ] On a real phone, open a Codex session with an exact native-hook transcript binding. Switch CLI → Chat → CLI and confirm the existing header, composer and question controls remain touch-usable. Browser verification does not prove phone touch behavior.
+
+## Mobile Grok Chat (#2077-b132)
+
+- [ ] On a real phone, open a registry-bound Grok session and switch CLI → Chat → CLI. Confirm the existing question controls and composer remain touch-usable. Worktree browser evidence does not prove phone touch behavior.

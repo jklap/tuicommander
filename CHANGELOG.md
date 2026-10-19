@@ -7,6 +7,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 - Bind native Codex hooks for HTTP/MCP-spawned agents and generic HTTP terminals using their live inherited session identity; preserve exact owner validation (#2081-ac1f).
+- Expose bound Grok terminal Chat on mobile and share the supported-adapter check with desktop, without changing exact transcript binding or native question controls (#2077-b132).
+
+- Expose the existing bound Codex terminal Chat view in the mobile session header, with the same PTY controls and backend binding refusal (#2076-8190).
 
 - Publish and retain the stable session identity for newly spawned native MCP/HTTP agents and generic HTTP sessions so a worktree declaration moves the live sidebar tab, not only its saved restore record (#2044-31f3).
 - Open parked Activity Dashboard sessions in their own Global Workspace tabs instead of displaying their content under the current repository tab; preserve existing session bindings (#2080-d401).
