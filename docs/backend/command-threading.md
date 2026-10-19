@@ -51,6 +51,22 @@ Before story 607-f483 the two had drifted in both directions: `search_files`
 offloaded over HTTP but not over IPC, while `search_content_all` offloaded over
 IPC but not over HTTP.
 
+## Agent session discovery (2026-10-19)
+
+`discover_agent_session` is async and moves all filesystem and process reads to
+`spawn_blocking`. Its HTTP route awaits the same command. The synchronous
+`discover_agent_session_blocking` service remains available to the subagent-map
+and suspended-session paths, which already run on blocking owners.
+
+Ego discovery caches the binding by sessions root and pid. A cache hit reads only
+the bound lease and checks its pid and writer lock. Ego leaves its lease file
+behind after exit, and its heartbeat is written at acquisition rather than
+renewed, so matching pid text alone cannot validate a cache hit after pid reuse.
+An unlocked, missing, corrupt or changed-pid lease invalidates the cache. A miss
+scans the store and chooses the matching pid with the latest heartbeat, as before.
+Only a binding with a held writer lock is cached. No filesystem work runs while
+the cache mutex is held.
+
 ## Audit (2026-08-18)
 
 ### Application launchers (2026-10-11)

@@ -1001,13 +1001,16 @@ pub(super) async fn list_audio_output_devices_http() -> impl IntoResponse {
 pub(super) async fn discover_agent_session_http(
     Json(body): Json<DiscoverAgentSessionRequest>,
 ) -> impl IntoResponse {
-    Json(crate::agent_session::discover_agent_session(
-        body.agent_type,
-        body.cwd,
-        body.claimed_ids,
-        body.agent_pid,
-        body.env_overrides,
-    ))
+    Json(
+        crate::agent_session::discover_agent_session(
+            body.agent_type,
+            body.cwd,
+            body.claimed_ids,
+            body.agent_pid,
+            body.env_overrides,
+        )
+        .await,
+    )
 }
 
 pub(super) async fn claude_project_dir_http(

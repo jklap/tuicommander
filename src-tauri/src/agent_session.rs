@@ -39,7 +39,28 @@ const SESSION_MAX_AGE: Duration = Duration::from_secs(300);
 /// - `env_overrides`: fallback env overrides from the TUIC run config. Only used for keys
 ///   NOT found in the process env (i.e. process env takes precedence).
 #[cfg_attr(feature = "desktop", tauri::command)]
-pub(crate) fn discover_agent_session(
+pub(crate) async fn discover_agent_session(
+    agent_type: String,
+    cwd: String,
+    claimed_ids: Vec<String>,
+    agent_pid: Option<u32>,
+    env_overrides: HashMap<String, String>,
+) -> Option<DiscoveredSession> {
+    match tokio::task::spawn_blocking(move || {
+        discover_agent_session_blocking(agent_type, cwd, claimed_ids, agent_pid, env_overrides)
+    })
+    .await
+    {
+        Ok(found) => found,
+        Err(error) => {
+            tracing::warn!(%error, "Agent session discovery task failed");
+            None
+        }
+    }
+}
+
+/// Blocking service for callers already running on a blocking owner.
+pub(crate) fn discover_agent_session_blocking(
     agent_type: String,
     cwd: String,
     claimed_ids: Vec<String>,
@@ -971,15 +992,62 @@ fn ego_sessions_dir(ego_home: Option<&str>) -> Option<PathBuf> {
     }
 }
 
-/// The session whose `lease` file names `pid`.
-///
-/// ego writes `{"pid":<n>,"heartbeat":<ms>}` to `<session>/lease` while a process
-/// holds the session, which is the exact pid→session binding (no "newest file"
-/// guess). The file outlives its process, so a dead holder is rejected by the
-/// caller's pid (the live agent pid never matches it) except under pid reuse; the
-/// most recent heartbeat wins then.
+#[cfg(test)]
+thread_local! {
+    static EGO_LEASE_READS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+#[derive(serde::Deserialize)]
+struct EgoLease {
+    pid: u32,
+    heartbeat: u64,
+}
+
+fn read_ego_lease(path: &Path) -> Option<(EgoLease, bool)> {
+    use std::io::Read;
+
+    #[cfg(test)]
+    EGO_LEASE_READS.with(|reads| reads.set(reads.get() + 1));
+    let mut file = std::fs::File::open(path).ok()?;
+    // ego's writer holds flock (Unix) / byte zero (Windows) until exit.
+    // A leftover pid alone is not evidence that the cached holder still lives.
+    let held = matches!(
+        file.try_lock_shared(),
+        Err(std::fs::TryLockError::WouldBlock)
+    );
+    #[cfg(windows)]
+    {
+        use std::io::{Seek, SeekFrom};
+        // Ego reserves byte zero for LockFileEx so readers can read the JSON
+        // starting at byte one while its exclusive writer lock is held.
+        file.seek(SeekFrom::Start(1)).ok()?;
+    }
+    let mut contents = String::new();
+    file.read_to_string(&mut contents).ok()?;
+    Some((serde_json::from_str(&contents).ok()?, held))
+}
+
+type EgoBindings = HashMap<(PathBuf, u32), String>;
+static EGO_BINDINGS: std::sync::LazyLock<parking_lot::Mutex<EgoBindings>> =
+    std::sync::LazyLock::new(|| parking_lot::Mutex::new(HashMap::new()));
+
+/// Resolve a lease pid exactly, choosing the latest heartbeat on a scan.
+/// Only a held writer lease can validate a cached binding: ego leaves the file
+/// after exit and writes its heartbeat only at acquisition, so matching stale
+/// pid text would otherwise hide pid reuse or an in-process session switch.
 fn ego_session_for_pid(sessions_dir: &Path, pid: u32) -> Option<String> {
-    std::fs::read_dir(sessions_dir)
+    let key = (sessions_dir.to_path_buf(), pid);
+    let cached = EGO_BINDINGS.lock().get(&key).cloned();
+    if let Some(session) = cached {
+        if let Some((lease, true)) = read_ego_lease(&sessions_dir.join(&session).join("lease"))
+            && lease.pid == pid
+        {
+            return Some(session);
+        }
+        EGO_BINDINGS.lock().remove(&key);
+    }
+
+    let (_, session, held) = std::fs::read_dir(sessions_dir)
         .ok()?
         .flatten()
         .filter_map(|entry| {
@@ -987,16 +1055,14 @@ fn ego_session_for_pid(sessions_dir: &Path, pid: u32) -> Option<String> {
             if !is_uuid(&name) {
                 return None;
             }
-            let lease: serde_json::Value =
-                serde_json::from_str(&std::fs::read_to_string(entry.path().join("lease")).ok()?)
-                    .ok()?;
-            if lease.get("pid")?.as_u64()? != u64::from(pid) {
-                return None;
-            }
-            Some((lease.get("heartbeat")?.as_u64()?, name))
+            let (lease, held) = read_ego_lease(&entry.path().join("lease"))?;
+            (lease.pid == pid).then_some((lease.heartbeat, name, held))
         })
-        .max()
-        .map(|(_, name)| name)
+        .max()?;
+    if held {
+        EGO_BINDINGS.lock().insert(key, session.clone());
+    }
+    Some(session)
 }
 
 /// Exact terminal Chat binding, with the same store the live process reads.
@@ -1218,7 +1284,7 @@ mod tests {
             fs::write(session.join("manifest.json"), "{}").unwrap();
             fs::write(
                 session.join("lease"),
-                format!(r#"{{"pid":{pid},"heartbeat":{heartbeat}}}"#),
+                format!(r#" {{"pid":{pid},"heartbeat":{heartbeat}}}"#),
             )
             .unwrap();
         }
@@ -1236,6 +1302,148 @@ mod tests {
         assert_eq!(ego_session_for_pid(dir.path(), 111).as_deref(), Some(EGO_A));
         assert_eq!(ego_session_for_pid(dir.path(), 222).as_deref(), Some(EGO_B));
         assert_eq!(ego_session_for_pid(dir.path(), 333), None);
+    }
+
+    // ego uses flock on Unix and LockFileEx on byte zero on Windows.
+    // Match its writer lock, not a mock liveness flag.
+    fn hold_ego_lease(path: &Path) -> fs::File {
+        let file = fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(path)
+            .unwrap();
+        #[cfg(unix)]
+        file.lock().unwrap();
+        #[cfg(windows)]
+        {
+            use std::os::windows::io::AsRawHandle;
+            use windows_sys::Win32::Storage::FileSystem::{
+                LOCKFILE_EXCLUSIVE_LOCK, LOCKFILE_FAIL_IMMEDIATELY, LockFileEx,
+            };
+            let mut overlapped = unsafe { std::mem::zeroed() };
+            assert_ne!(
+                unsafe {
+                    LockFileEx(
+                        file.as_raw_handle(),
+                        LOCKFILE_EXCLUSIVE_LOCK | LOCKFILE_FAIL_IMMEDIATELY,
+                        0,
+                        1,
+                        0,
+                        &mut overlapped,
+                    )
+                },
+                0
+            );
+        }
+        file
+    }
+
+    /// Catches: a released old lease retaining a recycled pid after another
+    /// already-existing session acquires it with a later heartbeat.
+    #[test]
+    fn ego_cached_pid_reuse_rescans_after_writer_releases_lease() {
+        let dir = ego_store(&[(EGO_A, 111, 5), (EGO_B, 222, 9)]);
+        let held = hold_ego_lease(&dir.path().join(EGO_A).join("lease"));
+        assert_eq!(ego_session_for_pid(dir.path(), 111).as_deref(), Some(EGO_A));
+        drop(held);
+        fs::write(
+            dir.path().join(EGO_B).join("lease"),
+            r#" {"pid":111,"heartbeat":10}"#,
+        )
+        .unwrap();
+        let _new_holder = hold_ego_lease(&dir.path().join(EGO_B).join("lease"));
+        assert_eq!(ego_session_for_pid(dir.path(), 111).as_deref(), Some(EGO_B));
+    }
+
+    /// Catches: a cached binding surviving a missing, corrupt or changed-pid lease.
+    #[test]
+    fn ego_cached_binding_revalidates_lease_before_returning() {
+        for replacement in [None, Some("broken"), Some(r#" {"pid":333,"heartbeat":12}"#)] {
+            let dir = ego_store(&[(EGO_A, 111, 5), (EGO_B, 111, 4)]);
+            let held = hold_ego_lease(&dir.path().join(EGO_A).join("lease"));
+            assert_eq!(ego_session_for_pid(dir.path(), 111).as_deref(), Some(EGO_A));
+            drop(held);
+            let path = dir.path().join(EGO_A).join("lease");
+            match replacement {
+                Some(contents) => fs::write(path, contents).unwrap(),
+                None => fs::remove_file(path).unwrap(),
+            }
+            assert_eq!(
+                ego_session_for_pid(dir.path(), 111).as_deref(),
+                Some(EGO_B),
+                "replacement: {replacement:?}"
+            );
+        }
+    }
+
+    /// Catches: identical pids under different EGO_HOME roots sharing one binding.
+    #[test]
+    fn ego_cached_binding_is_scoped_to_session_store() {
+        let first = ego_store(&[(EGO_A, 111, 5)]);
+        let second = ego_store(&[(EGO_B, 111, 9)]);
+        let _first_holder = hold_ego_lease(&first.path().join(EGO_A).join("lease"));
+        let _second_holder = hold_ego_lease(&second.path().join(EGO_B).join("lease"));
+        assert_eq!(
+            ego_session_for_pid(first.path(), 111).as_deref(),
+            Some(EGO_A)
+        );
+        assert_eq!(
+            ego_session_for_pid(second.path(), 111).as_deref(),
+            Some(EGO_B)
+        );
+        assert_eq!(
+            ego_session_for_pid(first.path(), 111).as_deref(),
+            Some(EGO_A)
+        );
+    }
+
+    /// Catches: every 30-second poll reopening all historical lease files.
+    #[test]
+    fn ego_cached_poll_reads_one_lease_among_1500_sessions() {
+        let dir = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+        for index in 0..1500_u32 {
+            let session = dir
+                .path()
+                .join(format!("00000000-0000-0000-0000-{index:012x}"));
+            fs::create_dir(&session).unwrap();
+            fs::write(
+                session.join("lease"),
+                format!(r#" {{"pid":{},"heartbeat":9}}"#, index + 1),
+            )
+            .unwrap();
+        }
+        let expected = "00000000-0000-0000-0000-000000000000";
+        let _held = hold_ego_lease(&dir.path().join(expected).join("lease"));
+        assert_eq!(
+            ego_session_for_pid(dir.path(), 1).as_deref(),
+            Some(expected)
+        );
+        EGO_LEASE_READS.with(|reads| reads.set(0));
+        assert_eq!(
+            ego_session_for_pid(dir.path(), 1).as_deref(),
+            Some(expected)
+        );
+        let reads = EGO_LEASE_READS.with(|reads| reads.get());
+        assert!(reads <= 1, "cached poll read {reads} leases instead of one");
+    }
+
+    /// Catches: Tauri dispatching filesystem discovery inline on the UI thread.
+    #[test]
+    fn discovery_command_offloads_filesystem_work() {
+        let source = include_str!("agent_session.rs");
+        let command = source
+            .split("#[cfg_attr(feature = \"desktop\", tauri::command)]")
+            .nth(1)
+            .unwrap();
+        let command = command.split("/// What discovery found").next().unwrap();
+        assert!(
+            command.contains("async fn discover_agent_session("),
+            "discovery command is synchronous"
+        );
+        assert!(
+            command.contains("spawn_blocking"),
+            "discovery parks an async worker instead of offloading filesystem work"
+        );
     }
 
     /// Catches: a recycled pid binding a tab to a dead process's older session.
@@ -2420,15 +2628,16 @@ mod tests {
     }
 
     /// Discovery must not invent a launch command when it has no pid to read.
-    #[test]
-    fn discover_agent_session_reports_no_launch_command_without_a_pid() {
+    #[tokio::test]
+    async fn discover_agent_session_reports_no_launch_command_without_a_pid() {
         let found = discover_agent_session(
             "goose".to_string(),
             "/tmp".to_string(),
             Vec::new(),
             None,
             HashMap::new(),
-        );
+        )
+        .await;
         assert_eq!(found, None, "goose has no filesystem discovery");
     }
 }
