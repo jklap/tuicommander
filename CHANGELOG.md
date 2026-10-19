@@ -34,6 +34,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Publish typed Settings account enumeration and configured Ego interactive login start/status, with human terminal authentication and separate credential readback (#1790-1011).
 ### Fixed
 
+- Keep mobile choice answers, queued drafts and delayed Enter writes bound to the session selected when tapped, even after navigation (#2021-30cd).
+
 - Report the configured ego executable and failed export status instead of blaming a missing transcript header when an older binary rejects Chat export (#2032-8dc3).
 - Show the mobile awaiting total only in the AWAITING tile, move waiting-session navigation to that tile, keep the per-session question banners, and remove the connected header narration (#2055-b727).
 
