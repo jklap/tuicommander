@@ -120,6 +120,44 @@ bound above its 300-second internal hang bound; routine limits are unchanged.
 - No retained trace identifies Boss's reported blocked tab or connects its wait
   to GitHub. Story 1995 remains open; no safe-rate guarantee is claimed.
 
+## Follow-up audit: 2026-10-19
+
+Story 1995 was reassigned on branch `fix/1995-github-request-volume`, based on
+`6fc80f59c18f6f2958fd1a4a40b83e113a4ef76f`. The existing measurement commit
+`9d91d0189f` is already an ancestor. Do not recreate or merge that work again.
+
+Source inspection confirms the following existing behavior:
+
+- `src-tauri/src/github.rs:436-444` reads remaining, reset and retry headers
+  before classifying HTTP 429. Lines 469-487 classify exhausted and secondary
+  HTTP 403 responses.
+- `src-tauri/src/github.rs:629` checks the account breaker before GraphQL
+  requests. Lines 663-667 record the rate-limit wait for a named account;
+  lines 695-699 do the same for the ambient account.
+- `src-tauri/src/github.rs:1355-1371` checks the REST breaker before
+  `request.send()` and classifies rate-limit headers. Lines 1399-1402 record
+  the wait. `rate_limit_wait_secs` at line 510 gives `retry-after` precedence.
+- `src-tauri/src/github_poller.rs:284-301` implements budget-dependent cadence.
+- `src-tauri/src/github_volume_measurement_1995.rs:91-252` already exercises
+  the production client, publishes parsed consumer results and asserts no
+  immediate retry send plus a resumed send for 403/429 on both transports.
+
+The retained `backend/final/receiver-summary.json` and rb `result.txt` were
+read again, not regenerated. They agree with the counts and commit-pinned
+Linux result above. These are historical results for `0b41b53ecd`, not a new
+run on this branch. No build, test, browser or live-account request was run
+for this documentation-only audit. There is no new failing regression or
+proven production defect, so no speculative fix or artificial RED criterion
+was added.
+
+All three original acceptance criteria remain unchecked. The existing evidence
+covers a controlled client workload, not simultaneous whole-app traffic or an
+account-wide safe upper bound. The exact historical blocked tab, its timestamp
+and a corresponding request/wait trace are still missing. The next action
+requires that report evidence from Boss or the coordinator; another synthetic
+measurement cannot recover it. No production behavior, UI or timeout changes
+are justified by this audit.
+
 ## Retained evidence
 
 Local evidence root:
