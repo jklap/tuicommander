@@ -652,3 +652,10 @@ black on Commander's blue accent and white on Paper's darker blue. The pressed
 state changes the background to `--accent-hover` instead of fading the whole
 strip. Do not reuse Commander's shared white accent foreground here: at 13px,
 its 3.36:1 contrast does not meet WCAG AA.
+
+### Constrained layouts and theme surfaces
+
+- Detached Files and Markdown panels fill their window; inline panels retain their docked width limits.
+- Dialog footer hints wrap as complete groups, with gaps between groups and actions. Action labels do not wrap letter by letter.
+- Task field labels align at the top when neighboring controls have different heights. Roadmap state labels use ellipsis inside short bars.
+- Native controls use the light color scheme on the Paper theme. Mobile bottom tabs and diff gutters use the existing application surface tokens.

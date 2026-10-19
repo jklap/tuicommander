@@ -6,3 +6,5 @@
 .upstreams { margin-top: 16px; }
 
 .page > [data-settings-page-header] { margin-bottom: 8px; }
+
+.discoveryError { color: var(--error); overflow-wrap: anywhere; min-width: 0; }

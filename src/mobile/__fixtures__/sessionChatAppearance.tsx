@@ -39,6 +39,9 @@ async function mount() {
 		const name = names[key] ?? key.replace(/[A-Z]/g, (c) => `-${c.toLowerCase()}`);
 		document.documentElement.style.setProperty(`--${name}`, value);
 	}
+	const codeSample = params.has("longCode")
+		? `const screen = "${"mobile".repeat(30)}";\nconsole.log(screen);`
+		: 'const screen = "mobile";';
 	const entries: AcpTranscriptEntry[] = [
 		{ id: "u", kind: "user", text: "Check the session Chat layout on a narrow screen." },
 		{ id: "s", kind: "agent", text: "Inspecting the shared styles." },
@@ -46,7 +49,10 @@ async function mount() {
 		{
 			id: "a",
 			kind: "agent",
-			text: '💬 The answer uses the same reading layout.\n\n> A genuine quotation.\n\n- Shared user prompt tint\n- Shared folded tool activity\n\n```ts\nconst screen = "mobile";\n```',
+			text:
+				"💬 The answer uses the same reading layout.\n\n> A genuine quotation.\n\n- Shared user prompt tint\n- Shared folded tool activity\n\n```ts\n" +
+				codeSample +
+				"\n```",
 		},
 	];
 	const terminalId = terminalsStore.add({
