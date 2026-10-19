@@ -114,7 +114,7 @@ function worktreeLabel(worktreePath: string): string {
 }
 
 /** Render backend-authored workspace membership without sending shell input. */
-function applyWorktreePlacement(payload: WorktreeCreatedPayload): void {
+function applyWorktreePlacement(payload: WorktreeCreatedPayload, declared = false): void {
 	const { repo_path, workspace_id, branch, worktree_path, kind } = payload;
 	// Register the branch in the store immediately so the sidebar shows the new
 	// worktree right away — independent of whether the user accepts the switch
@@ -131,14 +131,25 @@ function applyWorktreePlacement(payload: WorktreeCreatedPayload): void {
 		});
 	}
 	// Creating a checkout does not change the caller's cwd (agents often use git -C).
-	// Reconcile from cwd so a root coordinator never becomes a child-worktree tab.
+	// Creation stays cwd-based; an explicit caller-bound declaration owns display placement.
 	const creatorId = payload.creator_session ? terminalsStore.findBySessionId(payload.creator_session) : undefined;
 	if (
 		creatorId &&
 		repositoriesStore.findOwnerForTerminal(creatorId)?.repoPath === repo_path &&
 		!payload.spawn_session
 	) {
+		const peer = terminalsStore.get(creatorId)?.tuicSession;
+		if (declared && peer) {
+			repositoriesStore.setDeclaredWorktree(repo_path, peer, {
+				workspaceId: workspace_id,
+				branch,
+				worktreePath: worktree_path,
+			});
+		}
 		reconcileTerminalOwnership(creatorId);
+		if (declared && peer && terminalsStore.state.activeId === creatorId) {
+			repositoriesStore.setActiveWorkspace(repo_path, workspace_id);
+		}
 	}
 }
 
@@ -188,7 +199,7 @@ export function useWorktreeSwitchPrompt(deps: WorktreeSwitchDeps): void {
 		.catch((err) => appLogger.error("app", "Failed to register worktree-created listener", err));
 
 	listen<WorktreeCreatedPayload>("session-worktree-declared", (event) => {
-		applyWorktreePlacement(event.payload);
+		applyWorktreePlacement(event.payload, true);
 	})
 		.then((fn) => {
 			unlistenDeclared = fn;

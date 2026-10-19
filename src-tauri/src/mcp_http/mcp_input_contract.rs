@@ -1,4 +1,4 @@
-//! The advertised schema is also the native pre-dispatch validation contract.
+//! Private native validation contracts and client-compatible advertised schemas.
 use std::{collections::HashMap, sync::LazyLock};
 
 use serde_json::{Value, json};
@@ -12,6 +12,7 @@ pub(super) fn complete_schema(tool: &mut Value) {
     let actions = match name.as_str() {
         "session" => Some(SESSION_ACTIONS),
         "agent" => Some(AGENT_ACTIONS),
+        "workflow" => Some(WORKFLOW_ACTIONS),
         "repo" => Some(REPO_ACTIONS),
         "task" => Some(TASK_ACTIONS),
         "ui" => Some(UI_ACTIONS),
@@ -58,6 +59,7 @@ pub(super) fn complete_schema(tool: &mut Value) {
         }
         "agent" => {
             required(&["send"], &["to", "message"]);
+            required(&["task_get", "task_cancel"], &["task_id"]);
             required(&["subscribe", "ack", "unsubscribe"], &["subscription_id"]);
             required(&["ack"], &["cursor"]);
         }
@@ -86,6 +88,30 @@ pub(super) fn complete_schema(tool: &mut Value) {
             conditions.push(json!({"if":{"properties":{"action":{"const":"worktree_remove"}},"required":["action"]},"then":{"anyOf":[{"required":["branch"]},{"required":["worktree_path"]}]}}));
         }
         "ui" => {
+            let design = crate::design_mode::mcp::tool_definition();
+            for field in ["session_id", "repo_path", "browser", "script"] {
+                schema["properties"][field] = design["inputSchema"]["properties"][field].clone();
+            }
+            let tab_url = schema["properties"]["url"]["description"]
+                .as_str()
+                .unwrap_or_default();
+            schema["properties"]["url"]["description"] = json!(format!(
+                "{tab_url} For design_start/design_navigate: absolute HTTP(S) page URL; remote hosts require an extension host grant."
+            ));
+            required(&["design_start"], &["session_id"]);
+            required(
+                &[
+                    "design_stop",
+                    "design_reload",
+                    "design_navigate",
+                    "design_screenshot",
+                    "design_errors",
+                    "design_eval",
+                ],
+                &["repo_path"],
+            );
+            required(&["design_navigate"], &["url"]);
+            required(&["design_eval"], &["script"]);
             required(&["tab"], &["id", "title"]);
             required(&["toast"], &["title"]);
             required(&["screenshot"], &["id"]);
@@ -158,13 +184,119 @@ pub(super) fn complete_schema(tool: &mut Value) {
     }
 }
 
+/// Anthropic rejects root combinators. Keep the full contract private and publish
+/// the union of action fields, with conditional requirements in description text.
+/// Nested anyOf parameters are supported by the Anthropic JSON Schema API.
+pub(super) fn advertise_schema(tool: &mut Value) {
+    let schema = &mut tool["inputSchema"];
+    let object = schema.as_object_mut().expect("native input schema object");
+    if let Some(conditions) = object.remove("allOf") {
+        let description = object.entry("description").or_insert(json!(""));
+        *description = json!(format!(
+            "{} Action-specific requirements (checked by the server before dispatch): {conditions}",
+            description.as_str().unwrap_or_default()
+        ));
+    }
+    for keyword in ["oneOf", "anyOf"] {
+        let Some(variants) = object.remove(keyword) else {
+            continue;
+        };
+        fn collect_object_alternatives<'a>(schema: &'a Value, objects: &mut Vec<&'a Value>) {
+            if schema.get("properties").is_some() {
+                objects.push(schema);
+            }
+            // Untagged envelopes and flattened owner enums can wrap tagged
+            // actions. Traverse their object-level unions, not field schemas.
+            for keyword in ["oneOf", "anyOf", "allOf"] {
+                if let Some(variants) = schema[keyword].as_array() {
+                    for variant in variants {
+                        collect_object_alternatives(variant, objects);
+                    }
+                }
+            }
+        }
+        let mut objects = Vec::new();
+        for variant in variants.as_array().expect("native action variants") {
+            collect_object_alternatives(variant, &mut objects);
+        }
+        let mut fields: std::collections::BTreeMap<String, Vec<Value>> = Default::default();
+        let mut actions = Vec::new();
+        let mut required: Option<Vec<Value>> = None;
+        for variant in objects {
+            let names = variant["required"].as_array().cloned().unwrap_or_default();
+            required = Some(match required {
+                None => names,
+                Some(previous) => previous
+                    .into_iter()
+                    .filter(|name| names.contains(name))
+                    .collect(),
+            });
+            if let Some(properties) = variant["properties"].as_object() {
+                for (name, property) in properties {
+                    if name == "action" {
+                        for action in property
+                            .get("const")
+                            .into_iter()
+                            .chain(property["enum"].as_array().into_iter().flatten())
+                        {
+                            if !actions.contains(action) {
+                                actions.push(action.clone());
+                            }
+                        }
+                    } else {
+                        let options = fields.entry(name.clone()).or_default();
+                        if !options.contains(property) {
+                            options.push(property.clone());
+                        }
+                    }
+                }
+            }
+        }
+        let properties = object.entry("properties").or_insert(json!({}));
+        for (name, mut options) in fields {
+            properties[&name] = if options.len() == 1 {
+                options.pop().unwrap()
+            } else {
+                json!({"anyOf":options})
+            };
+        }
+        if !actions.is_empty() {
+            let required = required.get_or_insert_default();
+            if !required.iter().any(|field| field == "action") {
+                required.push(json!("action"));
+            }
+            properties["action"] = json!({"type":"string", "enum":actions,
+                "description":"Select the action. Its required fields are described by the tool; the server validates the complete action contract before dispatch."});
+        }
+        object.insert("type".into(), json!("object"));
+        object.insert("required".into(), json!(required.unwrap_or_default()));
+    }
+    // Use the documented nested union form, not exclusive-union enforcement:
+    // exclusivity remains in the unchanged private validator.
+    fn nested_unions(value: &mut Value) {
+        match value {
+            Value::Object(object) => {
+                if let Some(variants) = object.remove("oneOf") {
+                    object.insert("anyOf".into(), variants);
+                }
+                for child in object.values_mut() {
+                    nested_unions(child);
+                }
+            }
+            Value::Array(array) => array.iter_mut().for_each(nested_unions),
+            _ => {}
+        }
+    }
+    nested_unions(schema);
+}
+
 struct Contract {
     schema: Value,
     validator: Result<jsonschema::Validator, String>,
 }
 
 static CONTRACTS: LazyLock<HashMap<String, Contract>> = LazyLock::new(|| {
-    native_tool_definitions()
+    native_validation_tool_definitions()
         .as_array()
         .expect("native tool array")
         .iter()
@@ -213,6 +345,23 @@ pub(super) fn validate(name: &str, args: &Value) -> Option<Value> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Catches: agent task actions accept a missing or non-string task handle before dispatch.
+    #[test]
+    fn agent_task_actions_require_a_string_task_id() {
+        for action in ["task_get", "task_cancel"] {
+            for args in [
+                json!({"action":action}),
+                json!({"action":action,"task_id":1}),
+            ] {
+                assert_eq!(
+                    validate("agent", &args).unwrap()["code"],
+                    "invalid_arguments"
+                );
+            }
+            assert!(validate("agent", &json!({"action":action,"task_id":"handle"})).is_none());
+        }
+    }
 
     /// Catches: newly advertised subscription actions omit their repairable required fields.
     #[test]

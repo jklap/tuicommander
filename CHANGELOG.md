@@ -6,6 +6,25 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+- Open parked Activity Dashboard sessions in their own Global Workspace tabs instead of displaying their content under the current repository tab; preserve existing session bindings (#2080-d401).
+- Shorten agent-facing MCP descriptions for session, agent, repo, ui, voice, telegram and automations; preserve complete guidance through each tool’s `action=help`, without changing Settings copy or owner gates (#2069-7347).
+
+- Invalidate the shared intent grammar during frontend hot reload so stale JSON cannot abort answer gutters or expose raw answer markers (#2073-8131).
+
+- Add `ui design_*` MCP actions with the existing Design Mode ownership, host grants and saved denials; keep the old tool until the explicit 2068 catalogue cutover (#2067-e708).
+- List and allow `remote`, `voice` and `telegram` only when their owning connection/configuration is available; share discovery and call gates and notify clients when conditions change (#2066-516c, #2067-e708).
+- End PTY intents at the title closure so joined trailing prose stays out of the CONTEXT header and desktop/mobile intent tint (#2060-0ebe).
+- Add the typed `workflow` MCP tool and `tuic workflow` CLI with story, run, proposal_create, report and launch actions; reuse existing handlers, retain proposal idempotency and member denials, and keep legacy tools until cutover. Automations remains separate (#2065-dcc5).
+- Render mobile CLI answer markers as the desktop continuous green gutter instead of speech bubbles; preserve literal glyphs in prompts and code, including standalone fenced examples (#2070-773d).
+
+- Add `agent task_get/task_cancel` using the existing task service, with spawning-owner checks, immutable final outcomes and cancellation that leaves the PTY running; retain the current `task` tool until the catalogue cutover (#2064-6385).
+- Group native MCP switches in Settings by domain, with separate rare and conditional sections; preserve tool names, saved denials and Settings opt-in (#2063-baa9).
+
+- Resolve ego session discovery through its per-PID index and held writer lease without scanning historical sessions; retain legacy lookup only when the index is absent (#2058-0d0e).
+
+- Keep GitHub network proof lookups off the worktree-list request path; use cached definitive answers or conservative local classification, with fresh checkout safety fields (#2044-31f3).
+
+- Keep an agent tab under its explicitly declared worktree despite unchanged shell cwd, later cwd reports and saved-tab restore; preserve sibling tabs and cwd-based removal safety (#2044-31f3).
 - Export the title and clean answer labels from Codex native `/plan` questions instead of retaining an unrelated waiting title (#2026-9178).
 
 - Reuse retained terminal pixels during whole-row history growth instead of redrawing every glyph, skip unchanged damaged rows repaint bounded cell spans, and merge equal background fills; invalidate reuse on geometry, theme, screen or marker-layout changes (#2040-16b2).
@@ -28,6 +47,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - Preserve Claude follow-up suggestions through Stop-hook repaints after an early idle hook, so mobile receives the chips and can consume the list after a tap (#2029-994d).
 
+- Detect installed plugin payload differences even when the catalogue version is unchanged.
+
+- Keep mobile choice answers, queued drafts and delayed Enter writes bound to the session selected when tapped, even after navigation (#2021-30cd).
+
+- Report the configured ego executable and failed export status instead of blaming a missing transcript header when an older binary rejects Chat export (#2032-8dc3).
 - Show the mobile awaiting total only in the AWAITING tile, move waiting-session navigation to that tile, keep the per-session question banners, and remove the connected header narration (#2055-b727).
 
 - Remove repeated Settings, roadmap and variable-field copy, use a plain catalogue record label, and omit subtitle space from title-only Settings headers (#2053-58a5).
@@ -62,6 +86,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Publish typed Settings account enumeration and configured Ego interactive login start/status, with human terminal authentication and separate credential readback (#1790-1011).
 ### Fixed
 
+- Replace stale slash-command lists with a single filtered match, and dismiss the list when the agent closes completion, including ego `/go` and `/goal` (#2030-84bb).
 - Refresh Settings readers after legacy upstream credential and OAuth owner writes, including durable partial-vault failures, connection password edits, deployment pairing-token creation and deployment-mode changes (#1989-22fe).
 - Dismiss the mobile suggestion list as soon as a chip is picked, without restoring it from session activity updates; re-arm after the backend clears or replaces the list and show the existing send-failure notice if submission fails (#2029-994d).
 
@@ -212,9 +237,47 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - Show native terminal ego provider recovery with phase, attempt, next-retry countdown and a Force retry control; notify managed parents on recovery entry and exit (#1902-7010).
 
+### Fixed
+
+- Restore Edge spoken replies after the service migration with the new endpoint and the live-verified existing v1 GEC handshake (#1952-bf91).
+
+- Recover failed mobile views after a server outage through automatic or manual retry, without false empty/setup states, raw network errors or desktop restart advice (#1930-f4c2).
+- Exclude projected suggestion rows from copied terminal selections, including scrollback selections, remove the duplicate blank separator around an omitted suggestion block, and classify the full received viewport (#1935-eedd).
+
+- Apply asynchronous AI Chat session option offers before the first prompt so model and mode settings become available, without stale offer snapshots reverting a confirmed selection (#1918-2ea3).
+- Close AI Chat tabs with the middle mouse button through the normal guarded close path (#1922-8027).
+- Align AI Chat Stop, Park and Send controls with the input (#1925-9e69).
+- Stop a running AI Chat turn with Escape while preserving drafts and dismissing open Find even from the composer (#1926-458a).
+
+- Remove the green answer rail and its inset from AI Chat replies; retain terminal Chat cards and real blockquotes (#1920-700e).
+
+- Attach AI Chat clipboard images when an empty text flavor accompanies the PNG (#1919-f93d).
+
+- Keep the Settings shell visible during plugin catalogue and value reads, and identify plugin pages in a separate navigation group with source IDs (#1927-9649).
+
+- Retain bounded, metadata-only slow-refresh, UI-freeze and heartbeat-gap evidence across ring overflow and restart. Add an anonymized count-based replay input builder; original real-stall reproduction remains unproven (#1638-c94c).
+
+- Keep ego attachment grants after `run` and `resume` so direct launches accept their prompt (#1833).
+
+- Cancel Jira URL resolution end to end, including shared plugin HTTP header and body reads (#1756-4d42).
+
+- Grant Gemini session attachment trust without a folder prompt or global settings changes. Grant ego PTY attachments read-only access in confined sandbox modes (#1833-aa60).
+
+- Add conditional atomic Ego settings batches, executable paths and base-only write-only provider auth actions (#1907-0f9f).
+
+- Refresh expanded file-browser folders after Finder moves, copies, confirmed directory transfers and remote uploads (#1905-c1ed).
+
+- Recognize `💬` answers at the start of Markdown list items in the CLI grid, Answers view and Chat view, without including unmarked sibling items (#1904-9eef).
+
+- Fix urgent managed ego mail falling back as an unknown agent type; queue only an inbox notice without interrupting active tools (#1901-9b6b).
+
+- Fix cache keepalive draft preservation with guarded backend submissions and complete question-state replay on plugin load.
+
+### Added
 - Delete saved AI Chat conversations from the Conversations list with named confirmation and ACP capability gating (#1917).
 
 - Pin AI Chat repository context per conversation and show its configured name color, including parent repository colors for linked worktrees without changing draft parking (#1924-12be).
+- Configure Jira and GitLab default projects in schema-driven plugin settings; explicit account projects retain precedence (#1756-4d42).
 - Diagnose empty or off-screen mobile resume shells through the backend log ring without reloading the page (#1900-5ff6).
 - Preserve a bounded mobile lifecycle trail across reloads and send prior abnormal-document evidence automatically to the backend log ring; acknowledge HTTP 204 log writes so later mobile warnings are not lost. The reported iPhone grey-screen cause remains under investigation (#1900-5ff6).
 - Bind GitHub Work review threads and PR actions to the selected account through core policy, with desktop and HTTP parity (#1693-a816).

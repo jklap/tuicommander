@@ -545,7 +545,7 @@ fn story_tool_publishes_its_input_schema_and_tracking_only_actor_contract() {
     let definition = native_tool_named("story");
     let input = &definition["inputSchema"]["properties"]["input"];
     assert!(
-        input["oneOf"].as_array().is_some_and(|v| v.len() > 10),
+        input["anyOf"].as_array().is_some_and(|v| v.len() > 10),
         "the StoryAction variants must be published: {input}"
     );
     let description = definition["description"].as_str().unwrap_or_default();
@@ -564,6 +564,9 @@ fn story_tool_publishes_its_input_schema_and_tracking_only_actor_contract() {
 /// into whichever conversation happened to be armed.
 #[tokio::test]
 async fn voice_binds_to_the_calling_terminal_on_the_direct_and_collapsed_paths() {
+    let dir = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+    let _guard = crate::config::set_config_dir_override(dir.path().to_path_buf());
+    write_voice_config(dir.path(), true, true);
     let state = test_state();
 
     let unbound_direct = tool_call_text(
@@ -2014,6 +2017,191 @@ fn a_task_owned_by_another_identity_is_refused() {
         crate::tasks::TaskStatus::Working,
         "a refused cancel must not have mutated the task"
     );
+}
+
+/// Catches: moving task cancellation to agent loses the spawning caller's ownership check.
+#[tokio::test]
+async fn agent_task_cancel_refuses_a_non_owner() {
+    let state = test_state();
+    let id = state
+        .tasks
+        .create(crate::tasks::TaskKind::AgentSpawn, "peer-a", None);
+    state.mcp.to_session.insert("mcp-b".into(), "peer-b".into());
+    for action in ["task_cancel", "task_get"] {
+        let refused = handle_mcp_tool_call(
+            &state,
+            "127.0.0.1:1".parse().unwrap(),
+            "agent",
+            &serde_json::json!({"action":action, "task_id":id}),
+            Some("mcp-b"),
+        )
+        .await;
+        assert_eq!(
+            refused["error"], "task_id is not owned by the calling identity",
+            "{action}: {refused}"
+        );
+    }
+    assert_eq!(
+        state.tasks.get(&id).unwrap().status,
+        crate::tasks::TaskStatus::Working
+    );
+}
+
+/// Catches: agent task actions bypass remote-control guards or lose headerless ownership.
+#[tokio::test]
+async fn agent_task_actions_keep_headerless_ownership_and_remote_cancel_guard() {
+    let state = test_state();
+    let id = state.tasks.create(
+        crate::tasks::TaskKind::AgentSpawn,
+        &task_owner_identity(None, Some("headerless")),
+        None,
+    );
+    let polled = handle_mcp_tool_call(
+        &state,
+        "8.8.8.8:1".parse().unwrap(),
+        "agent",
+        &serde_json::json!({"action":"task_get", "task_id":id}),
+        Some("headerless"),
+    )
+    .await;
+    assert_eq!(polled["status"], "working", "{polled}");
+    let refused = handle_mcp_tool_call(
+        &state,
+        "8.8.8.8:1".parse().unwrap(),
+        "agent",
+        &serde_json::json!({"action":"task_cancel", "task_id":id}),
+        Some("headerless"),
+    )
+    .await;
+    assert_eq!(
+        refused["error"],
+        "Task cancellation is restricted to localhost connections"
+    );
+    assert_eq!(
+        state.tasks.get(&id).unwrap().status,
+        crate::tasks::TaskStatus::Working
+    );
+}
+
+/// Catches: the new adapter rewrites completed/failed/cancelled outcomes on cancellation.
+#[tokio::test]
+async fn agent_task_cancel_preserves_every_final_outcome() {
+    use crate::tasks::{TaskKind, TaskStatus, TaskUpdate};
+    let state = test_state();
+    let owner = task_owner_identity(None, Some("owner"));
+    for status in [
+        TaskStatus::Completed,
+        TaskStatus::Failed,
+        TaskStatus::Cancelled,
+    ] {
+        let id = state.tasks.create(TaskKind::AgentSpawn, &owner, None);
+        state
+            .tasks
+            .set_status(
+                &id,
+                status,
+                TaskUpdate {
+                    result: Some(serde_json::json!({"exit_code":137})),
+                    error: Some("child failed".into()),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        let cancelled = handle_mcp_tool_call(
+            &state,
+            "127.0.0.1:1".parse().unwrap(),
+            "agent",
+            &serde_json::json!({"action":"task_cancel", "task_id":id}),
+            Some("owner"),
+        )
+        .await;
+        assert_eq!(cancelled["cancelled"], false, "{cancelled}");
+        assert_eq!(state.tasks.get(&id).unwrap().status, status);
+        let polled = handle_mcp_tool_call(
+            &state,
+            "127.0.0.1:1".parse().unwrap(),
+            "agent",
+            &serde_json::json!({"action":"task_get", "task_id":id}),
+            Some("owner"),
+        )
+        .await;
+        assert_eq!(polled["status"], cancelled["status"]);
+        assert_eq!(polled["result"]["exit_code"], 137);
+        assert_eq!(polled["error_detail"], "child failed");
+        assert!(polled.get("error").is_none(), "{polled}");
+    }
+}
+
+/// Catches: task_cancel is accidentally wired to session kill instead of task cancellation.
+#[tokio::test]
+async fn agent_task_cancel_does_not_kill_its_pty() {
+    let state = test_state();
+    let created = handle_session(&state, &serde_json::json!({"action":"create"}), None);
+    let session_id = created["session_id"]
+        .as_str()
+        .expect("test needs a real PTY");
+    let id = state.tasks.create(
+        crate::tasks::TaskKind::AgentSpawn,
+        &task_owner_identity(None, Some("owner")),
+        Some(session_id),
+    );
+    let cancelled = handle_mcp_tool_call(
+        &state,
+        "127.0.0.1:1".parse().unwrap(),
+        "agent",
+        &serde_json::json!({"action":"task_cancel", "task_id":id}),
+        Some("owner"),
+    )
+    .await;
+    let still_running = state.session_maps.sessions.contains_key(session_id);
+    kill_test_session(&state, session_id);
+    assert_eq!(cancelled["cancelled"], true, "{cancelled}");
+    assert!(
+        still_running,
+        "cancelling a task must leave its real PTY alive"
+    );
+    assert_eq!(
+        state.tasks.get(&id).unwrap().status,
+        crate::tasks::TaskStatus::Cancelled
+    );
+}
+
+/// Catches: an existing task denial becomes bypassable through the new agent actions.
+#[tokio::test]
+async fn agent_task_actions_honor_existing_tool_denials() {
+    for disabled in ["task", "agent"] {
+        let state = test_state();
+        let id = state.tasks.create(
+            crate::tasks::TaskKind::AgentSpawn,
+            &task_owner_identity(None, Some("owner")),
+            None,
+        );
+        state
+            .config
+            .write()
+            .disabled_native_tools
+            .push(disabled.into());
+        for action in ["task_get", "task_cancel"] {
+            let refused = handle_mcp_tool_call(
+                &state,
+                "127.0.0.1:1".parse().unwrap(),
+                "agent",
+                &serde_json::json!({"action":action, "task_id":id}),
+                Some("owner"),
+            )
+            .await;
+            assert!(
+                refused["error"]
+                    .as_str()
+                    .is_some_and(|error| error.contains("disabled by configuration")),
+                "{refused}"
+            );
+        }
+        assert_eq!(
+            state.tasks.get(&id).unwrap().status,
+            crate::tasks::TaskStatus::Working
+        );
+    }
 }
 
 #[test]
@@ -5835,4 +6023,141 @@ async fn mcp_outcome_record_groups_parent_but_preserves_targets_and_utf8_cost() 
         assert_eq!(row["application_error"], false);
     }
     assert!(!projection.to_string().contains("recipient-"));
+}
+
+// Catches: UI regrouping bypasses the armed caller/repository boundary or the
+// previous Design Mode denial, or maps a lifecycle action to ordinary UI behavior.
+#[cfg(all(unix, feature = "desktop"))]
+#[tokio::test]
+async fn ui_design_actions_preserve_caller_repository_and_saved_denials() {
+    let state = test_state();
+    insert_managed_test_session(&state, "owner", "/repo");
+    insert_managed_test_session(&state, "other", "/repo");
+    state
+        .mcp
+        .to_session
+        .insert("owner-mcp".into(), "owner".into());
+    state
+        .mcp
+        .to_session
+        .insert("other-mcp".into(), "other".into());
+    let manager = crate::design_mode::manager(&state).await;
+    manager.arm_extension("/repo".into(), "owner".into()).await;
+    let actions = ["stop", "reload", "navigate", "screenshot", "errors", "eval"];
+    for action in actions {
+        for (caller, repo) in [("other-mcp", "/repo"), ("owner-mcp", "/other")] {
+            let reply = handle_mcp_tool_call(
+                &state,
+                loopback_addr(),
+                "call_tool",
+                &serde_json::json!({"tool_name":"ui","arguments":{
+                    "action":format!("design_{action}"),"repo_path":repo,
+                    "url":"http://localhost:3000", "script":"document.title"
+                }}),
+                Some(caller),
+            )
+            .await;
+            assert_eq!(
+                reply["error"], "Design Mode not armed for this session",
+                "{action}: {reply}"
+            );
+        }
+    }
+    let status = handle_mcp_tool_call(
+        &state,
+        loopback_addr(),
+        "ui",
+        &serde_json::json!({"action":"design_status"}),
+        Some("owner-mcp"),
+    )
+    .await;
+    assert_eq!(status[0]["repoPath"], "/repo", "{status}");
+    assert_eq!(status[0]["sessionId"], "owner", "{status}");
+    for disabled in ["ui", "design_mode"] {
+        state.config.write().disabled_native_tools = vec![disabled.into()];
+        for action in [
+            "design_start",
+            "design_status",
+            "design_stop",
+            "design_eval",
+        ] {
+            let reply = handle_mcp_tool_call(
+                &state,
+                loopback_addr(),
+                "ui",
+                &serde_json::json!({
+                    "action":action,"session_id":"owner","repo_path":"/repo","script":"1"
+                }),
+                Some("owner-mcp"),
+            )
+            .await;
+            assert_eq!(
+                reply["error"],
+                format!("Tool '{disabled}' is disabled by configuration"),
+                "{reply}"
+            );
+        }
+    }
+    state.config.write().disabled_native_tools.clear();
+    let stopped = handle_mcp_tool_call(
+        &state,
+        loopback_addr(),
+        "ui",
+        &serde_json::json!({"action":"design_stop","repo_path":"/repo"}),
+        Some("owner-mcp"),
+    )
+    .await;
+    assert!(stopped.get("error").is_none(), "{stopped}");
+    let status = handle_mcp_tool_call(
+        &state,
+        loopback_addr(),
+        "ui",
+        &serde_json::json!({"action":"design_status"}),
+        Some("owner-mcp"),
+    )
+    .await;
+    assert_eq!(status["error"], "Design Mode not armed for this session");
+}
+
+// Catches: flat advertised UI fields cannot express Design Mode requests, or
+// missing required fields reach the browser owner instead of static validation.
+#[tokio::test]
+async fn ui_design_contract_is_discoverable_and_validates_before_dispatch() {
+    let state = test_state();
+    let schema = handle_get_tool_schema(&state, &serde_json::json!({"tool_name":"ui"}));
+    for action in [
+        "design_start",
+        "design_stop",
+        "design_status",
+        "design_reload",
+        "design_navigate",
+        "design_screenshot",
+        "design_errors",
+        "design_eval",
+    ] {
+        assert!(
+            schema["inputSchema"]["properties"]["action"]["enum"]
+                .as_array()
+                .unwrap()
+                .contains(&serde_json::json!(action)),
+            "{action}"
+        );
+    }
+    for field in ["session_id", "repo_path", "browser", "script", "url"] {
+        assert!(
+            schema["inputSchema"]["properties"].get(field).is_some(),
+            "{field}"
+        );
+    }
+    for args in [
+        serde_json::json!({"action":"design_start"}),
+        serde_json::json!({"action":"design_stop"}),
+        serde_json::json!({"action":"design_navigate","repo_path":"/repo"}),
+        serde_json::json!({"action":"design_eval","repo_path":"/repo"}),
+        serde_json::json!({"action":"design_start","session_id":"owner","browser":"unknown"}),
+    ] {
+        let reply = handle_mcp_tool_call(&state, loopback_addr(), "ui", &args, None).await;
+        assert_eq!(reply["code"], "invalid_arguments", "{args}: {reply}");
+        assert_eq!(reply["effect"], "not_started", "{reply}");
+    }
 }

@@ -208,6 +208,14 @@ pub struct PluginManifest {
     pub id: String,
     pub name: String,
     pub version: String,
+    /// Computed from installed files; manifest input cannot claim an identity.
+    #[serde(
+        default,
+        skip_deserializing,
+        skip_serializing_if = "Option::is_none",
+        rename = "contentSha256"
+    )]
+    pub content_digest: Option<String>,
     #[serde(rename = "minAppVersion")]
     pub min_app_version: String,
     pub main: String,
@@ -626,6 +634,8 @@ pub fn list_user_plugins() -> Vec<PluginManifest> {
             continue;
         }
 
+        let mut manifest = manifest;
+        manifest.content_digest = crate::plugin_content::digest(&path).ok();
         manifests.push(manifest);
     }
 
@@ -718,6 +728,7 @@ pub fn unregister_loaded_plugin(
 }
 
 pub(crate) fn unregister_loaded_plugin_impl(state: &crate::AppState, plugin_id: &str) {
+    state.plugin_http_requests.cancel_plugin(plugin_id);
     state.plugin_settings.unregister(plugin_id);
     state.loaded_plugins.remove(plugin_id);
     crate::accounts::unregister_providers(plugin_id);
@@ -984,7 +995,9 @@ fn finalize_plugin_install(
         "plugin",
         &format!("Installed plugin \"{}\" v{}", manifest.id, manifest.version),
     );
-    Ok(manifest.clone())
+    let mut installed = manifest.clone();
+    installed.content_digest = crate::plugin_content::digest(&target.path).ok();
+    Ok(installed)
 }
 
 /// Recursively copy a directory, skipping the `data/` subdirectory (preserved separately).
@@ -1715,6 +1728,7 @@ mod tests {
             id: dir_name.to_string(),
             name: "Test Plugin".to_string(),
             version: "1.0.0".to_string(),
+            content_digest: None,
             min_app_version: "0.3.0".to_string(),
             main: "main.js".to_string(),
             description: None,

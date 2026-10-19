@@ -241,24 +241,17 @@ async fn handle_worktree_with_caller(
             };
             // Keep full, fresh checkout safety fields, but share the sidebar's
             // ref-keyed merge proofs instead of rerunning every integration read.
+            // GitHub evidence is cache-only here; monitoring fills it separately.
             let mut lifecycle_handles = Vec::with_capacity(wts.len());
             for (workspace_id, workspace) in &wts {
                 let workspace_id = workspace_id.clone();
                 let workspace = workspace.clone();
                 let base_repo = path.clone();
-                let proof_state = Arc::clone(state);
                 lifecycle_handles.push(tokio::task::spawn_blocking(move || {
                     let lifecycle = tuic_git::worktree::inspect_workspace_listing_with_pr(
                         std::path::Path::new(&base_repo),
                         &workspace,
-                        |repo, branch, tip| {
-                            crate::worktree::merged_github_pr_proves_tip_monitoring(
-                                &proof_state,
-                                repo,
-                                branch,
-                                tip,
-                            )
-                        },
+                        crate::worktree::merged_github_pr_proves_tip_cached,
                     );
                     (workspace_id, lifecycle)
                 }));
@@ -957,6 +950,71 @@ pub(super) fn handle_voice(
     })
 }
 
+/// The grouped wire contract reuses the service inputs and their owners.
+#[derive(serde::Deserialize, schemars::JsonSchema)]
+#[serde(tag = "action", rename_all = "snake_case", deny_unknown_fields)]
+enum WorkflowAction {
+    Story {
+        input: crate::stories::StoryAction,
+    },
+    Run {
+        input: Box<crate::workflows::RunAction>,
+    },
+    ProposalCreate {
+        input: WorkflowStoryCreateInput,
+    },
+    Report {
+        input: crate::workflows::AttemptReport,
+    },
+    Launch {
+        input: WorkflowLaunchInput,
+    },
+}
+
+pub(super) fn workflow_action_schema() -> serde_json::Value {
+    let generator = schemars::generate::SchemaSettings::draft2020_12()
+        .with(|settings| settings.inline_subschemas = true)
+        .into_generator();
+    let mut schema = serde_json::to_value(generator.into_root_schema_for::<WorkflowAction>())
+        .expect("workflow input schema");
+    schema.as_object_mut().unwrap().remove("$schema");
+    schema
+}
+
+pub(super) fn handle_workflow(
+    state: &Arc<AppState>,
+    addr: SocketAddr,
+    args: &serde_json::Value,
+    mcp_session_id: Option<&str>,
+) -> serde_json::Value {
+    let action: WorkflowAction = match serde_json::from_value(args.clone()) {
+        Ok(action) => action,
+        Err(error) => {
+            return serde_json::json!({"error": format!("invalid workflow action: {error}")});
+        }
+    };
+    match action {
+        WorkflowAction::Story { input } => {
+            handle_story(state, &serde_json::json!({"input":input}), mcp_session_id)
+        }
+        WorkflowAction::Run { input } => {
+            handle_workflow_run(state, &serde_json::json!({"input":input}), mcp_session_id)
+        }
+        WorkflowAction::ProposalCreate { input } => {
+            handle_workflow_story_create(state, &serde_json::json!({"input":input}), mcp_session_id)
+        }
+        WorkflowAction::Report { input } => {
+            handle_workflow_report(state, &serde_json::json!({"input":input}), mcp_session_id)
+        }
+        WorkflowAction::Launch { input } => handle_workflow_launch(
+            state,
+            addr,
+            &serde_json::json!({"input":input}),
+            mcp_session_id,
+        ),
+    }
+}
+
 pub(super) fn handle_story(
     state: &Arc<AppState>,
     args: &serde_json::Value,
@@ -1002,7 +1060,7 @@ pub(super) fn handle_workflow_run(
     ))
 }
 
-#[derive(serde::Deserialize)]
+#[derive(serde::Deserialize, serde::Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct WorkflowStoryCreateInput {
     pub(super) run_id: String,
@@ -1189,7 +1247,7 @@ pub(crate) fn queue_peer_notice(
     true
 }
 
-#[derive(serde::Deserialize)]
+#[derive(serde::Deserialize, serde::Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct WorkflowLaunchInput {
     pub(super) run_id: String,

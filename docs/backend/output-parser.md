@@ -523,7 +523,7 @@ ParsedEvent::SlashMenu {
 }
 ```
 
-Detected by `parse_slash_menu()` when `slash_mode` is active — scans the bottom screen rows for 2+ consecutive `/command` patterns. The `❯` prefix marks the highlighted item.
+Detected by `parse_slash_menu()` only when the input FSM has `slash_mode` active. It scans the bottom screen rows for consecutive `/command` patterns, including a single filtered result. The `❯` prefix marks the highlighted item. When the current screen no longer contains a menu, the PTY processor emits one empty `SlashMenu` to retract the cached list. Exact ego commands close completion without submitting a line; they must not leave the previous list visible.
 
 ## VT100-Aware Parsing
 
@@ -535,7 +535,7 @@ Primary entry point for VT100-aware parsing. Accepts `ChangedRow` vectors from `
 
 ### `parse_slash_menu(screen_rows: &[String]) -> Option<ParsedEvent>`
 
-Scans screen bottom rows (from VtLogBuffer) for slash command menus. Only called when `slash_mode` is active (user typed `/`). Returns `SlashMenu` event with all detected commands.
+Scans screen bottom rows (from VtLogBuffer) for slash command menus. Only called when `slash_mode` is active (user typed `/`). Returns `SlashMenu` with all detected commands, including one result. `None` means no menu on the current screen; the caller retracts any previously published menu. The real `ego-slash-filter-2030.tcap` covers broad completion, `/go` → `/goal`, exact-command closure and unmatched input.
 
 ## Pattern Detection
 
@@ -731,3 +731,26 @@ Before parsing an ego question, the PTY reader concatenates rows linked by the g
 ### Mobile intent presentation
 
 The log serializer keeps `intent:` text and its styled spans in history and screen output. Only `suggest:` source markers are stripped for the suggestion-chip UI. Mobile CLI rejoins the terminal soft-wrap boundaries and applies the desktop intent tint to the complete logical line. State/title parsing is unchanged.
+
+### PTY intent title closure
+
+The shared `intent_marker.json` grammar defines the intent anchor and title
+boundary for Rust capture and desktop/mobile tinting. The last complete, non-nested
+parenthesis group on the logical row is the title. Its closing parenthesis ends
+the intent even when ordinary prose follows without whitespace. Earlier
+parenthesis groups remain in the description. An unfinished later opening
+parenthesis keeps the title incomplete, so a repaint or hard-wrapped title is
+not replaced by an earlier aside. Desktop tinting resolves the complete
+soft-wrapped logical line before mapping the boundary back to physical cells.
+Title-less rows keep their existing hard-break completion behavior.
+
+Vite watches the shared grammar and its parent directories even though other
+Rust sources remain excluded from frontend hot reload. A grammar edit must
+invalidate its imported JSON module together with the frontend classifier;
+otherwise a cached grammar can omit new fields and abort viewport marker planning.
+
+The parser does not remove terminal bytes. Desktop tint stops at the closing
+cell, including when the title wraps; mobile keeps trailing spans and links outside
+the tint. The CONTEXT header receives only the parsed description. Source evidence
+for 2060-0ebe is the recorded ego assistant message in `ego-intent-2060.json`:
+the model itself emitted `)Criteri`, not two lines joined by the terminal renderer.

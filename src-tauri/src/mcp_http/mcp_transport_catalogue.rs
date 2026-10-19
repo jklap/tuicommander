@@ -355,6 +355,7 @@ const PLATFORM_TOOLS: &[&str] = &[
     "agent",
     "repo",
     "story",
+    "workflow",
     "task",
     "automations",
     "workflow_run",
@@ -435,15 +436,28 @@ pub(super) fn validate_mcp_repo_path(path: &str) -> Result<(), serde_json::Value
     super::validate_path_string(path).map_err(|msg| serde_json::json!({"error": msg}))
 }
 
-pub(super) const SESSION_ACTIONS: &str = "list, create, submit, force_retry, input, output, resize, rename, keep_open, suspend, close, kill, pause, resume, status, wait, declare_worktree";
-pub(super) const AGENT_ACTIONS: &str =
-    "launch, spawn, register, list_peers, send, inbox, wait, subscribe, ack, unsubscribe";
-pub(super) const REPO_ACTIONS: &str = "list, add, active, status, branch_integrations, branch_integration, worktree_list, worktree_lifecycle, worktree_create, worktree_remove, orphan_cleanup_answer, branch_delete, progress_list, work_item, work_item_act";
-pub(super) const UI_ACTIONS: &str = "tab, toast, confirm, screenshot";
+pub(super) const SESSION_ACTIONS: &str = "list, create, submit, force_retry, input, output, resize, rename, keep_open, suspend, close, kill, pause, resume, status, wait, declare_worktree, help";
+pub(super) const WORKFLOW_ACTIONS: &str = "story, run, proposal_create, report, launch";
+
+/// Preserve member denials during the additive period before the catalogue cutover.
+pub(super) fn workflow_member_tool(action: &str) -> Option<&'static str> {
+    match action {
+        "story" => Some("story"),
+        "run" => Some("workflow_run"),
+        "proposal_create" => Some("workflow_story_create"),
+        "report" => Some("workflow_report"),
+        "launch" => Some("workflow_launch"),
+        _ => None,
+    }
+}
+
+pub(super) const AGENT_ACTIONS: &str = "launch, spawn, register, list_peers, send, inbox, wait, subscribe, ack, unsubscribe, task_get, task_cancel, help";
+pub(super) const REPO_ACTIONS: &str = "list, add, active, status, branch_integrations, branch_integration, worktree_list, worktree_lifecycle, worktree_create, worktree_remove, orphan_cleanup_answer, branch_delete, progress_list, work_item, work_item_act, help";
+pub(super) const UI_ACTIONS: &str = "tab, toast, confirm, screenshot, design_start, design_stop, design_status, design_reload, design_navigate, design_screenshot, design_errors, design_eval, help";
 pub(super) const TASK_ACTIONS: &str = "get, cancel";
 pub(super) const DEBUG_ACTIONS: &str =
     "agent_detection, logs, sessions, invoke_js, frame_workload_dump, help";
-pub(super) const VOICE_ACTIONS: &str = "speak, stop, status";
+pub(super) const VOICE_ACTIONS: &str = "speak, stop, status, help";
 pub(super) const REMOTE_ACTIONS: &str = "preview, update";
 
 pub(super) fn removed_native_action_replacement(tool: &str, action: &str) -> Option<&'static str> {
@@ -480,6 +494,10 @@ pub(super) const NATIVE_TOOL_SUMMARIES: &[(&str, &str)] = &[
     ),
     ("repo", "Inspect repositories and manage their worktrees."),
     ("story", "Read project stories and update their progress."),
+    (
+        "workflow",
+        "Manage stories, workflow runs and bound agent attempts.",
+    ),
     (
         "design_mode",
         "Start Design Mode at a terminal link for layout work.",
@@ -528,8 +546,43 @@ pub(super) const NATIVE_TOOL_SUMMARIES: &[(&str, &str)] = &[
 /// and `progress_tracking`. Leaking the raw list to external clients exposes
 /// tool metadata for gated tools.
 pub(super) fn native_tool_definitions() -> serde_json::Value {
+    let mut tools = native_validation_tool_definitions();
+    for tool in tools.as_array_mut().expect("native tool array") {
+        super::mcp_input_contract::advertise_schema(tool);
+    }
+    tools
+}
+
+/// Complete private contracts, including conditions unsupported by tool clients.
+pub(super) fn native_validation_tool_definitions() -> serde_json::Value {
+    let mut tools = native_reference_tool_definitions();
+    for tool in tools.as_array_mut().expect("native tool array") {
+        let name = tool["name"].as_str().expect("native name");
+        if let Some(description) = compact_native_description(name) {
+            tool["description"] = serde_json::json!(description);
+            let action = &mut tool["inputSchema"]["properties"]["action"];
+            let actions = action["enum"].as_array_mut().expect("native actions");
+            if !actions.iter().any(|action| action == "help") {
+                actions.push(serde_json::json!("help"));
+            }
+            let action_names = actions
+                .iter()
+                .map(|action| action.as_str().unwrap())
+                .collect::<Vec<_>>()
+                .join(", ");
+            if action.get("description").is_some() {
+                action["description"] = serde_json::json!(format!("One of: {action_names}"));
+            }
+        }
+    }
+    tools
+}
+
+/// Full guidance stays on demand; Settings retains its existing tooltip copy.
+fn native_reference_tool_definitions() -> serde_json::Value {
     let mut defs = serde_json::json!([
         crate::automations::mcp::tool_definition(),
+        // DEFERRED (2026-10-19) — remove the old name only at the approved 2068 catalogue cutover.
         crate::design_mode::mcp::tool_definition(),
         crate::secrets::tool_definition(),
         crate::telegram::tool_definition(),
@@ -565,15 +618,16 @@ pub(super) fn native_tool_definitions() -> serde_json::Value {
         },
         {
             "name": "agent",
-            "description": "AI agent orchestration. There is no separate swarm action: use these agent/session primitives to spawn and coordinate managed peers.\n\nOrchestration in 5 lines:\n1. Managed PTYs auto-bind from $TUIC_SESSION. A headerless external caller calls register without tuic_session to receive an MCP-scoped UUID, or supplies an explicit stable UUID to reclaim it.\n2. Spawn a named peer: spawn name=worker prompt=<task> [agent_type=codex|gemini|...] → {session_id, name}.\n3. Wait for it: agent action=wait (new mail; omit since, the cursor is kept server-side) or session action=wait session_id=<id> until=idle|exited. Cheap blocking call — do NOT poll in a loop. Both cap at 300s: for work that runs longer, or across a reconnect, poll the spawn's task_id with task action=get instead — the outcome is recorded even with nobody waiting.\n4. Talk to it: send to=<peer> message=<text> [urgency=normal|urgent]. Normal is the default; use urgent when the recipient must change course before its next step. Mail stays mail: the payload is never typed into the recipient's composer. It waits in the recipient's inbox, and an idle/completed recipient may be sent a payload-free generic `agent action=inbox` wake. Urgent sends a payload-free inbox notice to a safe busy Claude/Codex/ego composer for the next tool boundary.\n5. Lifecycle notifications carry state only. Every worker must report task output or blockers with send; use session output only if a child anomalously failed to send.\n\nActions:\n- launch: One durable idempotent managed launch (localhost only). Requires idempotency_key, parent_session_id (registered peer), stable name, keep_open, workspace={existing_path} or {repo_path,branch,base_ref?}, and spawn={prompt,...spawn options}. Read a receipt with launch_id alone, or retry the identical request after a lost reply: the same launch_id/session_id returns, never another checkout or PTY. Conflicting key reuse errors explicitly. Receipt status=created|prompt_delivered|ready|blocked, prompt_delivery=queued|delivered|unknown and warm_artifacts are separate. Delivered proves argv handoff or PTY submission, not model acceptance; ready also requires native Ready-screen evidence. Interrupted uncertain creation blocks rather than spawning again; retain the handle and inspect the named resources. Model/account/brief policy remains caller-owned. Also POST /agents/launch and managed_agent_launch IPC, with identical validation.\n- spawn: Launch agent in new PTY (localhost only). Optional name is assigned before prompt delivery. Returns {session_id, name, task_id, poll_interval_ms, server_ts, parent_session_id?}.\n- wait: Block until new inbox mail. Not byte-bounded: byte_budget/continuation are rejected before mail consumption; use inbox for bounded payloads. Omit `since` — the server resumes from your last read position; pass it only to override (since=0 replays everything). Success inlines every retained fresh message (up to the 100-message inbox capacity) in chronological order. Every response carries next_since, timeout included. An active wait suppresses terminal wake.\n- register: Bind an external/headerless caller, or rename/set the repository path of an auto-bound managed peer. tuic_session is optional; omission generates a stable identity for this MCP connection. Reconnecting under a NEW uuid? Pass `replaces=<old_uuid>` or its inbox is stranded — the response reports superseded_identity, mail_migrated, and mail_stranded + identity_warning when the old identity still owns a live PTY (its mail is left alone). Check `terminal` in the response: false means no PTY notice can be typed into you; a subscribed ACP inbox can still notify you or wake idle ego. Otherwise consume mail with wait/inbox. Declare the orchestrator role with orchestrator=true and remove it with false; spawning a child never infers it, and omitting the field preserves the current role. The response reports mail_wake=managed_pty_lifecycle when a wake can reach you; external/headerless peers without a subscribed ACP inbox stay wait/inbox-only.\n- list_peers: Optional to scopes a recipient through the same resolver as send; compact=true returns identity, state (unknown if absent), activity_age_ms (null if absent), and omitted_fields. List peers across the desktop mail hub and connected daemons. address is connection/peer_id (local/peer_id on the hub); connection_id selects one daemon. Returns tuic_session, name, orchestrator, plus alias and session_id for a peer that owns a live terminal. Optional: path filter. Absent fields are omitted.\n- send: Message any local or remote peer (requires to, message). Use to=connection/peer_id or connection_id with a daemon-local address. The owning daemon performs inbox delivery and wake; replies return through the desktop hub. `to` accepts the peer's tuic_session, PTY id, or terminal alias. `urgency` is normal (default) or urgent; use urgent when the recipient must change course before its next step. Urgent keeps the body in the inbox and writes only a notice to a safe busy Claude/Codex/ego composer. `urgent_delivered` reports a PTY notice, subscribed ACP inbox update, inbox read, or waiter; false adds `urgent_fallback_reason` for queued mail. It does not prove model action or interrupt a tool. `delivered` and `delivery_path` describe the routing path; `recipient_state` appears only for a managed PTY.\n- inbox: Optional byte_budget=1024..65536 returns JSON-text chunks; the budget includes the compact page envelope, not MCP framing. Concatenate chunk values then parse JSON; continue with the opaque continuation and same action. Snapshots expire after 300s or cache eviction; errors require a fresh read. The server cursor advances only on the final chunk. Read up to 100 retained messages in FIFO order. Returns next_since and has_more; repeat while has_more is true. Optional: limit (default 100, max 100), since (omit to resume from the server-side cursor). On FIFO eviction, missed_count reports unread messages lost since the last inbox read.\n- subscribe: Create or resume a durable independent reader with subscription_id (1..64 ASCII letters/digits/_/-) and filter=actionable (default), all, exit or failure. Actionable excludes routine system lifecycle/idle traffic, not peer mail. A subscription does not consume legacy inbox or another reader.\n- inbox/wait with subscription_id: Return up to limit (1..100) matching journal messages, cursor, acknowledged_cursor, missed_count and has_more. No byte_budget/continuation; ACK then read has_more batches. Reads do not acknowledge. An unacknowledged batch is replayed unchanged while retained. wait returns only for matching mail or matching retention loss; routine traffic stays inside the server. For continuous event-driven delivery use GET /agent/subscriptions/{id}/events with your Mcp-Session-Id header, or over ACP subscribe to resource tuic://inbox/subscriptions/{id}.\n- ack: Acknowledge a processed subscription batch with subscription_id and its cursor. Acknowledged results never replay on reconnect under the same peer identity and subscription_id. Lost replies before ack can replay: deduplicate side effects by message id. Journal retains the newest 1000 messages per peer across restarts; missed_count counts matching unacknowledged evictions, not routine filtered events. since is legacy-only.\n- unsubscribe: Delete one subscription cursor; retained mail and other readers are unchanged.",
+            "description": "AI agent orchestration. There is no separate swarm action: use these agent/session primitives to spawn and coordinate managed peers.\n\nOrchestration in 5 lines:\n1. Managed PTYs auto-bind from $TUIC_SESSION. A headerless external caller calls register without tuic_session to receive an MCP-scoped UUID, or supplies an explicit stable UUID to reclaim it.\n2. Spawn a named peer: spawn name=worker prompt=<task> [agent_type=codex|gemini|...] → {session_id, name}.\n3. Wait for it: agent action=wait (new mail; omit since, the cursor is kept server-side) or session action=wait session_id=<id> until=idle|exited. Cheap blocking call — do NOT poll in a loop. Both cap at 300s: for work that runs longer, or across a reconnect, poll the spawn's task_id with agent action=task_get instead — the outcome is recorded even with nobody waiting.\n4. Talk to it: send to=<peer> message=<text> [urgency=normal|urgent]. Normal is the default; use urgent when the recipient must change course before its next step. Mail stays mail: the payload is never typed into the recipient's composer. It waits in the recipient's inbox, and an idle/completed recipient may be sent a payload-free generic `agent action=inbox` wake. Urgent sends a payload-free inbox notice to a safe busy Claude/Codex/ego composer for the next tool boundary.\n5. Lifecycle notifications carry state only. Every worker must report task output or blockers with send; use session output only if a child anomalously failed to send.\n\nActions:\n- launch: One durable idempotent managed launch (localhost only). Requires idempotency_key, parent_session_id (registered peer), stable name, keep_open, workspace={existing_path} or {repo_path,branch,base_ref?}, and spawn={prompt,...spawn options}. Read a receipt with launch_id alone, or retry the identical request after a lost reply: the same launch_id/session_id returns, never another checkout or PTY. Conflicting key reuse errors explicitly. Receipt status=created|prompt_delivered|ready|blocked, prompt_delivery=queued|delivered|unknown and warm_artifacts are separate. Delivered proves argv handoff or PTY submission, not model acceptance; ready also requires native Ready-screen evidence. Interrupted uncertain creation blocks rather than spawning again; retain the handle and inspect the named resources. Model/account/brief policy remains caller-owned. Also POST /agents/launch and managed_agent_launch IPC, with identical validation.\n- spawn: Launch agent in new PTY (localhost only). Optional name is assigned before prompt delivery. Returns {session_id, name, task_id, poll_interval_ms, server_ts, parent_session_id?}.\n- task_get: Read a task_id owned by the spawning caller. Returns {task_id, status, status_message?, result?, error_detail?, poll_interval_ms}; optional fields are omitted. Status is working|input_required|completed|failed|cancelled; the last three are immutable. Poll no faster than poll_interval_ms. Outcomes survive client reconnects for up to 24h within this server process.\n- task_cancel: Mark an owned task_id cancelled (localhost only). Does NOT kill the PTY; use session action=kill for that. Already-final tasks return their unchanged status with cancelled=false.\n- wait: Block until new inbox mail. Not byte-bounded: byte_budget/continuation are rejected before mail consumption; use inbox for bounded payloads. Omit `since` — the server resumes from your last read position; pass it only to override (since=0 replays everything). Success inlines every retained fresh message (up to the 100-message inbox capacity) in chronological order. Every response carries next_since, timeout included. An active wait suppresses terminal wake.\n- register: Bind an external/headerless caller, or rename/set the repository path of an auto-bound managed peer. tuic_session is optional; omission generates a stable identity for this MCP connection. Reconnecting under a NEW uuid? Pass `replaces=<old_uuid>` or its inbox is stranded — the response reports superseded_identity, mail_migrated, and mail_stranded + identity_warning when the old identity still owns a live PTY (its mail is left alone). Check `terminal` in the response: false means no PTY notice can be typed into you; a subscribed ACP inbox can still notify you or wake idle ego. Otherwise consume mail with wait/inbox. Declare the orchestrator role with orchestrator=true and remove it with false; spawning a child never infers it, and omitting the field preserves the current role. The response reports mail_wake=managed_pty_lifecycle when a wake can reach you; external/headerless peers without a subscribed ACP inbox stay wait/inbox-only.\n- list_peers: Optional to scopes a recipient through the same resolver as send; compact=true returns identity, state (unknown if absent), activity_age_ms (null if absent), and omitted_fields. List peers across the desktop mail hub and connected daemons. address is connection/peer_id (local/peer_id on the hub); connection_id selects one daemon. Returns tuic_session, name, orchestrator, plus alias and session_id for a peer that owns a live terminal. Optional: path filter. Absent fields are omitted.\n- send: Message any local or remote peer (requires to, message). Use to=connection/peer_id or connection_id with a daemon-local address. The owning daemon performs inbox delivery and wake; replies return through the desktop hub. `to` accepts the peer's tuic_session, PTY id, or terminal alias. `urgency` is normal (default) or urgent; use urgent when the recipient must change course before its next step. Urgent keeps the body in the inbox and writes only a notice to a safe busy Claude/Codex/ego composer. `urgent_delivered` reports a PTY notice, subscribed ACP inbox update, inbox read, or waiter; false adds `urgent_fallback_reason` for queued mail. It does not prove model action or interrupt a tool. `delivered` and `delivery_path` describe the routing path; `recipient_state` appears only for a managed PTY.\n- inbox: Optional byte_budget=1024..65536 returns JSON-text chunks; the budget includes the compact page envelope, not MCP framing. Concatenate chunk values then parse JSON; continue with the opaque continuation and same action. Snapshots expire after 300s or cache eviction; errors require a fresh read. The server cursor advances only on the final chunk. Read up to 100 retained messages in FIFO order. Returns next_since and has_more; repeat while has_more is true. Optional: limit (default 100, max 100), since (omit to resume from the server-side cursor). On FIFO eviction, missed_count reports unread messages lost since the last inbox read.\n- subscribe: Create or resume a durable independent reader with subscription_id (1..64 ASCII letters/digits/_/-) and filter=actionable (default), all, exit or failure. Actionable excludes routine system lifecycle/idle traffic, not peer mail. A subscription does not consume legacy inbox or another reader.\n- inbox/wait with subscription_id: Return up to limit (1..100) matching journal messages, cursor, acknowledged_cursor, missed_count and has_more. No byte_budget/continuation; ACK then read has_more batches. Reads do not acknowledge. An unacknowledged batch is replayed unchanged while retained. wait returns only for matching mail or matching retention loss; routine traffic stays inside the server. For continuous event-driven delivery use GET /agent/subscriptions/{id}/events with your Mcp-Session-Id header, or over ACP subscribe to resource tuic://inbox/subscriptions/{id}.\n- ack: Acknowledge a processed subscription batch with subscription_id and its cursor. Acknowledged results never replay on reconnect under the same peer identity and subscription_id. Lost replies before ack can replay: deduplicate side effects by message id. Journal retains the newest 1000 messages per peer across restarts; missed_count counts matching unacknowledged evictions, not routine filtered events. since is legacy-only.\n- unsubscribe: Delete one subscription cursor; retained mail and other readers are unchanged.",
             "inputSchema": { "type": "object", "properties": {
                 "connection_id": { "type": "string", "description": "Configured remote connection qualifier (session list/output/submit; agent list_peers/send). Remote addresses also accept connection/id; local/id addresses the desktop hub." },
                 "compact": { "type": "boolean", "description": "Inventory only: identity, state, activity_age_ms and explicit omitted_fields." },
                 "byte_budget": { "type": "integer", "minimum":1024, "maximum":65536, "description": "Opt into byte-bounded JSON-text chunks (inbox/output). Bound includes compact JSON page envelope, excludes MCP framing. Default on continuation: 4096." },
                 "continuation": { "type": "string", "description": "Opaque token from a byte-budget page; repeat with same action and target. Concatenate chunk values then parse JSON. Expires after 300s or cache eviction." },
-                "action": { "type": "string", "description": "One of: launch, spawn, wait, register, list_peers, send, inbox, subscribe, ack, unsubscribe" },
+                "action": { "type": "string", "description": "One of: launch, spawn, wait, register, list_peers, send, inbox, subscribe, ack, unsubscribe, task_get, task_cancel" },
                 "idempotency_key": { "type": "string", "minLength": 1, "maxLength": 256, "description": "launch: stable retry key scoped to parent; do not change after a lost reply." },
                 "launch_id": { "type": "string", "description": "launch: read only a durable receipt by handle; omit all creation fields." },
+                "task_id": { "type": "string", "description": "Task handle returned by agent spawn (required for task_get/task_cancel)." },
                 "parent_session_id": { "type": "string", "description": "launch: registered parent peer identity." },
                 "workspace": { "type": "object", "description": "launch: exactly {existing_path} or {repo_path,branch,base_ref?}. Never falls back to another checkout." },
                 "spawn": { "type": "object", "description": "launch: existing spawn options including prompt, agent_type, binary_path, args, model and env. cwd/name/keep_open belong to the transaction and are rejected here." },
@@ -663,6 +717,11 @@ pub(super) fn native_tool_definitions() -> serde_json::Value {
             }, "required": ["input"] }
         },
         {
+            "name": "workflow",
+            "description": "Durable project work for the calling managed session. Actions: story (input=StoryAction), run (input=RunAction), proposal_create, report, launch. Each action has a generated typed input; unknown fields are rejected before effects. story reads and updates native stories and plans; run starts pinned published graphs and reads ordered run history. proposal_create requires the active bound coordinator and {runId,proposalKey,story}; retry the same key and payload to return the same story, never substitute ordinary story create. report submits the typed AttemptReport for this live session's bound attempt; it does not advance story status. launch binds a pinned workflow attempt to an isolated registered worktree and renders its role prompt. Existing project, revision, coordinator, attempt ownership and local launch checks apply. Scheduled definitions remain in the separate automations tool. Legacy story and workflow_* tools remain available until the catalogue cutover.",
+            "inputSchema": super::mcp_transport_ancillary::workflow_action_schema()
+        },
+        {
             "name": "workflow_run",
             "description": "Start and inspect published workflow graphs in the calling managed session's project. Pass a generated RunAction as input: start_graph (payload-bound request_id, pinned definition revision, story expected_revision), get, list_plan_runs, events (after_sequence cursor), command, record_integration, recertify_canonical, execute_check. start_plan is the legacy record-only ledger, not executable delivery. Graph starts require the owning daemon; unsupported plan dispatch is refused visibly. Commands include pause, cancel, answer_input, resume_graph with explicit execution_id, activation_id and resolution. Legacy runs are inspect/cancel only in the UI. History is the same ordered ledger returned over HTTP/IPC, including decisions and evidence.",
             "inputSchema": { "type": "object", "properties": {
@@ -704,9 +763,9 @@ pub(super) fn native_tool_definitions() -> serde_json::Value {
         },
         {
             "name": "ui",
-            "description": "Control TUIC UI. Actions:\n- tab: open/update panel tab. Requires id, title, + html OR url.\n- toast: non-blocking notification. Requires title. Optional: message, level (info/warn/error), sound, urgency (normal/urgent).\n- confirm: blocking dialog, shown on every client (desktop, browser, mobile PWA) plus a mobile push — the first answer wins. Returns {confirmed}, plus {reason} when it expired unanswered after 300s (treat that as a refusal, not a yes). Requires title, except settings proposals: pass proposalId to show the backend redacted diff; model title/message/confirmed cannot grant approval.\n- screenshot: capture a panel as WebP. Requires id. Returns {path}. Read the path to view.\n\nURL schemes for tab:\n- http(s): loaded in sandboxed iframe using the permissive default-src CSP (external HTTPS and localhost HTTP supported). Site frame policies can still refuse embedding.\n- file:///path: read via IPC and rendered as inline HTML (sandbox blocks direct file:// access).\n- tuic://edit/<path>?line=N: native code editor (no iframe). Prefix absolute paths with `//` (tuic://edit//Users/x/a.rs). Relative = active repo.\n- tuic://open/<path>: native markdown/preview tab.\n\n- tuic://open-repo is rejected; use repo action=add with path to register a directory. Other tuic actions are not tab content.\n\nCustom schemes (vscode://) do NOT work in iframes.\n\nUse:\n- A project outcome — a milestone, a decision, a discovery, a blocker — belongs to the `progress` tool, which records it AND shows a toast. `ui action=toast` is the transient half only: it says something happened and keeps no record of it.\n- toast for done/error/long-job end; error=failure, warn=recoverable. Skip for micro-steps.\n- toast urgency: normal (default) records the notice in the bell only; urgent also shows a transient card on the desktop window. The caller chooses; the card never covers the focused input.\n- toast with sound=attention when you are working unattended and are BLOCKED on the user (question, approval, ambiguous requirement). It is the only sound that carries across a room; do not spend it on progress updates.\n- confirm BEFORE destructive ops (rm -rf, git reset --hard, force-push, DROP). Only proceed if confirmed.\n- tab http(s) for dashboards, reports, >20-line structured output.\n- tab tuic://edit to point user at source file+line (review, bug discussion) — beats pasting snippets.\n- screenshot to visually verify rendered HTML content in a panel you created.",
+            "description": "Control TUIC UI. Actions:\n- tab: open/update panel tab. Requires id, title, + html OR url.\n- toast: non-blocking notification. Requires title. Optional: message, level (info/warn/error), sound, urgency (normal/urgent).\n- confirm: blocking dialog, shown on every client (desktop, browser, mobile PWA) plus a mobile push — the first answer wins. Returns {confirmed}, plus {reason} when it expired unanswered after 300s (treat that as a refusal, not a yes). Requires title, except settings proposals: pass proposalId to show the backend redacted diff; model title/message/confirmed cannot grant approval.\n- design_start: start Design Mode with session_id and optional browser/url. Requires a live terminal agent.\n- design_stop: stop the caller-bound repository (repo_path).\n- design_status: list Design Mode bindings for an armed caller.\n- design_reload: reload the reviewed tab (repo_path).\n- design_navigate: navigate the reviewed tab (repo_path, url); remote hosts require an extension host grant.\n- design_screenshot: capture the reviewed tab as a PNG path (repo_path).\n- design_errors: read captured page errors (repo_path).\n- design_eval: evaluate script in the reviewed tab (repo_path, script); requires an explicit optional extension host grant.\n- screenshot: capture a panel as WebP. Requires id. Returns {path}. Read the path to view.\n\nURL schemes for tab:\n- http(s): loaded in sandboxed iframe using the permissive default-src CSP (external HTTPS and localhost HTTP supported). Site frame policies can still refuse embedding.\n- file:///path: read via IPC and rendered as inline HTML (sandbox blocks direct file:// access).\n- tuic://edit/<path>?line=N: native code editor (no iframe). Prefix absolute paths with `//` (tuic://edit//Users/x/a.rs). Relative = active repo.\n- tuic://open/<path>: native markdown/preview tab.\n\n- tuic://open-repo is rejected; use repo action=add with path to register a directory. Other tuic actions are not tab content.\n\nCustom schemes (vscode://) do NOT work in iframes.\n\nUse:\n- A project outcome — a milestone, a decision, a discovery, a blocker — belongs to the `progress` tool, which records it AND shows a toast. `ui action=toast` is the transient half only: it says something happened and keeps no record of it.\n- toast for done/error/long-job end; error=failure, warn=recoverable. Skip for micro-steps.\n- toast urgency: normal (default) records the notice in the bell only; urgent also shows a transient card on the desktop window. The caller chooses; the card never covers the focused input.\n- toast with sound=attention when you are working unattended and are BLOCKED on the user (question, approval, ambiguous requirement). It is the only sound that carries across a room; do not spend it on progress updates.\n- confirm BEFORE destructive ops (rm -rf, git reset --hard, force-push, DROP). Only proceed if confirmed.\n- tab http(s) for dashboards, reports, >20-line structured output.\n- tab tuic://edit to point user at source file+line (review, bug discussion) — beats pasting snippets.\n- screenshot to visually verify rendered HTML content in a panel you created.",
             "inputSchema": { "type": "object", "properties": {
-                "action": { "type": "string", "description": "One of: tab, toast, confirm, screenshot" },
+                "action": { "type": "string", "description": "One of: tab, toast, confirm, screenshot, design_start, design_stop, design_status, design_reload, design_navigate, design_screenshot, design_errors, design_eval" },
                 "id": { "type": "string", "description": "Stable identifier for dedup — same id reuses existing tab (action=tab, required)" },
                 "title": { "type": "string", "description": "Tab or notification title (action=tab/toast/confirm, required except settings proposal confirmation)" },
                 "proposalId": { "type": "string", "description": "Opaque backend-issued settings proposal (action=confirm). Displays the backend redacted diff; ignores supplied title/message. Human answer required; never accepts a confirmed flag." },
@@ -772,6 +831,44 @@ pub(super) fn native_tool_definitions() -> serde_json::Value {
     }
 
     defs
+}
+
+/// Return the complete displaced guidance, never a synthesized subset.
+pub(super) fn native_tool_help(name: &str) -> Option<serde_json::Value> {
+    compact_native_description(name)?;
+    native_reference_tool_definitions()
+        .as_array()?
+        .iter()
+        .find(|tool| tool["name"] == name)
+        .map(|tool| serde_json::json!({"description":tool["description"]}))
+}
+
+/// Agent-facing action contracts. Field types and bounds remain in the schema.
+fn compact_native_description(name: &str) -> Option<&'static str> {
+    Some(match name {
+        "session" => {
+            "PTY multiplexer (tmux): input=send-keys, output=capture-pane. help: full usage and response guide. All session_id actions accept PTY id, tuic_session, alias, unique short PTY prefix or unique display name; ambiguity errors.\nlist: local and connected remote inventory; optional session_id/compact. All active sessions and states in one call; never fan out per-session status calls. Optional fields are omitted, not null; background_work/standby only when true. completed requires a suggest marker.\ncreate: new PTY. submit: one non-empty command to a confirmed-idle managed agent; bounded receipt. Use one call; never split text and Enter; never poll after it. Never queues; partial composers, dialogs, busy agents, and older queued commands reject before writing. Acknowledgement means child terminal movement after Enter, not semantic application acceptance. composer_state (tracked InputLineBuffer, not application state). force_retry: submit /retry once only during ego provider recovery; never queues or retries automatically. input: Raw text/key compatibility surface. Send text and/or special_key; ok confirms PTY write only.\noutput: bounded retained terminal output; anomaly fallback only when a child failed to send its result, not normal orchestration. Tail hides empty composer/HUD; raw preserves it. Byte-budget chunks bound compact envelope bytes, not MCP framing; concatenate chunk values then parse JSON. Continue with same action/session and opaque token; expires after 300s/eviction. Follow has_more/next_cursor without rerunning commands; raw cursors are source bytes. Evicted output is unrecoverable.\n- status: state. wait: server-side idle/exited wait, not a polling loop. resize: dimensions. rename: non-empty display name; sticky unless is_custom=false. \n- keep_open: managed child enabled=true disables idle closure; enabled=false restores it. suspend: end PTY/agent, keep restorable tab; refused while working, awaiting answer or running a command; not SIGSTOP standby. close: graceful shutdown. kill: SIGKILL only if close fails. pause: stop buffering. resume: restart buffering. declare_worktree: authenticated live caller only, existing linked worktree in its repository, no foreign session; persists placement without changing cwd; MCP-only via POST /mcp. Executing/destructive session actions require localhost."
+        }
+        "agent" => {
+            "Managed peers and mail. There is no separate swarm action. help: full orchestration, response and subscription guide. Managed PTYs auto-bind from TUIC_SESSION; a headerless external caller calls register without tuic_session. Every worker must report task output or blockers with send. Lifecycle notifications carry state only. Use session output only for anomalously missing results. Wait: do NOT poll in a loop; waits cap at 300s.\nlaunch: localhost-only durable idempotent launch. Requires registered parent_session_id, stable idempotency_key/name, explicit keep_open, workspace={existing_path}|{repo_path,branch,base_ref?}, spawn={prompt,...}. Read with launch_id alone; identical retry returns same resources, conflicting key errors. Uncertain interrupted creation blocks: retain handle and inspect, never spawn again. Delivered proves argv/PTY handoff, not model acceptance; ready also needs native Ready-screen evidence. Model/account/brief policy is caller-owned.\nspawn: localhost-only new PTY, name assigned before prompt; returns task_id. task_get: caller-owned outcome retained up to 24h in this server process, including reconnect; working|input_required|completed|failed|cancelled, last three immutable. Poll no faster than poll_interval_ms. task_cancel: localhost-only, caller-owned; final status unchanged, does NOT kill PTY (session kill does).\nregister: optional stable UUID (omission generates MCP-scoped identity); reconnect with a NEW UUID must pass replaces or strand mail. Live-PTY identity cannot be superseded: check mail_stranded/identity_warning. No terminal means no PTY notice; subscribed ACP can notify/wake idle ego, otherwise wait/inbox only. orchestrator=true/false sets/removes role; omission preserves it, spawning a child never infers it. mail_wake=managed_pty_lifecycle identifies reachable PTY wake. list_peers: local/remote peers; optional to/path/connection_id/compact, absent fields omitted.\nsend: requires to/message; peer UUID, PTY id, alias, unique prefix/name or connection/peer_id. Normal is the default; urgent when the recipient must change course before its next step. Mail stays mail: the payload is never typed into the recipient's composer. Idle/completed recipients may get a payload-free generic `agent action=inbox` wake. Safe busy Claude/Codex/ego gets only a payload-free notice. urgent_delivered does not prove model action or interrupt tools; false supplies urgent_fallback_reason.\ninbox: FIFO up to 100, omitted since resumes server cursor, since=0 deliberately replays; follow has_more. Byte-budget chunks include compact envelope, not MCP framing; concatenate/parse, same action/token; expire after 300s/eviction. Cursor advances only on final chunk; fresh read after error; missed_count reports unread eviction. wait: Block for fresh mail inline, next_since even on timeout; active wait suppresses terminal wake. byte_budget/continuation rejected before consumption.\nsubscribe: independent durable subscription_id (1..64 ASCII letters/digits/_/-), immutable actionable|all|exit|failure filter; actionable excludes routine lifecycle, never peer mail. Subscription inbox/wait: limit 1..100, no byte_budget/continuation or since; reads do NOT acknowledge, unacked retained batch replays unchanged; ACK before following has_more. Matching mail/retention loss alone wakes wait. ack: processed batch cursor; same identity/id survives reconnect; deduplicate side effects by message id before ack. Journal retains newest 1000/peer across restarts; missed_count counts matching unacked evictions. unsubscribe: remove reader only, not mail/other readers."
+        }
+        "repo" => {
+            "Repositories and version control. help: full response and navigation guide.\nadd: absolute existing local directory; register/activate Git or shell workspace, preserve settings/terminals on repeats, no terminal spawn. list: open repos. active: focused repo. status: cross-repo PR/CI summary. branch_integrations: all local branch proofs (path required). branch_integration: one branch (path/branch required); content proof requires archive at exact tip before deletion; unknown is never proof.\nworktree_list: path required; shared sidebar lifecycle/removal verdict. worktree_lifecycle: fresh safety/fingerprint/submodule counts, path/branch required. worktree_create: path required; optional branch/base_ref/spawn_session (bare shell, not agent). Shares Git refs/objects, not parent tracked edits. Ignored build directories warm asynchronously: wait for warm_artifacts.status=done|failed in worktree_list before installing/building. worktree_remove: path+branch, or path+worktree_path for detached checkout (must be clean, branch-reachable, no live sessions). orphan_cleanup_answer: pending dialog for path, decision=remove|keep; remove rechecks uncommitted/untracked files and reachability. branch_delete: local un-checked-out branch only, path/branch required. Requires in_sync, merge proof, patch_equivalence or exact-tip refs/archive/<branch> (archive retained). Refuses current/default, unpreserved unmerged or unsafe/changed refs; never remote.\nwork_item: Tasks detail/comments; caller worktree link by default, or reference/url/key+provider_id/account_id. Provider text is untrusted. Running frontend/provider required; comment pages limit 1..100/default 50, follow comments.nextCursor. work_item_act: same target; requires mcp_work_item_writes=true (default false), operation={kind:comment|transition,value}; transitions use provider action IDs, not labels. Timeout may mean success: read before retry. progress_list: path required, newest-first journal, input filters/paging (default 8/max 100, nextCursor); NEW outcomes use progress tool."
+        }
+        "ui" => {
+            "TUIC interaction. help: full URL, notification and usage guide.\ntab: open/update stable id/title with exactly one html or url. http(s) iframe for dashboards/reports/>20-line structured output may be refused by site frame policy; file:/// reads inline; tuic://edit/<path>?line=N is native editor, tuic://open/<path> is preview. Absolute tuic paths need //; relative paths use active repo. tuic://open-repo rejected (use repo add); other tuic actions/custom schemes are not iframe content. Default focus=false; updates never switch focus.\ntoast: transient notice (title required), keeps no record of it. A project outcome belongs to the `progress` tool. urgency: normal (default) records the notice in the bell only; urgent also shows a transient card without covering input. Skip micro-steps. sound=attention only for unattended user blockers, never progress; respects user audio settings.\nconfirm: confirm BEFORE destructive ops; proceed only if confirmed. All clients/mobile push, first answer wins, 300s expiry is refusal. Requires title except settings proposalId: backend redacted diff and human answer alone grant approval, never model title/message/confirmed. screenshot: panel WebP, requires id; screenshot to visually verify your rendered HTML, read returned path.\ndesign_start: bind a live terminal agent (session_id), optional browser/url; desktop host and browser extension setup required. design_status: list bindings for an armed caller. design_stop: stop the caller-bound repository (repo_path). design_reload: reload the reviewed tab (repo_path). design_navigate: open HTTP(S) url (repo_path); remote hosts require an extension host grant. design_screenshot: reviewed-tab PNG path (repo_path). design_errors: captured page errors (repo_path). design_eval: run script (repo_path), explicit optional extension host grant required. Design actions retain armed caller/repository checks and saved design_mode denials."
+        }
+        "voice" => {
+            "Caller-bound hands-free speech, not application audio. help: full conversation/utterance guide. status: check first; if available is false reply in text. Mode notices come from TUICommander rather than from the user; off is final. The user can turn those notices off: absence proves nothing, status does. You do not choose the language or voice: write text in status.language. Speech supplements, never replaces normal reply.\nspeak: text required, max 2000 characters; supply status/notice turn to reject a stale reply, omission means now. Accepting a reply is NOT the same as the user hearing it: queued utterance_id is not heard; inspect status with that id; finished=heard to end, interrupted=user talked (normal), failed=never audible, unknown=too old. stop: immediately stop/drop queue and open new turn; use when reply is wrong."
+        }
+        "telegram" => {
+            "Caller-bound Telegram. help: full request/draft/routing guide. register: opt in own MCP-bound peer, replaces/notifies previous agent and revokes pending requests. unregister: release. Registration ends on agent exit, PTY close, MCP end or daemon restart. Without registration latest-connected live AI Chat receives inbound; only absent both is text dropped with bot notice.\nbegin: optional idempotent acknowledgement for current request. activity: concise safe unapproved preview. finish: complete exact authoritative reply, even after draft/turn ends, deduplicates completion. Request begin/activity/finish remain bound to recipient peer, never another AI Chat. AI Chat streams assistant text only; Telegram-woken turn settles its own final text unless finish replied. send: only registered peer or, without one, selected live AI Chat; single allowlisted destination, optional {label,data} button rows. Buttons yield structured mail, NOT publish approval. Never stream raw terminal output or hidden reasoning."
+        }
+        "automations" => {
+            "Scheduled definitions and runs (separate from workflows). help: full create/response guide. create: definition={name,prompt,run_config,in_secs?}; host resolves in_secs, exclusive with cron/once_local. run_config must be actual caller saved profile, never agent-type default. Create/update/re-enable validate profile names; unresolved returns repair choices; list reports run_config_error/no next_run_ms. Agent-created failed runs notify creator once, including pre-spawn. Bound caller may omit context fields; unbound HTTP/IPC supplies normal definition fields (cron optional for Once); missing context names field. Identical generated create/caller deduplicates; explicit new id creates separate reminder. create returns saved local fire time/next_run_ms: no date/list/get needed. update: definition or id+enabled. list: definitions. get: definition. pause: disable. resume: enable. delete: remove definition, retain history. run_now: trigger. run: inspect run. list_runs: history. summary: totals. preview: schedule. preview_definition: draft schedule. preset: resolve. templates: disabled drafts. template: one draft. worktree_preview: inspect. cleanup_worktree: safe removal."
+        }
+        _ => return None,
+    })
 }
 
 /// The three meta-tool names used when `collapse_tools: true`.
@@ -878,7 +975,7 @@ pub(super) fn resolve_allowed_upstreams(
 /// This is app metadata, not an MCP discovery surface. Every native tool can
 /// be disabled; progress additionally requires global progress_tracking.
 pub(crate) fn native_tool_catalog() -> Vec<serde_json::Value> {
-    native_tool_definitions()
+    native_reference_tool_definitions()
         .as_array()
         .into_iter()
         .flatten()
@@ -896,35 +993,79 @@ pub(crate) fn native_tool_catalog() -> Vec<serde_json::Value> {
         .collect()
 }
 
-/// Apply the two config-driven filters (`disabled_native_tools`,
-/// `progress_tracking`) to the full native tool list. Centralised so
-/// every listing/search path uses the same rules — adding a future config
-/// flag means editing one place instead of chasing duplicated closures.
-pub(super) fn filtered_native_tools(state: &Arc<AppState>) -> Vec<serde_json::Value> {
-    let (disabled, progress_tracking, settings_enabled) = {
-        let cfg = state.config.read();
-        let disabled: std::collections::HashSet<String> =
-            cfg.disabled_native_tools.iter().cloned().collect();
-        (disabled, cfg.progress_tracking, cfg.settings_mcp_enabled)
+/// Shared discovery/dispatch gate. Conditions describe owner configuration, not
+/// caller authority: conversation binding, registration and deployment consent
+/// remain enforced by the respective handlers.
+pub(super) fn native_tool_unavailability(state: &AppState, name: &str) -> Option<String> {
+    if state
+        .config
+        .read()
+        .disabled_native_tools
+        .iter()
+        .any(|tool| tool == name)
+    {
+        return Some(format!("Tool '{name}' is disabled by configuration"));
+    }
+    let reason = match name {
+        "remote" if !state.remote.has_connected_server() => "no connected remote server",
+        "voice" if !voice_configured() => "voice is not configured",
+        "telegram" if !crate::telegram::settings::configured() => "Telegram is not configured",
+        _ => return None,
     };
-    native_tool_definitions()
+    Some(format!("Tool '{name}' is unavailable: {reason}"))
+}
+
+fn voice_configured() -> bool {
+    // An unset engine resolves to Edge, so engine selection is not an opt-in.
+    // Read the persisted owner flags and fail closed on a missing/corrupt file.
+    std::fs::read(crate::config::config_dir().join("dictation-config.json"))
+        .ok()
+        .and_then(|bytes| serde_json::from_slice::<crate::config::DictationConfig>(&bytes).ok())
+        .is_some_and(|config| config.enabled && config.hands_free_spoken_replies)
+}
+
+/// Apply the same native availability gate used at dispatch to every catalogue.
+pub(super) fn filtered_native_tools(state: &Arc<AppState>) -> Vec<serde_json::Value> {
+    let (progress_tracking, settings_enabled) = {
+        let cfg = state.config.read();
+        (cfg.progress_tracking, cfg.settings_mcp_enabled)
+    };
+    native_validation_tool_definitions()
         .as_array()
         .cloned()
         .unwrap_or_default()
         .into_iter()
-        .filter(|t| {
-            let name = t["name"].as_str().unwrap_or("");
-            // The global half of `progress_tracking`. It is deliberately the
-            // global one and not the effective per-agent value: this list also
-            // feeds `searchable_tool_definitions`, which builds ONE cached index
-            // for every session, so a per-agent answer here would be whichever
-            // agent happened to trigger the last rebuild. The per-agent escape
-            // hatch is enforced where a report is recorded, which answers
-            // `progress_tracking_disabled` instead of hiding the tool.
-            if !progress_tracking && name == "progress" {
-                return false;
+        .filter(|tool| {
+            let name = tool["name"].as_str().unwrap_or("");
+            // This index is shared across callers; per-agent progress policy
+            // remains enforced by the report owner rather than discovery.
+            (progress_tracking || name != "progress")
+                && (settings_enabled || name != "settings")
+                && native_tool_unavailability(state, name).is_none()
+        })
+        .filter_map(|mut tool| {
+            if tool["name"] == "workflow" {
+                let variants = tool["inputSchema"]["oneOf"]
+                    .as_array_mut()
+                    .expect("workflow variants");
+                variants.retain(|variant| {
+                    let action = variant["properties"]["action"]["const"]
+                        .as_str()
+                        .unwrap_or("");
+                    workflow_member_tool(action)
+                        .is_none_or(|member| native_tool_unavailability(state, member).is_none())
+                });
+                if variants.is_empty() {
+                    return None;
+                }
+                let actions: Vec<_> = variants
+                    .iter()
+                    .map(|variant| variant["properties"]["action"]["const"].clone())
+                    .collect();
+                tool["inputSchema"]["properties"]["action"]["enum"] = serde_json::json!(actions);
             }
-            (name != "settings" || settings_enabled) && !disabled.contains(name)
+            super::mcp_input_contract::advertise_schema(&mut tool);
+            Some(tool)
         })
         .collect()
 }
@@ -1077,7 +1218,10 @@ pub(super) fn handle_search_tools_for_session(
 
     let ranked: Vec<serde_json::Value> = results
         .iter()
-        .filter(|e| e.name != "design_mode" || visible)
+        .filter(|e| {
+            (e.name != "design_mode" || visible)
+                && native_tool_unavailability(state, &e.name).is_none()
+        })
         .take(limit)
         .map(|e| serde_json::json!({ "name": e.name, "summary": e.summary }))
         .collect();
@@ -1124,6 +1268,9 @@ pub(super) fn handle_get_tool_schema_for_session(
         }
     };
 
+    if native_tool_unavailability(state, tool_name).is_some() {
+        return serde_json::json!({"error": format!("Tool '{tool_name}' not found. Use search_tools to discover available tools.")});
+    }
     let origin = super::mcp_transport_ancillary::resolve_mcp_origin_pty(state, mcp_session_id);
     if tool_name == "design_mode" && !crate::design_mode::mcp::visible_to(state, origin.as_deref())
     {

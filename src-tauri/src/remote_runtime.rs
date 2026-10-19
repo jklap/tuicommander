@@ -275,6 +275,13 @@ impl RemoteRuntime {
             .collect()
     }
 
+    /// Saved records, pending tunnels and unauthenticated probes do not count.
+    pub(crate) fn has_connected_server(&self) -> bool {
+        self.entries
+            .iter()
+            .any(|entry| entry.status == Some(RemoteStatus::Connected))
+    }
+
     /// Base URL for a connected connection, or `None`. The routing answer.
     pub(crate) fn base_url(&self, id: &str) -> Option<String> {
         self.entries.get(id).and_then(|e| e.snapshot(id).base_url)
@@ -422,6 +429,13 @@ fn update<F: FnOnce(&mut Entry)>(state: &Arc<AppState>, id: &str, mutate: F) {
     };
     if before.as_ref() == Some(&after) {
         return;
+    }
+    if before
+        .as_ref()
+        .is_some_and(|s| s.status == RemoteStatus::Connected)
+        != (after.status == RemoteStatus::Connected)
+    {
+        let _ = state.mcp.tools_changed.send(());
     }
     publish(state, &after);
 }
@@ -1553,6 +1567,9 @@ fn dispose(state: &Arc<AppState>, id: &str, mut entry: Entry) {
     if let Some(tunnel_id) = entry.tunnel_id.take() {
         state.tunnel_manager.stop_if_running(&tunnel_id);
     }
+    if entry.status == Some(RemoteStatus::Connected) {
+        let _ = state.mcp.tools_changed.send(());
+    }
     // The entry is gone, so there is nothing left for `update` to diff against:
     // the departure is announced by hand, and only when the connection was not
     // already sitting at `Disconnected`.
@@ -1896,6 +1913,35 @@ mod tests {
     use super::*;
     use axum::http::StatusCode;
     use std::future::Future;
+
+    // Catches: connection transitions change discovery without invalidating clients.
+    #[test]
+    fn conditional_remote_connected_set_changes_notify_tools() {
+        let state = std::sync::Arc::new(crate::state::tests_support::make_test_app_state());
+        let mut notices = state.mcp.tools_changed.subscribe();
+        update(&state, "one", |entry| {
+            entry.status = Some(RemoteStatus::Connecting)
+        });
+        assert!(notices.try_recv().is_err());
+        update(&state, "one", |entry| {
+            entry.status = Some(RemoteStatus::Connected)
+        });
+        assert!(notices.try_recv().is_ok());
+        update(&state, "one", |entry| entry.live_sessions = Some(4));
+        assert!(notices.try_recv().is_err());
+        update(&state, "two", |entry| {
+            entry.status = Some(RemoteStatus::Connected)
+        });
+        assert!(notices.try_recv().is_ok());
+        update(&state, "one", |entry| {
+            entry.status = Some(RemoteStatus::Unauthenticated)
+        });
+        assert!(notices.try_recv().is_ok());
+        assert!(state.remote.has_connected_server());
+        teardown(&state, "two");
+        assert!(notices.try_recv().is_ok());
+        assert!(!state.remote.has_connected_server());
+    }
 
     // Catches: a queued credential reconnect undoing a later explicit Disconnect.
     #[tokio::test]

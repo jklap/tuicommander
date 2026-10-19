@@ -465,7 +465,14 @@ fn session_action_requires_blocking_pool(action: &str) -> bool {
 fn agent_action_requires_blocking_pool(action: &str) -> bool {
     matches!(
         action,
-        "spawn" | "send" | "inbox" | "subscribe" | "ack" | "unsubscribe"
+        "spawn"
+            | "send"
+            | "inbox"
+            | "subscribe"
+            | "ack"
+            | "unsubscribe"
+            | "task_get"
+            | "task_cancel"
     )
 }
 
@@ -514,6 +521,28 @@ async fn guard_secret_inspection(
     call.await
 }
 
+/// Both catalogue adapters share caller ownership and the existing host-grant owner.
+async fn handle_design_mode_with_caller(
+    state: &Arc<AppState>,
+    args: &serde_json::Value,
+    mcp_session_id: Option<&str>,
+) -> serde_json::Value {
+    let origin = super::mcp_transport_ancillary::resolve_mcp_origin_pty(state, mcp_session_id);
+    if args["action"] != "start"
+        && !(crate::design_mode::mcp::visible_to(state, origin.as_deref())
+            && (args["action"] == "status"
+                || crate::design_mode::mcp::owns_repo(
+                    state,
+                    origin.as_deref(),
+                    args["repo_path"].as_str().unwrap_or(""),
+                )))
+    {
+        serde_json::json!({"error":"Design Mode not armed for this session"})
+    } else {
+        crate::design_mode::mcp::handle(state, args).await
+    }
+}
+
 async fn dispatch_mcp_tool_call_with_context(
     state: &Arc<AppState>,
     addr: SocketAddr,
@@ -525,15 +554,20 @@ async fn dispatch_mcp_tool_call_with_context(
     if name == "config" {
         return serde_json::json!({"error":"Unknown tool 'config'"});
     }
-    // Enforce disabled_native_tools on every call path (not just the call_tool meta-tool).
-    // Read-guard does not span an await and is released at the end of the `if` expression.
-    if state
-        .config
-        .read()
-        .disabled_native_tools
-        .iter()
-        .any(|d| d == name)
-    {
+    if let Some(error) = super::mcp_transport_catalogue::native_tool_unavailability(state, name) {
+        return serde_json::json!({"error": error});
+    }
+    // Grouped actions retain the underlying owner's explicit tool denial.
+    if state.config.read().disabled_native_tools.iter().any(|d| {
+        (name == "workflow"
+            && Some(d.as_str())
+                == super::mcp_transport_catalogue::workflow_member_tool(
+                    args["action"].as_str().unwrap_or(""),
+                ))
+            || (d == "task"
+                && name == "agent"
+                && matches!(args["action"].as_str(), Some("task_get" | "task_cancel")))
+    }) {
         return serde_json::json!({"error": format!("Tool '{}' is disabled by configuration", name)});
     }
     if let Some(action) = args["action"].as_str()
@@ -563,28 +597,35 @@ async fn dispatch_mcp_tool_call_with_context(
     if let Some(error) = super::mcp_input_contract::validate(name, args) {
         return error;
     }
+    if args["action"] == "help"
+        && let Some(help) = super::mcp_transport_catalogue::native_tool_help(name)
+    {
+        return help;
+    }
     // Resolve client identity at dispatch level — tool handlers get a plain bool
     let is_claude_code = mcp_session_id
         .and_then(|sid| state.mcp.sessions.get(sid))
         .map(|meta| meta.is_claude_code)
         .unwrap_or(false);
     match name {
-        "design_mode" => {
-            let origin =
-                super::mcp_transport_ancillary::resolve_mcp_origin_pty(state, mcp_session_id);
-            if args["action"] != "start"
-                && !(crate::design_mode::mcp::visible_to(state, origin.as_deref())
-                    && (args["action"] == "status"
-                        || crate::design_mode::mcp::owns_repo(
-                            state,
-                            origin.as_deref(),
-                            args["repo_path"].as_str().unwrap_or(""),
-                        )))
+        "design_mode" => handle_design_mode_with_caller(state, args, mcp_session_id).await,
+        "ui" if args["action"]
+            .as_str()
+            .is_some_and(|action| action.starts_with("design_")) =>
+        {
+            if let Some(error) =
+                super::mcp_transport_catalogue::native_tool_unavailability(state, "design_mode")
             {
-                serde_json::json!({"error":"Design Mode not armed for this session"})
-            } else {
-                crate::design_mode::mcp::handle(state, args).await
+                return serde_json::json!({"error":error});
             }
+            let mut design_args = args.clone();
+            design_args["action"] = serde_json::json!(
+                args["action"]
+                    .as_str()
+                    .unwrap()
+                    .trim_start_matches("design_")
+            );
+            handle_design_mode_with_caller(state, &design_args, mcp_session_id).await
         }
         "automations" => {
             crate::automations::mcp::handle(
@@ -744,6 +785,15 @@ async fn dispatch_mcp_tool_call_with_context(
             let sid = mcp_session_id.map(str::to_owned);
             run_blocking_handler(move || handle_story(&state, &args, sid.as_deref())).await
         }
+        "workflow" => {
+            let state = state.clone();
+            let args = args.clone();
+            let sid = mcp_session_id.map(str::to_owned);
+            run_blocking_handler(move || {
+                super::mcp_transport_ancillary::handle_workflow(&state, addr, &args, sid.as_deref())
+            })
+            .await
+        }
         "workflow_run" => {
             let state = state.clone();
             let args = args.clone();
@@ -810,7 +860,7 @@ async fn dispatch_mcp_tool_call_with_context(
             handle_call_tool(state, addr, args, mcp_session_id, managed_parent_cwd).await
         }
         _ => serde_json::json!({"error": format!(
-            "Unknown tool '{}'. Available: session, agent, task, remote, repo, story, progress, ui, plugin_dev_guide, settings, debug, voice, search_tools, get_tool_schema, call_tool", name
+            "Unknown tool '{}'. Available: session, agent, task, remote, repo, workflow, story, progress, ui, plugin_dev_guide, settings, debug, voice, search_tools, get_tool_schema, call_tool", name
         )}),
     }
 }
@@ -1606,9 +1656,9 @@ mod critic_story_tool_text {
             .expect("story tool")
             .clone();
         let description = definition["description"].as_str().unwrap_or_default();
-        let variants = definition["inputSchema"]["properties"]["input"]["oneOf"]
+        let variants = definition["inputSchema"]["properties"]["input"]["anyOf"]
             .as_array()
-            .expect("oneOf");
+            .expect("anyOf");
         let mut missing = Vec::new();
         for variant in variants {
             let action = &variant["properties"]["action"];

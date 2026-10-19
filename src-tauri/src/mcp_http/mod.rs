@@ -2161,6 +2161,10 @@ pub fn build_router(state: Arc<AppState>, remote_auth: bool, mcp_enabled: bool) 
             post(plugin_routes::plugin_http_fetch),
         )
         .route(
+            "/api/plugins/{plugin_id}/http/cancel",
+            post(plugin_routes::plugin_http_cancel),
+        )
+        .route(
             "/api/plugins/{plugin_id}/pty/output",
             get(plugin_routes::plugin_pty_output),
         )
@@ -6492,12 +6496,47 @@ mod tests {
         );
     }
 
+    // Exact discovery contract for an unbound caller with no optional owner
+    // configuration, all ordinary tools enabled, and expanded discovery.
+    const UNCONFIGURED_NATIVE_TOOL_NAMES: &[&str] = &[
+        "automations",
+        "secret",
+        "session",
+        "agent",
+        "task",
+        "repo",
+        "story",
+        "workflow",
+        "workflow_run",
+        "workflow_story_create",
+        "workflow_report",
+        "workflow_launch",
+        "progress",
+        "ui",
+        "plugin_dev_guide",
+        "settings",
+        "debug",
+    ];
+
     /// Catches: Settings inventories only enabled tools, loses newly registered
     /// tools, or offers switches which MCP discovery ignores.
     #[tokio::test]
     async fn native_settings_catalog_keeps_disabled_tools_and_disables_every_registry_tool() {
+        let dir = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+        let _guard = crate::config::set_config_dir_override(dir.path().to_path_buf());
+        // Empty owner configuration and no live remote/upstream connections.
         let state = test_state();
+        {
+            let mut config = state.config.write();
+            config.disabled_native_tools.clear();
+            config.settings_mcp_enabled = true;
+            config.progress_tracking = true;
+            config.collapse_tools = false;
+        }
         let definitions = mcp_transport::test_mcp_tool_definitions();
+        // Agent-only compaction must not rewrite Settings tooltip copy.
+        let recorded: serde_json::Value =
+            serde_json::from_str(include_str!("fixtures/native-guidance-2069.json")).unwrap();
         let app = build_router(state.clone(), false, true);
         for tool in definitions.as_array().unwrap() {
             let name = tool["name"].as_str().unwrap();
@@ -6521,7 +6560,12 @@ mod tests {
             assert_eq!(catalog.len(), definitions.as_array().unwrap().len());
             for (entry, definition) in catalog.iter().zip(definitions.as_array().unwrap()) {
                 assert_eq!(entry["name"], definition["name"]);
-                assert_eq!(entry["description"], definition["description"]);
+                assert_eq!(
+                    &entry["description"],
+                    recorded
+                        .get(definition["name"].as_str().unwrap())
+                        .unwrap_or(&definition["description"])
+                );
                 // Catches: HTTP status retaining description prefixes while Settings
                 // switches to dedicated, concise native registry summaries.
                 let summary = entry["summary"].as_str().unwrap();
@@ -6558,10 +6602,10 @@ mod tests {
                 .unwrap();
             let listing: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
             let listed = listing["result"]["tools"].as_array().unwrap();
-            let expected: Vec<_> = catalog
+            let expected: Vec<_> = UNCONFIGURED_NATIVE_TOOL_NAMES
                 .iter()
-                .filter(|entry| entry["name"] != name && entry["name"] != "design_mode")
-                .map(|entry| entry["name"].as_str().unwrap())
+                .copied()
+                .filter(|available| *available != name)
                 .collect();
             let actual: Vec<_> = listed
                 .iter()
@@ -6569,7 +6613,7 @@ mod tests {
                 .collect();
             assert_eq!(
                 actual, expected,
-                "disabled {name}; unbound Design Mode stays hidden"
+                "disabled {name}; unconfigured owners and unbound Design Mode stay hidden"
             );
             assert!(
                 listed.iter().all(|entry| entry["name"] != name),
@@ -6635,7 +6679,17 @@ mod tests {
 
     #[tokio::test]
     async fn test_mcp_tools_list_respects_disabled_native_tools() {
+        let dir = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+        let _guard = crate::config::set_config_dir_override(dir.path().to_path_buf());
+        // Empty owner configuration and no live remote/upstream connections.
         let state = test_state();
+        {
+            let mut config = state.config.write();
+            config.disabled_native_tools.clear();
+            config.settings_mcp_enabled = true;
+            config.progress_tracking = true;
+            config.collapse_tools = false;
+        }
         state.config.write().disabled_native_tools = vec!["debug".to_string()];
         let app = build_router(state, false, true);
         let body = serde_json::json!({
@@ -6651,18 +6705,16 @@ mod tests {
             .unwrap();
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
         let tools = json["result"]["tools"].as_array().unwrap();
-        let total = mcp_transport::test_mcp_tool_definitions()
-            .as_array()
-            .unwrap()
-            .len();
-        // One disabled tool and owner-scoped Design Mode are absent for this caller.
-        assert_eq!(tools.len(), total - 2);
         let names: Vec<&str> = tools.iter().map(|t| t["name"].as_str().unwrap()).collect();
-        assert!(
-            !names.contains(&"debug"),
-            "disabled tool must not appear in tools/list"
+        let expected: Vec<_> = UNCONFIGURED_NATIVE_TOOL_NAMES
+            .iter()
+            .copied()
+            .filter(|name| *name != "debug")
+            .collect();
+        assert_eq!(
+            names, expected,
+            "disabled debug must not appear in discovery"
         );
-        assert!(names.contains(&"session"));
     }
 
     /// The count this used to assert (`>= 13`) was sized when a second tool
@@ -9093,7 +9145,17 @@ mod tests {
     /// tools/list returns only native tools when no upstream is connected.
     #[tokio::test]
     async fn test_tools_list_no_upstream_returns_native_only() {
+        let dir = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+        let _guard = crate::config::set_config_dir_override(dir.path().to_path_buf());
+        // Empty owner configuration and no live remote/upstream connections.
         let state = test_state();
+        {
+            let mut config = state.config.write();
+            config.disabled_native_tools.clear();
+            config.settings_mcp_enabled = true;
+            config.progress_tracking = true;
+            config.collapse_tools = false;
+        }
         let app = build_router(state, false, true);
         let body = serde_json::json!({
             "jsonrpc": "2.0", "id": 1,
@@ -9106,22 +9168,8 @@ mod tests {
             .unwrap();
         let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
         let tools = json["result"]["tools"].as_array().unwrap();
-        // No upstream → native tools visible to an unbound caller only
-        let expected = mcp_transport::test_mcp_tool_definitions()
-            .as_array()
-            .unwrap()
-            .len();
-        assert_eq!(tools.len(), expected - 1);
         let names: Vec<&str> = tools.iter().map(|t| t["name"].as_str().unwrap()).collect();
-        assert!(!names.contains(&"design_mode"));
-        assert!(names.contains(&"session"));
-        assert!(names.contains(&"agent"));
-        assert!(names.contains(&"repo"));
-        assert!(names.contains(&"ui"));
-        assert!(names.contains(&"plugin_dev_guide"));
-        assert!(names.contains(&"settings"));
-        assert!(!names.contains(&"config"));
-        assert!(names.contains(&"debug"));
+        assert_eq!(names, UNCONFIGURED_NATIVE_TOOL_NAMES);
     }
 
     /// tools/call with upstream-prefixed name returns error (no upstream registered).

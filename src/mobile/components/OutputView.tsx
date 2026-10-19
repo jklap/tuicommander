@@ -1,5 +1,10 @@
 import { createEffect, createMemo, createSignal, For, type JSX, onCleanup, onMount, Show } from "solid-js";
-import { INTENT_HIGHLIGHT_RE } from "../../components/Terminal/suggestOverlay";
+import {
+	ANSWER_RULE_SHADOW,
+	INTENT_HIGHLIGHT_RE,
+	intentTitleEnd,
+	planSuggestOverlay,
+} from "../../components/Terminal/suggestOverlay";
 import { appLogger } from "../../stores/appLogger";
 import { type PtySubscription, subscribePty } from "../../transport";
 import { mobileFontSizes } from "../mobileFontSize";
@@ -317,6 +322,24 @@ export function OutputView(props: OutputViewProps) {
 	// terminal, which a search filter no longer preserves.
 	const allLines = createMemo(() => reflowDisplayLines([...logLines(), ...screenRows()]));
 
+	// Classify the full reflowed source before search removes boundary rows.
+	// Reflow has already joined soft wraps, so these are logical row starts.
+	const answers = createMemo(() => {
+		const lines = allLines();
+		const rows = lines.map((line) => ({
+			text: line.spans
+				.map((span) => span.text)
+				.join("")
+				.replaceAll("\uFE0E", ""),
+			isWrapped: false,
+		}));
+		const plan = planSuggestOverlay(rows.length, (index) => rows[index] ?? null);
+		return {
+			lines: new Set(plan.blocks.filter((block) => block.kind === "answer").map((block) => lines[block.row])),
+			markers: new Set([...plan.answerMarkers].map((index) => lines[index])),
+		};
+	});
+
 	const displayedLines = createMemo(() => {
 		const q = props.searchQuery;
 		if (!q) return allLines();
@@ -329,16 +352,27 @@ export function OutputView(props: OutputViewProps) {
 	function styledRange(line: LogLine, start: number, end: number): JSX.Element[] {
 		const result: JSX.Element[] = [];
 		let offset = 0;
+		const text = line.spans.map((span) => span.text).join("");
+		const marker = answers().markers.has(line) ? text.indexOf("💬") : -1;
+		const markerEnd = marker < 0 ? -1 : marker + (text.slice(marker).match(/^💬[\uFE0E\uFE0F]? ?/)?.[0].length ?? 2);
 		for (const span of line.spans) {
 			const from = Math.max(start, offset);
 			const to = Math.min(end, offset + span.text.length);
-			if (to > from) {
-				const part = span.text.slice(from - offset, to - offset);
+			const ranges =
+				marker < 0
+					? [[from, to]]
+					: [
+							[from, Math.min(to, marker)],
+							[Math.max(from, markerEnd), to],
+						];
+			for (const [partFrom, partTo] of ranges) {
+				if (partTo <= partFrom) continue;
+				const part = span.text.slice(partFrom - offset, partTo - offset);
 				const style = spanStyle(span);
 				// Claude replaces its leading dot with one space while it pulses.
 				// Font fallback can give even the text-form dot a different advance.
 				const slotLength =
-					from === 0 ? (part.startsWith("⏺") ? (part[1] === "\uFE0E" ? 2 : 1) : part.startsWith(" ") ? 1 : 0) : 0;
+					partFrom === 0 ? (part.startsWith("⏺") ? (part[1] === "\uFE0E" ? 2 : 1) : part.startsWith(" ") ? 1 : 0) : 0;
 				const content = slotLength ? (
 					<>
 						<span class={styles.dotSlot}>{part.slice(0, slotLength)}</span>
@@ -365,44 +399,61 @@ export function OutputView(props: OutputViewProps) {
 			else if (char === "\t") indent += 8 - (indent % 8);
 			else break;
 		}
-		const isIntent = INTENT_HIGHLIGHT_RE.test(text.replaceAll("\uFE0E", ""));
-		const marker = isIntent ? "intent" : undefined;
-		const lineClass = isIntent ? `${styles.line} ${styles.intent}` : styles.line;
-		const wrapStyle = indent ? { "--wrap-indent": `${indent}ch` } : undefined;
+		// VS15 is display-only but still occupies a UTF-16 offset in styledRange.
+		const anchor = INTENT_HIGHLIGHT_RE.exec(text.replaceAll("\uFE0E", " "));
+		const boundary = anchor ? intentTitleEnd(text.slice(anchor[0].length)) : undefined;
+		const end = boundary !== undefined ? anchor![0].length + boundary : text.length;
+		const partial = !!anchor && text.slice(end).trim() !== "";
+		const isIntent = !!anchor;
+		const isAnswer = () => answers().lines.has(line);
+		const marker = () => (isIntent && !partial ? "intent" : isAnswer() ? "answer" : undefined);
+		const lineClass = isIntent && !partial ? `${styles.line} ${styles.intent}` : styles.line;
+		const wrapStyle = () => ({
+			"--wrap-indent": indent ? `${indent}ch` : undefined,
+			"box-shadow": isAnswer() ? ANSWER_RULE_SHADOW : undefined,
+		});
 		const links = detectOutputLinks(text).filter((link) => link.kind === "web" || props.onOpenFileLink);
-		if (links.length === 0) {
-			return (
-				<div class={lineClass} style={wrapStyle} data-terminal-marker={marker}>
-					{styledRange(line, 0, text.length)}
-				</div>
-			);
+		function content(start: number, end: number): JSX.Element[] {
+			const parts: JSX.Element[] = [];
+			let offset = start;
+			for (const link of links) {
+				if (link.end <= start || link.start >= end) continue;
+				const from = Math.max(start, link.start);
+				const to = Math.min(end, link.end);
+				parts.push(...styledRange(line, offset, from));
+				const label = styledRange(line, from, to);
+				parts.push(
+					link.kind === "web" ? (
+						<a class={styles.webLink} href={link.text} target="_blank" rel="noopener noreferrer external">
+							{label}
+						</a>
+					) : (
+						<button
+							type="button"
+							class={styles.fileLink}
+							onClick={() => props.onOpenFileLink?.(link.candidate!, link.line)}
+						>
+							{label}
+						</button>
+					),
+				);
+				offset = to;
+			}
+			parts.push(...styledRange(line, offset, end));
+			return parts;
 		}
-		const parts: JSX.Element[] = [];
-		let offset = 0;
-		for (const link of links) {
-			parts.push(...styledRange(line, offset, link.start));
-			const content = styledRange(line, link.start, link.end);
-			parts.push(
-				link.kind === "web" ? (
-					<a class={styles.webLink} href={link.text} target="_blank" rel="noopener noreferrer external">
-						{content}
-					</a>
-				) : (
-					<button
-						type="button"
-						class={styles.fileLink}
-						onClick={() => props.onOpenFileLink?.(link.candidate!, link.line)}
-					>
-						{content}
-					</button>
-				),
-			);
-			offset = link.end;
-		}
-		parts.push(...styledRange(line, offset, text.length));
 		return (
-			<div class={lineClass} style={wrapStyle} data-terminal-marker={marker}>
-				{parts}
+			<div class={lineClass} style={wrapStyle()} data-terminal-marker={marker()}>
+				{partial ? (
+					<>
+						<span class={styles.intent} data-terminal-marker="intent">
+							{content(0, end)}
+						</span>
+						{content(end, text.length)}
+					</>
+				) : (
+					content(0, text.length)
+				)}
 			</div>
 		);
 	}

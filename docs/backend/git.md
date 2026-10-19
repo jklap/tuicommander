@@ -1,9 +1,10 @@
 # Git Operations
 
-Terminal placement uses reported cwd, not `placementPath` or a persisted
-`declaredWorktrees` association. Creating a checkout through `git -C` does not
-move the caller's process or its tab into that checkout. Cold saved-terminal
-restoration and reconnect also resolve the workspace from cwd.
+Terminal placement uses a valid caller-bound `declaredWorktrees` association when
+one exists, otherwise reported cwd. Creating a checkout through `git -C` does not
+move the caller's process or its tab into that checkout. An explicit declaration
+moves only its tab; saved-terminal restoration, reconnect and OSC 7 retain that
+placement without changing shell cwd. Legacy `placementPath` alone is not authority.
 
 **Modules:** `src-tauri/crates/tuic-git/src/{git,git_cli,git_graph,git_locks,git_reads,worktree,cow}.rs` (domain), `src-tauri/src/{git,git_graph,worktree}.rs` (app adapters)
 
@@ -267,8 +268,11 @@ unmerged PRs, mismatched heads, and unavailable API data never prove deletion.
 The request uses the repository-bound GitHub account and host. An incomplete
 pagination read is unknown and is not cached; monitoring reuses definitive
 answers for 300 seconds, while removal always asks again.
-MCP worktree listing uses those monitoring proofs too, keyed by current refs,
-without resolving the full worktree inventory again for each entry. Its dirt,
+MCP worktree listing uses local monitoring proofs keyed by current refs without
+resolving the full worktree inventory again for each entry. It reads GitHub proof
+from the existing definitive-answer cache only; a miss stays locally unproven and
+never starts network I/O. Background monitoring may populate the cache, while
+destructive preflights still ask freshly. Its dirt,
 fingerprint and submodule fields are still inspected freshly. A checkout HEAD
 that differs from its branch ref bypasses the proof cache; destructive lifecycle
 preflights always bypass it.
@@ -524,8 +528,9 @@ before closing it and uses directory-boundary, separator-independent containment
 Missing cwd is not permission to close. Surviving tabs from a removed row are
 reconciled to their cwd workspace or parked in the Global Workspace.
 
-Creation declarations remain backend metadata. They do not override cwd for tab
-placement on creation, OSC 7, reload or saved-tab restore. A repo-root session waits
+Creation alone remains cwd-based. Explicit caller declarations override cwd only
+for display placement, never terminal cleanup. A declaration must match an existing
+workspace id and checkout path; removal retracts it. An undeclared repo-root session waits
 for the root workspace to be discovered rather than joining the selected linked
 worktree.
 

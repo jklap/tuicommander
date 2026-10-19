@@ -2975,7 +2975,8 @@ worktrees are discovered without recreating or deleting them.
 The response and `session-worktree-declared` event use the worktree lifecycle
 payload, with `creator_session` naming the caller and `spawn_session=false`.
 Only that tab moves. Its real cwd, sibling tabs and an inactive selection stay
-unchanged. Retrying the same declaration is idempotent.
+unchanged; an active caller’s selected workspace follows the same tab. Retrying
+the same declaration is idempotent.
 
 The stable `TUIC_SESSION` association is stored in the owning repository's
 `declaredWorktrees` map using the existing locked repository delta. Any saved
@@ -2983,13 +2984,16 @@ caller snapshot moves to the target workspace; sibling snapshots are preserved.
 After a restart or WebView reconnect, HTTP `GET /sessions` and IPC
 `list_active_sessions` return the declared `worktree_path` and `worktree_branch`
 while `cwd` remains the actual shell directory. The frontend restores placement
-from that worktree path. Declaration does not acquire worktree cleanup ownership.
+from the persisted stable caller declaration across registered repositories,
+independent of a changed cwd-derived repository, when the workspace id and checkout
+path still match. Declaration does not acquire worktree cleanup ownership.
 A concurrent repository edit can return a configuration conflict; retry the
 declaration after refreshing rather than overwriting that edit.
 
 The explicit placement remains authoritative over later shell cwd notifications
 until another declaration changes it. The frontend retains the backend placement
-path separately from the observed cwd during reconciliation.
+in `declaredWorktrees` separately from the observed cwd during reconciliation.
+Removing or replacing the matching checkout invalidates that placement.
 
 **Intentional request transport exception:** `declare_worktree` is an MCP-only
 action, callable over the existing HTTP `POST /mcp` route with a bound caller.
@@ -3474,3 +3478,8 @@ IDs without advancing the legacy cursor or acknowledging its loss watermark.
 each bounded batch, then read again when `has_more` is true. These endpoints
 require the bound `Mcp-Session-Id`; a stateless `x-tuic-session` alone is not an
 HTTP subscription binding. See [retention and notification semantics](../backend/mcp-http.md#durable-independent-mail-subscriptions).
+
+Plugin catalogue entries returned by `fetch_plugin_registry` can include optional
+`contentSha256`. Installed plugin discovery returns the same field computed from
+the installed payload, not from manifest input. Both transports use the same Rust
+manifest serialization and payload identity algorithm. See [Plugin Registry](../plugins.md#plugin-registry).
