@@ -3,7 +3,7 @@ use agent_client_protocol::schema::v1;
 use std::path::Path;
 use tuicommander_lib::acp::AcpClientEvent;
 
-mod acp_support;
+use crate::acp_support;
 use acp_support::{Fixture, authority, text, until_settled};
 
 fn capable(scenario: &str) -> Fixture {
@@ -215,7 +215,7 @@ async fn capable_agent_still_queues_attachments() {
 // Catches: incompatible capability versions or methods are treated as valid steering.
 #[test]
 fn mismatched_steering_capabilities_preserve_legacy_prompt_routing() {
-    let wire = include_str!("fixtures/acp/ego-steer-initialize.json");
+    let wire = include_str!("../fixtures/acp/ego-steer-initialize.json");
     let recorded: serde_json::Value = serde_json::from_str(wire).unwrap();
     for advertised in [
         serde_json::json!({"version": 2, "method": "_ego/steer", "contentTypes": ["text"]}),

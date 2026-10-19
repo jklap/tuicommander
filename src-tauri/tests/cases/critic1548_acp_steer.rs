@@ -1,6 +1,6 @@
 use agent_client_protocol::schema::v1;
 
-mod acp_support;
+use crate::acp_support;
 use acp_support::{Fixture, authority, text, until};
 
 fn capable(scenario: &str, response: &str) -> Fixture {

@@ -568,7 +568,7 @@ mod state {
 
             let raw_rows = buf.screen_rows();
             let refs: Vec<&str> = raw_rows.iter().map(|s| s.as_str()).collect();
-            let cutoff = crate::chrome::find_chrome_cutoff(&refs).unwrap_or(raw_rows.len());
+            let cutoff = super::super::chrome::find_chrome_cutoff(&refs).unwrap_or(raw_rows.len());
             let screen: Vec<LogLine> = buf.screen_log_lines().into_iter().take(cutoff).collect();
 
             let screen_text: Vec<String> = screen.iter().map(|l| l.text()).collect();
@@ -956,7 +956,7 @@ mod state {
         /// Helper: create a TerminalGrid, feed data, and extract LogLine for row 0.
         fn extract_line_from(data: &[u8]) -> LogLine {
             use alacritty_terminal::index::Line;
-            let mut grid = crate::terminal_grid::TerminalGrid::new(4, 80, 0);
+            let mut grid = super::super::terminal_grid::TerminalGrid::new(4, 80, 0);
             let _ = grid.process(data);
             grid.extract_log_line(Line(0))
         }

@@ -5,9 +5,10 @@ use unicode_width::UnicodeWidthChar;
 // Catches a dot/space redraw shifting any row of the real wrapped Bash block.
 #[test]
 fn real_claude_dot_pulse_does_not_shift_wrapped_block_1654() {
-    let capture: serde_json::Value =
-        serde_json::from_str(include_str!("../src/fixtures/claude-dot-blink-1654.json"))
-            .expect("recorded Claude capture");
+    let capture: serde_json::Value = serde_json::from_str(include_str!(
+        "../../src/fixtures/claude-dot-blink-1654.json"
+    ))
+    .expect("recorded Claude capture");
     let raw = capture["data"].as_str().expect("raw PTY output");
     assert_eq!('⏺'.width(), Some(1));
     assert_eq!(' '.width(), Some(1));

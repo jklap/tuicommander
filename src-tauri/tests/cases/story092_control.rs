@@ -19,7 +19,7 @@ use tuicommander_lib::acp::{
     AcpTargetPublication, EgoCompactRequest, EgoHoldRequest,
 };
 
-mod acp_support;
+use crate::acp_support;
 
 use acp_support::{Fixture, authority, text, until};
 

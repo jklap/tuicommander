@@ -7,7 +7,7 @@ use tuicommander_lib::acp::{
     AcpPendingInteraction,
 };
 
-mod acp_support;
+use crate::acp_support;
 use acp_support::{Fixture, authority, text};
 
 #[tokio::test]
