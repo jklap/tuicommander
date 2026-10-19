@@ -1873,7 +1873,7 @@ fn apply_tailscale_status(
             new_https,
             "HTTPS state changed, restarting server"
         );
-        restart_server(&state, "Tailscale HTTPS availability changed");
+        restart_server(state, "Tailscale HTTPS availability changed");
     }
 
     new_state
