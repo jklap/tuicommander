@@ -96,6 +96,8 @@ vi.mock("../../stores/repositories", () => ({
 
 vi.mock("../../stores/repoSettings", () => ({
 	repoSettingsStore: {
+		// navigateToTerminal -> syncScopeForActiveRepo reads per-repo settings off `state`.
+		state: { settings: {} },
 		get: vi.fn(() => undefined),
 		getEffective: vi.fn(() => undefined),
 		getEffectiveField: vi.fn(() => undefined),
