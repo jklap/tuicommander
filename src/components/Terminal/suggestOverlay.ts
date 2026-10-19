@@ -4,6 +4,8 @@ import intentMarker from "../../../src-tauri/crates/tuic-terminal/src/intent_mar
 export interface RowSnapshot {
 	text: string;
 	isWrapped: boolean;
+	/** Map a text boundary to its real terminal cell (wide/combining glyphs). */
+	endColumn?: (offset: number) => number;
 }
 
 /** Re-declared here instead of imported: keeps the helper self-contained and
@@ -21,6 +23,8 @@ const INTENT_RE = /^intent:\s+\S/;
  * block on an indented mention would swallow the block's closing bracket.
  */
 export const INTENT_HIGHLIGHT_RE = new RegExp(`${intentMarker.anchor}[\\t ]+`);
+/** Same title boundary as Rust capture; rendering never invents a second delimiter. */
+export const INTENT_TITLE_RE = new RegExp(intentMarker.title);
 /**
  * The answer marker an agent prefixes to every sentence that directly answers
  * the user (💬). Matched on row text, which carries no escape sequences — bold,
@@ -257,6 +261,8 @@ export function isSuggestBlock(
 export interface OverlayBlock {
 	row: number;
 	kind: "suggest" | "continuation" | "intent" | "answer";
+	/** Present only when ordinary prose shares the final intent row. */
+	endColumn?: number;
 }
 
 /**
@@ -350,13 +356,25 @@ export function planSuggestOverlay(
 			row = last;
 		} else if (INTENT_HIGHLIGHT_RE.test(text)) {
 			// Ink also hard-wraps with cursor moves and indentation, without isWrapped.
+			let body = "";
+			let prefix = INTENT_HIGHLIGHT_RE.exec(text)![0].length;
 			for (; ; row++) {
-				blocks.push({ row, kind: "intent" });
-				parts.push(`i${row}`);
+				const current = getRow(row)!;
+				const before = body.length;
+				body += current.text.slice(prefix);
+				const closed = INTENT_TITLE_RE.exec(body);
+				const end = closed ? closed[0].length - before + prefix : undefined;
+				const partial = end !== undefined && current.text.slice(end).trim() !== "";
+				const endColumn = partial ? (current.endColumn?.(end!) ?? end!) : undefined;
+				blocks.push(endColumn === undefined ? { row, kind: "intent" } : { row, kind: "intent", endColumn });
+				parts.push(`i${row}${endColumn === undefined ? "" : `:${endColumn}`}`);
+				if (closed) break;
+				prefix = 0;
 				if (row + 1 >= totalRows) break;
 				const next = getRow(row + 1);
 				if (!next || next.text.trim() === "") break;
 				if (next.isWrapped) continue;
+				body += " ";
 				if (!ANSWER_CONTINUATION_RE.test(next.text)) break;
 				if (OUTPUT_ROW_RE.test(next.text) || ANSWER_MARKER_RE.test(next.text) || PROMPT_ROW_RE.test(next.text)) break;
 				if (SUGGEST_ANCHOR_RE.test(next.text) || INTENT_HIGHLIGHT_RE.test(next.text)) break;
@@ -386,13 +404,22 @@ function overlayDiv(top: number, height: number, background: string): HTMLDivEle
  * answer row: a transparent strip with a solid gutter bar. Intent rows get a
  * theme-aware tint; omitted suggest rows get no strip.
  */
-export function paintOverlayBlocks(container: HTMLElement, blocks: readonly OverlayBlock[], cellHeight: number): void {
+export function paintOverlayBlocks(
+	container: HTMLElement,
+	blocks: readonly OverlayBlock[],
+	cellHeight: number,
+	cellWidth?: number,
+): void {
 	container.textContent = "";
 	for (const block of blocks) {
 		if (block.row < 0) continue;
 		if (block.kind === "intent") {
 			const div = overlayDiv(block.row * cellHeight, cellHeight, "var(--warning)");
 			div.dataset.terminalMarker = "intent";
+			if (block.endColumn !== undefined && cellWidth !== undefined) {
+				div.style.right = "auto";
+				div.style.width = `${block.endColumn * cellWidth}px`;
+			}
 			div.style.opacity = "0.12";
 			container.appendChild(div);
 		} else if (block.kind === "answer") {

@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+- End PTY intents at the title closure so joined trailing prose stays out of the CONTEXT header and desktop/mobile intent tint (#2060-0ebe).
+
 - Resolve ego session discovery through its per-PID index and held writer lease without scanning historical sessions; retain legacy lookup only when the index is absent (#2058-0d0e).
 
 - Keep GitHub network proof lookups off the worktree-list request path; use cached definitive answers or conservative local classification, with fresh checkout safety fields (#2044-31f3).

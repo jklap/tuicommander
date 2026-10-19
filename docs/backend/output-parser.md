@@ -725,3 +725,18 @@ Before parsing an ego question, the PTY reader concatenates rows linked by the g
 ### Mobile intent presentation
 
 The log serializer keeps `intent:` text and its styled spans in history and screen output. Only `suggest:` source markers are stripped for the suggestion-chip UI. Mobile CLI rejoins the terminal soft-wrap boundaries and applies the desktop intent tint to the complete logical line. State/title parsing is unchanged.
+
+### PTY intent title closure
+
+The shared `intent_marker.json` grammar defines the intent anchor and title
+boundary for Rust capture and desktop/mobile tinting. The last complete, non-nested
+parenthesis group on the logical row is the title. Its closing parenthesis ends
+the intent even when ordinary prose follows without whitespace. Earlier
+parenthesis groups remain in the description. Title-less rows keep their existing
+hard-break completion behavior.
+
+The parser does not remove terminal bytes. Desktop tint stops at the closing
+cell, including when the title wraps; mobile keeps trailing spans and links outside
+the tint. The CONTEXT header receives only the parsed description. Source evidence
+for 2060-0ebe is the recorded ego assistant message in `ego-intent-2060.json`:
+the model itself emitted `)Criteri`, not two lines joined by the terminal renderer.

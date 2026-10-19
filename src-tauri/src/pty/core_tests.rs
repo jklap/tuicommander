@@ -15623,3 +15623,82 @@ async fn ego_second_recorded_intent_replaces_context_and_title_1964() {
         "the first marker must also be observed"
     );
 }
+
+/// Catches: the native ego title closure leaking following prose into the
+/// accumulated intent consumed by desktop CONTEXT and remote/mobile snapshots.
+#[cfg(unix)]
+#[tokio::test(flavor = "current_thread")]
+async fn ego_recorded_joined_intent_ends_at_title_closure_2060() {
+    let capture =
+        crate::pty_capture::decode_capture(&agent_prompt_fixture("ego-intent-joined-2060.tcap"))
+            .expect("read-only native ego ring capture");
+    let (rows, cols) = capture.geometry.expect("observed geometry");
+    let state = std::sync::Arc::new(crate::state::tests_support::make_test_app_state());
+    state.config.write().progress_tracking = false;
+    let sid = "ego-intent-2060";
+    crate::state::tests_support::insert_dummy_session(&state, sid);
+    agent_session(&state, sid, SHELL_BUSY);
+    state
+        .session_maps
+        .session_states
+        .get_mut(sid)
+        .unwrap()
+        .agent_type = Some("ego".into());
+    state.grid.vt_log_buffers.insert(
+        sid.into(),
+        Mutex::new(crate::state::VtLogBuffer::new(rows, cols, 2000)),
+    );
+    let silence = state.session_maps.silence_states.get(sid).unwrap().clone();
+    let mut receiver = state.event_bus.subscribe();
+    let mut processor = ChunkProcessor::new(None, None);
+    let mut intents = Vec::new();
+    for record in capture.records {
+        processor.process_chunk(
+            std::str::from_utf8(&record.data).expect("UTF-8 capture"),
+            &silence,
+            sid,
+            &state,
+        );
+        while let Ok(event) = receiver.try_recv() {
+            if let crate::state::AppEvent::PtyParsed { parsed, .. } = &event
+                && parsed["type"] == "intent"
+            {
+                intents.push((
+                    parsed["text"].as_str().unwrap().to_string(),
+                    parsed["title"].as_str().map(str::to_string),
+                ));
+            }
+            crate::state::tests_support::apply_replay_event(&state, &event);
+        }
+    }
+    assert_eq!(
+        intents.last(),
+        Some(&(
+            "Verifying joined title closure".to_string(),
+            Some("Intent boundary".to_string())
+        ))
+    );
+    assert_eq!(
+        state
+            .session_maps
+            .session_states
+            .get(sid)
+            .unwrap()
+            .agent_intent
+            .as_deref(),
+        Some("Verifying joined title closure")
+    );
+    let vt = state.grid.vt_log_buffers.get(sid).unwrap();
+    let vt = vt.lock();
+    let visible = vt
+        .lines()
+        .iter()
+        .map(|line| line.text())
+        .chain(vt.screen_rows())
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        visible.contains("This sentence must remain ordinary output after the title."),
+        "trailing prose must remain in terminal output: {visible}"
+    );
+}

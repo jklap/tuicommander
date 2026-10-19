@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
+import { cachedMarkerSnapshot } from "../canvasTerminalMarkers";
 import type { DecodedRow } from "../canvasTerminalUtils";
-import { rowText } from "../canvasTerminalUtils";
+import { rowText, utf16SpanToCellRange } from "../canvasTerminalUtils";
 import {
 	answerBlockRanges,
 	answerExtent,
@@ -589,4 +590,19 @@ describe("answer overlay geometry cache", () => {
 		expect(strips[0].style.top).toBe("365.5px");
 		expect(strips[4].style.top).toBe("451.5px");
 	});
+});
+
+it("paints only real terminal cells through a title closure beside ordinary prose", () => {
+	// Catches: treating a UTF-16 offset as a cell count, or painting full-width after closure.
+	const text = "intent: Inspect 漢字 (Inspection)Next sentence";
+	const cells = [...text].flatMap((char) =>
+		char === "漢" || char === "字" ? [char.codePointAt(0)!, 0] : [char.codePointAt(0)!],
+	);
+	const row = { count: cells.length, codepoints: Uint32Array.from(cells) } as DecodedRow;
+	const snapshot = cachedMarkerSnapshot(rowText, (value, end) => utf16SpanToCellRange(value, 0, end)[1]);
+	const plan = planSuggestOverlay(1, () => snapshot(row, false));
+	const container = document.createElement("div");
+	paintOverlayBlocks(container, plan.blocks, 20, 8);
+	expect(container.firstElementChild?.getAttribute("data-terminal-marker")).toBe("intent");
+	expect((container.firstElementChild as HTMLElement).style.width).toBe("264px");
 });
