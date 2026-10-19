@@ -20,6 +20,7 @@
 	align-items: center;
 	justify-content: center;
 	width: fit-content;
+	max-width: 100%;
 	margin: 0 auto;
 	padding: 16px;
 	background: #ffffff;
@@ -29,7 +30,7 @@
 .qr {
 	display: block;
 	width: 320px;
-	height: 320px;
+	height: auto;
 	max-width: 100%;
 	image-rendering: pixelated;
 }
@@ -78,3 +79,6 @@
 	color: var(--fg-primary);
 	border-color: var(--accent);
 }
+
+.discoveryFailure { min-width: 0; }
+.discoveryFailure p { color: var(--error); overflow-wrap: anywhere; }
