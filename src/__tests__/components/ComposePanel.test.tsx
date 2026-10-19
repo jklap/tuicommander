@@ -2,7 +2,7 @@ import { EditorView } from "@codemirror/view";
 import { cleanup, fireEvent, render, waitFor } from "@solidjs/testing-library";
 import { createSignal } from "solid-js";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { ComposePanel } from "../../components/ComposePanel/ComposePanel";
+import { type ComposeAppendRequest, ComposePanel } from "../../components/ComposePanel/ComposePanel";
 import type { QueuedCommand } from "../../hooks/usePty";
 import { invoke } from "../../invoke";
 import { __resetModalStackForTest, pushModal } from "../../stores/modalStack";
@@ -411,6 +411,49 @@ describe("ComposePanel", () => {
 
 			setIsOpen(true);
 			await waitFor(() => expect(docText(container)).toBe("draft from cursor line"));
+		});
+	});
+
+	describe("appendRequest — filling an already-open panel", () => {
+		it("appends with a blank-line separator when the doc already has content", async () => {
+			const [appendRequest, setAppendRequest] = createSignal<ComposeAppendRequest | null>(null);
+			const { container } = renderPanel({ appendRequest });
+			await waitFor(() => expect(container.querySelector(".cm-content")).not.toBeNull());
+			typeIntoEditor(container, "existing draft");
+
+			setAppendRequest({ text: "appended prompt", seq: 1 });
+			await waitFor(() => expect(docText(container)).toBe("existing draft\n\nappended prompt"));
+		});
+
+		it("appends without a separator when the doc is empty", async () => {
+			const [appendRequest, setAppendRequest] = createSignal<ComposeAppendRequest | null>(null);
+			const { container } = renderPanel({ appendRequest });
+			await waitFor(() => expect(container.querySelector(".cm-content")).not.toBeNull());
+
+			setAppendRequest({ text: "first prompt", seq: 1 });
+			await waitFor(() => expect(docText(container)).toBe("first prompt"));
+		});
+
+		it("ignores an appendRequest that is already set at mount time (defer skips the initial value)", async () => {
+			const [appendRequest] = createSignal<ComposeAppendRequest | null>({ text: "stale", seq: 1 });
+			const { container } = renderPanel({ appendRequest });
+			await waitFor(() => expect(container.querySelector(".cm-content")).not.toBeNull());
+			await flushFrame();
+			await flushFrame();
+
+			expect(docText(container)).toBe("");
+		});
+
+		it("applies a second append after the first", async () => {
+			const [appendRequest, setAppendRequest] = createSignal<ComposeAppendRequest | null>(null);
+			const { container } = renderPanel({ appendRequest });
+			await waitFor(() => expect(container.querySelector(".cm-content")).not.toBeNull());
+
+			setAppendRequest({ text: "first", seq: 1 });
+			await waitFor(() => expect(docText(container)).toBe("first"));
+
+			setAppendRequest({ text: "second", seq: 2 });
+			await waitFor(() => expect(docText(container)).toBe("first\n\nsecond"));
 		});
 	});
 

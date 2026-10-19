@@ -191,3 +191,27 @@ describe("Chat Compose input", () => {
 		expect((await readyEditor(view.container)).state.doc.toString()).toBe("Keep on Escape");
 	});
 });
+
+describe("Smart Prompt into CLI Compose", () => {
+	// Catches: a prompt fired into an open Compose wiping the draft the user is writing.
+	it("appends_below_the_draft_of_an_already_open_compose", async () => {
+		const id = addTerminal();
+		const view = render(() => <Terminal id={id} cwd="/repo" alwaysVisible />);
+		fireEvent.click(view.getByText(/^Compose /));
+		const cm = await readyEditor(view.container);
+		typeDraft(view.container, "My draft");
+		terminalsStore.get(id)?.ref?.openComposeWithText?.("Review this change");
+		await waitFor(() => expect(cm.state.doc.toString()).toBe("My draft\n\nReview this change"));
+		expect(editor(view.container)).toBe(cm);
+	});
+
+	// Catches: the append path swallowing the first open, which must fill the draft.
+	it("opens_a_closed_compose_filled_with_the_prompt", async () => {
+		const id = addTerminal();
+		const view = render(() => <Terminal id={id} cwd="/repo" alwaysVisible />);
+		expect(view.container.querySelector(".cm-editor")).toBeNull();
+		terminalsStore.get(id)?.ref?.openComposeWithText?.("Review this change");
+		const cm = await readyEditor(view.container);
+		await waitFor(() => expect(cm.state.doc.toString()).toBe("Review this change"));
+	});
+});

@@ -44,6 +44,15 @@ const composeTheme = EditorView.theme(
 	{ dark: true },
 );
 
+/** One request to append text to an already-open Compose panel, e.g. from
+ *  triggering a Smart Prompt while Compose is already open. `seq` must
+ *  increase on every request — it's what lets the panel tell two consecutive
+ *  requests for the same text apart. */
+export interface ComposeAppendRequest {
+	text: string;
+	seq: number;
+}
+
 export interface ComposePanelProps {
 	isOpen: Accessor<boolean>;
 	initialText: Accessor<string>;
@@ -73,8 +82,13 @@ export interface ComposePanelProps {
 	onDismiss: () => void;
 	/** Bumped to move the caret into the editor while the panel stays open. */
 	focusRequest: Accessor<number>;
-	/** Explicit host replacement (for example a smart prompt), independent of typing. */
+	/** Explicit host replacement (for example the draft left after a send, or a
+	 *  smart prompt into the always-open Chat input), independent of typing. */
 	textRequest?: Accessor<number>;
+	/** Set (with a fresh `seq`) to append text to the doc of an already-open
+	 *  panel instead of replacing it: a Smart Prompt fired into an open Compose
+	 *  lands below the draft the user is writing. */
+	appendRequest?: Accessor<ComposeAppendRequest | null>;
 }
 
 /** Who parked a queue entry, for the entries that are not the operator's own. */
@@ -258,6 +272,28 @@ export const ComposePanel: Component<ComposePanelProps> = (props) => {
 				view.dispatch({
 					changes: { from: 0, to: view.state.doc.length, insert: text },
 					selection: { anchor: text.length },
+				});
+				view.focus();
+			},
+			{ defer: true },
+		),
+	);
+
+	// Append below the existing draft (blank-line separated) rather than replace
+	// it. `on(..., { defer: true })` skips the initial run, so a request already
+	// set when the panel mounts appends nothing.
+	createEffect(
+		on(
+			() => props.appendRequest?.() ?? null,
+			(request) => {
+				if (!request?.text) return;
+				const view = editorView();
+				if (!view) return;
+				const end = view.state.doc.length;
+				const insertion = end > 0 ? `\n\n${request.text}` : request.text;
+				view.dispatch({
+					changes: { from: end, to: end, insert: insertion },
+					selection: { anchor: end + insertion.length },
 				});
 				view.focus();
 			},

@@ -7057,9 +7057,9 @@ and are not repeated here. What's left needs a human pass:
   separator), not silently dropped and not overwriting the draft. (Live
   verification this session covered the adjacent focus-trap fix by typing
   directly into the Content field, not this exact "trigger a real Smart
-  Prompt" path.) _(NOTE (2026-10-17 replay): the append path was NOT carried onto
-  main — main's own fix (`textRequest`, #1599-db8a) REPLACES the open draft with the
-  prompt text; verify replace, or decide whether to restore append.)_
+  Prompt" path.) _(NOTE (2026-10-19): append is restored for an already-open CLI
+  Compose (`appendRequest`); the always-open Chat input keeps main's replace
+  (`textRequest`, #1599-db8a). A closed Compose still opens filled with the prompt.)_
 - [ ] **Settings → Smart Selection — first-edit-on-a-fresh-config case** — on
   a config with no prior Smart Selection customization (so the rule list is
   showing built-in defaults, unmaterialized), expand a rule, type into "Menu
