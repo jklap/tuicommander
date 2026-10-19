@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
+import { cachedMarkerSnapshot } from "../canvasTerminalMarkers";
 import type { DecodedRow } from "../canvasTerminalUtils";
-import { rowText } from "../canvasTerminalUtils";
+import { rowText, utf16SpanToCellRange } from "../canvasTerminalUtils";
 import {
 	answerBlockRanges,
 	answerExtent,
@@ -591,23 +592,75 @@ describe("answer overlay geometry cache", () => {
 	});
 });
 
+it("paints only real terminal cells through a title closure beside ordinary prose", () => {
+	// Catches: treating a UTF-16 offset as a cell count, or painting full-width after closure.
+	const text = "intent: Inspect 漢字 (Inspection)Next sentence";
+	const cells = [...text].flatMap((char) =>
+		char === "漢" || char === "字" ? [char.codePointAt(0)!, 0] : [char.codePointAt(0)!],
+	);
+	const row = { count: cells.length, codepoints: Uint32Array.from(cells) } as DecodedRow;
+	const snapshot = cachedMarkerSnapshot(rowText, (value, end) => utf16SpanToCellRange(value, 0, end)[1]);
+	const plan = planSuggestOverlay(1, () => snapshot(row, false));
+	const container = document.createElement("div");
+	paintOverlayBlocks(container, plan.blocks, 20, 8);
+	expect(container.firstElementChild?.getAttribute("data-terminal-marker")).toBe("intent");
+	expect((container.firstElementChild as HTMLElement).style.width).toBe("264px");
+});
+
+it("resolves an aside and title across the complete soft-wrapped logical line", () => {
+	// Catches: the first closed aside ending tint before the real title on a later physical row.
+	for (const width of [20, 200]) {
+		for (const trailing of ["", "Next sentence with ordinary prose"]) {
+			const intent = "intent: checking (local) configuration (Config)";
+			const text = intent + trailing;
+			const snapshots: RowSnapshot[] = [];
+			for (let offset = 0; offset < text.length; offset += width) {
+				snapshots.push({ text: text.slice(offset, offset + width), isWrapped: offset > 0 });
+			}
+			const plan = planSuggestOverlay(snapshots.length, (index) => snapshots[index] ?? null);
+			const expected = [];
+			for (let row = 0; row * width < intent.length; row++) {
+				const end = intent.length - row * width;
+				expected.push(
+					end < snapshots[row].text.length ? { row, kind: "intent", endColumn: end } : { row, kind: "intent" },
+				);
+			}
+			expect(plan.blocks).toEqual(expected);
+		}
+	}
+});
+
+it("keeps an unfinished later title open through hard wraps but not a new answer", () => {
+	// Catches: an earlier aside truncating hard-wrap tint or consuming the next answer.
+	const snapshots = [
+		{ text: "intent: checking (local) configuration (Config", isWrapped: false },
+		{ text: "  review)Next sentence", isWrapped: false },
+		{ text: "  💬 A new answer", isWrapped: false },
+	];
+	expect(planSuggestOverlay(snapshots.length, (index) => snapshots[index] ?? null).blocks).toEqual([
+		{ row: 0, kind: "intent" },
+		{ row: 1, kind: "intent", endColumn: 9 },
+		{ row: 2, kind: "answer" },
+	]);
+});
 // Catches: a standalone fenced example is parsed as live protocol, or its closing
 // fence leaves the next real answer hidden from the shared desktop/mobile plan.
-it.each(["⏺ Example protocol output:", "intent: Explaining the protocol (Protocol example)"])(
-	"keeps standalone fenced protocol literal after %s and resumes after the closing fence",
-	(prefix) => {
-		const get = rows([
-			[prefix, false],
-			["  ```text", false],
-			["  💬 Keep this literal prefix", false],
-			["  suggest: [ A | B ]", false],
-			["  intent: Literal intent (Example)", false],
-			["  ❯ Literal prompt", false],
-			["  ```", false],
-			["⏺ 💬 Real answer", false],
-		]);
-		const plan = planSuggestOverlay(8, get);
-		expect([...plan.answerMarkers]).toEqual([7]);
-		expect(plan.blocks.filter((block) => block.row > 0)).toEqual([{ row: 7, kind: "answer" }]);
-	},
-);
+it.each([
+	"⏺ Example protocol output:",
+	"intent: Explaining the protocol (Protocol example)",
+	"intent: Explaining the protocol",
+])("keeps standalone fenced protocol literal after %s and resumes after the closing fence", (prefix) => {
+	const get = rows([
+		[prefix, false],
+		["  ```text", false],
+		["  💬 Keep this literal prefix", false],
+		["  suggest: [ A | B ]", false],
+		["  intent: Literal intent (Example)", false],
+		["  ❯ Literal prompt", false],
+		["  ```", false],
+		["⏺ 💬 Real answer", false],
+	]);
+	const plan = planSuggestOverlay(8, get);
+	expect([...plan.answerMarkers]).toEqual([7]);
+	expect(plan.blocks.filter((block) => block.row > 0)).toEqual([{ row: 7, kind: "answer" }]);
+});

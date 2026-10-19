@@ -1,3 +1,6 @@
+## Joined intent title closure (2060-0ebe) — Rust restart required
+
+- [ ] After Boss manually restarts `make dev` or installs `make build`, check an intent followed immediately by ordinary prose on the same row. CONTEXT must contain only the intent description; desktop and mobile tint must stop at the title closure without hiding trailing prose. Include a title that wraps. This peer did not restart or replace the running desktop.
 ## Workflow MCP grouping (2065-dcc5) — Rust restart required
 
 - [ ] After Boss manually restarts `make dev` or installs `make build`, reconnect MCP and confirm the grouped `workflow` schema exposes story, run, proposal_create, report and launch. Legacy tools remain available; `tuic workflow` uses the new entry and `tuic automations` stays independent. The running backend was not restarted by this peer.
