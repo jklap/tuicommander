@@ -22,7 +22,7 @@ const NATIVE_TOOL_GROUPS = [
 	{ title: "Repositories", names: ["repo"] },
 	{
 		title: "Workflows and stories",
-		names: ["story", "workflow_run", "workflow_story_create", "workflow_report", "workflow_launch"],
+		names: ["workflow", "story", "workflow_run", "workflow_story_create", "workflow_report", "workflow_launch"],
 	},
 	{ title: "Automations", names: ["automations"] },
 	{ title: "User interface and Design Mode", names: ["ui", "design_mode"] },
