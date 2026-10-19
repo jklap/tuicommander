@@ -55,12 +55,7 @@ export const LocalMcpPanel: Component = () => {
 
 	return (
 		<div class={`${s.section} ${layout.page}`}>
-			<SettingPageHeader
-				title="MCP"
-				description="Local MCP connection, tool visibility and upstream servers."
-				scope="This machine"
-				breadcrumb="Integrations / MCP"
-			/>
+			<SettingPageHeader title="MCP" scope="This machine" breadcrumb="Integrations / MCP" />
 			<SectionCard title="Server connections">
 				<SettingRow label={t("services.label.serverStatus", "Server Status")}>
 					{() => (
@@ -85,10 +80,6 @@ export const LocalMcpPanel: Component = () => {
 				{/* ── TUIC Tools ── */}
 			</SectionCard>
 			<SectionCard title="TUIC Tools">
-				<div class={s.group}>
-					<p class={s.hint}>Native tools exposed via MCP. Disable tools to restrict what AI agents can access.</p>
-				</div>
-
 				<div class={s.group}>
 					<button
 						data-non-setting="Show the bridge integration instructions; not a preference"
@@ -139,10 +130,7 @@ export const LocalMcpPanel: Component = () => {
 				</div>
 
 				<ExpertSetting configKey="app.collapse_tools" value={collapseTools()}>
-					<SettingRow
-						label="Collapse tools — Speakeasy MCP (reduces AI context ~98%)"
-						hint="Discover tools on demand through search_tools, get_tool_schema and call_tool."
-					>
+					<SettingRow label="Collapse tools — Speakeasy MCP (reduces AI context ~98%)">
 						{(id, descriptionId) => (
 							<input
 								data-setting-id="app.collapse_tools"
@@ -168,9 +156,6 @@ export const LocalMcpPanel: Component = () => {
 						<label>
 							Native tools <ContextualHelp label="Native tools" />
 						</label>
-						<p class={s.hint}>
-							Choose which built-in tools MCP clients can call. Disabled tools are hidden from clients.
-						</p>
 					</div>
 					<For each={nativeTools}>
 						{(tool) => {

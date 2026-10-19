@@ -76,7 +76,6 @@ export const RepoWorktreeTab: Component<RepoTabProps> = (props) => {
 		<div class={`${s.section} ${r.page}`}>
 			<SettingPageHeader
 				title={props.settings.displayName || "Repository"}
-				description="Configure repository identity and inherited worktree defaults."
 				scope="Repository"
 				source={props.settings.path}
 				breadcrumb="Repositories / Settings"

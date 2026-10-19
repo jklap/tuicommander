@@ -475,12 +475,7 @@ export const GitHubTab: Component = () => {
 
 	return (
 		<div class={`${s.section} ${w.page}`}>
-			<SettingPageHeader
-				title="Git & GitHub"
-				description="Manage accounts, monitoring, and defaults for your repositories."
-				scope="Application defaults"
-				breadcrumb="Workspace / Git & GitHub"
-			/>
+			<SettingPageHeader title="Git & GitHub" scope="Application defaults" breadcrumb="Workspace / Git & GitHub" />
 			<SectionCard title="GitHub Authentication">
 				{/* Error display */}
 				<Show when={error()}>

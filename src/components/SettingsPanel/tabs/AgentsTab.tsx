@@ -1602,7 +1602,6 @@ export const AgentsTab: Component<AgentsTabProps> = (props) => {
 					<div class={`${s.section} ${a.page}`}>
 						<SettingPageHeader
 							title="Terminal agents"
-							description="Configure terminal agents and named launch configurations."
 							scope={
 								machine()
 									? `Machine: ${remoteConnectionsStore.getConnectionState(machine()!)?.connection.name ?? machine()}`
@@ -1638,10 +1637,6 @@ export const AgentsTab: Component<AgentsTabProps> = (props) => {
 							</Show>
 						</div>
 						<SectionCard title="Agent behavior">
-							<p class={s.hint} style={{ "margin-bottom": "12px" }}>
-								Control terminal-agent presentation and expand an agent to edit its named launch configurations.
-							</p>
-
 							<SettingToggle
 								settingId="app.intent_tab_title"
 								row

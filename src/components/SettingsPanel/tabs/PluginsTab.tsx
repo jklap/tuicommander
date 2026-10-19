@@ -437,12 +437,7 @@ export const PluginsTab: Component<{
 	return (
 		<div class={s.section}>
 			<div>
-				<SettingPageHeader
-					title="Manage plugins"
-					description="Manage installed plugins and browse the community registry."
-					scope="Application defaults"
-					breadcrumb="Plugins / Manage plugins"
-				/>
+				<SettingPageHeader title="Manage plugins" scope="Application defaults" breadcrumb="Plugins / Manage plugins" />
 				<button
 					data-non-setting="Open plugin documentation"
 					class={ps.docsLink}
