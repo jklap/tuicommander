@@ -2202,6 +2202,7 @@ pub fn parse_choice_prompt(screen_rows: &[String]) -> Option<ParsedEvent> {
     let mut amend_key: Option<String> = None;
     let mut codex_footer = false;
     let mut codex_approval = false;
+    let mut codex_plan = false;
 
     // Step 1: skip trailing blanks + optional footer.
     while idx > 0 {
@@ -2219,6 +2220,13 @@ pub fn parse_choice_prompt(screen_rows: &[String]) -> Option<ParsedEvent> {
         if row == "Press enter to confirm or esc to cancel" {
             dismiss_key = Some("cancel".to_owned());
             codex_approval = true;
+            idx -= 1;
+            continue;
+        }
+        if row == "tab to add notes | enter to submit answer | esc to interrupt" {
+            dismiss_key = Some("cancel".to_owned());
+            amend_key = Some("amend".to_owned());
+            codex_plan = true;
             idx -= 1;
             continue;
         }
@@ -2244,10 +2252,23 @@ pub fn parse_choice_prompt(screen_rows: &[String]) -> Option<ParsedEvent> {
             let mut label = caps[2].trim().to_string();
             let highlighted = raw.contains('❯') || raw.contains('›');
 
-            let hint = HINT_RE.captures(&label).map(|c| c[1].to_string());
-            if hint.is_some() {
-                label = HINT_RE.replace(&label, "").trim().to_string();
-            }
+            // /plan renders descriptions in a second column, including its
+            // notes hint. They are not part of the selectable answer label.
+            let hint = if codex_plan {
+                if let Some((answer, description)) = label.split_once("  ") {
+                    let hint = Some(description.trim().to_owned());
+                    label = answer.trim().to_owned();
+                    hint
+                } else {
+                    None
+                }
+            } else {
+                let hint = HINT_RE.captures(&label).map(|c| c[1].to_string());
+                if hint.is_some() {
+                    label = HINT_RE.replace(&label, "").trim().to_string();
+                }
+                hint
+            };
 
             let destructive = {
                 let lower = label.to_lowercase();
@@ -2307,10 +2328,41 @@ pub fn parse_choice_prompt(screen_rows: &[String]) -> Option<ParsedEvent> {
     {
         return None;
     }
+    // /plan is a distinct native form, not the queued-follow-up panel. Require
+    // its counter immediately above the title rather than accepting prose lists
+    // solely because their title is imperative or their footer was quoted.
+    if codex_plan {
+        let header = screen_rows[..idx - 1]
+            .iter()
+            .rev()
+            .find(|row| !row.trim().is_empty())?
+            .trim();
+        let counter = header.strip_prefix("Question ")?;
+        let (position, unanswered) = counter.split_once(" (")?;
+        let (current, total) = position.split_once('/')?;
+        let current = current.parse::<usize>().ok()?;
+        let total = total.parse::<usize>().ok()?;
+        let unanswered = unanswered
+            .strip_suffix(" unanswered)")?
+            .parse::<usize>()
+            .ok()?;
+        if current == 0
+            || current > total
+            || unanswered == 0
+            || unanswered > total
+            || options_rev
+                .iter()
+                .rev()
+                .enumerate()
+                .any(|(index, option)| option.key.parse::<usize>().ok() != Some(index + 1))
+        {
+            return None;
+        }
+    }
     // The exact Codex footer plus queued-panel heading is authoritative even
     // for imperative titles such as the recorded `Pick a color.`.
     let title_qualifies =
-        codex_footer || title_row.ends_with('?') || TITLE_VERB_RE.is_match(title_row);
+        codex_footer || codex_plan || title_row.ends_with('?') || TITLE_VERB_RE.is_match(title_row);
     if !title_qualifies {
         return None;
     }
@@ -6731,6 +6783,111 @@ Enter to select · ↑/↓ to navigate · Esc to cancel";
         assert_eq!(payload.options.len(), 2);
         assert_eq!(payload.dismiss_key.as_deref(), Some("cancel"));
         assert_eq!(payload.amend_key.as_deref(), Some("amend"));
+    }
+
+    fn recorded_codex_plan_question_rows() -> Vec<String> {
+        let fixture: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../src/fixtures/agent_prompts/codex-plan-question-20261019.json"
+        ))
+        .unwrap();
+        // The retained ring is not a TCAP: original geometry, input and chunk
+        // timing are unavailable. Replay on a canvas large enough for its last
+        // complete repaint (row 63, column 220); assert parser content only.
+        let mut grid = crate::terminal_grid::TerminalGrid::new(63, 220, 2000);
+        grid.process(fixture["data"].as_str().unwrap().as_bytes());
+        grid.screen_text_rows()
+    }
+
+    // Catches: the /plan request_user_input form losing its title and options
+    // because only the separate queued-follow-up footer is recognized.
+    #[test]
+    fn recorded_codex_plan_question_exports_clean_answer_controls() {
+        assert_codex_plan_answer_controls(&recorded_codex_plan_question_rows());
+    }
+
+    fn assert_codex_plan_answer_controls(rows: &[String]) {
+        let ParsedEvent::ChoicePrompt {
+            title,
+            options,
+            selection_mode,
+            dismiss_key,
+            amend_key,
+        } = parse_choice_prompt(rows).expect("recorded /plan question must export options")
+        else {
+            panic!("expected choice prompt");
+        };
+        assert_eq!(title, "Pick a colour");
+        assert_eq!(
+            options
+                .iter()
+                .map(|o| (o.key.as_str(), o.label.as_str(), o.highlighted))
+                .collect::<Vec<_>>(),
+            [
+                ("1", "Red", true),
+                ("2", "Green", false),
+                ("3", "Blue", false),
+                ("4", "None of the above", false)
+            ]
+        );
+        assert_eq!(options[0].hint.as_deref(), Some("Select Red."));
+        assert_eq!(
+            options[3].hint.as_deref(),
+            Some("Optionally, add details in notes (tab)")
+        );
+        assert_eq!(
+            selection_mode, None,
+            "recorded numeric answer submits immediately"
+        );
+        assert_eq!(dismiss_key.as_deref(), Some("cancel"));
+        assert_eq!(amend_key.as_deref(), Some("amend"));
+    }
+
+    // Catches: the same native /plan form failing at its real captured geometry.
+    #[test]
+    fn captured_codex_plan_question_exports_clean_answer_controls() {
+        let capture = crate::pty_capture::decode_capture(include_bytes!(
+            "../../../src/fixtures/agent_prompts/codex-plan-question-20261019-real.tcap"
+        ))
+        .unwrap();
+        let (rows, cols) = capture.geometry.expect("real recorded geometry");
+        let mut grid = crate::terminal_grid::TerminalGrid::new(rows, cols, 2000);
+        for record in capture.records {
+            if record.direction == crate::pty_capture::CaptureDirection::Input
+                && record.data == b"\x03"
+            {
+                break;
+            }
+            if record.direction == crate::pty_capture::CaptureDirection::Output {
+                grid.process(&record.data);
+            }
+        }
+        assert_codex_plan_answer_controls(&grid.screen_text_rows());
+    }
+
+    // Catches: quoted imperative lists becoming live controls without both
+    // native anchors, or a partial repaint exporting a missing answer key.
+    #[test]
+    fn recorded_codex_plan_question_requires_header_footer_and_numbering() {
+        let rows = recorded_codex_plan_question_rows();
+        for needle in ["Question 1/1", "tab to add notes", "2. Green"] {
+            let mut incomplete = rows.clone();
+            let row = incomplete
+                .iter_mut()
+                .find(|row| row.contains(needle))
+                .unwrap();
+            *row = String::new();
+            assert!(
+                parse_choice_prompt(&incomplete).is_none(),
+                "missing {needle}"
+            );
+        }
+        let mut answered = rows;
+        let header = answered
+            .iter_mut()
+            .find(|row| row.contains("Question 1/1"))
+            .unwrap();
+        *header = "  Question 1/1 (0 unanswered)".to_owned();
+        assert!(parse_choice_prompt(&answered).is_none());
     }
 
     fn recorded_claude_question_rows() -> Vec<String> {

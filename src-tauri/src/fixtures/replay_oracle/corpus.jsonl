@@ -22,6 +22,7 @@
 {"fixture":"src-tauri/src/fixtures/agent_prompts/codex-narrow-ink-replay-20260925.tcap","events":354}
 {"fixture":"src-tauri/src/fixtures/agent_prompts/codex-narrow-progress-intent-20260925.tcap","events":354}
 {"fixture":"src-tauri/src/fixtures/agent_prompts/codex-native-question-2026.tcap","events":2611}
+{"fixture":"src-tauri/src/fixtures/agent_prompts/codex-plan-question-20261019-real.tcap","events":569}
 {"fixture":"src-tauri/src/fixtures/agent_prompts/codex-queued-wake-stuck-20260929.tcap","events":14}
 {"fixture":"src-tauri/src/fixtures/agent_prompts/codex-request-user-input-20260929.tcap","events":5658}
 {"fixture":"src-tauri/src/fixtures/agent_prompts/codex-streaming-intent-20260924.tcap","events":1274}
