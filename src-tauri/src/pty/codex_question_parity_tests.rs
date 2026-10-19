@@ -70,7 +70,7 @@ async fn captured_codex_plan_question_reaches_answer_controls() {
 
 /// Catches: an unanswered enforced approval losing awaiting or its three controls on repaint.
 #[tokio::test]
-async fn codex_enforced_approval_stays_awaiting_without_answer() {
+async fn captured_codex_approval_once_retires_native_controls() {
     let mut opened = false;
     let mut answered = false;
     let mut repaints = 0;
@@ -111,5 +111,46 @@ async fn codex_enforced_approval_stays_awaiting_without_answer() {
     assert!(
         !final_choices,
         "approval must retire after the command runs"
+    );
+}
+
+/// Catches: a late hook-idle clearing an unanswered native approval and its three controls.
+#[tokio::test]
+async fn codex_enforced_approval_stays_awaiting_without_answer() {
+    let mut opened = false;
+    let mut repaints = 0;
+    replay_native_question(
+        "codex-enforced-hook-idle-2075.tcap",
+        "codex",
+        |record, session| {
+            opened |= session.choice_prompt.is_some();
+            if opened {
+                assert_eq!(
+                    record.direction,
+                    crate::pty_capture::CaptureDirection::Output,
+                    "no input follows the real open approval"
+                );
+                assert!(
+                    session.awaiting_input && session.question_confident,
+                    "unanswered approval lost awaiting at {}us: {session:?}",
+                    record.elapsed_us
+                );
+                assert_eq!(
+                    session
+                        .choice_prompt
+                        .as_ref()
+                        .expect("unanswered approval lost choices")
+                        .options
+                        .len(),
+                    3
+                );
+                repaints += 1;
+            }
+        },
+    );
+    assert!(opened);
+    assert!(
+        repaints > 100,
+        "real capture includes three minutes without an answer"
     );
 }

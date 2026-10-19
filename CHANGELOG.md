@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+- Keep unanswered Codex enforced command approvals and all three native answer controls active when a delayed idle hook arrives (#2075-aa2f).
+
 - Publish and retain the stable session identity for newly spawned native MCP/HTTP agents and generic HTTP sessions so a worktree declaration moves the live sidebar tab, not only its saved restore record (#2044-31f3).
 - Open parked Activity Dashboard sessions in their own Global Workspace tabs instead of displaying their content under the current repository tab; preserve existing session bindings (#2080-d401).
 - Shorten agent-facing MCP descriptions for session, agent, repo, ui, voice, telegram and automations; preserve complete guidance through each tool’s `action=help`, without changing Settings copy or owner gates (#2069-7347).
