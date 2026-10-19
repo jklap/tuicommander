@@ -214,7 +214,10 @@ export function useSmartPrompts() {
 	const pty = usePty();
 
 	/** Check if a smart prompt can be executed right now */
-	function canExecute(prompt: SavedPrompt): CanExecuteResult {
+	/** `submitOverride`: the caller's explicit submit choice (a double-click, the
+	 *  variable dialog's Execute) — it must reach the busy gate, or an
+	 *  `autoExecute: false` prompt submitted that way skips it. */
+	function canExecute(prompt: SavedPrompt, submitOverride?: boolean): CanExecuteResult {
 		if (prompt.enabled === false) return { ok: false, reason: "Prompt is disabled" };
 
 		if (prompt.executionMode === "shell") {
@@ -235,17 +238,17 @@ export function useSmartPrompts() {
 			return { ok: true };
 		}
 
-		return canExecuteInject(prompt);
+		return canExecuteInject(prompt, submitOverride);
 	}
 
-	function canExecuteInject(prompt: SavedPrompt): CanExecuteResult {
+	function canExecuteInject(prompt: SavedPrompt, submitOverride?: boolean): CanExecuteResult {
 		const active = terminalsStore.getActive();
 		if (!active?.sessionId) return { ok: false, reason: "No active terminal" };
 		if (!active.agentType) return { ok: false, reason: "No agent detected in terminal" };
 		const composeIsOpen = active.ref?.isComposeOpen?.() ?? false;
 		// Idle only matters when this action will submit. Review-only insertions do
 		// not steer the active turn, regardless of their preferred UI target.
-		if (shouldSubmitInjectPrompt(prompt, composeIsOpen) && prompt.requiresIdle !== false) {
+		if (shouldSubmitInjectPrompt(prompt, composeIsOpen, submitOverride) && prompt.requiresIdle !== false) {
 			// isBusy, not isWorking: declared background work (teammates, bg tasks) must not
 			// block a prompt into the main agent, which is free to take it.
 			const busy = terminalsStore.isBusy(active.id);
