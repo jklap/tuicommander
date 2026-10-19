@@ -111,6 +111,7 @@ export async function replayFrameWorkload(
 		const rows = new Map(event.rows.map((row) => [row.index, restoreWorkloadRow(row)]));
 		const options = {
 			fullRepaint: state.fullRepaint,
+			viewportTop: state.viewportTop,
 			dirtyIndices: state.dirtyIndices ? new Set(state.dirtyIndices) : undefined,
 			projection: new ViewportProjection(rows, new Set(state.hiddenRows), new Set(state.answerMarkers)),
 		};
