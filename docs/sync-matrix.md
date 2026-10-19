@@ -476,7 +476,7 @@ that reach them:
 | `src-tauri/src/pty.rs` | Claim release on session teardown (`remove_live_session_state`) |
 | `src-tauri/src/lib.rs` | `story_action_command` (IPC) |
 | `src-tauri/src/mcp_http/mod.rs` | `POST /stories/action` and its auth guard |
-| `src-tauri/src/mcp_http/mcp_transport.rs` | The MCP `story` tool (`handle_story`, bound caller only) |
+| `src-tauri/src/mcp_http/mcp_transport.rs` | The MCP `workflow action=story` entry (`handle_story`, bound caller only) |
 | `src-tauri/crates/tuic-cli/src/main.rs` | `tuic story` |
 | `src/transport.ts` + `src-tauri/src/mcp_http/command_table_paths.txt` | The `story_action_command` mapping; regenerate the paths file with `pnpm vitest run src/__tests__/transport.test.ts -u` |
 | `src/components/StoriesDialog/`, `src/stores/storiesUi.ts`, `src/components/Toolbar/Toolbar.tsx` | The dialog, its visibility store, and the toolbar entry point |

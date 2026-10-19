@@ -109,7 +109,7 @@ and restart verification await without blocking the IPC main thread.
 
 ### Native stories (2026-09-25)
 
-`story_action_command` is `async fn` and offloads SQLite and ownership resolution with `spawn_blocking`. The headless-compatible `/stories/action` route offloads the same shared Rust service independently; the MCP `story` tool runs it through the existing blocking handler. This keeps disk I/O off the macOS IPC thread and Tokio workers.
+`story_action_command` is `async fn` and offloads SQLite and ownership resolution with `spawn_blocking`. The headless-compatible `/stories/action` route offloads the same shared Rust service independently; the MCP `workflow action=story` entry runs it through the existing blocking handler. This keeps disk I/O off the macOS IPC thread and Tokio workers.
 
 `workflow_definition_action` and its HTTP twin use `spawn_blocking` around graph validation and SQLite publication for the same reason.
 `workflow_run_action` and its HTTP twin also use `spawn_blocking` for SQLite run transitions and event paging.
