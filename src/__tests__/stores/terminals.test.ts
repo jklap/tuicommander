@@ -188,7 +188,7 @@ describe("terminalsStore", () => {
 					store.handleOsc133(id, "D", 20, 0);
 					rafCallbacks.get(1)?.(0);
 					const blocks = store.get(id)!.commandBlocks;
-					expect(blocks[blocks.length - 1]?.promptText).toBe("please refactor the parser");
+					expect(blocks.at(-1)?.promptText).toBe("please refactor the parser");
 				});
 			} finally {
 				vi.unstubAllGlobals();
@@ -319,7 +319,7 @@ describe("terminalsStore", () => {
 					store.handleOsc133(id, "D", 6, 0, undefined, true);
 					rafCallbacks.get(1)?.(0);
 					const blocks = store.get(id)!.commandBlocks;
-					expect(blocks[blocks.length - 1]?.onAltScreen).toBe(true);
+					expect(blocks.at(-1)?.onAltScreen).toBe(true);
 				});
 			} finally {
 				vi.unstubAllGlobals();

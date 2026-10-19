@@ -97,8 +97,8 @@ export function buildScrollbarMarksHtml(input: ScrollbarMarksInput): string {
  */
 export function scrollbarMarksKey(input: Omit<ScrollbarMarksInput, "trackH">): string {
 	const { showBlockMarks, showPromptMarks, blocks, promptLines, totalRows, matchRows, historyBase = 0 } = input;
-	const lastBlock = blocks[blocks.length - 1];
-	const lastPrompt = promptLines[promptLines.length - 1];
+	const lastBlock = blocks.at(-1);
+	const lastPrompt = promptLines.at(-1);
 	const searchCount = matchRows.length;
 	return (
 		`b${showBlockMarks ? blocks.length : 0}:${showBlockMarks ? (lastBlock?.promptLine ?? "") : ""}:${showBlockMarks ? (lastBlock?.endLine ?? "") : ""}:${showBlockMarks ? (lastBlock?.exitCode ?? "") : ""}` +
