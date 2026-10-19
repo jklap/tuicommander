@@ -3,6 +3,7 @@ import styles from "./HeroMetrics.module.css";
 interface HeroMetricsProps {
 	activeCount: number;
 	awaitingCount: number;
+	onAwaitingClick?: () => void;
 }
 
 export function HeroMetrics(props: HeroMetricsProps) {
@@ -16,14 +17,20 @@ export function HeroMetrics(props: HeroMetricsProps) {
 					Active
 				</span>
 			</div>
-			<div class={styles.card} data-testid="metric-card">
+			<button
+				type="button"
+				class={`${styles.card} ${styles.awaiting}`}
+				data-testid="metric-card"
+				disabled={props.awaitingCount === 0}
+				onClick={props.onAwaitingClick}
+			>
 				<span class={styles.number} data-testid="metric-number">
 					{props.awaitingCount}
 				</span>
 				<span class={styles.label} data-testid="metric-label">
 					Awaiting
 				</span>
-			</div>
+			</button>
 		</div>
 	);
 }

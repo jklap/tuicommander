@@ -1,5 +1,5 @@
-import { cleanup, render } from "@solidjs/testing-library";
-import { afterEach, describe, expect, it } from "vitest";
+import { cleanup, fireEvent, render } from "@solidjs/testing-library";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { HeroMetrics } from "../components/HeroMetrics";
 
 afterEach(cleanup);
@@ -36,4 +36,14 @@ describe("HeroMetrics", () => {
 		expect(labels[0].textContent).toBe("Active");
 		expect(labels[1].textContent).toBe("Awaiting");
 	});
+});
+
+// Catches: an empty awaiting tile remains actionable after header navigation moves.
+it("disables the awaiting action when no session is waiting", async () => {
+	const onAwaitingClick = vi.fn();
+	const view = render(() => <HeroMetrics activeCount={2} awaitingCount={0} onAwaitingClick={onAwaitingClick} />);
+	const tile = view.getByRole("button", { name: "0 Awaiting" }) as HTMLButtonElement;
+	expect(tile.disabled).toBe(true);
+	await fireEvent.click(tile);
+	expect(onAwaitingClick).not.toHaveBeenCalled();
 });

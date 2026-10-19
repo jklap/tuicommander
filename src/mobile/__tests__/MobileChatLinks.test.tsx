@@ -54,7 +54,6 @@ vi.mock("../useSessions", () => ({
 		error: () => null,
 		authError: () => false,
 		refresh: vi.fn(),
-		questionCount: () => 0,
 		markSeen: vi.fn(),
 	}),
 }));
