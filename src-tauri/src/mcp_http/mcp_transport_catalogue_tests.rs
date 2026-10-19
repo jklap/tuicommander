@@ -1,3 +1,112 @@
+/// Catches: Anthropic rejects advertised action contracts with root combinators,
+/// including schemas returned through lazy search and exact lookup.
+#[test]
+fn advertised_native_schemas_have_no_root_combinators() {
+    let state = test_state();
+    {
+        let mut config = state.config.write();
+        config.progress_tracking = true;
+        config.settings_mcp_enabled = true;
+    }
+    rebuild_tool_search_index(&state);
+    let mut failures = Vec::new();
+    let mut check = |surface: &str, tool: &serde_json::Value| {
+        let schema = &tool["inputSchema"];
+        for keyword in ["oneOf", "anyOf", "allOf"] {
+            if schema.get(keyword).is_some() {
+                failures.push(format!("{surface}: {} has {keyword}", tool["name"]));
+            }
+        }
+    };
+    for tool in native_tool_definitions().as_array().unwrap() {
+        check("native", tool);
+    }
+    for tool in merged_tool_definitions_for_mode(&state, None, false)
+        .as_array()
+        .unwrap()
+    {
+        check("tools/list", tool);
+    }
+    for tool in searchable_tool_definitions(&state) {
+        let name = tool["name"].as_str().unwrap();
+        if name == "design_mode" {
+            continue; // Session-bound visibility is covered by the Design Mode tests.
+        }
+        let exact = handle_get_tool_schema(&state, &serde_json::json!({"tool_name":name}));
+        assert_eq!(exact["name"], name);
+        check("get_tool_schema", &exact);
+        let search = handle_search_tools(
+            &state,
+            &serde_json::json!({
+                "query":name, "schema_byte_budget":65536
+            }),
+        );
+        assert!(search["count"].as_u64().unwrap() > 0, "{name}");
+        if let Some(top) = search.get("top_schema") {
+            check("search_tools", top);
+        }
+    }
+    // Catches: an untagged wrapper hides a tagged action enum (settings
+    // transactions), or a flattened owner union loses its action-specific fields.
+    fn check_variant_fields(
+        private: &serde_json::Value,
+        advertised: &serde_json::Value,
+        name: &str,
+        failures: &mut Vec<String>,
+    ) {
+        if let Some(properties) = private["properties"].as_object() {
+            for (field, schema) in properties {
+                if advertised["properties"].get(field).is_none() {
+                    failures.push(format!("{name} loses field {field}"));
+                }
+                if field == "action" {
+                    let values: Vec<_> = schema
+                        .get("const")
+                        .into_iter()
+                        .chain(schema["enum"].as_array().into_iter().flatten())
+                        .collect();
+                    for action in values {
+                        if !advertised["properties"]["action"]["enum"]
+                            .as_array()
+                            .is_some_and(|actions| actions.contains(action))
+                        {
+                            failures.push(format!("{name} loses action {action}"));
+                        }
+                    }
+                }
+            }
+        }
+        // Follow only object-level wrappers, never parameter schemas.
+        for keyword in ["oneOf", "anyOf", "allOf"] {
+            if let Some(variants) = private[keyword].as_array() {
+                for variant in variants {
+                    check_variant_fields(variant, advertised, name, failures);
+                }
+            }
+        }
+    }
+    let advertised = native_tool_definitions();
+    for private in super::super::mcp_transport_catalogue::native_validation_tool_definitions()
+        .as_array()
+        .unwrap()
+    {
+        let name = private["name"].as_str().unwrap();
+        let public = advertised
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|tool| tool["name"] == name)
+            .unwrap();
+        check_variant_fields(
+            &private["inputSchema"],
+            &public["inputSchema"],
+            name,
+            &mut failures,
+        );
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
 // Catches: Settings rows reuse long MCP paragraphs or omit newly registered tools.
 #[test]
 fn native_tool_catalog_summaries_are_short_and_not_description_prefixes() {
@@ -2189,7 +2298,7 @@ fn launch_capable_clients_receive_no_duplicate_playbook() {
 
 /// Catches: merging launch bypasses static validation or omits its reusable discovery contract.
 #[tokio::test]
-async fn launch_discovery_schema_matches_predispatch_validation() {
+async fn launch_flat_discovery_keeps_predispatch_validation() {
     let state = test_state();
     let definition = native_tool_definitions()
         .as_array()
@@ -2250,7 +2359,8 @@ async fn launch_discovery_schema_matches_predispatch_validation() {
         malformed,
         oversized,
     ] {
-        assert!(!validator.is_valid(&invalid), "{invalid}");
+        // Discovery is deliberately permissive for cross-field action requirements;
+        // only the private contract enforces them, before effects can start.
         let result = handle_mcp_tool_call(&state, loopback_addr(), "agent", &invalid, None).await;
         assert_eq!(result["code"], "invalid_arguments", "{result}");
         assert_eq!(result["effect"], "not_started");

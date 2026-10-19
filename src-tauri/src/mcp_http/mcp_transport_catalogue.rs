@@ -546,6 +546,15 @@ pub(super) const NATIVE_TOOL_SUMMARIES: &[(&str, &str)] = &[
 /// and `progress_tracking`. Leaking the raw list to external clients exposes
 /// tool metadata for gated tools.
 pub(super) fn native_tool_definitions() -> serde_json::Value {
+    let mut tools = native_validation_tool_definitions();
+    for tool in tools.as_array_mut().expect("native tool array") {
+        super::mcp_input_contract::advertise_schema(tool);
+    }
+    tools
+}
+
+/// Complete private contracts, including conditions unsupported by tool clients.
+pub(super) fn native_validation_tool_definitions() -> serde_json::Value {
     let mut defs = serde_json::json!([
         crate::automations::mcp::tool_definition(),
         crate::design_mode::mcp::tool_definition(),
@@ -931,7 +940,7 @@ pub(super) fn filtered_native_tools(state: &Arc<AppState>) -> Vec<serde_json::Va
             cfg.disabled_native_tools.iter().cloned().collect();
         (disabled, cfg.progress_tracking, cfg.settings_mcp_enabled)
     };
-    native_tool_definitions()
+    native_validation_tool_definitions()
         .as_array()
         .cloned()
         .unwrap_or_default()
@@ -970,6 +979,7 @@ pub(super) fn filtered_native_tools(state: &Arc<AppState>) -> Vec<serde_json::Va
                     .collect();
                 tool["inputSchema"]["properties"]["action"]["enum"] = serde_json::json!(actions);
             }
+            super::mcp_input_contract::advertise_schema(&mut tool);
             Some(tool)
         })
         .collect()
