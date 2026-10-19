@@ -6,7 +6,8 @@ import MobileApp from "../MobileApp";
 
 const { rpc } = vi.hoisted(() => ({ rpc: vi.fn() }));
 
-vi.mock("../../transport", () => ({ rpc }));
+// MobileApp subscribes to agent-wrap prompts over the event stream on mount.
+vi.mock("../../transport", () => ({ rpc, subscribeEvents: vi.fn(async () => () => {}) }));
 vi.mock("../../invoke", () => ({ invoke: vi.fn() }));
 vi.mock("../../stores/appLogger", () => ({ appLogger: { debug: vi.fn(), warn: vi.fn(), error: vi.fn() } }));
 vi.mock("../../stores/settings", () => ({ settingsStore: { hydrate: vi.fn(async () => {}) } }));
