@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+- Shorten agent-facing MCP descriptions for session, agent, repo, ui, voice, telegram and automations; preserve complete guidance through each tool’s `action=help`, without changing Settings copy or owner gates (#2069-7347).
+
 - Invalidate the shared intent grammar during frontend hot reload so stale JSON cannot abort answer gutters or expose raw answer markers (#2073-8131).
 
 - Add `ui design_*` MCP actions with the existing Design Mode ownership, host grants and saved denials; keep the old tool until the explicit 2068 catalogue cutover (#2067-e708).

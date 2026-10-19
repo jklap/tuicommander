@@ -1,5 +1,11 @@
 # MCP & HTTP Server
 
+The compact `ui` description includes `design_start`, `design_stop`, `design_status`,
+`design_reload`, `design_navigate`, `design_screenshot`, `design_errors` and
+`design_eval`. `ui action=help` retains their full usage guidance together with
+the panel, notification and confirmation guide. Design actions keep the existing
+caller/repository checks, extension host grants and saved `design_mode` denials.
+
 ## Scoped plugin settings
 
 The plugin settings IPC command and `POST /api/plugins/{id}/settings` dispatch to the same scoped Rust owner. Catalogue descriptors contain no stored values; secrets read as set/unset. `plugin-changed` carries only plugin IDs over desktop and SSE after a durable commit, scheduling existing reload callbacks. This adapter does not publish the general settings MCP tool.
@@ -686,6 +692,20 @@ consumer contract fixture, not a captured client trace. It covers the audit's
 missing titles/text/paths, and an invented action. Ego must validate its admitted
 schema against these cases without a server round trip; that cross-repository
 consumer integration is not proven by TUIC's tests.
+
+### On-demand native tool guidance
+
+`session`, `agent`, `repo`, `ui`, `voice`, `telegram` and `automations` advertise
+compact agent-facing descriptions with every action and the hard constraints.
+Call the same tool with `{"action":"help"}` for its complete usage guide in the
+`description` response field. Help retains all displaced rules, examples and
+response details. It does not perform the requested operational action.
+The normal disabled-tool and conditional-owner gates apply to help too.
+Argument schemas and pre-dispatch validation remain authoritative; discovery
+continues to publish flat client-compatible schemas. Other already compact
+native tools are unchanged, including the directly loaded `progress` primitive.
+Settings summaries and tooltip copy do not change. Reconnect cached MCP clients
+after loading this backend build to obtain the updated catalogue.
 
 ### Lazy Tool Discovery (`collapse_tools`)
 
