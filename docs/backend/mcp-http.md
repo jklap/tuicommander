@@ -920,12 +920,13 @@ say what was measured, not what the list costs today.
 | `session` | list, create, submit, input, output, status, wait, resize, rename, close, kill, pause, resume | Enabled |
 | `agent` | spawn, wait, register, list_peers, send, inbox, subscribe, ack, unsubscribe, task_get, task_cancel | Enabled |
 | `task` | get, cancel | Enabled |
-| `remote` | preview, update | Enabled |
+| `remote` | preview, update | Only with a connected remote server |
 | `repo` | list, active, status, branch_integrations, branch_integration, worktree_list, worktree_lifecycle, worktree_create, worktree_remove, orphan_cleanup_answer, branch_delete, progress_list | Enabled |
 | `progress` | *(no actions — appends one `done` or `blocked` entry)* | Enabled, unless `progress_tracking` is off |
 | `ui` | tab, toast, confirm, screenshot | Enabled |
 | `plugin_dev_guide` | *(no actions — returns guide text)* | Enabled |
-| `voice` | speak, stop, status | Enabled |
+| `voice` | speak, stop, status | Only with voice configured |
+| `telegram` | register, unregister, begin, activity, finish, send | Only with Telegram configured |
 | `settings` | describe, get, set, reset, patch, perform, refresh | Disabled; trusted UI opt-in required |
 | `debug` | agent_detection, logs, sessions, invoke_js, help | Disabled |
 
@@ -943,17 +944,37 @@ closes the dialog before removal.
 
 Removed MCP actions report the replacement route in their error: `agent detect` → `GET /agents`, `agent stats` → `GET /stats`, `agent metrics` → `GET /metrics`, `session process_stats` → `GET /process/stats`, `repo prs` → `GET /repo/prs`, `repo issues` → `GET /repo/issues`, `repo close_issue` → `POST /repo/issues/close`, `repo reopen_issue` → `POST /repo/issues/reopen`, and `repo ci_logs` → `GET /repo/ci-failure-logs`. `repo active/status`, `session pause/resume/status`, and `task` remain because their behavior has no equivalent single-call replacement.
 
-#### `voice` is always listed and usually unavailable
+#### Conditional native tools
 
-It is listed whether or not anything is armed, and on builds with no audio at
-all. That is deliberate: `notifications/tools/list_changed` is not a discovery
-mechanism we can rely on — Claude Code never refetches on it — so arming cannot
-be what makes the tool appear. Instead the tool is always there and answers
-`action=status` with `available: false` plus a reason. A headless
-`tuic-remote` build answers the same shape, so a model reads one contract on
-both builds rather than an unknown-tool error on one of them.
-The headless no-audio answer follows the terminal binding check: an unbound
-connection is refused before it can receive a voice status.
+`remote`, `voice` and `telegram` use one shared availability predicate for
+classic listing, lazy search, exact schema lookup and direct or `call_tool`
+dispatch. A known name does not bypass a missing condition. Explicit native
+config denials still take precedence.
+
+- `remote`: at least one `RemoteRuntime` entry has `RemoteStatus::Connected`.
+  Saved records, connecting tunnels, failed authentication and health-only
+  probes do not count. Preview digests and session-loss confirmation stay in
+  the deployment owner and are not relaxed by this condition.
+- `voice`: the persisted `dictation-config.json` parses as `DictationConfig`
+  with both `enabled` and `hands_free_spoken_replies` true. A missing or corrupt
+  document is not configured. Engine selection is not the opt-in: an unset
+  engine resolves to Edge. This does not require an armed conversation or
+  probe the microphone, speech model or network.
+- `telegram`: the private setup config has `enabled=true` and a nonempty
+  `bot_alias`, and the private `bot.token` file exists. Discovery checks only
+  credential-file availability, never its contents. Network connectivity,
+  chat selection and agent registration remain separate runtime checks.
+
+Remote connected-set transitions and successful voice/Telegram owner setting
+changes send `notifications/tools/list_changed` through the existing HTTP SSE,
+bridge and ACP notification paths. The Telegram polling owner also observes
+cross-process setup revisions. Clients that ignore catalogue notifications
+must reconnect after a condition changes. The Settings tool inventory remains
+unfiltered so users can inspect and enable optional capabilities.
+
+A configured voice can still answer `available: false` with a runtime reason.
+A build without audio retains that answer after checking terminal binding;
+an unbound connection is refused before it can receive voice status.
 
 Every action is bound to the **calling terminal**: `resolve_mcp_origin_session`
 maps `mcp-session-id` onto a TUIC session, and that session must be the one

@@ -2973,8 +2973,11 @@ pub fn set_dictation_config(
     base: DictationConfig,
     config: DictationConfig,
     dictation: State<'_, DictationState>,
+    state: State<'_, Arc<crate::AppState>>,
 ) -> Result<(), String> {
-    save_dictation_config(base, config, Some(&dictation))
+    save_dictation_config(base, config, Some(&dictation))?;
+    crate::settings::api::publish_change(&state, "voice", true);
+    Ok(())
 }
 
 /// [`set_dictation_config`] for a caller that may not have the dictation state.
