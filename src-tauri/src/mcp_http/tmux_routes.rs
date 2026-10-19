@@ -489,10 +489,43 @@ pub(crate) async fn get_topology(
 ) -> impl IntoResponse {
     let label = label_of(&q);
     let live = live_session_ids(&state);
-    let mut entry = state.tmux_servers.entry(label).or_default();
-    reconcile(&mut entry, &live);
-    let body = serde_json::to_value(&*entry).unwrap_or(serde_json::Value::Null);
+    let mut body = {
+        let mut entry = state.tmux_servers.entry(label).or_default();
+        reconcile(&mut entry, &live);
+        serde_json::to_value(&*entry).unwrap_or(serde_json::Value::Null)
+    };
+    // The topology guard is gone: `session_foreground_is_root_shell` locks a
+    // `PtySession`, which must never happen under it (see `resolve_pane_cwd`).
+    annotate_foreground_is_shell(&state, &mut body);
     (StatusCode::OK, Json(body))
+}
+
+/// Adds `foreground_is_shell` to every materialized pane of a serialized
+/// topology: `true` when the pane's shell itself owns the foreground, `false`
+/// when a job (or an agent) does, absent when the app cannot tell. The CLI's
+/// `respawn-pane -k` sends its interrupt (Ctrl+C) only when this is not `true`:
+/// a ^C aimed at a shell that is still running its startup (direnv evaluating
+/// `.envrc` from a precmd hook) kills that evaluation, and the launched agent
+/// then starts without the project's environment. A virtual pane has no
+/// session and no field.
+fn annotate_foreground_is_shell(state: &AppState, topology: &mut serde_json::Value) {
+    let Some(sessions) = topology["sessions"].as_array_mut() else {
+        return;
+    };
+    for pane in sessions
+        .iter_mut()
+        .filter_map(|s| s["windows"].as_array_mut())
+        .flatten()
+        .filter_map(|w| w["panes"].as_array_mut())
+        .flatten()
+    {
+        let Some(session_id) = pane["tuic_session_id"].as_str() else {
+            continue;
+        };
+        if let Some(is_shell) = crate::pty::session_foreground_is_root_shell(state, session_id) {
+            pane["foreground_is_shell"] = serde_json::Value::Bool(is_shell);
+        }
+    }
 }
 
 pub(crate) async fn create_tmux_session(
@@ -900,7 +933,12 @@ pub(crate) async fn rename_pane(
 ) -> impl IntoResponse {
     let label = label_of(&q);
     let live = live_session_ids(&state);
-    let tuic_session_id = {
+    // `select-pane` with no `-T` (plain focus) sends no title: it must leave
+    // both the pane record and the tab name alone, as real tmux does.
+    let Some(title) = body.title else {
+        return (StatusCode::OK, Json(serde_json::json!({"ok": true}))).into_response();
+    };
+    let (tuic_session_id, previous_title) = {
         let Some(mut topology) = state.tmux_servers.get_mut(&label) else {
             return not_found("pane").into_response();
         };
@@ -908,16 +946,42 @@ pub(crate) async fn rename_pane(
         let Some(pane) = topology.find_pane_mut(&pane_id) else {
             return not_found("pane").into_response();
         };
-        pane.title = body.title.clone();
-        pane.tuic_session_id.clone()
+        let previous = pane.title.take();
+        pane.title = Some(title.clone()).filter(|title| !title.is_empty());
+        (pane.tuic_session_id.clone(), previous)
     };
+    let Some(tuic_id) = tuic_session_id else {
+        return (StatusCode::OK, Json(serde_json::json!({"ok": true}))).into_response();
+    };
+    // `select-pane -T ""` clears the title. Clear the tab's name only when it is
+    // still the title this shim gave it (custom + equal), so a user's own
+    // rename is never wiped. Clearing drops the custom flag (OSC titles may
+    // name the tab again) and emits `session-renamed {name: null}` live to
+    // every client (dropped-items #23).
+    if title.is_empty() {
+        let shows_previous_title = previous_title
+            .as_deref()
+            .filter(|previous| !previous.is_empty())
+            .is_some_and(|previous| {
+                state
+                    .session_maps
+                    .sessions
+                    .get(&tuic_id)
+                    .is_some_and(|entry| {
+                        let session = entry.lock();
+                        session.display_name.as_deref() == Some(previous)
+                            && session.display_name_is_custom
+                    })
+            });
+        if shows_previous_title {
+            state.clear_session_name_from_backend(&tuic_id);
+        }
+        return (StatusCode::OK, Json(serde_json::json!({"ok": true}))).into_response();
+    }
     // A tmux rename starts in the backend, so it goes through
-    // `rename_session_from_backend` (which emits `session-renamed` to every UI)
-    // rather than the frontend-originated `PUT /sessions/{id}/name`, which by
-    // design never emits. Agents' status tickers repeat `select-pane -T` with an
-    // unchanged title on every repaint, so an unchanged title is a no-op.
-    if let Some(tuic_id) = tuic_session_id
-        && let Some(title) = body.title.filter(|title| !title.is_empty())
+    // `rename_session_from_backend` (which emits `session-renamed` to every
+    // UI). Agents' status tickers repeat `select-pane -T` with an unchanged
+    // title on every repaint, so an unchanged title is a no-op.
     {
         let unchanged = state
             .session_maps
@@ -1257,6 +1321,161 @@ mod tests {
             Some(initial_pane_id.as_str()),
             "active_pane must be reassigned to a pane that still exists, not left dangling"
         );
+    }
+
+    /// A tmux session with one pane, materialized to a live TUIC session and
+    /// titled `title` by `select-pane -T`. Returns (state, label, pane_id, tuic_id).
+    async fn materialized_titled_pane(label: &str, title: &str) -> (Arc<AppState>, String, String) {
+        let state = super::super::tests::test_state();
+        let created = create_tmux_session(
+            State(state.clone()),
+            Json(CreateTmuxSessionRequest {
+                label: Some(label.to_string()),
+                name: "s".to_string(),
+                window_name: None,
+                cwd: None,
+                cwd_session_id: None,
+                fallback_cwd: None,
+            }),
+        )
+        .await
+        .into_response();
+        let body = axum::body::to_bytes(created.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let created: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        let pane_id = created["pane_id"].as_str().unwrap().to_string();
+        let materialized = materialize_pane(
+            State(state.clone()),
+            Path(pane_id.clone()),
+            label_query(label),
+            Json(MaterializePaneRequest {
+                cwd: None,
+                origin_session_id: None,
+            }),
+        )
+        .await
+        .into_response();
+        assert_eq!(materialized.status(), StatusCode::OK);
+        let _ = rename_pane(
+            State(state.clone()),
+            Path(pane_id.clone()),
+            label_query(label),
+            Json(RenamePaneRequest {
+                title: Some(title.to_string()),
+            }),
+        )
+        .await;
+        (state, pane_id, label.to_string())
+    }
+
+    fn pane_session(state: &AppState, label: &str, pane_id: &str) -> (Option<String>, String) {
+        let topology = state.tmux_servers.get(label).unwrap();
+        let pane = topology
+            .sessions
+            .iter()
+            .flat_map(|s| s.windows.iter())
+            .flat_map(|w| w.panes.iter())
+            .find(|p| p.id == pane_id)
+            .unwrap();
+        (pane.title.clone(), pane.tuic_session_id.clone().unwrap())
+    }
+
+    fn renames(
+        rx: &mut tokio::sync::broadcast::Receiver<crate::state::AppEvent>,
+    ) -> Vec<(Option<String>, bool)> {
+        std::iter::from_fn(|| rx.try_recv().ok())
+            .filter_map(|event| match event {
+                crate::state::AppEvent::SessionRenamed {
+                    name, is_custom, ..
+                } => Some((name, is_custom)),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// Dropped-items #23: `select-pane -T ""` clears the tab name this shim
+    /// gave it and tells every client live (`session-renamed {name: null}`).
+    #[tokio::test]
+    async fn select_pane_empty_title_clears_the_tab_name_and_emits() {
+        let (state, pane_id, label) =
+            materialized_titled_pane("test-rename-pane-clear", "build").await;
+        let (_, tuic_id) = pane_session(&state, &label, &pane_id);
+        let mut rx = state.event_bus.subscribe();
+
+        let _ = rename_pane(
+            State(state.clone()),
+            Path(pane_id.clone()),
+            label_query(&label),
+            Json(RenamePaneRequest {
+                title: Some(String::new()),
+            }),
+        )
+        .await;
+
+        assert_eq!(renames(&mut rx), vec![(None, false)]);
+        let entry = state.session_maps.sessions.get(&tuic_id).unwrap();
+        let session = entry.lock();
+        assert_eq!(session.display_name, None);
+        assert!(!session.display_name_is_custom);
+        drop(session);
+        drop(entry);
+        assert_eq!(pane_session(&state, &label, &pane_id).0, None);
+        crate::pty::close_pty_core(&state, &tuic_id, false);
+    }
+
+    /// An empty `-T` must never wipe a name the user gave the tab afterwards.
+    #[tokio::test]
+    async fn select_pane_empty_title_keeps_a_users_own_rename() {
+        let (state, pane_id, label) =
+            materialized_titled_pane("test-rename-pane-clear-user", "build").await;
+        let (_, tuic_id) = pane_session(&state, &label, &pane_id);
+        state.rename_session_from_frontend(&tuic_id, Some("mine".to_string()), true);
+        let mut rx = state.event_bus.subscribe();
+
+        let _ = rename_pane(
+            State(state.clone()),
+            Path(pane_id.clone()),
+            label_query(&label),
+            Json(RenamePaneRequest {
+                title: Some(String::new()),
+            }),
+        )
+        .await;
+
+        assert!(renames(&mut rx).is_empty());
+        let entry = state.session_maps.sessions.get(&tuic_id).unwrap();
+        assert_eq!(entry.lock().display_name.as_deref(), Some("mine"));
+        drop(entry);
+        crate::pty::close_pty_core(&state, &tuic_id, false);
+    }
+
+    /// A plain `select-pane -t X` (focus, no `-T`) sends no title and must
+    /// leave both the pane's recorded title and the tab name alone.
+    #[tokio::test]
+    async fn select_pane_without_a_title_changes_nothing() {
+        let (state, pane_id, label) =
+            materialized_titled_pane("test-rename-pane-focus", "build").await;
+        let (_, tuic_id) = pane_session(&state, &label, &pane_id);
+        let mut rx = state.event_bus.subscribe();
+
+        let _ = rename_pane(
+            State(state.clone()),
+            Path(pane_id.clone()),
+            label_query(&label),
+            Json(RenamePaneRequest { title: None }),
+        )
+        .await;
+
+        assert!(renames(&mut rx).is_empty());
+        assert_eq!(
+            pane_session(&state, &label, &pane_id).0.as_deref(),
+            Some("build")
+        );
+        let entry = state.session_maps.sessions.get(&tuic_id).unwrap();
+        assert_eq!(entry.lock().display_name.as_deref(), Some("build"));
+        drop(entry);
+        crate::pty::close_pty_core(&state, &tuic_id, false);
     }
 
     /// Regression for the tab-name-flapping bug: `select-pane -T` (this route)
@@ -1807,6 +2026,90 @@ mod tests {
                 "no SessionRenamed without a prior select-pane -T, got {event:?}"
             );
         }
+    }
+
+    /// `respawn-pane -k`'s interrupt must never be aimed at a shell that is
+    /// merely busy starting up (direnv evaluating `.envrc` from a precmd hook:
+    /// the ^C kills it and the launched agent gets none of the project env).
+    /// The topology therefore reports, per materialized pane, whether the pane's
+    /// own shell still owns the foreground: true for an idle shell, false once a
+    /// job runs in it, absent for a virtual pane (no session to ask).
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn topology_reports_whether_a_panes_shell_or_a_job_owns_the_foreground() {
+        let state = super::super::tests::test_state();
+        let label = "test-topology-foreground-is-shell";
+        let (_window_id, pane_id) = new_virtual_session(&state, label).await;
+
+        let pane_of = |topology: &serde_json::Value| {
+            topology["sessions"][0]["windows"][0]["panes"][0].clone()
+        };
+        let virtual_topology = body_json(
+            get_topology(State(state.clone()), label_query(label))
+                .await
+                .into_response(),
+        )
+        .await;
+        assert!(
+            pane_of(&virtual_topology)
+                .get("foreground_is_shell")
+                .is_none(),
+            "a virtual pane has no session to ask: {virtual_topology}"
+        );
+
+        let materialized = materialize_pane(
+            State(state.clone()),
+            Path(pane_id),
+            label_query(label),
+            Json(MaterializePaneRequest {
+                cwd: None,
+                origin_session_id: None,
+            }),
+        )
+        .await
+        .into_response();
+        assert_eq!(materialized.status(), StatusCode::OK);
+        let session_id = body_json(materialized).await["tuic_session_id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+
+        let idle_topology = body_json(
+            get_topology(State(state.clone()), label_query(label))
+                .await
+                .into_response(),
+        )
+        .await;
+        assert_eq!(
+            pane_of(&idle_topology)["foreground_is_shell"],
+            serde_json::Value::Bool(true),
+            "an idle shell owns the foreground: {idle_topology}"
+        );
+
+        // A real foreground job: the pty's foreground process group moves off
+        // the shell, so the answer flips to false.
+        crate::mcp_http::session::write_pty_input_parts(&state, &session_id, &["sleep 30\n"])
+            .expect("write the job into the pane's shell");
+        let mut job_topology = serde_json::Value::Null;
+        for _ in 0..100 {
+            job_topology = body_json(
+                get_topology(State(state.clone()), label_query(label))
+                    .await
+                    .into_response(),
+            )
+            .await;
+            if pane_of(&job_topology)["foreground_is_shell"] == serde_json::Value::Bool(false) {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+        assert_eq!(
+            pane_of(&job_topology)["foreground_is_shell"],
+            serde_json::Value::Bool(false),
+            "a running job owns the foreground: {job_topology}"
+        );
+        // Don't leave the 30 s sleep behind.
+        let _ = crate::mcp_http::session::write_pty_input_parts(&state, &session_id, &["\x03"]);
     }
 
     /// The shell-readiness gate's integration point: a real `materialize()`

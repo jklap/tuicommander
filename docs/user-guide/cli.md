@@ -378,12 +378,12 @@ panes.
 | `tmux new-session -s name [-n window] [-P -F fmt]` | Create a named session (and its initial window/pane); `-P -F` prints the rendered format instead of the legacy `name: id` line |
 | `tmux new-window -t target [-n name] [-P -F fmt]` | Add a window to an existing session |
 | `tmux split-window -t target [-c cwd] [-P -F fmt]` | Add a pane to an existing window — the actual mechanism behind a new teammate |
-| `tmux respawn-pane -k -t target -- cmd` | Deliver a real command into a pane that was created running a placeholder |
+| `tmux respawn-pane -k -t target -- cmd` | Deliver a real command into a pane that was created running a placeholder. `-k` interrupts (Ctrl+C) only a real foreground job: when the pane's own shell still owns the foreground (it is idle, or still running its startup / a direnv precmd hook) nothing is sent first, since a Ctrl+C there would kill direnv's `.envrc` evaluation and the launched agent would start without the project's environment |
 | `tmux list-sessions` | List sessions |
 | `tmux list-windows [-t target] [-F fmt]` | List a session's windows |
 | `tmux list-panes [-t target] [-F fmt]` | List a window's panes |
 | `tmux display-message -p fmt` | Render a `#{...}` format string to stdout |
-| `tmux select-pane -t target -T title` | Rename a pane's tab |
+| `tmux select-pane -t target -T title` | Rename a pane's tab (`-T ""` clears the name it set) |
 | `tmux kill-pane -t target` | Close one pane |
 | `tmux kill-session -t target` | Kill session |
 | `tmux kill-server` | Kill all sessions (and all tracked tmux topology) |
