@@ -532,7 +532,10 @@ async fn native_mcp_worktree_list_never_queries_uncached_github_proofs() {
     let proxy_task = tokio::spawn(async move {
         while let Ok((mut socket, _)) = proxy.accept().await {
             let mut bytes = [0; 4096];
-            socket.read(&mut bytes).await.unwrap();
+            let bytes_read = socket.read(&mut bytes).await.unwrap();
+            if bytes_read == 0 {
+                continue;
+            }
             observed.fetch_add(1, Ordering::Relaxed);
             socket
                 .write_all(
