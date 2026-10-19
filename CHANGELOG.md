@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+- Expose bound Grok terminal Chat on mobile and share the supported-adapter check with desktop, without changing exact transcript binding or native question controls (#2077-b132).
+
 - Expose the existing bound Codex terminal Chat view in the mobile session header, with the same PTY controls and backend binding refusal (#2076-8190).
 
 - Open parked Activity Dashboard sessions in their own Global Workspace tabs instead of displaying their content under the current repository tab; preserve existing session bindings (#2080-d401).

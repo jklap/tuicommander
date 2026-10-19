@@ -7,6 +7,7 @@ vi.mock("../../stores/appLogger", () => ({ appLogger: { warn: vi.fn(), info: vi.
 
 import { chatViewStore } from "../../stores/chatView";
 import { HttpRpcError } from "../../transport/http";
+import grokSnapshot from "../__fixtures__/grokChatSnapshot.json";
 import { useSessionChatView } from "../components/useSessionChatView";
 
 beforeEach(() => {
@@ -64,8 +65,39 @@ it("returns unbound Codex to CLI with the backend binding reason", async () => {
 it.each([
 	["gemini", true],
 	["codex", false],
+	["grok", false],
 ])("hides Chat for %s with live session %s", (agent, exists) => {
 	const view = mount(agent as string, exists as boolean);
 	expect(view.queryByRole("button", { name: "Chat" })).toBeNull();
 	expect(invoke).not.toHaveBeenCalled();
+});
+
+// Catches: mobile excludes Grok despite a live registry-bound transcript accepted by the backend.
+it("mobile_grok_chat_toggle_for_bound_transcript", async () => {
+	invoke.mockResolvedValue(grokSnapshot);
+	const view = mount("grok");
+	view.getByRole("button", { name: "Chat" }).click();
+	await waitFor(() => expect(view.getByText("MOBILE_CHAT_REALITY_OK")).toBeTruthy());
+	expect(invoke).toHaveBeenCalledWith("chat_view_snapshot", {
+		sessionId: "mobile-grok",
+		epoch: null,
+		fromSeq: 0,
+	});
+	view.getByRole("button", { name: "CLI" }).click();
+	expect(view.queryByTestId("terminal-chat-view")).toBeNull();
+});
+
+// Catches: adding Grok silently accepts an absent native registry binding.
+it("returns unbound Grok to CLI with the backend binding reason", async () => {
+	invoke.mockRejectedValue(
+		new HttpRpcError(
+			"chat_view_snapshot",
+			500,
+			'{"error":"not_bound: no Grok session is registered for this terminal"}',
+		),
+	);
+	const view = mount("grok");
+	view.getByRole("button", { name: "Chat" }).click();
+	await waitFor(() => expect(view.getByRole("button", { name: "CLI" }).getAttribute("aria-pressed")).toBe("true"));
+	expect(view.container.textContent).toContain("no Grok session is registered for this terminal");
 });
