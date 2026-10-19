@@ -276,18 +276,18 @@ function createRemoteConnectionsStore() {
 
 	function requestProvisionConfirmation(plan: ProvisionPlan): Promise<boolean> {
 		provisionResolver?.(false);
-		return new Promise((resolve) => {
-			provisionResolver = resolve;
-			setPendingProvision(plan);
-		});
+		const { promise, resolve } = Promise.withResolvers<boolean>();
+		provisionResolver = resolve;
+		setPendingProvision(plan);
+		return promise;
 	}
 
 	function requestFingerprintConfirmation(request: PendingFingerprintConfirmation): Promise<boolean> {
 		confirmationResolver?.(false);
-		return new Promise((resolve) => {
-			confirmationResolver = resolve;
-			setPendingConfirmation(request);
-		});
+		const { promise, resolve } = Promise.withResolvers<boolean>();
+		confirmationResolver = resolve;
+		setPendingConfirmation(request);
+		return promise;
 	}
 
 	// ---------------------------------------------------------------------------
