@@ -34,3 +34,36 @@ async fn captured_codex_enforced_approval_reaches_answer_controls() {
     assert_eq!(refused, 1);
     assert!(!final_awaiting, "refused enforced command must retract");
 }
+
+/// Catches: the real /plan question keeping an OSC title or no controls in SessionState.
+#[tokio::test]
+async fn captured_codex_plan_question_reaches_answer_controls() {
+    let mut canceled = false;
+    replay_native_question(
+        "codex-plan-question-20261019-real.tcap",
+        "codex",
+        |record, session| {
+            if record.direction == crate::pty_capture::CaptureDirection::Input
+                && record.data == b"\x03"
+            {
+                assert!(session.awaiting_input && session.question_confident);
+                assert_eq!(session.question_text.as_deref(), Some("Pick a colour"));
+                let prompt = session
+                    .choice_prompt
+                    .as_ref()
+                    .expect("native /plan answer controls");
+                assert_eq!(prompt.title, "Pick a colour");
+                assert_eq!(
+                    prompt
+                        .options
+                        .iter()
+                        .map(|o| o.label.as_str())
+                        .collect::<Vec<_>>(),
+                    ["Red", "Green", "Blue", "None of the above"]
+                );
+                canceled = true;
+            }
+        },
+    );
+    assert!(canceled, "capture includes the real question before Ctrl+C");
+}

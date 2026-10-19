@@ -29,6 +29,8 @@
 
 ## Codex native question parity (2026-9178) — Rust restart required
 
+- [ ] After Boss restarts the backend, trigger `/plan` `request_user_input` with “Pick a colour” and Red/Green/Blue. Verify the clean title and four choices (including None of the above) on desktop and authenticated mobile. The 2026-10-19 raw-byte parser regression does not prove live UI rendering; mobile verification requires Boss’s login.
+
 - [ ] After Boss manually restarts `make dev` or installs `make build`, ask Codex 0.162.1 for a native color question. Verify the desktop/mobile waiting state, use the mobile Open Codex question action, and answer once. Confirm options retract after settlement. Also trigger a CLI-enforced command approval and verify numeric refusal without Enter. Live CLI Shift+Left and numeric answers were captured; updated desktop/mobile rendering has not been verified against this worktree backend.
 ## Automation validation parity (2007-59f6) — Rust restart required
 
