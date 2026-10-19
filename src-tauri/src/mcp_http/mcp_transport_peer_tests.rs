@@ -3119,8 +3119,7 @@ fn mcp_send_wakes_a_parked_claude_recipient_so_it_reads_the_notice() {
         .session_maps
         .messaging_channels
         .insert("mcp-recipient".to_string(), channel);
-    let submitted_output =
-        install_completed_agent_submission_probe(&state, TEST_UUID_B, "claude");
+    let submitted_output = install_completed_agent_submission_probe(&state, TEST_UUID_B, "claude");
     state
         .session_maps
         .session_states

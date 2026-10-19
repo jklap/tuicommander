@@ -2036,7 +2036,10 @@ fn declared_background_work_defers_parent_idle_notification() {
     );
     let silence = Arc::new(Mutex::new(SilenceState::new()));
     silence.lock().set_declared_background_work(true, 0);
-    state.session_maps.silence_states.insert(child_id.to_string(), silence);
+    state
+        .session_maps
+        .silence_states
+        .insert(child_id.to_string(), silence);
 
     assert!(try_shell_transition(
         &state, child_id, SHELL_BUSY, SHELL_IDLE, true
@@ -2085,8 +2088,7 @@ fn declared_background_work_defers_suggest_publication() {
     assert!(emit_pending_suggest_if_idle(&state, &silence, child_id));
     let inbox = state.agent_inbox.get(parent_id).unwrap();
     assert_eq!(inbox.len(), 1);
-    let content: serde_json::Value =
-        serde_json::from_str(&inbox.front().unwrap().content).unwrap();
+    let content: serde_json::Value = serde_json::from_str(&inbox.front().unwrap().content).unwrap();
     assert_eq!(content["state"], "completed");
 }
 
@@ -2145,8 +2147,7 @@ fn pending_background_probe_defers_suggest_publication() {
     assert!(emit_pending_suggest_if_idle(&state, &silence, child_id));
     let inbox = state.agent_inbox.get(parent_id).unwrap();
     assert_eq!(inbox.len(), 1);
-    let content: serde_json::Value =
-        serde_json::from_str(&inbox.front().unwrap().content).unwrap();
+    let content: serde_json::Value = serde_json::from_str(&inbox.front().unwrap().content).unwrap();
     assert_eq!(content["state"], "completed");
 }
 
@@ -2178,8 +2179,21 @@ fn a_genuine_new_turn_clears_declared_background_work() {
 
     note_submitted_input(&state, child_id);
 
-    assert_eq!(state.session_maps.session_states.get(child_id).unwrap().turn_epoch, 1);
-    let silence = state.session_maps.silence_states.get(child_id).unwrap().clone();
+    assert_eq!(
+        state
+            .session_maps
+            .session_states
+            .get(child_id)
+            .unwrap()
+            .turn_epoch,
+        1
+    );
+    let silence = state
+        .session_maps
+        .silence_states
+        .get(child_id)
+        .unwrap()
+        .clone();
     assert!(
         !silence.lock().declared_background_work_for_epoch(0),
         "a genuine new turn must clear a stale declared_background_work claim"
@@ -2211,7 +2225,12 @@ fn submitted_input_with_no_detected_agent_type_still_clears_declared_background_
     note_submitted_input(&state, session_id);
 
     assert_eq!(
-        state.session_maps.session_states.get(session_id).unwrap().turn_epoch,
+        state
+            .session_maps
+            .session_states
+            .get(session_id)
+            .unwrap()
+            .turn_epoch,
         0,
         "this branch must not touch turn_epoch"
     );
@@ -2238,7 +2257,10 @@ fn standby_refuses_session_with_declared_background_work() {
     );
     let silence = Arc::new(Mutex::new(SilenceState::new()));
     silence.lock().set_declared_background_work(true, 0);
-    state.session_maps.silence_states.insert(session_id.to_string(), silence);
+    state
+        .session_maps
+        .silence_states
+        .insert(session_id.to_string(), silence);
 
     assert_eq!(standby_session(&state, session_id), Ok(false));
     assert!(!state.session_maps.standby_sessions.contains_key(session_id));
@@ -2253,7 +2275,12 @@ fn tuic_osc_bgtasks_sets_declared_background_work_for_current_epoch() {
         session_id.to_string(),
         Mutex::new(crate::state::VtLogBuffer::new(24, 80, 1000)),
     );
-    let silence = state.session_maps.silence_states.get(session_id).unwrap().clone();
+    let silence = state
+        .session_maps
+        .silence_states
+        .get(session_id)
+        .unwrap()
+        .clone();
     let mut processor = ChunkProcessor::new(None, None);
 
     assert!(!silence.lock().declared_background_work_for_epoch(0));
@@ -2285,7 +2312,12 @@ fn end_to_end_stop_hook_bgtasks_survives_a_subsequent_screen_poll() {
         session_id.to_string(),
         Mutex::new(crate::state::VtLogBuffer::new(24, 80, 1000)),
     );
-    let silence = state.session_maps.silence_states.get(session_id).unwrap().clone();
+    let silence = state
+        .session_maps
+        .silence_states
+        .get(session_id)
+        .unwrap()
+        .clone();
     let mut processor = ChunkProcessor::new(None, None);
 
     // A prompt row so `detect_claude_screen_activity` has a prompt anchor
@@ -2316,7 +2348,12 @@ fn end_to_end_stop_hook_bgtasks_survives_a_subsequent_screen_poll() {
     );
 
     assert_eq!(
-        state.session_maps.session_states.get(session_id).unwrap().turn_epoch,
+        state
+            .session_maps
+            .session_states
+            .get(session_id)
+            .unwrap()
+            .turn_epoch,
         0,
         "no real turn was submitted"
     );
@@ -2345,7 +2382,12 @@ fn tuic_osc_bgtasks_clears_on_zero_running_statuses() {
         session_id.to_string(),
         Mutex::new(crate::state::VtLogBuffer::new(24, 80, 1000)),
     );
-    let silence = state.session_maps.silence_states.get(session_id).unwrap().clone();
+    let silence = state
+        .session_maps
+        .silence_states
+        .get(session_id)
+        .unwrap()
+        .clone();
     silence.lock().set_declared_background_work(true, 0);
     let mut processor = ChunkProcessor::new(None, None);
 
@@ -2377,7 +2419,12 @@ fn tuic_osc_bgtasks_unknown_status_is_treated_as_still_running() {
         session_id.to_string(),
         Mutex::new(crate::state::VtLogBuffer::new(24, 80, 1000)),
     );
-    let silence = state.session_maps.silence_states.get(session_id).unwrap().clone();
+    let silence = state
+        .session_maps
+        .silence_states
+        .get(session_id)
+        .unwrap()
+        .clone();
     let mut processor = ChunkProcessor::new(None, None);
 
     processor.process_chunk(
@@ -2404,7 +2451,12 @@ fn tuic_osc_bgtasks_empty_payload_clears_declaration() {
         session_id.to_string(),
         Mutex::new(crate::state::VtLogBuffer::new(24, 80, 1000)),
     );
-    let silence = state.session_maps.silence_states.get(session_id).unwrap().clone();
+    let silence = state
+        .session_maps
+        .silence_states
+        .get(session_id)
+        .unwrap()
+        .clone();
     silence.lock().set_declared_background_work(true, 0);
     let mut processor = ChunkProcessor::new(None, None);
 
@@ -4467,9 +4519,18 @@ fn tombstone_transient_cleanup_removes_swarm_maps() {
     );
     state.agent_inbox.entry(sid.to_string()).or_default();
     state.agent_inbox_evictions.insert(sid.to_string(), 2);
-    state.session_maps.has_osc133_integration.insert(sid.to_string(), ());
-    state.session_maps.has_tuic_state_integration.insert(sid.to_string(), ());
-    state.session_maps.turn_error_flags.insert(sid.to_string(), ());
+    state
+        .session_maps
+        .has_osc133_integration
+        .insert(sid.to_string(), ());
+    state
+        .session_maps
+        .has_tuic_state_integration
+        .insert(sid.to_string(), ());
+    state
+        .session_maps
+        .turn_error_flags
+        .insert(sid.to_string(), ());
 
     tombstone_transient_cleanup(sid, &state);
 
@@ -4501,7 +4562,10 @@ fn tombstone_transient_cleanup_removes_swarm_maps() {
         "must not leak a permanent entry per session UUID on normal exit"
     );
     assert!(
-        !state.session_maps.has_tuic_state_integration.contains_key(sid),
+        !state
+            .session_maps
+            .has_tuic_state_integration
+            .contains_key(sid),
         "must not leak a permanent entry per session UUID on normal exit"
     );
     assert!(
@@ -4968,7 +5032,10 @@ fn resize_noop_guard_returns_none_on_matching_dims() {
     // Same dims → no-op returning None WITHOUT touching the (absent) session.
     // Without the guard this would fall through to sessions.get and fail with
     // "Session not found", so Ok(None) proves the guard short-circuited first.
-    assert_eq!(resize_session_core(&state, "s", 24, 80, None, None), Ok(None));
+    assert_eq!(
+        resize_session_core(&state, "s", 24, 80, None, None),
+        Ok(None)
+    );
 }
 
 #[test]
@@ -4979,7 +5046,10 @@ fn resize_seeds_applied_from_grid_and_noops_at_startup_dims() {
     seed_vt_grid(&state, "s", 24, 80);
     // A first resize matching only the startup dims must seed *applied from
     // the live grid and then no-op — no gratuitous SIGWINCH, no session touch.
-    assert_eq!(resize_session_core(&state, "s", 24, 80, None, None), Ok(None));
+    assert_eq!(
+        resize_session_core(&state, "s", 24, 80, None, None),
+        Ok(None)
+    );
     // The seed must have populated resize_locks with the live grid dims.
     assert_eq!(
         *state.session_maps.resize_locks.get("s").unwrap().lock(),

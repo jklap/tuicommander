@@ -135,7 +135,10 @@ fn marker_flags_for_agent_and_rule_cannot_be_widened_by_either_side() {
     );
 
     // An agent type with no entry in agents.json follows the global toggle alone.
-    assert_eq!(marker_flags_for_agent(&state, Some("codex")), (false, false));
+    assert_eq!(
+        marker_flags_for_agent(&state, Some("codex")),
+        (false, false)
+    );
 }
 
 // --- the voice tool (817-f67c) ---
@@ -567,18 +570,9 @@ fn agent_tool_definition_drops_the_whole_walkthrough_when_neither_preferred() {
     // detect/stats/metrics moved to HTTP (`removed_native_action_replacement`),
     // so the header no longer advertises them.
     assert!(desc.starts_with("AI agent peer administration."));
-    assert!(
-        desc.contains("prefer those over `spawn`/`register`/`list_peers`/`send`/`inbox` here")
-    );
+    assert!(desc.contains("prefer those over `spawn`/`register`/`list_peers`/`send`/`inbox` here"));
     // Every action bullet — and the schema itself — is still fully intact.
-    for action in &[
-        "spawn",
-        "wait",
-        "register",
-        "list_peers",
-        "send",
-        "inbox",
-    ] {
+    for action in &["spawn", "wait", "register", "list_peers", "send", "inbox"] {
         assert!(
             desc.contains(&format!("- {action}:")),
             "action bullet for '{action}' must survive even with both preferences off"
@@ -634,8 +628,7 @@ fn agent_tool_definition_calls_a_spawned_peer_a_teammate_wherever_spawn_is_recom
 /// request, directly targeting the exact reasoning trap the teammate-wording fix alone
 /// didn't close.
 #[test]
-fn agent_tool_definition_says_to_use_it_instead_of_the_hosts_own_spawning_tool_when_recommended()
- {
+fn agent_tool_definition_says_to_use_it_instead_of_the_hosts_own_spawning_tool_when_recommended() {
     for (prefer_spawning, prefer_messaging) in [(true, true), (true, false)] {
         let agent = agent_tool_definition(prefer_spawning, prefer_messaging);
         let desc = agent["description"].as_str().unwrap();
@@ -977,8 +970,10 @@ fn the_progress_obligation_and_the_progress_tool_appear_and_vanish_together() {
 
     let state = test_state();
     let listed = |state: &Arc<AppState>| {
-        tool_names(&serde_json::Value::Array(filtered_native_tools(state, true, true)))
-            .contains(&"progress".to_string())
+        tool_names(&serde_json::Value::Array(filtered_native_tools(
+            state, true, true,
+        )))
+        .contains(&"progress".to_string())
     };
 
     state.config.write().progress_tracking = true;
@@ -1521,9 +1516,7 @@ fn instructions_messaging_disabled_keeps_spawn_but_omits_messaging_guidance() {
 
     // Spawn guidance stays.
     assert!(out.contains("- **Prefer TUICommander for peers/teams:**"));
-    assert!(
-        out.contains("- **Same repo:** TUIC `agent action=spawn` peers to work in this repo.")
-    );
+    assert!(out.contains("- **Same repo:** TUIC `agent action=spawn` peers to work in this repo."));
     assert!(out.contains("- **Isolated branches:**"));
 
     // Messaging guidance is gone.
