@@ -190,6 +190,34 @@ A fresh occurrence must correlate the visible pane and rendered cells with the
 same moment's grid, raw agent output, kernel geometry, and resize history.
 The current observations do not distinguish a historical startup/repaint race
 from retained narrow hard-wrapped output or a renderer-only issue. No such cause
-is claimed. Claude and ego narrow-to-wide visual acceptance and hidden-tab
-return acceptance remain unverified. No production guard or forced resize was
-added without a reproduced failure.
+is claimed. The main-store worklog at `2026-10-19T01:20:47.522Z` records the
+coordinator's pixel review: Claude prose and composer rules reach the full
+197-column width after widening and after tab return in variants 1 and 3.
+This is evidence against a persistent Claude paint defect in those runs, not
+a reproduction of the reported failure. Ego visual acceptance remains unverified.
+No production guard or forced resize was added without a reproduced failure.
+
+## Continuation audit, 2026-10-19
+
+The continuation reused the recorded experiments instead of repeating successful
+checks. The test log was read again: the native Mac test passed in 1.828 seconds
+and the rb Linux test passed in 1.254 seconds on unchanged production code.
+There is still no RED result. None of the three acceptance criteria can be
+checked in full: the first requires a failing regression, the second includes
+agent layout, and the third requires both Claude and ego.
+
+Source inspection confirms that `pty/lifecycle.rs:3797` calls `vt.resize(rows,
+cols)` before `pty/lifecycle.rs:3819` resizes the PTY master. The last-applied
+size is recorded only after successful PTY resize at line 3833. These lines
+explain the intended ordering; they do not establish the cause of a historical
+failure. The child-side oracle is `os.get_terminal_size(0)` in
+`pty/lifecycle_tests.rs:3629`.
+
+The existing canvas captures, metadata, kernel samples and original test log
+were copied to `~/Gits/.tmp/results/2043-4419/` with SHA-256 verification.
+These are retained prior-run artifacts, not fresh worktree-browser captures.
+No browser, backend, desktop MCP call, agent run or test process was started
+for this continuation. The exact remaining dependency is a failing occurrence
+with simultaneous pane measurement, grid width, child kernel winsize and raw
+agent bytes. Until that exists, neither a TUIC cause nor agent hard wrapping
+is proved, and a production fix would be speculative.
