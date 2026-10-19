@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+- Retain the stable session identity when adopting a newly spawned agent so its worktree declaration moves the live sidebar tab, not only its saved restore record (#2044-31f3).
+
 - Add `ui design_*` MCP actions with the existing Design Mode ownership, host grants and saved denials; keep the old tool until the explicit 2068 catalogue cutover (#2067-e708).
 - List and allow `remote`, `voice` and `telegram` only when their owning connection/configuration is available; share discovery and call gates and notify clients when conditions change (#2066-516c, #2067-e708).
 - End PTY intents at the title closure so joined trailing prose stays out of the CONTEXT header and desktop/mobile intent tint (#2060-0ebe).

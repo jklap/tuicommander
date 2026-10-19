@@ -43,6 +43,10 @@
 
 - [ ] After Boss manually restarts the Rust backend, repeat `tuic mcp repo` with `action=worktree_list` on the many-worktree repositories. Confirm cold listing makes no GitHub requests, dirty file/fingerprint fields still update after edits, and the sidebar remains unchanged. A GitHub-only merged proof can be absent until background monitoring populates the existing cache. Fresh Git/filesystem reads are not a hard latency guarantee. This peer did not restart the installed app; criterion 4 remains unchecked.
 
+## Live spawned caller declaration (2044-31f3) — load updated frontend
+
+- [ ] With the updated frontend loaded and an authenticated browser session, spawn a new agent, create a linked worktree and declare it. Confirm the caller tab moves under that worktree while its cwd and sibling tabs stay unchanged; repeat the declaration. The worktree Vite page was opened through ab-stealth, but real-backend fetches timed out and direct `/health` and `/sessions` requests returned 401. No credentials were read and Boss's app was not restarted. The module-boundary regression covers live creation followed by declaration, not only reconnect.
+
 ## Declaration into a newly discovered workspace (2044-31f3) — Rust restart required
 
 - [ ] After Boss restarts the Rust backend, use an isolated instance and declare an existing linked worktree whose saved workspace row has no `savedTerminals`. Confirm declaration succeeds, the caller restore record moves without duplicating sibling records, and the caller tab appears under the declared workspace despite unchanged cwd. Repeat the declaration, cd into another repository or an unregistered directory, reload the frontend and send a cwd update; placement must persist without moving sibling tabs. The peer did not restart or mutate the installed instance; live sidebar verification is still pending.
