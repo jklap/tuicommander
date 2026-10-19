@@ -2089,6 +2089,9 @@ fn dewrap_suggest_keyword(text: &str) -> std::borrow::Cow<'_, str> {
 /// Called only while the input FSM is in slash mode. A filtered menu may have
 /// just one matching row at the bottom of the screen.
 /// Highlighted item: detected by `❯` prefix or falls back to first item.
+// DEFERRED (2026-10-19) — Codex 0.162.1 paints completion above its composer and
+// status line, with a `›` selection marker. Supporting that distinct layout is
+// outside the ego single-match/retraction fix; live evidence is in story 2030-84bb.
 pub fn parse_slash_menu(screen_rows: &[String]) -> Option<ParsedEvent> {
     lazy_static::lazy_static! {
         // Each menu row: optional leading whitespace, optional ❯ marker, /command, 2+ spaces, description
