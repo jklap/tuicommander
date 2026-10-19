@@ -9,6 +9,7 @@ import { worktreeManagerStore } from "../../stores/worktreeManager";
 import type { BranchPrStatus } from "../../types";
 import { formatRelativeTime } from "../../utils/time";
 import b from "../shared/branch.module.css";
+import { Input } from "../ui/Input";
 import s from "./WorktreeManager.module.css";
 
 /** Row data derived from repo/branch state */
@@ -272,7 +273,7 @@ export const WorktreeManager: Component<{ actions?: WorktreeActions }> = (props)
 								</div>
 							</Show>
 						</div>
-						<input
+						<Input
 							class={s.searchInput}
 							type="text"
 							placeholder="Filter worktrees…"

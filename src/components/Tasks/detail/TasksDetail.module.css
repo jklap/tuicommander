@@ -18,7 +18,8 @@
 .content h3 { margin: 0 0 12px; font-size: var(--font-lg, 16px); }
 .description, .fields { margin-bottom: 24px; }
 .fields { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 240px), 1fr)); gap: 12px; }
-.field { display: flex; align-items: flex-end; gap: 8px; min-width: 0; }
+.field { display: flex; align-items: flex-start; gap: 8px; min-width: 0; }
+.field > button { align-self: flex-end; }
 .fieldLabel { display: flex; flex-direction: column; gap: 4px; flex: 1; min-width: 0; }
 .fieldLabel > span:first-child { color: var(--fg-secondary); font-size: var(--font-sm, 12px); }
 .detail [data-form-control] { width: 100%; }
