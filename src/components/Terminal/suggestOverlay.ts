@@ -381,6 +381,9 @@ function overlayDiv(top: number, height: number, background: string): HTMLDivEle
 	return div;
 }
 
+/** Shared desktop/mobile answer gutter; no background tint or speech-bubble glyph. */
+export const ANSWER_RULE_SHADOW = "inset 3px 0 0 var(--answer-rule)";
+
 /**
  * Replace the contents of `container` with one absolutely positioned strip per
  * answer row: a transparent strip with a solid gutter bar. Intent rows get a
@@ -397,7 +400,7 @@ export function paintOverlayBlocks(container: HTMLElement, blocks: readonly Over
 			container.appendChild(div);
 		} else if (block.kind === "answer") {
 			const div = overlayDiv(block.row * cellHeight, cellHeight, "transparent");
-			div.style.boxShadow = "inset 3px 0 0 var(--answer-rule)";
+			div.style.boxShadow = ANSWER_RULE_SHADOW;
 			container.appendChild(div);
 		}
 	}
