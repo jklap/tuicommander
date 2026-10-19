@@ -38,6 +38,23 @@ afterEach(() => {
 const REPOS = ["/home/user/project-a", "/home/user/project-b"];
 
 describe("NewSessionSheet", () => {
+	it("spawns installed Cursor with its detected CLI path instead of looking up the unrelated cursor binary", async () => {
+		// Catches: Cursor is offered from cursor-agent detection but spawn resolves agent_type=cursor as the executable.
+		vi.mocked(rpc).mockResolvedValueOnce({ "cursor-agent": { path: "/opt/homebrew/bin/cursor-agent" } });
+		const view = render(() => <NewSessionSheet repos={REPOS} onDismiss={() => {}} />);
+		await ready(view);
+		expect(view.getByRole("option", { name: "Cursor Agent" })).toBeTruthy();
+		await fireEvent.click(view.getByRole("button", { name: /project-a/ }));
+		expect(rpc).toHaveBeenCalledWith(
+			"spawn_agent",
+			expect.objectContaining({
+				agent_config: expect.objectContaining({
+					agent_type: "cursor",
+					binary_path: "/opt/homebrew/bin/cursor-agent",
+				}),
+			}),
+		);
+	});
 	it("shows detection errors and never spawns from a fallback list", async () => {
 		// Catches: a rejected detection silently offers unavailable agents or permits spawning.
 		vi.mocked(rpc).mockRejectedValueOnce(new Error("Detection offline"));
