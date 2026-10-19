@@ -24,6 +24,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Publish typed Settings account enumeration and configured Ego interactive login start/status, with human terminal authentication and separate credential readback (#1790-1011).
 ### Fixed
 
+- Show the mobile awaiting total only in the AWAITING tile, move waiting-session navigation to that tile, keep the per-session question banners, and remove the connected header narration (#2055-b727).
+
 - Remove repeated Settings, roadmap and variable-field copy, use a plain catalogue record label, and omit subtitle space from title-only Settings headers (#2053-58a5).
 - Style Remote Mobile retries with shared dialog controls, keep task Save buttons beside their fields, fit the Stories header on phones while keeping Close at the top right, and apply theme colors to crash diagnostics (#2054-0eb2).
 

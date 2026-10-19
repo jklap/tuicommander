@@ -335,65 +335,6 @@ describe("useSessions — refreshing signal", () => {
 		dispose();
 	});
 
-	it("questionCount reflects sessions with awaiting_input", async () => {
-		const initialD = deferred<SessionInfo[]>();
-		mockRpc.mockReturnValue(initialD.promise as Promise<never>);
-
-		let questionCount: () => number = () => 0;
-		let refresh: () => void = () => {};
-
-		const dispose = createRoot((dispose) => {
-			const hook = useSessions();
-			questionCount = hook.questionCount;
-			refresh = hook.refresh;
-			return dispose;
-		});
-
-		initialD.resolve([]);
-		await initialD.promise;
-		await Promise.resolve();
-		expect(questionCount()).toBe(0);
-
-		// Refresh with sessions that have questions
-		const refreshD = deferred<SessionInfo[]>();
-		mockRpc.mockReturnValue(refreshD.promise as Promise<never>);
-		refresh();
-
-		refreshD.resolve([
-			makeSession("s1", {
-				state: {
-					awaiting_input: true,
-					rate_limited: false,
-					shell_state: "idle",
-					last_activity_ms: Date.now(),
-				},
-			}),
-			makeSession("s2", {
-				state: {
-					awaiting_input: false,
-					rate_limited: false,
-					shell_state: "busy",
-					last_activity_ms: Date.now(),
-				},
-			}),
-			makeSession("s3", {
-				state: {
-					awaiting_input: true,
-					question_text: "Continue?",
-					rate_limited: false,
-					shell_state: "idle",
-					last_activity_ms: Date.now(),
-				},
-			}),
-		]);
-		await refreshD.promise;
-		await Promise.resolve();
-
-		expect(questionCount()).toBe(2);
-
-		dispose();
-	});
-
 	it("pty-parsed SSE with shell-state updates session in-place", async () => {
 		const initialD = deferred<SessionInfo[]>();
 		mockRpc.mockReturnValue(initialD.promise as Promise<never>);
