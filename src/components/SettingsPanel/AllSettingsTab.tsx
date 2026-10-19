@@ -71,7 +71,7 @@ export const CatalogueFieldEditor: Component<{ field: Field; path: string; repos
 		if (!stored) return;
 		setRevision(snapshot.revision);
 		setValue(() => stored.stored);
-		setNotice(`Source: ${stored.source}. ${field().effect}`);
+		setNotice(`Source: ${stored.source}.`);
 	}
 	onCleanup(settingsRefresh.register({ section: field().store, read, apply: adopt }));
 	onCleanup(() => {
@@ -235,53 +235,57 @@ export const CatalogueFieldEditor: Component<{ field: Field; path: string; repos
 						}
 					/>
 				</Show>
-				<Show when={field().nullable && !options()}>
-					<button
-						data-setting-id={field().id as SettingId}
-						class={s.testBtn}
-						disabled={busy()}
-						onClick={() => edit(null)}
-					>
-						Use null / inherit
-					</button>
-				</Show>
-				<button
-					data-setting-id={field().id as SettingId}
-					class={s.testBtn}
-					disabled={busy() || !dirty()}
-					onClick={() => void save()}
-				>
-					Save setting
-				</button>
-				<Show when={(field().operations as readonly string[]).includes("reset")}>
-					<button
-						data-setting-id={field().id as SettingId}
-						class={s.testBtn}
-						disabled={busy()}
-						onClick={() => void save(true)}
-					>
-						Reset to owner default
-					</button>
-				</Show>
 			</Show>
-			<button
-				data-non-setting="Read the owner snapshot; optionally discard this editor draft"
-				class={s.testBtn}
-				disabled={busy()}
-				onClick={() => void reload()}
-			>
-				{dirty() ? "Discard draft and reload" : "Reload owner"}
-			</button>
-			<Show when={proposal()}>
+			<div class={s.catalogueActions} role="group" aria-label="Setting actions">
+				<Show when={revision()}>
+					<Show when={field().nullable && !options()}>
+						<button
+							data-setting-id={field().id as SettingId}
+							class={s.testBtn}
+							disabled={busy()}
+							onClick={() => edit(null)}
+						>
+							Use null / inherit
+						</button>
+					</Show>
+					<button
+						data-setting-id={field().id as SettingId}
+						class={s.testBtn}
+						disabled={busy() || !dirty()}
+						onClick={() => void save()}
+					>
+						Save setting
+					</button>
+					<Show when={(field().operations as readonly string[]).includes("reset")}>
+						<button
+							data-setting-id={field().id as SettingId}
+							class={s.testBtn}
+							disabled={busy()}
+							onClick={() => void save(true)}
+						>
+							Reset to owner default
+						</button>
+					</Show>
+				</Show>
 				<button
-					data-setting-id={field().id as SettingId}
+					data-non-setting="Read the owner snapshot; optionally discard this editor draft"
 					class={s.testBtn}
 					disabled={busy()}
-					onClick={() => void save(false, true)}
+					onClick={() => void reload()}
 				>
-					Ask for confirmation
+					{dirty() ? "Discard draft and reload" : "Reload owner"}
 				</button>
-			</Show>
+				<Show when={proposal()}>
+					<button
+						data-setting-id={field().id as SettingId}
+						class={s.testBtn}
+						disabled={busy()}
+						onClick={() => void save(false, true)}
+					>
+						Ask for confirmation
+					</button>
+				</Show>
+			</div>
 			<p class={s.hint} role="status">
 				{notice()}
 			</p>

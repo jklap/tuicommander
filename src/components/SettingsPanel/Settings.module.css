@@ -1594,3 +1594,5 @@
 /* Reserve the badge width on the final inline label fragment, then occupy that space. */
 .helpLabel > label:has(+ .infoBadge) { padding-inline-end: 20px; }
 .helpLabel > label + .infoBadge { margin-inline-start: -14px; }
+
+.catalogueActions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
