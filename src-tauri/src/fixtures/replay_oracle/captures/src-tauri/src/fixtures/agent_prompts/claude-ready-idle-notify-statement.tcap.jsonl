@@ -11,6 +11,7 @@
 {"record":7,"state":{"shell":1,"agent":"working","awaiting":false,"question":null,"confident":false,"last_question":null,"choice_sig":null,"fullscreen":false}}
 {"record":8,"state":{"shell":1,"agent":"working","awaiting":false,"question":null,"confident":false,"last_question":null,"choice_sig":null,"fullscreen":false}}
 {"record":9,"state":{"shell":1,"agent":"working","awaiting":false,"question":null,"confident":false,"last_question":null,"choice_sig":null,"fullscreen":false}}
+{"record":10,"event":{"type":"progress","state":0,"_turn_epoch":0}}
 {"record":10,"state":{"shell":1,"agent":"working","awaiting":false,"question":null,"confident":false,"last_question":null,"choice_sig":null,"fullscreen":false}}
 {"record":11,"state":{"shell":1,"agent":"working","awaiting":false,"question":null,"confident":false,"last_question":null,"choice_sig":null,"fullscreen":false}}
 {"record":12,"state":{"shell":1,"agent":"working","awaiting":false,"question":null,"confident":false,"last_question":null,"choice_sig":null,"fullscreen":false}}

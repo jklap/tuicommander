@@ -23,12 +23,14 @@
 {"record":23,"state":{"shell":1,"agent":"working","awaiting":false,"question":null,"confident":false,"last_question":null,"choice_sig":null,"fullscreen":false}}
 {"record":24,"state":{"shell":1,"agent":"working","awaiting":false,"question":null,"confident":false,"last_question":null,"choice_sig":null,"fullscreen":false}}
 {"record":25,"state":{"shell":1,"agent":"working","awaiting":false,"question":null,"confident":false,"last_question":null,"choice_sig":null,"fullscreen":false}}
+{"record":26,"event":{"type":"progress","state":0,"_turn_epoch":0}}
 {"record":26,"state":{"shell":1,"agent":"working","awaiting":false,"question":null,"confident":false,"last_question":null,"choice_sig":null,"fullscreen":false}}
 {"record":27,"state":{"shell":1,"agent":"working","awaiting":false,"question":null,"confident":false,"last_question":null,"choice_sig":null,"fullscreen":false}}
 {"record":28,"state":{"shell":1,"agent":"working","awaiting":false,"question":null,"confident":false,"last_question":null,"choice_sig":null,"fullscreen":false}}
 {"record":29,"event":{"type":"status-line","task_name":"Kneading","full_line":"· Kneading…","time_info":null,"token_info":null,"_turn_epoch":0}}
 {"record":29,"state":{"shell":1,"agent":"working","awaiting":false,"question":null,"confident":false,"last_question":null,"choice_sig":null,"fullscreen":false}}
 {"record":30,"state":{"shell":1,"agent":"working","awaiting":false,"question":null,"confident":false,"last_question":null,"choice_sig":null,"fullscreen":false}}
+{"record":31,"event":{"type":"progress","state":3,"_turn_epoch":0}}
 {"record":31,"state":{"shell":1,"agent":"working","awaiting":false,"question":null,"confident":false,"last_question":null,"choice_sig":null,"fullscreen":false}}
 {"record":32,"state":{"shell":1,"agent":"working","awaiting":false,"question":null,"confident":false,"last_question":null,"choice_sig":null,"fullscreen":false}}
 {"record":33,"state":{"shell":1,"agent":"working","awaiting":false,"question":null,"confident":false,"last_question":null,"choice_sig":null,"fullscreen":false}}
@@ -231,6 +233,7 @@
 {"record":221,"state":{"shell":1,"agent":"working","awaiting":false,"question":null,"confident":false,"last_question":null,"choice_sig":null,"fullscreen":false}}
 {"record":222,"state":{"shell":1,"agent":"working","awaiting":false,"question":null,"confident":false,"last_question":null,"choice_sig":null,"fullscreen":false}}
 {"record":223,"state":{"shell":1,"agent":"working","awaiting":false,"question":null,"confident":false,"last_question":null,"choice_sig":null,"fullscreen":false}}
+{"record":224,"event":{"type":"progress","state":0,"_turn_epoch":0}}
 {"record":224,"state":{"shell":1,"agent":"working","awaiting":false,"question":null,"confident":false,"last_question":null,"choice_sig":null,"fullscreen":false}}
 {"record":225,"state":{"shell":1,"agent":"working","awaiting":false,"question":null,"confident":false,"last_question":null,"choice_sig":null,"fullscreen":false}}
 {"ring_len":87272}

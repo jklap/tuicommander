@@ -106,6 +106,7 @@
 {"record":104,"state":{"shell":1,"agent":"working","awaiting":false,"question":null,"confident":false,"last_question":null,"choice_sig":null,"fullscreen":false}}
 {"record":105,"state":{"shell":1,"agent":"working","awaiting":false,"question":null,"confident":false,"last_question":null,"choice_sig":null,"fullscreen":false}}
 {"record":106,"state":{"shell":1,"agent":"working","awaiting":false,"question":null,"confident":false,"last_question":null,"choice_sig":null,"fullscreen":false}}
+{"record":107,"event":{"type":"progress","state":0,"_turn_epoch":0}}
 {"record":107,"state":{"shell":1,"agent":"working","awaiting":false,"question":null,"confident":false,"last_question":null,"choice_sig":null,"fullscreen":false}}
 {"record":108,"state":{"shell":1,"agent":"working","awaiting":false,"question":null,"confident":false,"last_question":null,"choice_sig":null,"fullscreen":false}}
 {"record":109,"state":{"shell":1,"agent":"working","awaiting":false,"question":null,"confident":false,"last_question":null,"choice_sig":null,"fullscreen":false}}
@@ -123,6 +124,7 @@
 {"record":124,"state":{"shell":1,"agent":"working","awaiting":false,"question":null,"confident":false,"last_question":null,"choice_sig":null,"fullscreen":false}}
 {"record":125,"state":{"shell":1,"agent":"working","awaiting":false,"question":null,"confident":false,"last_question":null,"choice_sig":null,"fullscreen":false}}
 {"record":128,"state":{"shell":1,"agent":"working","awaiting":false,"question":null,"confident":false,"last_question":null,"choice_sig":null,"fullscreen":false}}
+{"record":129,"event":{"type":"progress","state":3,"_turn_epoch":0}}
 {"record":129,"state":{"shell":1,"agent":"working","awaiting":false,"question":null,"confident":false,"last_question":null,"choice_sig":null,"fullscreen":false}}
 {"record":130,"state":{"shell":1,"agent":"working","awaiting":false,"question":null,"confident":false,"last_question":null,"choice_sig":null,"fullscreen":false}}
 {"record":131,"event":{"type":"status-line","task_name":"Gesticulating","full_line":"✢ Gesticulating… (running UserPromptSubmit hooks… 1/5 · 0s)","time_info":null,"token_info":null,"_turn_epoch":0}}
@@ -177,17 +179,18 @@
 {"record":177,"event":{"type":"user-input","content":"","line":-1,"_turn_epoch":0}}
 {"record":177,"state":{"shell":1,"agent":"working","awaiting":false,"question":null,"confident":false,"last_question":null,"choice_sig":null,"fullscreen":false}}
 {"record":178,"event":{"type":"question","prompt_text":"","confident":true,"_turn_epoch":0}}
-{"record":178,"state":{"shell":1,"agent":"awaiting_input","awaiting":true,"question":"","confident":true,"last_question":"","choice_sig":null,"fullscreen":false}}
-{"record":179,"state":{"shell":1,"agent":"awaiting_input","awaiting":true,"question":"","confident":true,"last_question":"","choice_sig":null,"fullscreen":false}}
-{"record":180,"state":{"shell":1,"agent":"awaiting_input","awaiting":true,"question":"","confident":true,"last_question":"","choice_sig":null,"fullscreen":false}}
-{"record":181,"state":{"shell":1,"agent":"awaiting_input","awaiting":true,"question":"","confident":true,"last_question":"","choice_sig":null,"fullscreen":false}}
-{"record":182,"state":{"shell":1,"agent":"awaiting_input","awaiting":true,"question":"","confident":true,"last_question":"","choice_sig":null,"fullscreen":false}}
+{"record":178,"state":{"shell":1,"agent":"awaiting_input","awaiting":true,"question":"","confident":true,"last_question":null,"choice_sig":null,"fullscreen":false}}
+{"record":179,"state":{"shell":1,"agent":"awaiting_input","awaiting":true,"question":"","confident":true,"last_question":null,"choice_sig":null,"fullscreen":false}}
+{"record":180,"state":{"shell":1,"agent":"awaiting_input","awaiting":true,"question":"","confident":true,"last_question":null,"choice_sig":null,"fullscreen":false}}
+{"record":181,"state":{"shell":1,"agent":"awaiting_input","awaiting":true,"question":"","confident":true,"last_question":null,"choice_sig":null,"fullscreen":false}}
+{"record":182,"state":{"shell":1,"agent":"awaiting_input","awaiting":true,"question":"","confident":true,"last_question":null,"choice_sig":null,"fullscreen":false}}
 {"record":183,"event":{"type":"question","prompt_text":"Enter to select · ↑/↓ to navigate · Esc to cancel","confident":true,"_turn_epoch":0}}
 {"record":183,"event":{"type":"choice-prompt","title":"Which color do you prefer?","options":[{"key":"1","label":"Red","highlighted":true,"destructive":false},{"key":"2","label":"Green","highlighted":false,"destructive":false},{"key":"3","label":"Blue","highlighted":false,"destructive":false},{"key":"4","label":"Type something.","highlighted":false,"destructive":false},{"key":"5","label":"Chat about this","highlighted":false,"destructive":false}],"selection_mode":"navigate-enter","dismiss_key":"cancel","_turn_epoch":0}}
 {"record":183,"state":{"shell":1,"agent":"awaiting_input","awaiting":true,"question":"Which color do you prefer?","confident":true,"last_question":"Enter to select · ↑/↓ to navigate · Esc to cancel","choice_sig":"Which color do you prefer?|1,2,3,4,5","fullscreen":false}}
 {"record":184,"event":{"type":"question","prompt_text":"Claude needs your permission","confident":true,"_turn_epoch":0}}
 {"record":184,"state":{"shell":1,"agent":"awaiting_input","awaiting":true,"question":"Claude needs your permission","confident":true,"last_question":"Claude needs your permission","choice_sig":"Which color do you prefer?|1,2,3,4,5","fullscreen":false}}
 {"record":186,"state":{"shell":1,"agent":"awaiting_input","awaiting":true,"question":"Claude needs your permission","confident":true,"last_question":"Claude needs your permission","choice_sig":"Which color do you prefer?|1,2,3,4,5","fullscreen":false}}
+{"record":187,"event":{"type":"progress","state":0,"_turn_epoch":0}}
 {"record":187,"state":{"shell":1,"agent":"awaiting_input","awaiting":true,"question":"Claude needs your permission","confident":true,"last_question":"Claude needs your permission","choice_sig":"Which color do you prefer?|1,2,3,4,5","fullscreen":false}}
 {"record":188,"state":{"shell":1,"agent":"awaiting_input","awaiting":true,"question":"Claude needs your permission","confident":true,"last_question":"Claude needs your permission","choice_sig":"Which color do you prefer?|1,2,3,4,5","fullscreen":false}}
 {"record":189,"event":{"type":"choice-cleared","_turn_epoch":0}}
