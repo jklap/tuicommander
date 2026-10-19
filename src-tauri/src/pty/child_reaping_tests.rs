@@ -100,8 +100,9 @@ fn assert_os_child_reaped(pid: libc::pid_t) {
     );
 }
 
-/// Catches: EOF/close drops the child after try_wait(None), leaving a zombie
-/// when the real process exits later. Also prevents waiting under session locks.
+/// Catches: EOF drops the child after try_wait(None), leaving a zombie when the
+/// real process exits later, and an explicit close that leaves its killed child
+/// unreaped. Also prevents waiting under session locks.
 #[test]
 fn session_removal_reaps_child_that_exits_after_first_poll() {
     for explicit_close in [false, true] {
@@ -119,6 +120,15 @@ fn session_removal_reaps_child_that_exits_after_first_poll() {
         }
         assert!(!state.session_maps.sessions.contains_key(sid));
         assert_eq!(state.metrics.active_sessions.load(Ordering::Relaxed), 0);
+        if explicit_close {
+            // An explicit close does not wait for the child to exit on its own:
+            // `cleanup_session` force-kills it after a short grace period
+            // (`terminate_child_with_grace`) and reaps it while doing so, so the
+            // gated shell must already be gone, with no zombie left behind.
+            drop(input);
+            assert_os_child_reaped(pid);
+            continue;
+        }
         // The shell cannot exit until teardown has returned and this releases it.
         input.write_all(b"release\n").expect("release child");
         drop(input);
