@@ -18,7 +18,7 @@ use tuicommander_lib::acp::{
     AcpClientErrorCode, AcpClientEvent, AcpEventEnvelope, AcpHostRequestId, AcpPendingInteraction,
 };
 
-mod acp_support;
+use crate::acp_support;
 
 use acp_support::{Fixture, authority, chunk, text, until};
 

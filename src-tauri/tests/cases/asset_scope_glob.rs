@@ -6,7 +6,7 @@ const HOME: &str = "/Users/u";
 
 fn allowed(path: &str) -> bool {
     let conf: serde_json::Value =
-        serde_json::from_str(include_str!("../tauri.conf.json")).expect("tauri.conf.json parses");
+        serde_json::from_str(include_str!("../../tauri.conf.json")).expect("tauri.conf.json parses");
     let scope = conf["app"]["security"]["assetProtocol"]["scope"]
         .as_array()
         .expect("scope is the plain allow-list form (default leading-dot rule)");

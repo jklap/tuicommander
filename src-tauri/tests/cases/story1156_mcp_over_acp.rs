@@ -21,7 +21,7 @@ use tuicommander_lib::acp::{
     McpReply,
 };
 
-mod acp_support;
+use crate::acp_support;
 
 use acp_support::{Fixture, PATIENCE, authority};
 
