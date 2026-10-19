@@ -1,3 +1,10 @@
+## UI Design Mode actions (2067-e708) — Rust restart required
+
+- [ ] After Boss manually restarts `make dev` or installs `make build`, reconnect MCP and use `ui design_start` with the target terminal and page URL. Verify browser commands remain limited to the armed recipient/repository and extension host grants. The separate `design_mode` tool remains until story 2068. This peer did not restart the backend.
+
+## Conditional MCP tools (2066-516c, 2067-e708) — Rust restart required
+
+- [ ] After Boss manually restarts the backend with `make dev` or installs `make build`, verify a downstream MCP client refreshes after remote connect/disconnect and Voice/Telegram configuration changes. Clients that ignore `notifications/tools/list_changed` need a reconnect. The running desktop does not load these Rust changes; this peer did not restart it. Conversation binding, Telegram registration and remote digest/session-loss confirmation remain required.
 ## Joined intent title closure (2060-0ebe) — Rust restart required
 
 - [ ] After Boss manually restarts `make dev` or installs `make build`, check an intent followed immediately by ordinary prose on the same row. CONTEXT must contain only the intent description; desktop and mobile tint must stop at the title closure without hiding trailing prose. Include a title that wraps. This peer did not restart or replace the running desktop.
@@ -2626,3 +2633,4 @@ Needs an iPhone (iOS 16.4+, 18.4+ preferred), the desktop TUICommander running a
 - [ ] After the Rust restart and plugin catalogue publication, install a plugin, edit its installed `main.js` without changing its version, rediscover it and refresh Browse: both Installed and Browse offer Update. Restore from the catalogue and confirm the badge clears; editing only `data/config.json` must not offer an update.
 - [ ] Reload GitHub/GitLab/Jira twice: one registration each; rejected async startup reports its error. Set and use Jira/GitLab default projects through plugin Settings (account-specific projects take precedence); capture the settings page. Resolve a Jira URL and cancel an in-flight detail request.
 - [ ] Remaining original live checks: switch repos during scans, change composer during retry/wakeup reads, open same-name CSV/DOCX/XLSX files in different repos, refuse an incompatible real plugin, and route an account-authorized GitHub review/action through the core ports. Module tests do not satisfy these live E2Es.
+- [ ] #2072-adf9: After a manual `make dev` restart or release rebuild, reconnect Claude Code and confirm ToolSearch finds agent, session, repo, and ui; send one agent message. Rust schemas do not hot-reload.

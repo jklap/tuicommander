@@ -1,3 +1,112 @@
+/// Catches: Anthropic rejects advertised action contracts with root combinators,
+/// including schemas returned through lazy search and exact lookup.
+#[test]
+fn advertised_native_schemas_have_no_root_combinators() {
+    let state = test_state();
+    {
+        let mut config = state.config.write();
+        config.progress_tracking = true;
+        config.settings_mcp_enabled = true;
+    }
+    rebuild_tool_search_index(&state);
+    let mut failures = Vec::new();
+    let mut check = |surface: &str, tool: &serde_json::Value| {
+        let schema = &tool["inputSchema"];
+        for keyword in ["oneOf", "anyOf", "allOf"] {
+            if schema.get(keyword).is_some() {
+                failures.push(format!("{surface}: {} has {keyword}", tool["name"]));
+            }
+        }
+    };
+    for tool in native_tool_definitions().as_array().unwrap() {
+        check("native", tool);
+    }
+    for tool in merged_tool_definitions_for_mode(&state, None, false)
+        .as_array()
+        .unwrap()
+    {
+        check("tools/list", tool);
+    }
+    for tool in searchable_tool_definitions(&state) {
+        let name = tool["name"].as_str().unwrap();
+        if name == "design_mode" {
+            continue; // Session-bound visibility is covered by the Design Mode tests.
+        }
+        let exact = handle_get_tool_schema(&state, &serde_json::json!({"tool_name":name}));
+        assert_eq!(exact["name"], name);
+        check("get_tool_schema", &exact);
+        let search = handle_search_tools(
+            &state,
+            &serde_json::json!({
+                "query":name, "schema_byte_budget":65536
+            }),
+        );
+        assert!(search["count"].as_u64().unwrap() > 0, "{name}");
+        if let Some(top) = search.get("top_schema") {
+            check("search_tools", top);
+        }
+    }
+    // Catches: an untagged wrapper hides a tagged action enum (settings
+    // transactions), or a flattened owner union loses its action-specific fields.
+    fn check_variant_fields(
+        private: &serde_json::Value,
+        advertised: &serde_json::Value,
+        name: &str,
+        failures: &mut Vec<String>,
+    ) {
+        if let Some(properties) = private["properties"].as_object() {
+            for (field, schema) in properties {
+                if advertised["properties"].get(field).is_none() {
+                    failures.push(format!("{name} loses field {field}"));
+                }
+                if field == "action" {
+                    let values: Vec<_> = schema
+                        .get("const")
+                        .into_iter()
+                        .chain(schema["enum"].as_array().into_iter().flatten())
+                        .collect();
+                    for action in values {
+                        if !advertised["properties"]["action"]["enum"]
+                            .as_array()
+                            .is_some_and(|actions| actions.contains(action))
+                        {
+                            failures.push(format!("{name} loses action {action}"));
+                        }
+                    }
+                }
+            }
+        }
+        // Follow only object-level wrappers, never parameter schemas.
+        for keyword in ["oneOf", "anyOf", "allOf"] {
+            if let Some(variants) = private[keyword].as_array() {
+                for variant in variants {
+                    check_variant_fields(variant, advertised, name, failures);
+                }
+            }
+        }
+    }
+    let advertised = native_tool_definitions();
+    for private in super::super::mcp_transport_catalogue::native_validation_tool_definitions()
+        .as_array()
+        .unwrap()
+    {
+        let name = private["name"].as_str().unwrap();
+        let public = advertised
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|tool| tool["name"] == name)
+            .unwrap();
+        check_variant_fields(
+            &private["inputSchema"],
+            &public["inputSchema"],
+            name,
+            &mut failures,
+        );
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
 // Catches: Settings rows reuse long MCP paragraphs or omit newly registered tools.
 #[test]
 fn native_tool_catalog_summaries_are_short_and_not_description_prefixes() {
@@ -87,18 +196,18 @@ fn native_tool_named(name: &str) -> serde_json::Value {
         .clone()
 }
 
-/// Discovery must work on the surface the client is already looking at.
-///
-/// `notifications/tools/list_changed` is not a mechanism we can rely on —
-/// Claude Code does not refetch on it — so arming cannot be what makes the
-/// tool appear. It is always in the list, always in the search corpus and
-/// always fetchable by name; whether it can *do* anything is an answer the
-/// tool itself gives.
+// Catches: a configured voice is filtered out of the lazy discovery corpus.
 #[tokio::test]
-async fn voice_is_discoverable_by_list_search_and_name_without_a_list_change() {
+async fn conditional_configured_voice_is_discoverable_by_list_search_and_name() {
+    let dir = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+    let _guard = crate::config::set_config_dir_override(dir.path().to_path_buf());
+    write_voice_config(dir.path(), true, true);
     let state = test_state();
-    spawn_tool_search_index_updater(Arc::clone(&state));
-    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    assert!(
+        tool_names(&merged_tool_definitions(&state, None, None))
+            .iter()
+            .any(|name| name == "voice")
+    );
 
     let definition = native_tool_named("voice");
     assert_eq!(
@@ -204,6 +313,8 @@ fn meta_tool_names_constant_matches_definitions() {
 /// so renaming one silently stops a user's policy from matching.
 #[tokio::test]
 async fn native_tool_definitions_are_the_one_surviving_family() {
+    let dir = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+    let _guard = crate::config::set_config_dir_override(dir.path().to_path_buf());
     let state = test_state();
     {
         let mut config = state.config.write();
@@ -223,11 +334,9 @@ async fn native_tool_definitions_are_the_one_surviving_family() {
         vec![
             "automations",
             "secret",
-            "telegram",
             "session",
             "agent",
             "task",
-            "remote",
             "repo",
             "story",
             "workflow",
@@ -240,7 +349,6 @@ async fn native_tool_definitions_are_the_one_surviving_family() {
             "plugin_dev_guide",
             "settings",
             "debug",
-            "voice",
         ],
         "native_tool_definitions must return exactly the one family, in order"
     );
@@ -253,8 +361,8 @@ async fn native_tool_definitions_are_the_one_surviving_family() {
     )
     .await;
     assert_eq!(
-        called["error"], "telegram_invalid_state",
-        "unbound Telegram invocation must reach its native authority check"
+        called["error"], "Tool 'telegram' is unavailable: Telegram is not configured",
+        "unconfigured Telegram must be refused before its native authority check"
     );
 }
 
@@ -540,26 +648,46 @@ fn debug_tool_includes_sessions_action() {
     );
 }
 
+// Catches: expanded discovery exposes optional tools without owner configuration.
 #[test]
 fn merged_tools_collapse_false_returns_all_native_tools() {
+    let dir = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+    let _guard = crate::config::set_config_dir_override(dir.path().to_path_buf());
+    // No voice/Telegram configuration files or live remote connections. All
+    // ordinary tools are enabled; Design Mode has no armed owner for this caller.
     let state = test_state();
-    assert!(!state.config.read().collapse_tools);
+    {
+        let mut config = state.config.write();
+        config.disabled_native_tools.clear();
+        config.settings_mcp_enabled = true;
+        config.progress_tracking = true;
+        config.collapse_tools = false;
+    }
 
     let merged = merged_tool_definitions(&state, None, None);
     let names = tool_names(&merged);
-
-    // Design Mode is visible only to the armed owner, not an unbound caller.
-    let native: Vec<_> = tool_names(&native_tool_definitions())
-        .into_iter()
-        .filter(|name| name != "design_mode")
-        .collect();
     assert_eq!(
-        names, native,
-        "collapse_tools=false should return every native tool visible to this caller"
-    );
-    assert!(
-        names.len() > 3,
-        "baseline native tool set must exceed 3 tools"
+        names,
+        vec![
+            "automations",
+            "secret",
+            "session",
+            "agent",
+            "task",
+            "repo",
+            "story",
+            "workflow",
+            "workflow_run",
+            "workflow_story_create",
+            "workflow_report",
+            "workflow_launch",
+            "progress",
+            "ui",
+            "plugin_dev_guide",
+            "settings",
+            "debug",
+        ],
+        "expanded discovery must return exactly the tools available to this unconfigured caller"
     );
 }
 
@@ -1575,19 +1703,52 @@ fn every_documented_action_constant_matches_schema_and_description() {
     }
 }
 
-/// After `rebuild_tool_search_index`, the cache contains every native
-/// tool from `native_tool_definitions()`.
+// Catches: index rebuild exposes unconfigured optional tools or drops available tools.
 #[test]
 fn rebuild_tool_search_index_populates_all_native_tools() {
+    let dir = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+    let _guard = crate::config::set_config_dir_override(dir.path().to_path_buf());
+    // No voice/Telegram configuration files or live remote connections. The
+    // shared index retains Design Mode; discovery applies its per-caller grant.
     let state = test_state();
+    {
+        let mut config = state.config.write();
+        config.disabled_native_tools.clear();
+        config.settings_mcp_enabled = true;
+        config.progress_tracking = true;
+        config.collapse_tools = false;
+    }
     rebuild_tool_search_index(&state);
     let idx = state.mcp.tool_search_index.read();
-    let native_count = native_tool_definitions().as_array().unwrap().len();
-    assert_eq!(idx.len(), native_count);
-    // Spot-check a few well-known native tools by name.
-    assert!(idx.get_schema("session").is_some());
-    assert!(idx.get_schema("repo").is_some());
-    assert!(idx.get_schema("agent").is_some());
+    let names: Vec<_> = idx
+        .entries()
+        .iter()
+        .map(|entry| entry.name.as_str())
+        .collect();
+    assert_eq!(
+        names,
+        vec![
+            "automations",
+            "design_mode",
+            "secret",
+            "session",
+            "agent",
+            "task",
+            "repo",
+            "story",
+            "workflow",
+            "workflow_run",
+            "workflow_story_create",
+            "workflow_report",
+            "workflow_launch",
+            "progress",
+            "ui",
+            "plugin_dev_guide",
+            "settings",
+            "debug",
+        ],
+        "index rebuild must contain exactly the tools available with unconfigured owners"
+    );
 }
 
 /// After mutating `disabled_native_tools` and rebuilding, the disabled
@@ -2189,7 +2350,7 @@ fn launch_capable_clients_receive_no_duplicate_playbook() {
 
 /// Catches: merging launch bypasses static validation or omits its reusable discovery contract.
 #[tokio::test]
-async fn launch_discovery_schema_matches_predispatch_validation() {
+async fn launch_flat_discovery_keeps_predispatch_validation() {
     let state = test_state();
     let definition = native_tool_definitions()
         .as_array()
@@ -2250,7 +2411,8 @@ async fn launch_discovery_schema_matches_predispatch_validation() {
         malformed,
         oversized,
     ] {
-        assert!(!validator.is_valid(&invalid), "{invalid}");
+        // Discovery is deliberately permissive for cross-field action requirements;
+        // only the private contract enforces them, before effects can start.
         let result = handle_mcp_tool_call(&state, loopback_addr(), "agent", &invalid, None).await;
         assert_eq!(result["code"], "invalid_arguments", "{result}");
         assert_eq!(result["effect"], "not_started");
@@ -2258,4 +2420,194 @@ async fn launch_discovery_schema_matches_predispatch_validation() {
     }
     assert!(!state.data_dir.join("managed-launches.sqlite").exists());
     assert!(state.session_maps.sessions.is_empty());
+}
+
+// Catches: hiding remote in discovery while a direct call still reaches deployment.
+#[tokio::test]
+async fn conditional_remote_direct_call_without_connection_is_refused() {
+    let state = test_state();
+    state.config.write().disabled_native_tools.clear();
+    let result = handle_mcp_tool_call(
+        &state,
+        loopback_addr(),
+        "remote",
+        &serde_json::json!({"action":"preview", "connection_id":"absent"}),
+        None,
+    )
+    .await;
+    assert_eq!(
+        result["error"], "Tool 'remote' is unavailable: no connected remote server",
+        "{result}"
+    );
+}
+
+fn write_voice_config(path: &std::path::Path, enabled: bool, replies: bool) {
+    let config = crate::config::DictationConfig {
+        enabled,
+        hands_free_spoken_replies: replies,
+        ..Default::default()
+    };
+    std::fs::write(
+        path.join("dictation-config.json"),
+        serde_json::to_vec(&config).unwrap(),
+    )
+    .unwrap();
+}
+
+// Catches: native and meta calls bypass an absent owner configuration; a stale
+// search index still reveals a tool after its owner is switched off.
+#[tokio::test]
+async fn conditional_owner_flags_gate_discovery_schema_and_both_call_paths() {
+    let dir = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+    let _guard = crate::config::set_config_dir_override(dir.path().to_path_buf());
+    write_voice_config(dir.path(), true, true);
+    let state = test_state();
+    for (enabled, replies) in [(false, true), (true, false)] {
+        write_voice_config(dir.path(), enabled, replies);
+        for tool in ["voice", "telegram", "remote"] {
+            assert!(
+                !tool_names(&merged_tool_definitions(&state, None, None))
+                    .iter()
+                    .any(|name| name == tool)
+            );
+            let schema = handle_get_tool_schema(&state, &serde_json::json!({"tool_name": tool}));
+            assert!(schema.get("error").is_some(), "{tool}: {schema}");
+            let search =
+                handle_search_tools(&state, &serde_json::json!({"query":tool,"limit":100}));
+            assert!(
+                !search["results"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|entry| entry["name"] == tool)
+            );
+            let direct = handle_mcp_tool_call(
+                &state,
+                loopback_addr(),
+                tool,
+                &serde_json::json!({"action":"status"}),
+                None,
+            )
+            .await;
+            let meta = handle_call_tool(
+                &state,
+                loopback_addr(),
+                &serde_json::json!({"tool_name":tool,"arguments":{"action":"status"}}),
+                None,
+                None,
+            )
+            .await;
+            assert_eq!(direct, meta);
+            assert!(
+                direct["error"]
+                    .as_str()
+                    .unwrap()
+                    .contains("is unavailable:"),
+                "{tool}: {direct}"
+            );
+        }
+    }
+    std::fs::write(dir.path().join("dictation-config.json"), "not json").unwrap();
+    assert!(
+        !tool_names(&merged_tool_definitions(&state, None, None))
+            .iter()
+            .any(|name| name == "voice")
+    );
+}
+
+// Catches: saved/configured remote records substitute for authenticated live
+// connections, or removing one of two live servers hides the remaining one.
+#[tokio::test]
+async fn conditional_remote_tracks_live_connections_and_preserves_explicit_denial() {
+    let state = test_state();
+    state
+        .remote
+        .force_connected_for_test("first", "http://127.0.0.1:9", None);
+    state
+        .remote
+        .force_connected_for_test("second", "http://127.0.0.1:9", None);
+    assert!(
+        tool_names(&merged_tool_definitions(&state, None, None))
+            .iter()
+            .any(|name| name == "remote")
+    );
+    crate::remote_runtime::teardown(&state, "first");
+    assert!(
+        tool_names(&merged_tool_definitions(&state, None, None))
+            .iter()
+            .any(|name| name == "remote")
+    );
+    state
+        .config
+        .write()
+        .disabled_native_tools
+        .push("remote".into());
+    assert!(
+        !tool_names(&merged_tool_definitions(&state, None, None))
+            .iter()
+            .any(|name| name == "remote")
+    );
+    let denied = handle_mcp_tool_call(
+        &state,
+        loopback_addr(),
+        "remote",
+        &serde_json::json!({"action":"preview","connection_id":"second"}),
+        None,
+    )
+    .await;
+    assert_eq!(
+        denied["error"],
+        "Tool 'remote' is disabled by configuration"
+    );
+    state.config.write().disabled_native_tools.clear();
+    crate::remote_runtime::teardown(&state, "second");
+    assert!(
+        !tool_names(&merged_tool_definitions(&state, None, None))
+            .iter()
+            .any(|name| name == "remote")
+    );
+}
+
+// Catches: a configured Telegram tool remains hidden or bypasses its caller
+// registration authority when the configuration predicate is satisfied.
+#[tokio::test]
+async fn conditional_configured_telegram_preserves_caller_authority() {
+    let dir = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+    let _guard = crate::config::set_config_dir_override(dir.path().to_path_buf());
+    let paths = crate::telegram::settings::paths().unwrap();
+    std::fs::create_dir(&paths.directory).unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&paths.directory, std::fs::Permissions::from_mode(0o700)).unwrap();
+    }
+    for (name, contents) in [
+        ("config.json", r#"{"enabled":true,"bot_alias":"test-bot"}"#),
+        ("bot.token", "111:fake-one"),
+    ] {
+        std::fs::write(paths.file(name), contents).unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(paths.file(name), std::fs::Permissions::from_mode(0o600))
+                .unwrap();
+        }
+    }
+    let state = test_state();
+    assert!(
+        tool_names(&merged_tool_definitions(&state, None, None))
+            .iter()
+            .any(|name| name == "telegram")
+    );
+    let schema = handle_get_tool_schema(&state, &serde_json::json!({"tool_name":"telegram"}));
+    assert_eq!(schema["name"], "telegram");
+    let result = handle_mcp_tool_call(
+        &state,
+        loopback_addr(),
+        "telegram",
+        &serde_json::json!({"action":"register"}),
+        None,
+    )
+    .await;
+    assert_eq!(result["error"], "telegram_invalid_state");
 }

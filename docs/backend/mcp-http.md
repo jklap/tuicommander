@@ -649,11 +649,18 @@ does not add another blanket wrapper.
 
 ### Native argument repair contract (#2007-59f6)
 
-The native tool's advertised `inputSchema` is enforced before dispatch, both for
-direct tools and `call_tool`, on HTTP and MCP-over-ACP. Action enums and standard
-`if`/`then` requirements describe conditional fields (for example `ui tab` needs
-`id`, `title`, and exactly one of `html`/`url`). A local-only JSON Schema validator
-uses those same definitions; validation cannot fetch external schema references.
+Native argument contracts are enforced before dispatch, both for direct tools
+and `call_tool`, on HTTP and MCP-over-ACP. The server keeps the complete private
+JSON Schema, including action-dependent requirements (for example `ui tab` needs
+`id`, `title`, and exactly one of `html`/`url`). Validation cannot fetch external
+schema references.
+
+Advertised `inputSchema` objects have no root `oneOf`, `anyOf`, or `allOf`:
+Anthropic tool clients reject that shape. Full listing, lazy search, and exact
+schema lookup publish the same flat action enum and properties. Conditional
+requirements are in description text; nested parameter alternatives use `anyOf`.
+The private validator still enforces exclusive alternatives and required fields
+before any effect starts, including grouped workflow actions and agent task handles.
 Static rejection returns a tool error with:
 
 - `code: "invalid_arguments"`, `outcome: "rejected"`, `effect: "not_started"`;
@@ -913,12 +920,13 @@ say what was measured, not what the list costs today.
 | `session` | list, create, submit, input, output, status, wait, resize, rename, close, kill, pause, resume | Enabled |
 | `agent` | spawn, wait, register, list_peers, send, inbox, subscribe, ack, unsubscribe, task_get, task_cancel | Enabled |
 | `task` | get, cancel | Enabled |
-| `remote` | preview, update | Enabled |
+| `remote` | preview, update | Only with a connected remote server |
 | `repo` | list, active, status, branch_integrations, branch_integration, worktree_list, worktree_lifecycle, worktree_create, worktree_remove, orphan_cleanup_answer, branch_delete, progress_list | Enabled |
 | `progress` | *(no actions — appends one `done` or `blocked` entry)* | Enabled, unless `progress_tracking` is off |
 | `ui` | tab, toast, confirm, screenshot | Enabled |
 | `plugin_dev_guide` | *(no actions — returns guide text)* | Enabled |
-| `voice` | speak, stop, status | Enabled |
+| `voice` | speak, stop, status | Only with voice configured |
+| `telegram` | register, unregister, begin, activity, finish, send | Only with Telegram configured |
 | `settings` | describe, get, set, reset, patch, perform, refresh | Disabled; trusted UI opt-in required |
 | `debug` | agent_detection, logs, sessions, invoke_js, help | Disabled |
 
@@ -936,17 +944,37 @@ closes the dialog before removal.
 
 Removed MCP actions report the replacement route in their error: `agent detect` → `GET /agents`, `agent stats` → `GET /stats`, `agent metrics` → `GET /metrics`, `session process_stats` → `GET /process/stats`, `repo prs` → `GET /repo/prs`, `repo issues` → `GET /repo/issues`, `repo close_issue` → `POST /repo/issues/close`, `repo reopen_issue` → `POST /repo/issues/reopen`, and `repo ci_logs` → `GET /repo/ci-failure-logs`. `repo active/status`, `session pause/resume/status`, and `task` remain because their behavior has no equivalent single-call replacement.
 
-#### `voice` is always listed and usually unavailable
+#### Conditional native tools
 
-It is listed whether or not anything is armed, and on builds with no audio at
-all. That is deliberate: `notifications/tools/list_changed` is not a discovery
-mechanism we can rely on — Claude Code never refetches on it — so arming cannot
-be what makes the tool appear. Instead the tool is always there and answers
-`action=status` with `available: false` plus a reason. A headless
-`tuic-remote` build answers the same shape, so a model reads one contract on
-both builds rather than an unknown-tool error on one of them.
-The headless no-audio answer follows the terminal binding check: an unbound
-connection is refused before it can receive a voice status.
+`remote`, `voice` and `telegram` use one shared availability predicate for
+classic listing, lazy search, exact schema lookup and direct or `call_tool`
+dispatch. A known name does not bypass a missing condition. Explicit native
+config denials still take precedence.
+
+- `remote`: at least one `RemoteRuntime` entry has `RemoteStatus::Connected`.
+  Saved records, connecting tunnels, failed authentication and health-only
+  probes do not count. Preview digests and session-loss confirmation stay in
+  the deployment owner and are not relaxed by this condition.
+- `voice`: the persisted `dictation-config.json` parses as `DictationConfig`
+  with both `enabled` and `hands_free_spoken_replies` true. A missing or corrupt
+  document is not configured. Engine selection is not the opt-in: an unset
+  engine resolves to Edge. This does not require an armed conversation or
+  probe the microphone, speech model or network.
+- `telegram`: the private setup config has `enabled=true` and a nonempty
+  `bot_alias`, and the private `bot.token` file exists. Discovery checks only
+  credential-file availability, never its contents. Network connectivity,
+  chat selection and agent registration remain separate runtime checks.
+
+Remote connected-set transitions and successful voice/Telegram owner setting
+changes send `notifications/tools/list_changed` through the existing HTTP SSE,
+bridge and ACP notification paths. The Telegram polling owner also observes
+cross-process setup revisions. Clients that ignore catalogue notifications
+must reconnect after a condition changes. The Settings tool inventory remains
+unfiltered so users can inspect and enable optional capabilities.
+
+A configured voice can still answer `available: false` with a runtime reason.
+A build without audio retains that answer after checking terminal binding;
+an unbound connection is refused before it can receive voice status.
 
 Every action is bound to the **calling terminal**: `resolve_mcp_origin_session`
 maps `mcp-session-id` onto a TUIC session, and that session must be the one
@@ -2342,7 +2370,7 @@ an explicit create action. These actions match across HTTP, IPC, MCP and CLI.
 
 ### Design Mode lifecycle tool
 
-The native `design_mode` tool exposes `start`, `stop`, `status`, `reload` and `navigate` through normal discovery and dispatch. Start accepts `session_id`, optional `browser` (`chrome` or `edge`) and optional absolute HTTP(S) `url`. Session references resolve like the session tool. Stop accepts `repo_path` from start/status. Reload takes the same `repo_path` and bumps a per-repository reload sequence; the extension reloads the reviewed tab once on its next heartbeat. Navigate takes `repo_path` and `url` (HTTP(S) on `localhost`, `127.0.0.1` or `[::1]`, no credentials); the heartbeat reply then carries `navigate: {seq, url}` and the extension opens the URL in the reviewed tab once per sequence. The sequence survives a re-arm but the URL does not, so a new Start never replays an old navigation. Reload and navigate answer "Design Mode is not running for this repository" when nothing is armed. The extension posts `heartbeat` to `/design-mode/extension` every 5 s (reply `{armed, reloadSeq, navigate?}`); an armed mode is stopped 60 s after the last heartbeat, or 10 min after Start when none arrived. The adapter uses the same lifecycle core as HTTP and IPC; headless builds return an explicit desktop-host-required error. URL-aware start is the default coordinator path for layout work.
+The `ui` tool exposes `design_start`, `design_stop`, `design_status`, `design_reload`, `design_navigate`, `design_screenshot`, `design_errors` and `design_eval`. These actions delegate to the existing Design Mode owner: the caller must own the armed repository for browser commands, remote hosts still require an extension host grant, and JavaScript still requires its optional host grant. A saved `design_mode` denial also blocks the new actions; disabling `ui` blocks all UI actions. The separate `design_mode` tool remains until the explicit breaking catalogue cutover in story 2068, not the Design Mode v2 rollout in story 1672. It exposes the same unprefixed actions and caller checks. Start accepts `session_id`, optional `browser` (`chrome` or `edge`) and optional absolute HTTP(S) `url`. Session references resolve like the session tool. Stop accepts `repo_path` from start/status. Reload takes the same `repo_path` and bumps a per-repository reload sequence; the extension reloads the reviewed tab once on its next heartbeat. Navigate takes `repo_path` and `url` (HTTP(S) on `localhost`, `127.0.0.1` or `[::1]`, no credentials); the heartbeat reply then carries `navigate: {seq, url}` and the extension opens the URL in the reviewed tab once per sequence. The sequence survives a re-arm but the URL does not, so a new Start never replays an old navigation. Reload and navigate answer "Design Mode is not running for this repository" when nothing is armed. The extension posts `heartbeat` to `/design-mode/extension` every 5 s (reply `{armed, reloadSeq, navigate?}`); an armed mode is stopped 60 s after the last heartbeat, or 10 min after Start when none arrived. The adapter uses the same lifecycle core as HTTP and IPC; headless builds return an explicit desktop-host-required error. URL-aware start is the default coordinator path for layout work.
 
 The GitHub settings owner adapter supplies typed device-login, Enterprise account,
 credential, label and binding actions for the later settings transport cutover.
@@ -2659,6 +2687,13 @@ Client-side correlation/captured traces are needed to identify Codex attempts th
 never reached MCP or whose replies were lost. Do not evaluate transcript JavaScript
 to derive call counts. No OTel exporter is enabled by this feature.
 
+The [partial live recording](../../src-tauri/src/mcp_http/fixtures/outcomes-partial-2010.md)
+records a real ego-selected call with a server-retained client UUID, an application
+refusal, and a client disconnect over local IPC. It excludes response bodies and
+does not complete the four-outcome fixture: real client permission denial and
+rendering success still require recording. A successful speech-status read is
+not rendering evidence.
+
 ## Managed stateless reconnect context (#2008-5317)
 
 A modern `tools/call` without `mcp-session-id` can recover mail/project routing
@@ -2781,4 +2816,4 @@ measurement is not a claim about product-wide token or latency savings.
 `session action=input` also accepts only `pty_description` (string or null).
 This updates or clears the context-bar description without sending PTY bytes.
 
-Managed `agent action=launch` uses the same advertised pre-dispatch static contract as other native actions. Discovery includes the disjoint receipt-read and creation forms, exclusive workspace shapes, and nested spawn argument types. Invalid calls return structured `invalid_arguments` with `effect=not_started` before the launch journal or PTY is touched.
+Managed `agent action=launch` uses the same private pre-dispatch static contract as other native actions. Discovery describes the disjoint receipt-read and creation forms, workspace alternatives, and nested spawn argument types; the server enforces exclusivity. Invalid calls return structured `invalid_arguments` with `effect=not_started` before the launch journal or PTY is touched.

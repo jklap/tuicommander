@@ -4607,6 +4607,9 @@ impl AppState {
         &self,
         notice: crate::settings::changes::SettingsChanged,
     ) {
+        if matches!(notice.section.as_str(), "voice" | "telegram") {
+            let _ = self.mcp.tools_changed.send(());
+        }
         let _ = self
             .event_bus
             .send(AppEvent::SettingsChanged(notice.clone()));

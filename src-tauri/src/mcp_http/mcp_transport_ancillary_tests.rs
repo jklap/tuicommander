@@ -2514,11 +2514,11 @@ async fn workflow_denials_preserve_members_and_leave_automations_independent() {
             .find(|tool| tool["name"] == "workflow")
             .unwrap();
         assert!(
-            !workflow["inputSchema"]["oneOf"]
+            !workflow["inputSchema"]["properties"]["action"]["enum"]
                 .as_array()
                 .unwrap()
                 .iter()
-                .any(|variant| variant["properties"]["action"]["const"] == action)
+                .any(|advertised| advertised == action)
         );
     }
     state.config.write().disabled_native_tools = vec!["workflow".into()];

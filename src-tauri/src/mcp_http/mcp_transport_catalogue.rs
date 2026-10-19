@@ -453,7 +453,7 @@ pub(super) fn workflow_member_tool(action: &str) -> Option<&'static str> {
 
 pub(super) const AGENT_ACTIONS: &str = "launch, spawn, register, list_peers, send, inbox, wait, subscribe, ack, unsubscribe, task_get, task_cancel";
 pub(super) const REPO_ACTIONS: &str = "list, add, active, status, branch_integrations, branch_integration, worktree_list, worktree_lifecycle, worktree_create, worktree_remove, orphan_cleanup_answer, branch_delete, progress_list, work_item, work_item_act";
-pub(super) const UI_ACTIONS: &str = "tab, toast, confirm, screenshot";
+pub(super) const UI_ACTIONS: &str = "tab, toast, confirm, screenshot, design_start, design_stop, design_status, design_reload, design_navigate, design_screenshot, design_errors, design_eval";
 pub(super) const TASK_ACTIONS: &str = "get, cancel";
 pub(super) const DEBUG_ACTIONS: &str =
     "agent_detection, logs, sessions, invoke_js, frame_workload_dump, help";
@@ -546,8 +546,18 @@ pub(super) const NATIVE_TOOL_SUMMARIES: &[(&str, &str)] = &[
 /// and `progress_tracking`. Leaking the raw list to external clients exposes
 /// tool metadata for gated tools.
 pub(super) fn native_tool_definitions() -> serde_json::Value {
+    let mut tools = native_validation_tool_definitions();
+    for tool in tools.as_array_mut().expect("native tool array") {
+        super::mcp_input_contract::advertise_schema(tool);
+    }
+    tools
+}
+
+/// Complete private contracts, including conditions unsupported by tool clients.
+pub(super) fn native_validation_tool_definitions() -> serde_json::Value {
     let mut defs = serde_json::json!([
         crate::automations::mcp::tool_definition(),
+        // DEFERRED (2026-10-19) — remove the old name only at the approved 2068 catalogue cutover.
         crate::design_mode::mcp::tool_definition(),
         crate::secrets::tool_definition(),
         crate::telegram::tool_definition(),
@@ -728,9 +738,9 @@ pub(super) fn native_tool_definitions() -> serde_json::Value {
         },
         {
             "name": "ui",
-            "description": "Control TUIC UI. Actions:\n- tab: open/update panel tab. Requires id, title, + html OR url.\n- toast: non-blocking notification. Requires title. Optional: message, level (info/warn/error), sound, urgency (normal/urgent).\n- confirm: blocking dialog, shown on every client (desktop, browser, mobile PWA) plus a mobile push — the first answer wins. Returns {confirmed}, plus {reason} when it expired unanswered after 300s (treat that as a refusal, not a yes). Requires title, except settings proposals: pass proposalId to show the backend redacted diff; model title/message/confirmed cannot grant approval.\n- screenshot: capture a panel as WebP. Requires id. Returns {path}. Read the path to view.\n\nURL schemes for tab:\n- http(s): loaded in sandboxed iframe using the permissive default-src CSP (external HTTPS and localhost HTTP supported). Site frame policies can still refuse embedding.\n- file:///path: read via IPC and rendered as inline HTML (sandbox blocks direct file:// access).\n- tuic://edit/<path>?line=N: native code editor (no iframe). Prefix absolute paths with `//` (tuic://edit//Users/x/a.rs). Relative = active repo.\n- tuic://open/<path>: native markdown/preview tab.\n\n- tuic://open-repo is rejected; use repo action=add with path to register a directory. Other tuic actions are not tab content.\n\nCustom schemes (vscode://) do NOT work in iframes.\n\nUse:\n- A project outcome — a milestone, a decision, a discovery, a blocker — belongs to the `progress` tool, which records it AND shows a toast. `ui action=toast` is the transient half only: it says something happened and keeps no record of it.\n- toast for done/error/long-job end; error=failure, warn=recoverable. Skip for micro-steps.\n- toast urgency: normal (default) records the notice in the bell only; urgent also shows a transient card on the desktop window. The caller chooses; the card never covers the focused input.\n- toast with sound=attention when you are working unattended and are BLOCKED on the user (question, approval, ambiguous requirement). It is the only sound that carries across a room; do not spend it on progress updates.\n- confirm BEFORE destructive ops (rm -rf, git reset --hard, force-push, DROP). Only proceed if confirmed.\n- tab http(s) for dashboards, reports, >20-line structured output.\n- tab tuic://edit to point user at source file+line (review, bug discussion) — beats pasting snippets.\n- screenshot to visually verify rendered HTML content in a panel you created.",
+            "description": "Control TUIC UI. Actions:\n- tab: open/update panel tab. Requires id, title, + html OR url.\n- toast: non-blocking notification. Requires title. Optional: message, level (info/warn/error), sound, urgency (normal/urgent).\n- confirm: blocking dialog, shown on every client (desktop, browser, mobile PWA) plus a mobile push — the first answer wins. Returns {confirmed}, plus {reason} when it expired unanswered after 300s (treat that as a refusal, not a yes). Requires title, except settings proposals: pass proposalId to show the backend redacted diff; model title/message/confirmed cannot grant approval.\n- design_start: start Design Mode with session_id and optional browser/url. Requires a live terminal agent.\n- design_stop: stop the caller-bound repository (repo_path).\n- design_status: list Design Mode bindings for an armed caller.\n- design_reload: reload the reviewed tab (repo_path).\n- design_navigate: navigate the reviewed tab (repo_path, url); remote hosts require an extension host grant.\n- design_screenshot: capture the reviewed tab as a PNG path (repo_path).\n- design_errors: read captured page errors (repo_path).\n- design_eval: evaluate script in the reviewed tab (repo_path, script); requires an explicit optional extension host grant.\n- screenshot: capture a panel as WebP. Requires id. Returns {path}. Read the path to view.\n\nURL schemes for tab:\n- http(s): loaded in sandboxed iframe using the permissive default-src CSP (external HTTPS and localhost HTTP supported). Site frame policies can still refuse embedding.\n- file:///path: read via IPC and rendered as inline HTML (sandbox blocks direct file:// access).\n- tuic://edit/<path>?line=N: native code editor (no iframe). Prefix absolute paths with `//` (tuic://edit//Users/x/a.rs). Relative = active repo.\n- tuic://open/<path>: native markdown/preview tab.\n\n- tuic://open-repo is rejected; use repo action=add with path to register a directory. Other tuic actions are not tab content.\n\nCustom schemes (vscode://) do NOT work in iframes.\n\nUse:\n- A project outcome — a milestone, a decision, a discovery, a blocker — belongs to the `progress` tool, which records it AND shows a toast. `ui action=toast` is the transient half only: it says something happened and keeps no record of it.\n- toast for done/error/long-job end; error=failure, warn=recoverable. Skip for micro-steps.\n- toast urgency: normal (default) records the notice in the bell only; urgent also shows a transient card on the desktop window. The caller chooses; the card never covers the focused input.\n- toast with sound=attention when you are working unattended and are BLOCKED on the user (question, approval, ambiguous requirement). It is the only sound that carries across a room; do not spend it on progress updates.\n- confirm BEFORE destructive ops (rm -rf, git reset --hard, force-push, DROP). Only proceed if confirmed.\n- tab http(s) for dashboards, reports, >20-line structured output.\n- tab tuic://edit to point user at source file+line (review, bug discussion) — beats pasting snippets.\n- screenshot to visually verify rendered HTML content in a panel you created.",
             "inputSchema": { "type": "object", "properties": {
-                "action": { "type": "string", "description": "One of: tab, toast, confirm, screenshot" },
+                "action": { "type": "string", "description": "One of: tab, toast, confirm, screenshot, design_start, design_stop, design_status, design_reload, design_navigate, design_screenshot, design_errors, design_eval" },
                 "id": { "type": "string", "description": "Stable identifier for dedup — same id reuses existing tab (action=tab, required)" },
                 "title": { "type": "string", "description": "Tab or notification title (action=tab/toast/confirm, required except settings proposal confirmation)" },
                 "proposalId": { "type": "string", "description": "Opaque backend-issued settings proposal (action=confirm). Displays the backend redacted diff; ignores supplied title/message. Human answer required; never accepts a confirmed flag." },
@@ -920,35 +930,55 @@ pub(crate) fn native_tool_catalog() -> Vec<serde_json::Value> {
         .collect()
 }
 
-/// Apply the two config-driven filters (`disabled_native_tools`,
-/// `progress_tracking`) to the full native tool list. Centralised so
-/// every listing/search path uses the same rules — adding a future config
-/// flag means editing one place instead of chasing duplicated closures.
-pub(super) fn filtered_native_tools(state: &Arc<AppState>) -> Vec<serde_json::Value> {
-    let (disabled, progress_tracking, settings_enabled) = {
-        let cfg = state.config.read();
-        let disabled: std::collections::HashSet<String> =
-            cfg.disabled_native_tools.iter().cloned().collect();
-        (disabled, cfg.progress_tracking, cfg.settings_mcp_enabled)
+/// Shared discovery/dispatch gate. Conditions describe owner configuration, not
+/// caller authority: conversation binding, registration and deployment consent
+/// remain enforced by the respective handlers.
+pub(super) fn native_tool_unavailability(state: &AppState, name: &str) -> Option<String> {
+    if state
+        .config
+        .read()
+        .disabled_native_tools
+        .iter()
+        .any(|tool| tool == name)
+    {
+        return Some(format!("Tool '{name}' is disabled by configuration"));
+    }
+    let reason = match name {
+        "remote" if !state.remote.has_connected_server() => "no connected remote server",
+        "voice" if !voice_configured() => "voice is not configured",
+        "telegram" if !crate::telegram::settings::configured() => "Telegram is not configured",
+        _ => return None,
     };
-    native_tool_definitions()
+    Some(format!("Tool '{name}' is unavailable: {reason}"))
+}
+
+fn voice_configured() -> bool {
+    // An unset engine resolves to Edge, so engine selection is not an opt-in.
+    // Read the persisted owner flags and fail closed on a missing/corrupt file.
+    std::fs::read(crate::config::config_dir().join("dictation-config.json"))
+        .ok()
+        .and_then(|bytes| serde_json::from_slice::<crate::config::DictationConfig>(&bytes).ok())
+        .is_some_and(|config| config.enabled && config.hands_free_spoken_replies)
+}
+
+/// Apply the same native availability gate used at dispatch to every catalogue.
+pub(super) fn filtered_native_tools(state: &Arc<AppState>) -> Vec<serde_json::Value> {
+    let (progress_tracking, settings_enabled) = {
+        let cfg = state.config.read();
+        (cfg.progress_tracking, cfg.settings_mcp_enabled)
+    };
+    native_validation_tool_definitions()
         .as_array()
         .cloned()
         .unwrap_or_default()
         .into_iter()
-        .filter(|t| {
-            let name = t["name"].as_str().unwrap_or("");
-            // The global half of `progress_tracking`. It is deliberately the
-            // global one and not the effective per-agent value: this list also
-            // feeds `searchable_tool_definitions`, which builds ONE cached index
-            // for every session, so a per-agent answer here would be whichever
-            // agent happened to trigger the last rebuild. The per-agent escape
-            // hatch is enforced where a report is recorded, which answers
-            // `progress_tracking_disabled` instead of hiding the tool.
-            if !progress_tracking && name == "progress" {
-                return false;
-            }
-            (name != "settings" || settings_enabled) && !disabled.contains(name)
+        .filter(|tool| {
+            let name = tool["name"].as_str().unwrap_or("");
+            // This index is shared across callers; per-agent progress policy
+            // remains enforced by the report owner rather than discovery.
+            (progress_tracking || name != "progress")
+                && (settings_enabled || name != "settings")
+                && native_tool_unavailability(state, name).is_none()
         })
         .filter_map(|mut tool| {
             if tool["name"] == "workflow" {
@@ -959,7 +989,8 @@ pub(super) fn filtered_native_tools(state: &Arc<AppState>) -> Vec<serde_json::Va
                     let action = variant["properties"]["action"]["const"]
                         .as_str()
                         .unwrap_or("");
-                    !workflow_member_tool(action).is_some_and(|member| disabled.contains(member))
+                    workflow_member_tool(action)
+                        .is_none_or(|member| native_tool_unavailability(state, member).is_none())
                 });
                 if variants.is_empty() {
                     return None;
@@ -970,6 +1001,7 @@ pub(super) fn filtered_native_tools(state: &Arc<AppState>) -> Vec<serde_json::Va
                     .collect();
                 tool["inputSchema"]["properties"]["action"]["enum"] = serde_json::json!(actions);
             }
+            super::mcp_input_contract::advertise_schema(&mut tool);
             Some(tool)
         })
         .collect()
@@ -1123,7 +1155,10 @@ pub(super) fn handle_search_tools_for_session(
 
     let ranked: Vec<serde_json::Value> = results
         .iter()
-        .filter(|e| e.name != "design_mode" || visible)
+        .filter(|e| {
+            (e.name != "design_mode" || visible)
+                && native_tool_unavailability(state, &e.name).is_none()
+        })
         .take(limit)
         .map(|e| serde_json::json!({ "name": e.name, "summary": e.summary }))
         .collect();
@@ -1170,6 +1205,9 @@ pub(super) fn handle_get_tool_schema_for_session(
         }
     };
 
+    if native_tool_unavailability(state, tool_name).is_some() {
+        return serde_json::json!({"error": format!("Tool '{tool_name}' not found. Use search_tools to discover available tools.")});
+    }
     let origin = super::mcp_transport_ancillary::resolve_mcp_origin_pty(state, mcp_session_id);
     if tool_name == "design_mode" && !crate::design_mode::mcp::visible_to(state, origin.as_deref())
     {

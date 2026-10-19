@@ -144,6 +144,8 @@ per cell and the configured history limit still apply.
 
 ### 1.0 Design Mode for agent terminals
 
+Agents can use `ui action=design_start/stop/status/reload/navigate/screenshot/errors/eval` with the same armed-recipient ownership and extension host grants. Existing Design Mode denials remain effective. The separate `design_mode` tool stays until the explicit catalogue cutover in story 2068.
+
 The extension sends a heartbeat every five seconds. A stale mode stops after 60 seconds without a heartbeat, or ten minutes after Start if the extension has not connected. Agents can request a page reload with `design_mode action=reload repo_path=<repoPath>`; the worker reloads the reviewed tab once per new sequence.
 
 Right-click an HTTP(S) terminal link (including localhost) and choose **Start in Design Mode**, then **Edge** or **Chrome**, to open that exact page with the terminal agent connected. Agent coordinators use `design_mode action=start session_id=<terminal> url=<page>` for layout work; stop uses the returned `repoPath`.
@@ -2361,6 +2363,7 @@ TUICommander aggregates upstream MCP servers and exposes them through its own `/
 - BM25 index backed by `AppState::tool_search_index` (rebuilds automatically when the tool set changes)
 - Settings native-tool switches and descriptions come from the backend MCP registry, including disabled tools; newly registered tools appear automatically. Every native tool can be disabled.
 - Safety filters (`disabled_native_tools`, upstream allow/deny) enforced at both discovery and dispatch time — agents cannot bypass filters by calling `call_tool` directly
+- Conditional tools share discovery and call gates: `remote` needs a connected remote server; `voice` needs enabled dictation and spoken replies; `telegram` needs enabled setup, a bot alias and its private token file. Owner changes notify clients to refresh the catalogue.
 - Toggling fires `notifications/tools/list_changed`; compatible connected clients refresh automatically, while clients that ignore the notification may require a reconnect
 
 ### 19.2 Tool Namespace

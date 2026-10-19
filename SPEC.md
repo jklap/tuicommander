@@ -1,5 +1,9 @@
 # TUICommander Specification
 
+UI Design Mode actions (#2067-e708): `ui design_start/stop/status/reload/navigate/screenshot/errors/eval` reuse the Design Mode owner, armed caller/repository checks and extension host grants. Saved `design_mode` denials apply to the grouped actions. The old tool remains until the pending 2068 catalogue cutover.
+
+
+Conditional MCP tools (#2066-516c, conditional portion of #2067-e708): remote requires a live authenticated connected server; voice requires persisted dictation enabled and spoken replies enabled; Telegram requires enabled setup, a bot alias and its private token file. Shared predicates gate listing, search, schema lookup and calls. Owner changes invalidate the catalogue. Configuration does not replace conversation binding, Telegram registration or deployment consent. Design Mode regrouping remains a separate cutover.
 - [x] Mobile CLI answers reuse the desktop answer planner and green gutter style instead of displaying protocol speech bubbles; prompts and fenced examples stay literal (#2070-773d).
 
 - [x] Native MCP Settings rows use domain sections without changing tool names, saved disabled values or effective denials (#2063-baa9).

@@ -24,6 +24,19 @@ impl Publisher {
 
 #[cfg(test)]
 mod tests {
+    // Catches: facade and legacy owner notices fail to invalidate the MCP catalogue.
+    #[test]
+    fn conditional_owner_settings_changes_notify_tools() {
+        let state = std::sync::Arc::new(crate::state::tests_support::make_test_app_state());
+        let mut notices = state.mcp.tools_changed.subscribe();
+        for section in ["voice", "telegram"] {
+            super::Publisher::new(&state).publish(section, true);
+            assert!(notices.try_recv().is_ok(), "{section}");
+        }
+        super::Publisher::new(&state).publish("appearance", true);
+        assert!(notices.try_recv().is_err());
+    }
+
     // Catches: background invalidation authority retaining the host or bypassing its shared publisher.
     #[test]
     fn background_publishers_use_host_generation_without_retaining_host() {
