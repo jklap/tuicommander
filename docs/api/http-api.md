@@ -835,6 +835,8 @@ one dropped frame corrupts every frame after it.
 GET /events?types=repo-changed,pty-parsed&stream_id=<uuid>
 ```
 
+Browser clients share one reference-counted stream per backend URL per page across `listen()` and `subscribeEvents()`. Consumer-specific filtering and cleanup do not create extra connections. Reconnect and late filter installation finish before consumer snapshot resync. Two mobile tabs use two SSE connections, leaving ordinary HTTP/1.1 capacity; an unlimited number of tabs is not guaranteed.
+
 Broadcasts server-side events to all browser/mobile clients. Supports optional `?types=` query parameter for comma-separated event name filtering. Omitting `types` asks for every event; sending it empty is an empty allowlist and delivers none. Uses monotonic event IDs and 15-second keep-alive pings.
 
 `stream_id` is a client-chosen id for the connection. With one, `types` is only the
