@@ -7,6 +7,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 - Add `agent task_get/task_cancel` using the existing task service, with spawning-owner checks, immutable final outcomes and cancellation that leaves the PTY running; retain the current `task` tool until the catalogue cutover (#2064-6385).
+- Group native MCP switches in Settings by domain, with separate rare and conditional sections; preserve tool names, saved denials and Settings opt-in (#2063-baa9).
 
 - Resolve ego session discovery through its per-PID index and held writer lease without scanning historical sessions; retain legacy lookup only when the index is absent (#2058-0d0e).
 
