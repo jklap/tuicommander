@@ -130,9 +130,11 @@ Evidence is under `~/Gits/.tmp/2043-live-20261019/`: screenshots
 `05-hidden-launch.png`, `06-hidden-return.png`, `07-stream-narrow.png`,
 `08-stream-wide.png`, and `09-stream-complete.png`, with matching JSON/grid
 and kernel files. `00-before.png` and `10-restored.png` record the surrounding
-UI state. Screenshots were captured from the desktop, but this agent had no
-image-view tool and did not visually inspect them. Thus no renderer-only
-visual pass is claimed. The asynchronous debug-log reader briefly returned an
+UI state. The coordinator inspected these full-screen captures and found
+other windows, not the TUIC terminal. These screenshots provide no terminal
+paint evidence. The kernel/grid measurements remain valid. This agent had no
+image-view tool and did not visually inspect them; no renderer-only visual
+pass is claimed. The asynchronous debug-log reader briefly returned an
 older result for stages 06 and 09; their JSON files were replaced with the
 completed, timestamped result before reporting.
 
@@ -143,6 +145,44 @@ are null (no split). The debug layout snapshot still reports an unreferenced
 `g1` entry naming the removed test tab. This residual snapshot/state is noted,
 not silently presented as an exact restoration of the original empty groups
 map. No production code, installed binary, or running desktop was changed.
+
+## Canvas export follow-up, 2026-10-19
+
+At the coordinator's request, variants 1 and 3 were repeated in a new throwaway
+session, `111648d9-faa2-4533-b592-c5780d7279a2` (`term-1037`). Captures now
+come directly from the visible CanvasTerminal base canvas's
+`toDataURL("image/png")`, not the desktop. The capture requires exactly one
+visible terminal canvas. A temporary loopback collector decoded the PNG and
+saved it with the same invocation's grid/geometry metadata. No UI state or
+canvas drawing was changed by this export.
+
+Files are under `~/Gits/.tmp/2043-live-20261019/canvas/`:
+
+| PNG | CSS width | Grid columns | Kernel rows × columns | PNG dimensions |
+| --- | ---: | ---: | --- | --- |
+| `v1-narrow.png` | 638 | 79 | 63 × 79 | 1276 × 2520 |
+| `v1-wide.png` | 1582 | 197 | 63 × 197 | 3164 × 2520 |
+| `v1-return.png` | 1582 | 197 | 62 × 197 | 3164 × 2480 |
+| `v3-narrow.png` | 638 | 79 | 62 × 79 | 1276 × 2480 |
+| `v3-wide.png` | 1582 | 197 | 62 × 197 | 3164 × 2480 |
+| `v3-return.png` | 1582 | 197 | 62 × 197 | 3164 × 2480 |
+
+Each PNG has matching JSON and kernel text. `summary.json` records timestamps,
+PNG hashes and dimensions. Variant 1 widened a completed narrow answer, then
+switched to a document tab and back without removing the split. Variant 3
+started a new answer at narrow width, moved the divider rapidly while it was
+streaming, then switched away and back. The wide and return PNGs for variant 3
+have identical SHA-256 hashes. Wide grid composer rules reach index 196; no
+kernel/grid mismatch was reproduced. Paint interpretation is left to the
+coordinator, who can view these actual canvas exports.
+
+The temporary collector was stopped. The throwaway PTY and Claude process
+were closed and verified absent. The original `term-904` selection was restored
+without restarting the desktop. During the experiment an unrelated managed
+peer, `term-1038` (`critic-polish-layout`), was auto-assigned to the same pane
+group. It was preserved: the final tree has one leaf, no split, containing
+that unrelated peer rather than an empty/null layout. `canvas/restored.json`
+records this state. No production change or failing regression is claimed.
 
 ## Remaining gap
 
