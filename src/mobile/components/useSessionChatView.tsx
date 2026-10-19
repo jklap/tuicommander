@@ -21,7 +21,10 @@ export function useSessionChatView(props: {
 		modes.set(props.sessionId(), next);
 		setMode(next);
 	};
-	const available = () => (props.agentType() === "claude" || props.agentType() === "ego") && props.sessionExists();
+	// SessionInfo has no transcript binding: chat_view_snapshot remains the authority.
+	const available = () =>
+		(props.agentType() === "claude" || props.agentType() === "codex" || props.agentType() === "ego") &&
+		props.sessionExists();
 	createEffect(() => {
 		if (mode() === "chat" && !available()) {
 			chatViewStore.markUnavailable(props.sessionId(), "No agent is running in this terminal");
