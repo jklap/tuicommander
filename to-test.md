@@ -1,3 +1,7 @@
+## Ego PID index (2058-0d0e) — Rust restart required
+
+- [ ] After Boss manually restarts `make dev` or installs `make build`, confirm an ego terminal discovers its active conversation through the PID index. The live backend does not hot-reload Rust. This peer did not restart or change the installed desktop instance.
+
 ## ego Chat export diagnostics (2032-8dc3) — Rust restart required
 
 - [ ] After Boss manually restarts `make dev` or installs `make build`, verify an incompatible configured ego executable reports its path and failed export status. For the retained live failure, Settings points to `/Users/stefano.straus/bin/ego`, which rejects `--after`; select the transcript-capable `/Users/stefano.straus/.local/bin/ego`, then open Chat on a bound local ego session. Confirm the completed answer is shown and Chat stays open. This peer did not alter Settings, replace a binary, restart the app, or call desktop MCP tools.

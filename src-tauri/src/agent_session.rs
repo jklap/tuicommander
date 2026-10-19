@@ -994,6 +994,8 @@ fn ego_sessions_dir(ego_home: Option<&str>) -> Option<PathBuf> {
 
 #[cfg(test)]
 thread_local! {
+    static EGO_INDEX_READS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    static EGO_SESSION_SCANS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     static EGO_LEASE_READS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
@@ -1031,12 +1033,48 @@ type EgoBindings = HashMap<(PathBuf, u32), String>;
 static EGO_BINDINGS: std::sync::LazyLock<parking_lot::Mutex<EgoBindings>> =
     std::sync::LazyLock::new(|| parking_lot::Mutex::new(HashMap::new()));
 
-/// Resolve a lease pid exactly, choosing the latest heartbeat on a scan.
+#[derive(serde::Deserialize)]
+struct EgoPidIndex {
+    pid: u32,
+    session_id: String,
+}
+
+/// Resolve an indexed pid against its held lease, or scan for older ego versions.
+/// An invalid index fails closed; only an absent index permits the legacy scan.
 /// Only a held writer lease can validate a cached binding: ego leaves the file
 /// after exit and writes its heartbeat only at acquisition, so matching stale
 /// pid text would otherwise hide pid reuse or an in-process session switch.
 fn ego_session_for_pid(sessions_dir: &Path, pid: u32) -> Option<String> {
     let key = (sessions_dir.to_path_buf(), pid);
+    let index_path = sessions_dir
+        .parent()?
+        .join("pids")
+        .join(format!("{pid}.json"));
+    #[cfg(test)]
+    EGO_INDEX_READS.with(|reads| reads.set(reads.get() + 1));
+    match std::fs::read(index_path) {
+        Ok(contents) => {
+            // The index is a locator, never liveness evidence. Read it before
+            // the cache so an active session switch cannot return the old id.
+            EGO_BINDINGS.lock().remove(&key);
+            let index: EgoPidIndex = serde_json::from_slice(&contents).ok()?;
+            if index.pid != pid || !is_uuid(&index.session_id) {
+                return None;
+            }
+            let (lease, held) =
+                read_ego_lease(&sessions_dir.join(&index.session_id).join("lease"))?;
+            if lease.pid != pid || !held {
+                return None;
+            }
+            EGO_BINDINGS.lock().insert(key, index.session_id.clone());
+            return Some(index.session_id);
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(_) => {
+            EGO_BINDINGS.lock().remove(&key);
+            return None;
+        }
+    }
     let cached = EGO_BINDINGS.lock().get(&key).cloned();
     if let Some(session) = cached {
         if let Some((lease, true)) = read_ego_lease(&sessions_dir.join(&session).join("lease"))
@@ -1047,6 +1085,8 @@ fn ego_session_for_pid(sessions_dir: &Path, pid: u32) -> Option<String> {
         EGO_BINDINGS.lock().remove(&key);
     }
 
+    #[cfg(test)]
+    EGO_SESSION_SCANS.with(|scans| scans.set(scans.get() + 1));
     let (_, session, held) = std::fs::read_dir(sessions_dir)
         .ok()?
         .flatten()
@@ -1336,6 +1376,126 @@ mod tests {
             );
         }
         file
+    }
+
+    fn write_ego_pid_index(home: &Path, pid: u32, session: &str) {
+        fs::create_dir_all(home.join("pids")).unwrap();
+        fs::write(
+            home.join("pids").join(format!("{pid}.json")),
+            serde_json::json!({"pid": pid, "session_id": session, "cwd": home}).to_string(),
+        )
+        .unwrap();
+    }
+
+    /// Catches: cold discovery still enumerating all historical sessions.
+    #[test]
+    fn ego_pid_index_binds_without_listing_sessions() {
+        let home = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+        let sessions = home.path().join("sessions");
+        fs::create_dir_all(sessions.join(EGO_A)).unwrap();
+        fs::write(
+            sessions.join(EGO_A).join("lease"),
+            r#" {"pid":111,"heartbeat":5}"#,
+        )
+        .unwrap();
+        let _held = hold_ego_lease(&sessions.join(EGO_A).join("lease"));
+        write_ego_pid_index(home.path(), 111, EGO_A);
+        EGO_SESSION_SCANS.with(|scans| scans.set(0));
+        EGO_LEASE_READS.with(|reads| reads.set(0));
+        assert_eq!(ego_session_for_pid(&sessions, 111).as_deref(), Some(EGO_A));
+        assert_eq!(
+            EGO_SESSION_SCANS.with(|scans| scans.get()),
+            0,
+            "indexed lookup listed sessions"
+        );
+        assert_eq!(EGO_LEASE_READS.with(|reads| reads.get()), 1);
+    }
+
+    /// Catches: a stale index binding a recycled pid through the legacy scan.
+    #[test]
+    fn stale_ego_pid_index_is_rejected() {
+        let home = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+        let sessions = home.path().join("sessions");
+        for (id, pid) in [(EGO_A, 222), (EGO_B, 111)] {
+            fs::create_dir_all(sessions.join(id)).unwrap();
+            fs::write(
+                sessions.join(id).join("lease"),
+                format!(r#" {{"pid":{pid},"heartbeat":5}}"#),
+            )
+            .unwrap();
+        }
+        let _held = hold_ego_lease(&sessions.join(EGO_A).join("lease"));
+        let _other = hold_ego_lease(&sessions.join(EGO_B).join("lease"));
+        write_ego_pid_index(home.path(), 111, EGO_A);
+        assert_eq!(ego_session_for_pid(&sessions, 111), None);
+    }
+
+    /// Catches: malformed indexes, unheld writers or replaced indexes reviving
+    /// a cached session or silently selecting an unrelated legacy candidate.
+    #[test]
+    fn ego_pid_index_fails_closed_and_tracks_active_session_switches() {
+        let home = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+        let sessions = home.path().join("sessions");
+        for id in [EGO_A, EGO_B] {
+            fs::create_dir_all(sessions.join(id)).unwrap();
+            fs::write(
+                sessions.join(id).join("lease"),
+                r#" {"pid":111,"heartbeat":5}"#,
+            )
+            .unwrap();
+        }
+        let held = hold_ego_lease(&sessions.join(EGO_A).join("lease"));
+        let other = hold_ego_lease(&sessions.join(EGO_B).join("lease"));
+        write_ego_pid_index(home.path(), 111, EGO_A);
+        assert_eq!(ego_session_for_pid(&sessions, 111).as_deref(), Some(EGO_A));
+        write_ego_pid_index(home.path(), 111, EGO_B);
+        assert_eq!(ego_session_for_pid(&sessions, 111).as_deref(), Some(EGO_B));
+        drop(other);
+        assert_eq!(ego_session_for_pid(&sessions, 111), None);
+        for contents in [
+            "broken".to_string(),
+            serde_json::json!({"pid": 222, "session_id": EGO_A}).to_string(),
+            serde_json::json!({"pid": 111, "session_id": "../escape"}).to_string(),
+        ] {
+            fs::write(home.path().join("pids/111.json"), contents).unwrap();
+            assert_eq!(ego_session_for_pid(&sessions, 111), None);
+        }
+        drop(held);
+    }
+
+    /// Catches: the index fast path diverging from real ego writer files.
+    /// Captured from native ego 584; replay its held writer lock on this host.
+    #[test]
+    fn ego_pid_index_real_writer_opens_only_index_and_lease() {
+        let home = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+        let index_bytes = include_bytes!("fixtures/ego_pid_index/pid.json");
+        let index: serde_json::Value = serde_json::from_slice(index_bytes).unwrap();
+        let pid = index["pid"].as_u64().unwrap() as u32;
+        let expected = index["session_id"].as_str().unwrap();
+        let lease_path = home.path().join("sessions").join(expected).join("lease");
+        fs::create_dir_all(lease_path.parent().unwrap()).unwrap();
+        fs::create_dir_all(home.path().join("pids")).unwrap();
+        fs::write(
+            home.path().join("pids").join(format!("{pid}.json")),
+            index_bytes,
+        )
+        .unwrap();
+        fs::write(
+            &lease_path,
+            include_bytes!("fixtures/ego_pid_index/lease.json"),
+        )
+        .unwrap();
+        let _held = hold_ego_lease(&lease_path);
+        EGO_INDEX_READS.with(|reads| reads.set(0));
+        EGO_LEASE_READS.with(|reads| reads.set(0));
+        EGO_SESSION_SCANS.with(|scans| scans.set(0));
+        assert_eq!(
+            ego_session_for_pid(&home.path().join("sessions"), pid).as_deref(),
+            Some(expected)
+        );
+        assert_eq!(EGO_INDEX_READS.with(|reads| reads.get()), 1);
+        assert_eq!(EGO_LEASE_READS.with(|reads| reads.get()), 1);
+        assert_eq!(EGO_SESSION_SCANS.with(|scans| scans.get()), 0);
     }
 
     /// Catches: a released old lease retaining a recycled pid after another

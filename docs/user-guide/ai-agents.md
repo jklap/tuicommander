@@ -20,6 +20,10 @@ Aider is no longer an agent harness. An `aider` command runs as a plain terminal
 | pi | `pi` | `pi --continue` | — |
 | ego (terminal CLI) | `ego` | `ego resume` | `ego resume <discovered id>` |
 
+Ego session discovery uses its per-PID index and validates the active writer
+lease. Older ego versions without this index retain lease-based discovery.
+Invalid index entries never select another conversation.
+
 ### Claude MCP profiles
 
 At startup, the primary TUICommander instance repairs its MCP bridge in the

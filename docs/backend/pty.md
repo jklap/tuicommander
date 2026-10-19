@@ -1033,8 +1033,12 @@ An incompatible executable that refuses `--after` returns an export failure with
 its configured path and status, not a misleading transcript-format error. A
 successful empty export still reports the missing v1 header.
 
-The foreground ego PID is matched to `lease.pid` in the process-owned
-`EGO_HOME/sessions`; no newest-file fallback is used. A failed environment read
+The foreground ego PID first resolves through the process-owned
+`EGO_HOME/pids/<pid>.json`. The indexed UUID must have a held writer lease
+with the same PID under `EGO_HOME/sessions`. A corrupt, mismatched or unlocked
+index target fails closed; only an absent index uses the legacy lease scan.
+The root/PID cache still validates held leases for older ego versions.
+No newest-file fallback is used. A failed environment read
 fails closed rather than selecting the host's default ego store. The configured
 absolute ego executable reads the bound session through the published local
 transcript v1 command, `ego export SESSION --format transcript --after SEQ`.
