@@ -114,21 +114,6 @@ exact framing is in
 - **Local network only** — The server binds to your machine's IP; it's not exposed to the internet unless you configure port forwarding (don't do this without a VPN)
 - **Browser request protection** — The HTTP listener rejects foreign Origin headers and unknown Host names before authentication. Use its literal IP or detected Tailscale FQDN; browser/PWA requests from that same server and bundled/development WebViews remain supported. CORS does not allow arbitrary websites.
 
-### Reading a file outside your registered repositories
-
-The desktop app can open any file you can see, but a browser/remote/PWA client
-is a narrower-trust caller: opening an absolute file path (a Markdown/plan-file
-link, or a file opened directly in the code editor) is gated to your
-**registered repositories**, plus any directory you've explicitly added under
-**Settings → Remote Access → File Access → Additional Readable Directories**.
-`~/.claude/plans` is included by default, so a Claude Code plan-file link an
-agent printed opens with no extra setup. If you click a link elsewhere and see
-a friendly "outside your registered repositories and allowed directories"
-message instead of the file, add that file's folder to the same setting. This
-only affects **reading** files over HTTP — it never widens what a remote
-client can write, copy, or move; those stay confined to registered repository
-roots regardless of this setting.
-
 ## MCP HTTP Server
 
 Separate from remote access, TUICommander runs an **HTTP API server** for AI tool integration:
@@ -471,9 +456,11 @@ They live on **Settings → Remote Servers** (the separate Remote Machines page 
    accept a shell login)
 2. Set **Kind** to **Remote Server — SSH**
 3. Configure the host, port (default 22), user and optional identity file — the
-   same SSH fields as a tunnel. **StrictHostKeyChecking** is fixed to
-   `AcceptNew` here: the tunnel TUICommander opens on your behalf always accepts a
-   new host's key on first contact and refuses a changed one
+   same SSH fields as a tunnel. **StrictHostKeyChecking** defaults to
+   `AcceptNew` (accept a new host's key on first contact, refuse a changed one);
+   pick `Yes` to refuse any host whose key is not already in `~/.ssh/known_hosts`
+   (connect once with plain `ssh` first). Every SSH command TUICommander runs for
+   the server honours the choice
 4. Set the remote daemon port (default 9877)
 5. Choose **Never deploy**, **Deploy on connect**, or **Installed service**, and
    set how many minutes an ephemeral daemon should survive with no client
@@ -1138,6 +1125,8 @@ Missing or invalid PEM files stop startup before any listener binds; there is no
 plaintext fallback. With `mode: "off"` (the default), the port serves plain HTTP.
 Startup logs report the bound listener mode, and `tls_active` reflects the live
 TLS listener rather than the presence of certificate configuration.
+
+Both HTTP and HTTPS are served on the same port (no forced redirect) once a manual cert is configured.
 
 ### Differences from Desktop Remote Access
 
