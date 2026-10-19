@@ -12,8 +12,7 @@ impl IdentityTerminal {
         // relocated Apple platform binary, and a protected Apple executable
         // does not expose its environment to sysctl. It blocks on its PTY
         // stdin like cat.
-        let executable =
-            tuic_test_support::install_identity_probe(scratch.path(), "identity-cat");
+        let executable = tuic_test_support::install_identity_probe(scratch.path(), "identity-cat");
         let pair = portable_pty::native_pty_system()
             .openpty(PtySize::default())
             .unwrap();

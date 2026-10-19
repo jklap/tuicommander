@@ -2331,7 +2331,10 @@ fn cctitle_and_ccend_payloads_drop_control_characters() {
         &state,
     );
     let entry = state.session_maps.session_states.get(session_id).unwrap();
-    assert_eq!(entry.agent_session_title.as_deref(), Some("Fix[31m thebuild"));
+    assert_eq!(
+        entry.agent_session_title.as_deref(),
+        Some("Fix[31m thebuild")
+    );
     assert_eq!(entry.agent_session_end_reason.as_deref(), Some("logout"));
     assert_eq!(
         crate::pty::cap_agent_metadata_len("plain title".to_string()),

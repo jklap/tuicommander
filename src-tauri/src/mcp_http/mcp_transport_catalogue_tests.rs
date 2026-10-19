@@ -252,7 +252,10 @@ fn marker_flags_for_agent_and_rule_cannot_be_widened_by_either_side() {
     );
 
     // An agent type with no entry in agents.json follows the global toggle alone.
-    assert_eq!(marker_flags_for_agent(&state, Some("codex")), (false, false));
+    assert_eq!(
+        marker_flags_for_agent(&state, Some("codex")),
+        (false, false)
+    );
 }
 
 // --- the voice tool (817-f67c) ---
@@ -1506,9 +1509,7 @@ fn instructions_messaging_disabled_keeps_spawn_but_omits_messaging_guidance() {
 
     // Spawn guidance stays.
     assert!(out.contains("- **Prefer TUICommander for peers/teams:**"));
-    assert!(
-        out.contains("- **Same repo:** TUIC `agent action=spawn` peers to work in this repo.")
-    );
+    assert!(out.contains("- **Same repo:** TUIC `agent action=spawn` peers to work in this repo."));
     assert!(out.contains("- **Isolated branches:**"));
 
     // Messaging guidance is gone.
@@ -2577,7 +2578,8 @@ fn repos_render_as_one_count_line_with_group_and_connection_counts() {
         "{out}"
     );
     assert!(out.contains("`repo action=list`"));
-    let collapsed = render_mcp_instructions(None, true, (true, true), true, &ctx, &default_tool_gates());
+    let collapsed =
+        render_mcp_instructions(None, true, (true, true), true, &ctx, &default_tool_gates());
     assert!(collapsed.contains("call_tool tool_name=repo arguments={action:list}"));
 }
 
@@ -2632,7 +2634,14 @@ fn capability_map_names_exactly_the_registered_tools_and_upstreams() {
         upstreams: vec![("quill".into(), 4), ("maccontrol".into(), 7)],
         ..Default::default()
     };
-    let out = render_mcp_instructions(Some("claude-code"), false, (true, true), true, &ctx, &default_tool_gates());
+    let out = render_mcp_instructions(
+        Some("claude-code"),
+        false,
+        (true, true),
+        true,
+        &ctx,
+        &default_tool_gates(),
+    );
     for name in &registered {
         assert!(out.contains(&format!("`{name}`")), "{name} missing: {out}");
     }
@@ -2645,9 +2654,11 @@ fn capability_map_names_exactly_the_registered_tools_and_upstreams() {
     assert!(out.contains("`quill` (4 tools), `maccontrol` (7 tools)"));
     assert!(out.contains("ToolSearch"));
     assert!(out.contains("urgency=urgent"));
-    let collapsed = render_mcp_instructions(None, true, (true, true), true, &ctx, &default_tool_gates());
+    let collapsed =
+        render_mcp_instructions(None, true, (true, true), true, &ctx, &default_tool_gates());
     assert!(collapsed.contains("`search_tools query=<server>`"));
-    let plain = render_mcp_instructions(None, false, (true, true), true, &ctx, &default_tool_gates());
+    let plain =
+        render_mcp_instructions(None, false, (true, true), true, &ctx, &default_tool_gates());
     assert!(plain.contains("<server>__<tool>"));
     assert!(!plain.contains("ToolSearch"));
 }
@@ -2667,7 +2678,8 @@ fn no_upstreams_means_no_upstream_line_and_no_tools_means_no_map() {
         false,
         (true, true),
         true,
-        &InstructionContext::default(), &default_tool_gates()
+        &InstructionContext::default(),
+        &default_tool_gates(),
     );
     assert!(!bare.contains("## What TUIC gives you"));
 }
@@ -2731,9 +2743,17 @@ fn instructions_with_forty_repos_and_six_upstreams_are_smaller_than_before() {
             collapse,
             (true, true),
             true,
-            &InstructionContext::default(), &default_tool_gates()
+            &InstructionContext::default(),
+            &default_tool_gates(),
         );
-        let new = render_mcp_instructions(None, collapse, (true, true), true, &ctx, &default_tool_gates());
+        let new = render_mcp_instructions(
+            None,
+            collapse,
+            (true, true),
+            true,
+            &ctx,
+            &default_tool_gates(),
+        );
         assert!(
             new.len() < bare.len() + old_repos_section.len(),
             "collapse={collapse}: {} >= {}",
@@ -2794,7 +2814,14 @@ fn instructions_make_no_claim_about_the_user_or_the_platform() {
     };
     for collapse in [false, true] {
         for client in [None, Some("claude-code")] {
-            let out = render_mcp_instructions(client, collapse, (true, true), true, &ctx, &default_tool_gates());
+            let out = render_mcp_instructions(
+                client,
+                collapse,
+                (true, true),
+                true,
+                &ctx,
+                &default_tool_gates(),
+            );
             // Whole words: wip's measured agent-teams wording says "throwaway".
             let words: Vec<&str> = out.split(|c: char| !c.is_alphanumeric()).collect();
             for banned in ["away", "Mac"] {
@@ -2942,7 +2969,8 @@ fn launch_capable_clients_receive_no_duplicate_playbook() {
             false,
             (true, true),
             true,
-            &InstructionContext::default(), &default_tool_gates()
+            &InstructionContext::default(),
+            &default_tool_gates(),
         );
         assert!(!text.contains("Output Markers"), "{name}: {text}");
         assert!(!text.contains("**Submit:**"));
@@ -3339,7 +3367,14 @@ fn instructions_name_tools_unambiguously() {
             .find(|name| name.ends_with("__agent") || name.ends_with(".agent"))
             .expect("capture must include the real client's qualified agent tool");
         for collapsed in [false, true] {
-            let out = render_mcp_instructions(Some(client), collapsed, (true, true), true, &ctx, &default_tool_gates());
+            let out = render_mcp_instructions(
+                Some(client),
+                collapsed,
+                (true, true),
+                true,
+                &ctx,
+                &default_tool_gates(),
+            );
             assert!(
                 out.contains(agent),
                 "{client} cannot find its exposed {agent}: {out}"
