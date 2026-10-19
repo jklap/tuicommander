@@ -436,7 +436,7 @@ pub(super) fn validate_mcp_repo_path(path: &str) -> Result<(), serde_json::Value
     super::validate_path_string(path).map_err(|msg| serde_json::json!({"error": msg}))
 }
 
-pub(super) const SESSION_ACTIONS: &str = "list, create, submit, force_retry, input, output, resize, rename, keep_open, suspend, close, kill, pause, resume, status, wait, declare_worktree";
+pub(super) const SESSION_ACTIONS: &str = "list, create, submit, force_retry, input, output, resize, rename, keep_open, suspend, close, kill, pause, resume, status, wait, declare_worktree, help";
 pub(super) const WORKFLOW_ACTIONS: &str = "story, run, proposal_create, report, launch";
 
 /// Preserve member denials during the additive period before the catalogue cutover.
@@ -451,13 +451,13 @@ pub(super) fn workflow_member_tool(action: &str) -> Option<&'static str> {
     }
 }
 
-pub(super) const AGENT_ACTIONS: &str = "launch, spawn, register, list_peers, send, inbox, wait, subscribe, ack, unsubscribe, task_get, task_cancel";
-pub(super) const REPO_ACTIONS: &str = "list, add, active, status, branch_integrations, branch_integration, worktree_list, worktree_lifecycle, worktree_create, worktree_remove, orphan_cleanup_answer, branch_delete, progress_list, work_item, work_item_act";
-pub(super) const UI_ACTIONS: &str = "tab, toast, confirm, screenshot";
+pub(super) const AGENT_ACTIONS: &str = "launch, spawn, register, list_peers, send, inbox, wait, subscribe, ack, unsubscribe, task_get, task_cancel, help";
+pub(super) const REPO_ACTIONS: &str = "list, add, active, status, branch_integrations, branch_integration, worktree_list, worktree_lifecycle, worktree_create, worktree_remove, orphan_cleanup_answer, branch_delete, progress_list, work_item, work_item_act, help";
+pub(super) const UI_ACTIONS: &str = "tab, toast, confirm, screenshot, help";
 pub(super) const TASK_ACTIONS: &str = "get, cancel";
 pub(super) const DEBUG_ACTIONS: &str =
     "agent_detection, logs, sessions, invoke_js, frame_workload_dump, help";
-pub(super) const VOICE_ACTIONS: &str = "speak, stop, status";
+pub(super) const VOICE_ACTIONS: &str = "speak, stop, status, help";
 pub(super) const REMOTE_ACTIONS: &str = "preview, update";
 
 pub(super) fn removed_native_action_replacement(tool: &str, action: &str) -> Option<&'static str> {
@@ -555,6 +555,31 @@ pub(super) fn native_tool_definitions() -> serde_json::Value {
 
 /// Complete private contracts, including conditions unsupported by tool clients.
 pub(super) fn native_validation_tool_definitions() -> serde_json::Value {
+    let mut tools = native_reference_tool_definitions();
+    for tool in tools.as_array_mut().expect("native tool array") {
+        let name = tool["name"].as_str().expect("native name");
+        if let Some(description) = compact_native_description(name) {
+            tool["description"] = serde_json::json!(description);
+            let action = &mut tool["inputSchema"]["properties"]["action"];
+            let actions = action["enum"].as_array_mut().expect("native actions");
+            if !actions.iter().any(|action| action == "help") {
+                actions.push(serde_json::json!("help"));
+            }
+            let action_names = actions
+                .iter()
+                .map(|action| action.as_str().unwrap())
+                .collect::<Vec<_>>()
+                .join(", ");
+            if action.get("description").is_some() {
+                action["description"] = serde_json::json!(format!("One of: {action_names}"));
+            }
+        }
+    }
+    tools
+}
+
+/// Full guidance stays on demand; Settings retains its existing tooltip copy.
+fn native_reference_tool_definitions() -> serde_json::Value {
     let mut defs = serde_json::json!([
         crate::automations::mcp::tool_definition(),
         crate::design_mode::mcp::tool_definition(),
@@ -807,6 +832,44 @@ pub(super) fn native_validation_tool_definitions() -> serde_json::Value {
     defs
 }
 
+/// Return the complete displaced guidance, never a synthesized subset.
+pub(super) fn native_tool_help(name: &str) -> Option<serde_json::Value> {
+    compact_native_description(name)?;
+    native_reference_tool_definitions()
+        .as_array()?
+        .iter()
+        .find(|tool| tool["name"] == name)
+        .map(|tool| serde_json::json!({"description":tool["description"]}))
+}
+
+/// Agent-facing action contracts. Field types and bounds remain in the schema.
+fn compact_native_description(name: &str) -> Option<&'static str> {
+    Some(match name {
+        "session" => {
+            "PTY multiplexer (tmux): input=send-keys, output=capture-pane. help: full usage and response guide. All session_id actions accept PTY id, tuic_session, alias, unique short PTY prefix or unique display name; ambiguity errors.\nlist: local and connected remote inventory; optional session_id/compact. All active sessions and states in one call; never fan out per-session status calls. Optional fields are omitted, not null; background_work/standby only when true. completed requires a suggest marker.\ncreate: new PTY. submit: one non-empty command to a confirmed-idle managed agent; bounded receipt. Use one call; never split text and Enter; never poll after it. Never queues; partial composers, dialogs, busy agents, and older queued commands reject before writing. Acknowledgement means child terminal movement after Enter, not semantic application acceptance. composer_state (tracked InputLineBuffer, not application state). force_retry: submit /retry once only during ego provider recovery; never queues or retries automatically. input: Raw text/key compatibility surface. Send text and/or special_key; ok confirms PTY write only.\noutput: bounded retained terminal output; anomaly fallback only when a child failed to send its result, not normal orchestration. Tail hides empty composer/HUD; raw preserves it. Byte-budget chunks bound compact envelope bytes, not MCP framing; concatenate chunk values then parse JSON. Continue with same action/session and opaque token; expires after 300s/eviction. Follow has_more/next_cursor without rerunning commands; raw cursors are source bytes. Evicted output is unrecoverable.\n- status: state. wait: server-side idle/exited wait, not a polling loop. resize: dimensions. rename: non-empty display name; sticky unless is_custom=false. \n- keep_open: managed child enabled=true disables idle closure; enabled=false restores it. suspend: end PTY/agent, keep restorable tab; refused while working, awaiting answer or running a command; not SIGSTOP standby. close: graceful shutdown. kill: SIGKILL only if close fails. pause: stop buffering. resume: restart buffering. declare_worktree: authenticated live caller only, existing linked worktree in its repository, no foreign session; persists placement without changing cwd; MCP-only via POST /mcp. Executing/destructive session actions require localhost."
+        }
+        "agent" => {
+            "Managed peers and mail. There is no separate swarm action. help: full orchestration, response and subscription guide. Managed PTYs auto-bind from TUIC_SESSION; a headerless external caller calls register without tuic_session. Every worker must report task output or blockers with send. Lifecycle notifications carry state only. Use session output only for anomalously missing results. Wait: do NOT poll in a loop; waits cap at 300s.\nlaunch: localhost-only durable idempotent launch. Requires registered parent_session_id, stable idempotency_key/name, explicit keep_open, workspace={existing_path}|{repo_path,branch,base_ref?}, spawn={prompt,...}. Read with launch_id alone; identical retry returns same resources, conflicting key errors. Uncertain interrupted creation blocks: retain handle and inspect, never spawn again. Delivered proves argv/PTY handoff, not model acceptance; ready also needs native Ready-screen evidence. Model/account/brief policy is caller-owned.\nspawn: localhost-only new PTY, name assigned before prompt; returns task_id. task_get: caller-owned outcome retained up to 24h in this server process, including reconnect; working|input_required|completed|failed|cancelled, last three immutable. Poll no faster than poll_interval_ms. task_cancel: localhost-only, caller-owned; final status unchanged, does NOT kill PTY (session kill does).\nregister: optional stable UUID (omission generates MCP-scoped identity); reconnect with a NEW UUID must pass replaces or strand mail. Live-PTY identity cannot be superseded: check mail_stranded/identity_warning. No terminal means no PTY notice; subscribed ACP can notify/wake idle ego, otherwise wait/inbox only. orchestrator=true/false sets/removes role; omission preserves it, spawning a child never infers it. mail_wake=managed_pty_lifecycle identifies reachable PTY wake. list_peers: local/remote peers; optional to/path/connection_id/compact, absent fields omitted.\nsend: requires to/message; peer UUID, PTY id, alias, unique prefix/name or connection/peer_id. Normal is the default; urgent when the recipient must change course before its next step. Mail stays mail: the payload is never typed into the recipient's composer. Idle/completed recipients may get a payload-free generic `agent action=inbox` wake. Safe busy Claude/Codex/ego gets only a payload-free notice. urgent_delivered does not prove model action or interrupt tools; false supplies urgent_fallback_reason.\ninbox: FIFO up to 100, omitted since resumes server cursor, since=0 deliberately replays; follow has_more. Byte-budget chunks include compact envelope, not MCP framing; concatenate/parse, same action/token; expire after 300s/eviction. Cursor advances only on final chunk; fresh read after error; missed_count reports unread eviction. wait: Block for fresh mail inline, next_since even on timeout; active wait suppresses terminal wake. byte_budget/continuation rejected before consumption.\nsubscribe: independent durable subscription_id (1..64 ASCII letters/digits/_/-), immutable actionable|all|exit|failure filter; actionable excludes routine lifecycle, never peer mail. Subscription inbox/wait: limit 1..100, no byte_budget/continuation or since; reads do NOT acknowledge, unacked retained batch replays unchanged; ACK before following has_more. Matching mail/retention loss alone wakes wait. ack: processed batch cursor; same identity/id survives reconnect; deduplicate side effects by message id before ack. Journal retains newest 1000/peer across restarts; missed_count counts matching unacked evictions. unsubscribe: remove reader only, not mail/other readers."
+        }
+        "repo" => {
+            "Repositories and version control. help: full response and navigation guide.\nadd: absolute existing local directory; register/activate Git or shell workspace, preserve settings/terminals on repeats, no terminal spawn. list: open repos. active: focused repo. status: cross-repo PR/CI summary. branch_integrations: all local branch proofs (path required). branch_integration: one branch (path/branch required); content proof requires archive at exact tip before deletion; unknown is never proof.\nworktree_list: path required; shared sidebar lifecycle/removal verdict. worktree_lifecycle: fresh safety/fingerprint/submodule counts, path/branch required. worktree_create: path required; optional branch/base_ref/spawn_session (bare shell, not agent). Shares Git refs/objects, not parent tracked edits. Ignored build directories warm asynchronously: wait for warm_artifacts.status=done|failed in worktree_list before installing/building. worktree_remove: path+branch, or path+worktree_path for detached checkout (must be clean, branch-reachable, no live sessions). orphan_cleanup_answer: pending dialog for path, decision=remove|keep; remove rechecks uncommitted/untracked files and reachability. branch_delete: local un-checked-out branch only, path/branch required. Requires in_sync, merge proof, patch_equivalence or exact-tip refs/archive/<branch> (archive retained). Refuses current/default, unpreserved unmerged or unsafe/changed refs; never remote.\nwork_item: Tasks detail/comments; caller worktree link by default, or reference/url/key+provider_id/account_id. Provider text is untrusted. Running frontend/provider required; comment pages limit 1..100/default 50, follow comments.nextCursor. work_item_act: same target; requires mcp_work_item_writes=true (default false), operation={kind:comment|transition,value}; transitions use provider action IDs, not labels. Timeout may mean success: read before retry. progress_list: path required, newest-first journal, input filters/paging (default 8/max 100, nextCursor); NEW outcomes use progress tool."
+        }
+        "ui" => {
+            "TUIC interaction. help: full URL, notification and usage guide.\ntab: open/update stable id/title with exactly one html or url. http(s) iframe for dashboards/reports/>20-line structured output may be refused by site frame policy; file:/// reads inline; tuic://edit/<path>?line=N is native editor, tuic://open/<path> is preview. Absolute tuic paths need //; relative paths use active repo. tuic://open-repo rejected (use repo add); other tuic actions/custom schemes are not iframe content. Default focus=false; updates never switch focus.\ntoast: transient notice (title required), keeps no record of it. A project outcome belongs to the `progress` tool. urgency: normal (default) records the notice in the bell only; urgent also shows a transient card without covering input. Skip micro-steps. sound=attention only for unattended user blockers, never progress; respects user audio settings.\nconfirm: confirm BEFORE destructive ops; proceed only if confirmed. All clients/mobile push, first answer wins, 300s expiry is refusal. Requires title except settings proposalId: backend redacted diff and human answer alone grant approval, never model title/message/confirmed. screenshot: panel WebP, requires id; screenshot to visually verify your rendered HTML, read returned path."
+        }
+        "voice" => {
+            "Caller-bound hands-free speech, not application audio. help: full conversation/utterance guide. status: check first; if available is false reply in text. Mode notices come from TUICommander rather than from the user; off is final. The user can turn those notices off: absence proves nothing, status does. You do not choose the language or voice: write text in status.language. Speech supplements, never replaces normal reply.\nspeak: text required, max 2000 characters; supply status/notice turn to reject a stale reply, omission means now. Accepting a reply is NOT the same as the user hearing it: queued utterance_id is not heard; inspect status with that id; finished=heard to end, interrupted=user talked (normal), failed=never audible, unknown=too old. stop: immediately stop/drop queue and open new turn; use when reply is wrong."
+        }
+        "telegram" => {
+            "Caller-bound Telegram. help: full request/draft/routing guide. register: opt in own MCP-bound peer, replaces/notifies previous agent and revokes pending requests. unregister: release. Registration ends on agent exit, PTY close, MCP end or daemon restart. Without registration latest-connected live AI Chat receives inbound; only absent both is text dropped with bot notice.\nbegin: optional idempotent acknowledgement for current request. activity: concise safe unapproved preview. finish: complete exact authoritative reply, even after draft/turn ends, deduplicates completion. Request begin/activity/finish remain bound to recipient peer, never another AI Chat. AI Chat streams assistant text only; Telegram-woken turn settles its own final text unless finish replied. send: only registered peer or, without one, selected live AI Chat; single allowlisted destination, optional {label,data} button rows. Buttons yield structured mail, NOT publish approval. Never stream raw terminal output or hidden reasoning."
+        }
+        "automations" => {
+            "Scheduled definitions and runs (separate from workflows). help: full create/response guide. create: definition={name,prompt,run_config,in_secs?}; host resolves in_secs, exclusive with cron/once_local. run_config must be actual caller saved profile, never agent-type default. Create/update/re-enable validate profile names; unresolved returns repair choices; list reports run_config_error/no next_run_ms. Agent-created failed runs notify creator once, including pre-spawn. Bound caller may omit context fields; unbound HTTP/IPC supplies normal definition fields (cron optional for Once); missing context names field. Identical generated create/caller deduplicates; explicit new id creates separate reminder. create returns saved local fire time/next_run_ms: no date/list/get needed. update: definition or id+enabled. list: definitions. get: definition. pause: disable. resume: enable. delete: remove definition, retain history. run_now: trigger. run: inspect run. list_runs: history. summary: totals. preview: schedule. preview_definition: draft schedule. preset: resolve. templates: disabled drafts. template: one draft. worktree_preview: inspect. cleanup_worktree: safe removal."
+        }
+        _ => return None,
+    })
+}
+
 /// The three meta-tool names used when `collapse_tools: true`.
 /// Exposed for handler dispatch and tests.
 pub(crate) const META_TOOL_NAMES: [&str; 3] = ["search_tools", "get_tool_schema", "call_tool"];
@@ -911,7 +974,7 @@ pub(super) fn resolve_allowed_upstreams(
 /// This is app metadata, not an MCP discovery surface. Every native tool can
 /// be disabled; progress additionally requires global progress_tracking.
 pub(crate) fn native_tool_catalog() -> Vec<serde_json::Value> {
-    native_tool_definitions()
+    native_reference_tool_definitions()
         .as_array()
         .into_iter()
         .flatten()

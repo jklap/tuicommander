@@ -575,6 +575,11 @@ async fn dispatch_mcp_tool_call_with_context(
     if let Some(error) = super::mcp_input_contract::validate(name, args) {
         return error;
     }
+    if args["action"] == "help"
+        && let Some(help) = super::mcp_transport_catalogue::native_tool_help(name)
+    {
+        return help;
+    }
     // Resolve client identity at dispatch level — tool handlers get a plain bool
     let is_claude_code = mcp_session_id
         .and_then(|sid| state.mcp.sessions.get(sid))

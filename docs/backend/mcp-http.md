@@ -687,6 +687,20 @@ missing titles/text/paths, and an invented action. Ego must validate its admitte
 schema against these cases without a server round trip; that cross-repository
 consumer integration is not proven by TUIC's tests.
 
+### On-demand native tool guidance
+
+`session`, `agent`, `repo`, `ui`, `voice`, `telegram` and `automations` advertise
+compact agent-facing descriptions with every action and the hard constraints.
+Call the same tool with `{"action":"help"}` for its complete usage guide in the
+`description` response field. Help retains all displaced rules, examples and
+response details. It does not perform the requested operational action.
+The normal disabled-tool and conditional-owner gates apply to help too.
+Argument schemas and pre-dispatch validation remain authoritative; discovery
+continues to publish flat client-compatible schemas. Other already compact
+native tools are unchanged, including the directly loaded `progress` primitive.
+Settings summaries and tooltip copy do not change. Reconnect cached MCP clients
+after loading this backend build to obtain the updated catalogue.
+
 ### Lazy Tool Discovery (`collapse_tools`)
 
 When `collapse_tools: true` in `config.json` (or via Settings > MCP > TUIC Tools > "Collapse tools"), the server replaces the full tool list in `tools/list` with three meta-tools (the Speakeasy pattern) plus the compact `progress` tool when enabled:

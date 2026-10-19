@@ -113,6 +113,9 @@ fn native_tool_catalog_summaries_are_short_and_not_description_prefixes() {
     let definitions = native_tool_definitions();
     let tools = definitions.as_array().unwrap();
     let catalog = native_tool_catalog();
+    // Agent descriptions may shrink; Settings copy must stay unchanged.
+    let recorded: serde_json::Value =
+        serde_json::from_str(include_str!("fixtures/native-guidance-2069.json")).unwrap();
     assert!(!tools.is_empty());
     assert_eq!(catalog.len(), tools.len());
     assert_eq!(NATIVE_TOOL_SUMMARIES.len(), tools.len());
@@ -121,7 +124,10 @@ fn native_tool_catalog_summaries_are_short_and_not_description_prefixes() {
         let description = tool["description"].as_str().unwrap();
         let summary = entry["summary"].as_str().unwrap();
         assert_eq!(entry["name"], tool["name"]);
-        assert_eq!(entry["description"], tool["description"]);
+        assert_eq!(
+            &entry["description"],
+            recorded.get(name).unwrap_or(&tool["description"])
+        );
         assert!(!summary.trim().is_empty(), "{name} needs a summary");
         assert!(summary.chars().count() <= 70, "{name} summary is too long");
         assert!(
@@ -2610,4 +2616,104 @@ async fn conditional_configured_telegram_preserves_caller_authority() {
     )
     .await;
     assert_eq!(result["error"], "telegram_invalid_state");
+}
+
+// Catches: shortening the catalogue drops a rule instead of moving it to help.
+// Oracle: descriptions recorded from d4882b0f6c before the catalogue rewrite.
+#[tokio::test]
+async fn native_help_preserves_every_displaced_rule_2069() {
+    let dir = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+    let _guard = crate::config::set_config_dir_override(dir.path().to_path_buf());
+    write_voice_config(dir.path(), true, true);
+    let paths = crate::telegram::settings::paths().unwrap();
+    std::fs::create_dir(&paths.directory).unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&paths.directory, std::fs::Permissions::from_mode(0o700)).unwrap();
+    }
+    for (name, contents) in [
+        ("config.json", r#"{"enabled":true,"bot_alias":"test-bot"}"#),
+        ("bot.token", "111:fake-one"),
+    ] {
+        std::fs::write(paths.file(name), contents).unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(paths.file(name), std::fs::Permissions::from_mode(0o600))
+                .unwrap();
+        }
+    }
+    let state = test_state();
+    state.config.write().disabled_native_tools.clear();
+    let recorded: serde_json::Value =
+        serde_json::from_str(include_str!("fixtures/native-guidance-2069.json")).unwrap();
+    let definitions = native_tool_definitions();
+    // Compact serialized UTF-8 definition bytes, including metadata, not tokens.
+    for definition in definitions.as_array().unwrap() {
+        println!(
+            "definition_bytes {} {}",
+            definition["name"].as_str().unwrap(),
+            serde_json::to_vec(definition).unwrap().len()
+        );
+    }
+    let mut failures = Vec::new();
+    for (name, original) in recorded.as_object().unwrap() {
+        let definition = handle_get_tool_schema(&state, &serde_json::json!({"tool_name":name}));
+        let compact = definition["description"].as_str().unwrap();
+        if compact.len() >= original.as_str().unwrap().len() {
+            failures.push(format!("{name}: description was not shortened"));
+        }
+        for action in definition["inputSchema"]["properties"]["action"]["enum"]
+            .as_array()
+            .unwrap()
+        {
+            if !compact.contains(&format!("{}:", action.as_str().unwrap())) {
+                failures.push(format!("{name}: missing visible action {action}"));
+            }
+        }
+        let reply = handle_mcp_tool_call(
+            &state,
+            loopback_addr(),
+            name,
+            &serde_json::json!({"action":"help"}),
+            None,
+        )
+        .await;
+        if reply["description"] != *original {
+            failures.push(format!(
+                "{name}: help lost recorded guidance ({})",
+                reply.get("error").unwrap_or(&serde_json::Value::Null)
+            ));
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+// Catches: the generic help fast path leaks a disabled or unconfigured owner.
+#[tokio::test]
+async fn native_help_respects_owner_availability_2069() {
+    let dir = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+    let _guard = crate::config::set_config_dir_override(dir.path().to_path_buf());
+    let state = test_state();
+    state.config.write().disabled_native_tools = vec!["session".into()];
+    for (name, reason) in [
+        ("session", "disabled by configuration"),
+        ("voice", "voice is not configured"),
+        ("telegram", "Telegram is not configured"),
+    ] {
+        let reply = handle_mcp_tool_call(
+            &state,
+            loopback_addr(),
+            name,
+            &serde_json::json!({"action":"help"}),
+            None,
+        )
+        .await;
+        assert!(
+            reply["error"].as_str().unwrap().contains(reason),
+            "{name}: {reply}"
+        );
+        assert!(reply.get("description").is_none());
+    }
 }
