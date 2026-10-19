@@ -1135,7 +1135,7 @@ re-derived later.
 - Code: `src-tauri/src/ai_agent/{knowledge,tui_detect}.rs` — they kept the `ai_agent/` module path because `pty.rs` reads them there
 
 ### 6.16 ChoicePrompt Detection
-- Claude AskUserQuestion is parsed from its full-bleed Ink footer and numbered options, including rows with descriptions. Its `selection_mode: navigate-enter` tells mobile to move the highlight with arrows and submit with Enter; the mobile screen retains the whole open dialog
+- Claude AskUserQuestion is parsed from its full-bleed Ink footer and numbered options, including rows with descriptions and imperative titles without a question mark (`Pick a colour`). Its `selection_mode: navigate-enter` tells mobile to move the highlight with arrows and submit with Enter; the mobile screen retains the whole open dialog
 - New `ParsedEvent::ChoicePrompt { title, options, dismiss_key, amend_key }` recognises Claude-Code-style numbered confirmation menus (footer matches `Esc to cancel · Tab to amend`)
 - Options parsed by regex with optional cursor marker (`❯`, `›`, `>`). Title heuristics require `?` or a verb prefix (`proceed`, `confirm`, `do you want`, …) to avoid matching Markdown numbered lists. Minimum two options
 - Destructive labels (`no`, `cancel`, `reject`, `abort`, `deny`, `don't`) flagged for styling

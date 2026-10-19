@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+- Export Claude native question titles without a question mark, including `Pick a colour`, with ordered desktop and mobile answer choices (#2074-b0dc).
+
 - Open parked Activity Dashboard sessions in their own Global Workspace tabs instead of displaying their content under the current repository tab; preserve existing session bindings (#2080-d401).
 - Shorten agent-facing MCP descriptions for session, agent, repo, ui, voice, telegram and automations; preserve complete guidance through each tool’s `action=help`, without changing Settings copy or owner gates (#2069-7347).
 

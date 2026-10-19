@@ -10999,6 +10999,85 @@ async fn claude_askuser_esc_capture_retracts_awaiting_after_turn_done() {
     }
 }
 
+// Catches: an imperative native title sets awaiting but exports no named controls.
+#[tokio::test(flavor = "current_thread")]
+async fn claude_imperative_title_exports_native_choices() {
+    let capture = crate::pty_capture::decode_capture(&agent_prompt_fixture(
+        "claude-imperative-title-2074.tcap",
+    ))
+    .expect("authentic Claude capture");
+    let (rows, cols) = capture.geometry.expect("observed PTY geometry");
+    let sid = "claude-imperative";
+    let (state, silence) = chunk_trace_state(sid);
+    state
+        .session_maps
+        .session_states
+        .get_mut(sid)
+        .unwrap()
+        .agent_type = Some("claude".into());
+    state
+        .session_maps
+        .session_states
+        .insert("other-session".into(), Default::default());
+    state
+        .grid
+        .vt_log_buffers
+        .insert(sid.into(), Mutex::new(VtLogBuffer::new(rows, cols, 2000)));
+    crate::state::AppState::spawn_session_state_accumulator(state.clone());
+    let mut processor = ChunkProcessor::new(None, None);
+    let mut utf8 = Utf8ReadBuffer::new();
+    let mut escape = EscapeAwareBuffer::new();
+    let mut answered = false;
+    for record in capture.records {
+        match record.direction {
+            crate::pty_capture::CaptureDirection::Output => {
+                let data = utf8.push(&record.data);
+                let data = escape.push(&data);
+                let (clean, _) = crate::state::strip_kitty_sequences(&data);
+                processor.process_chunk(&clean, &silence, sid, &state);
+            }
+            crate::pty_capture::CaptureDirection::Input if record.data == b"\x1b[B\r" => {
+                assert!(await_session(&state, sid, |s| {
+                    s.awaiting_input && s.question_text.as_deref() == Some("Pick a colour")
+                        && s.choice_prompt.as_ref().is_some_and(|prompt| {
+                            prompt.title == "Pick a colour"
+                                && prompt.selection_mode == Some(
+                                    crate::output_parser::ChoiceSelectionMode::NavigateEnter,
+                                )
+                                && prompt.options.iter().map(|o| o.label.as_str()).collect::<Vec<_>>()
+                                    == ["Red", "Green", "Blue", "Type something.", "Chat about this"]
+                        })
+                }).await, "imperative title must export its native ordered choices");
+                let snapshot =
+                    serde_json::to_value(&*state.session_maps.session_states.get(sid).unwrap())
+                        .unwrap();
+                assert_eq!(snapshot["choice_prompt"]["title"], "Pick a colour");
+                assert_eq!(snapshot["choice_prompt"]["options"][1]["label"], "Green");
+                crate::state::resolve_choice_prompt_input(&state, sid, "\x1b[B");
+                crate::state::resolve_choice_prompt_input(&state, sid, "\r");
+                answered = true;
+            }
+            crate::pty_capture::CaptureDirection::Input => {}
+        }
+    }
+    assert!(answered, "capture must contain the native Green answer");
+    assert!(
+        await_session(&state, sid, |s| !s.awaiting_input
+            && s.choice_prompt.is_none())
+        .await,
+        "answered form must release the question controls"
+    );
+    let other = state
+        .session_maps
+        .session_states
+        .get("other-session")
+        .unwrap();
+    assert!(
+        !other.awaiting_input && other.choice_prompt.is_none(),
+        "the answer must not modify another session"
+    );
+}
+
 /// Live Claude 2.1.286 two-question AskUserQuestion (`Lista`, `Branch`, `Submit`
 /// tabs) answered with Enter, Down+Enter, Enter. Every step must expose the
 /// dialog that is on screen to the mobile overlay: the second question, and the

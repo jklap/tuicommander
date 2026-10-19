@@ -1,3 +1,7 @@
+## Claude imperative question title (2074-b0dc) — Rust restart required
+
+- [ ] After Boss manually restarts `make dev` or installs `make build`, ask Claude for a native `Pick a colour` form without a question mark. Confirm desktop and mobile show the title and Red/Green/Blue controls. Tap Green once on mobile: Claude must print Green, awaiting must clear, and another session must not receive the answer. This peer does not restart the installed backend.
+
 ## Compact MCP guidance (2069-7347) — Rust restart required
 
 - [ ] After Boss manually restarts `make dev` or installs `make build`, reconnect a cached MCP client and confirm session/agent/repo/ui/voice/telegram/automations advertise `help` where their owner is available. `action=help` returns the complete guide; disabled/unconfigured owners still refuse it. This peer did not restart or replace the running desktop. Automated tests cover catalogue lookup, complete guidance and owner gates.
