@@ -53,6 +53,7 @@ describe("worktree removal cwd authority", () => {
 			repo: {
 				removeWorktree: vi.fn(async () => outcome),
 				getWorkspaceLifecycle: async () => ({ dirtyFiles: 0, commitStatus: "merged", removalSafety: "safe" }),
+				getInfo: async () => ({ is_git_repo: true }),
 			},
 			dialogs: { confirmRemoveWorktree: async () => true },
 			closeTerminal,
@@ -146,6 +147,7 @@ describe("worktree removal cwd authority", () => {
 					removalSafety: "requires_force",
 					dirtyFingerprint: "confirmed-dirty-checkout",
 				}),
+				getInfo: async () => ({ is_git_repo: true }),
 			},
 			dialogs: { confirmRemoveWorktree: async () => true },
 			closeTerminal: async () => {},
