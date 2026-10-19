@@ -465,7 +465,14 @@ fn session_action_requires_blocking_pool(action: &str) -> bool {
 fn agent_action_requires_blocking_pool(action: &str) -> bool {
     matches!(
         action,
-        "spawn" | "send" | "inbox" | "subscribe" | "ack" | "unsubscribe"
+        "spawn"
+            | "send"
+            | "inbox"
+            | "subscribe"
+            | "ack"
+            | "unsubscribe"
+            | "task_get"
+            | "task_cancel"
     )
 }
 
@@ -527,13 +534,12 @@ async fn dispatch_mcp_tool_call_with_context(
     }
     // Enforce disabled_native_tools on every call path (not just the call_tool meta-tool).
     // Read-guard does not span an await and is released at the end of the `if` expression.
-    if state
-        .config
-        .read()
-        .disabled_native_tools
-        .iter()
-        .any(|d| d == name)
-    {
+    if state.config.read().disabled_native_tools.iter().any(|d| {
+        d == name
+            || (d == "task"
+                && name == "agent"
+                && matches!(args["action"].as_str(), Some("task_get" | "task_cancel")))
+    }) {
         return serde_json::json!({"error": format!("Tool '{}' is disabled by configuration", name)});
     }
     if let Some(action) = args["action"].as_str()
