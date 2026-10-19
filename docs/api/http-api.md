@@ -3478,3 +3478,8 @@ IDs without advancing the legacy cursor or acknowledging its loss watermark.
 each bounded batch, then read again when `has_more` is true. These endpoints
 require the bound `Mcp-Session-Id`; a stateless `x-tuic-session` alone is not an
 HTTP subscription binding. See [retention and notification semantics](../backend/mcp-http.md#durable-independent-mail-subscriptions).
+
+Plugin catalogue entries returned by `fetch_plugin_registry` can include optional
+`contentSha256`. Installed plugin discovery returns the same field computed from
+the installed payload, not from manifest input. Both transports use the same Rust
+manifest serialization and payload identity algorithm. See [Plugin Registry](../plugins.md#plugin-registry).

@@ -2161,6 +2161,10 @@ pub fn build_router(state: Arc<AppState>, remote_auth: bool, mcp_enabled: bool) 
             post(plugin_routes::plugin_http_fetch),
         )
         .route(
+            "/api/plugins/{plugin_id}/http/cancel",
+            post(plugin_routes::plugin_http_cancel),
+        )
+        .route(
             "/api/plugins/{plugin_id}/pty/output",
             get(plugin_routes::plugin_pty_output),
         )
@@ -6530,6 +6534,9 @@ mod tests {
             config.collapse_tools = false;
         }
         let definitions = mcp_transport::test_mcp_tool_definitions();
+        // Agent-only compaction must not rewrite Settings tooltip copy.
+        let recorded: serde_json::Value =
+            serde_json::from_str(include_str!("fixtures/native-guidance-2069.json")).unwrap();
         let app = build_router(state.clone(), false, true);
         for tool in definitions.as_array().unwrap() {
             let name = tool["name"].as_str().unwrap();
@@ -6553,7 +6560,12 @@ mod tests {
             assert_eq!(catalog.len(), definitions.as_array().unwrap().len());
             for (entry, definition) in catalog.iter().zip(definitions.as_array().unwrap()) {
                 assert_eq!(entry["name"], definition["name"]);
-                assert_eq!(entry["description"], definition["description"]);
+                assert_eq!(
+                    &entry["description"],
+                    recorded
+                        .get(definition["name"].as_str().unwrap())
+                        .unwrap_or(&definition["description"])
+                );
                 // Catches: HTTP status retaining description prefixes while Settings
                 // switches to dedicated, concise native registry summaries.
                 let summary = entry["summary"].as_str().unwrap();

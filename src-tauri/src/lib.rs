@@ -137,6 +137,7 @@ pub(crate) use tuic_terminal::output_parser;
 pub(crate) use tuic_terminal::output_watchers;
 #[cfg(feature = "desktop")]
 mod panel_window;
+mod plugin_content;
 pub(crate) mod plugin_credentials;
 pub(crate) mod plugin_exec;
 pub(crate) mod plugin_fs;
@@ -2509,6 +2510,7 @@ pub fn run(mut context: tauri::Context<tauri::Wry>) {
             plugin_fs::delete_build_artifact,
             plugin_fs::trim_build_artifact,
             plugin_http::plugin_http_fetch,
+            plugin_http::plugin_http_cancel,
             plugin_github::plugin_github_action,
             plugin_pty::plugin_read_session_output,
             plugin_exec::plugin_exec_cli,

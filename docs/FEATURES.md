@@ -1,5 +1,7 @@
 # TUICommander — Complete Feature Reference
 
+- Native MCP tools with long guidance expose compact action contracts and return the full guide through `action=help`; existing owner gates and Settings copy remain unchanged (#2069-7347).
+
 - Independent durable peer-mail readers filter routine lifecycle traffic, retain acknowledged cursors across reconnect, and support continuous HTTP/ACP notification delivery (#2004-4760).
 
 - Mobile session headers offer an open-Markdown dropdown at widths of 768 px or more. Phones keep the same list in More session actions, with stable in-place refreshes.
@@ -3285,3 +3287,6 @@ Modern stateless managed calls recover mail/project routing from their exact liv
 host-issued peer identity without model-driven registration. Unknown/headerless
 peers get bounded context-recovery guidance, not a guessed repository or identity.
 Existing explicit identity replacement and stranded-mail receipts remain intact.
+
+Plugin catalogue update detection compares equal-version payload identities as well
+as versions. Installed identity is computed by Rust and ignores mutable plugin data.

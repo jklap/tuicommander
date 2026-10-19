@@ -1,5 +1,6 @@
 # TUICommander Specification
 
+Native MCP guidance (#2069-7347): session, agent, repo, ui, voice, telegram and automations expose compact agent-facing action contracts. Their action=help returns every displaced rule from the full native guide. Existing action validation, conditional availability, disabled-tool gates and Settings copy remain unchanged.
 UI Design Mode actions (#2067-e708): `ui design_start/stop/status/reload/navigate/screenshot/errors/eval` reuse the Design Mode owner, armed caller/repository checks and extension host grants. Saved `design_mode` denials apply to the grouped actions. The old tool remains until the pending 2068 catalogue cutover.
 
 
