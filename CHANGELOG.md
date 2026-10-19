@@ -6,6 +6,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+- End PTY intents at the title closure so joined trailing prose stays out of the CONTEXT header and desktop/mobile intent tint (#2060-0ebe).
 - Add the typed `workflow` MCP tool and `tuic workflow` CLI with story, run, proposal_create, report and launch actions; reuse existing handlers, retain proposal idempotency and member denials, and keep legacy tools until cutover. Automations remains separate (#2065-dcc5).
 - Render mobile CLI answer markers as the desktop continuous green gutter instead of speech bubbles; preserve literal glyphs in prompts and code, including standalone fenced examples (#2070-773d).
 
