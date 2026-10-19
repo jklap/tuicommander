@@ -39,6 +39,19 @@ it("condenses recorded mobile answer bubbles into a continuous desktop gutter", 
 	expect(container.textContent).toContain("each starting with 💬");
 });
 
+it("preserves literal answer prefixes in standalone fenced examples", async () => {
+	// Catches: a copied protocol example loses its literal prefix without an answer before the fence.
+	const lines = ["⏺ Example protocol output:", "  ```text", "  💬 Keep this literal prefix", "  ```"];
+	vi.stubGlobal(
+		"fetch",
+		vi.fn(async () => ({ ok: true, json: async () => ({ lines, total_lines: lines.length }) })),
+	);
+	vi.stubGlobal("requestAnimationFrame", () => 0);
+	const { container } = render(() => <OutputView sessionId="standalone-code-example" />);
+	await vi.waitFor(() => expect(container.textContent).toContain("Keep this literal prefix"));
+	expect(container.textContent).toContain("💬 Keep this literal prefix");
+});
+
 it("keeps answer links and span styles without marking prompts, tools or literal code bubbles", async () => {
 	// Catches: global emoji stripping corrupts literal code and link offsets after the marker.
 	const lines = [
