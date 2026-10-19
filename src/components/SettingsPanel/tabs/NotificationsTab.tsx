@@ -128,12 +128,7 @@ export const NotificationsTab: Component = () => {
 
 	return (
 		<div class={`${s.section} ${s.applicationPage}`}>
-			<SettingPageHeader
-				title="Notifications"
-				breadcrumb="Application / Notifications"
-				description="Audio alerts, visual notices and operating-system notifications."
-				scope="Application defaults"
-			/>
+			<SettingPageHeader title="Notifications" breadcrumb="Application / Notifications" scope="Application defaults" />
 			<SectionCard title={t("notifications.heading.notificationSettings", "Notification Settings")}>
 				<Show
 					when={notificationsStore.state.isAvailable}

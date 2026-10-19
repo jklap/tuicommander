@@ -201,12 +201,7 @@ export const DictationSettings: Component = () => {
 	// h3 heading — see `SpeechRecognition` for why that matters.
 	return (
 		<div class={s.section}>
-			<SettingPageHeader
-				title="Voice"
-				description="Dictation, speech recognition and spoken conversations on this machine."
-				scope="This machine"
-				breadcrumb="AI / Voice"
-			/>
+			<SettingPageHeader title="Voice" scope="This machine" breadcrumb="AI / Voice" />
 			<SectionCard title={t("dictation.heading.dictation", "Dictation")}>
 				<Show when={dictationStore.state.ownedElsewhere}>
 					<p class={s.hint}>

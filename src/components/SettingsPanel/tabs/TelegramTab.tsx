@@ -111,12 +111,7 @@ export const TelegramTab: Component = () => {
 	});
 	return (
 		<div class={`${s.section} ${telegram.panel}`}>
-			<SettingPageHeader
-				title="Telegram"
-				description="Bot setup and authorized chats on this machine."
-				scope="This machine"
-				breadcrumb="Integrations / Telegram"
-			/>
+			<SettingPageHeader title="Telegram" scope="This machine" breadcrumb="Integrations / Telegram" />
 			<Show when={settings()}>
 				{(data) => (
 					<>

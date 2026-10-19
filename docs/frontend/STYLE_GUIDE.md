@@ -450,7 +450,7 @@ enabled choice. Tasks uses it for List, Board and Roadmap.
 
 Full-screen overlay. All pages share `width: min(1136px, calc(100vw - 48px))`, `height: 80vh`, independently scrolling navigation and content, and existing theme tokens. This width replaces the previous 700px guide after the 2026-10-16 mock approval. Never resize on tab selection or eagerly mount pages to avoid flashes.
 - Navigation: 232px default; retain saved user width and resize behavior. Content padding: 24px 32px.
-- `SettingPageHeader`: 20px title, one-sentence purpose, scope badge and optional source.
+- `SettingPageHeader`: 20px title, optional subtitle, scope badge and optional source. Omit subtitles that only repeat card headings. A header without a subtitle or source reserves no subtitle space.
 - `SectionCard`: semantic `<h3>`, 15px heading, 16px padding/gap, 8px radius, `--bg-primary`.
 - `SettingRow`: persistent label/hint left, existing shared control right (up to 260px, 36px high), 12px vertical padding. Reuse `SettingField` IDs; errors go below the field and join `aria-describedby`.
 - `StatusSummary`: visible status words and existing `StatusBadge` semantic tone, source and freshness. Unknown is neutral; saved sign-in is not a live connection.

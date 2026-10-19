@@ -2,6 +2,7 @@
 .pageHeader { display: flex; flex-wrap: wrap; align-items: flex-start; justify-content: space-between; gap: 16px; margin-bottom: 0; }
 .pageHeader > div, .listText { min-width: 0; }
 .pageHeader h2 { margin: 0 0 8px; font-size: 20px; font-weight: 600; }
+.pageHeader h2:last-child { margin-bottom: 0; }
 .pageHeader p, .card p, .listRow p, .empty p, .status p { margin: 4px 0 0; color: var(--fg-secondary); line-height: 1.5; overflow-wrap: anywhere; }
 .card { padding: 16px; margin-bottom: 16px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg-primary); }
 .card h3 { margin: 0 0 8px; color: var(--fg-primary); font-size: 15px; font-weight: 600; }

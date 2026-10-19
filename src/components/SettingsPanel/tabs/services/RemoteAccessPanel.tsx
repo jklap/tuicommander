@@ -254,12 +254,7 @@ export const RemoteAccessPanel: Component = () => {
 
 	return (
 		<div class={`${s.section} ${layout.page}`}>
-			<SettingPageHeader
-				title="Remote Access"
-				description="Web access, authentication and relay settings for this machine."
-				scope="This machine"
-				breadcrumb="Integrations / Remote Access"
-			/>
+			<SettingPageHeader title="Remote Access" scope="This machine" breadcrumb="Integrations / Remote Access" />
 			<SectionCard title="Connection status">
 				<SettingToggle
 					settingId="app.services.server.enabled"

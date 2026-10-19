@@ -754,12 +754,7 @@ export const SmartPromptsTab: Component = () => {
 
 	return (
 		<div class={s.section}>
-			<SettingPageHeader
-				title="Smart Prompts"
-				description="Configure reusable actions and their execution behavior."
-				scope="Application defaults"
-				breadcrumb="AI / Smart Prompts"
-			/>
+			<SettingPageHeader title="Smart Prompts" scope="Application defaults" breadcrumb="AI / Smart Prompts" />
 			<SectionCard title="Background agent">
 				<SettingRow
 					label="Headless Agent"

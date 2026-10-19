@@ -219,12 +219,7 @@ export const GeneralTab: Component<{ onOpenAiChat?: () => void }> = (props) => {
 					</>
 				}
 			/>
-			<SettingPageHeader
-				title="General"
-				breadcrumb="Application / General"
-				description="Application behavior, updates and local tools."
-				scope="Application defaults"
-			/>
+			<SettingPageHeader title="General" breadcrumb="Application / General" scope="Application defaults" />
 			<Show when={isTauri()}>
 				<SectionCard title="Local tools">
 					<Show when={isTauri() && cliStatus()}>
