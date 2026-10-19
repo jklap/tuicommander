@@ -13443,6 +13443,115 @@ mod grid_delivery_tests {
         assert_eq!(u32::from_le_bytes(expected[7..11].try_into().unwrap()), 5);
     }
 
+    /// Catches: synchronous session discovery blocking input and unrelated frame
+    /// consumers on the transport thread while a busy terminal keeps redrawing.
+    /// The FIFO supplies controlled filesystem backpressure, not agent output.
+    #[cfg(unix)]
+    #[tokio::test(flavor = "current_thread")]
+    async fn slow_session_discovery_does_not_stall_input_echo_or_other_frames() {
+        use std::io::{Read, Write};
+        use std::os::unix::ffi::OsStrExt;
+        use std::time::{Duration, Instant};
+        use tower::ServiceExt;
+
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+        let _busy_rx = grid_session(&state, "redrawing-agent");
+        let mut other_rx = grid_session(&state, "other-terminal");
+        let stop_busy = start_ticker(&state, "redrawing-agent");
+        let stop_other = start_ticker(&state, "other-terminal");
+        let feed_busy = feed_continuously(&state, "redrawing-agent");
+        let feed_other = feed_continuously(&state, "other-terminal");
+        other_rx.changed().await.unwrap();
+
+        // A real kernel PTY with its slave retained: the line discipline echoes
+        // input without a shell, executable scan, or invented application reply.
+        let pair = native_pty_system()
+            .openpty(PtySize {
+                rows: 24,
+                cols: 80,
+                pixel_width: 0,
+                pixel_height: 0,
+            })
+            .unwrap();
+        let mut reader = pair.master.try_clone_reader().unwrap();
+        let mut writer = pair.master.take_writer().unwrap();
+        let (echo_tx, echo_rx) = tokio::sync::oneshot::channel();
+        let echo_thread = std::thread::spawn(move || {
+            let mut byte = [0];
+            let result = reader.read_exact(&mut byte).map(|()| byte);
+            let _ = echo_tx.send(result);
+        });
+
+        let dir = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+        let session_dir = dir
+            .path()
+            .join("sessions/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa");
+        std::fs::create_dir_all(&session_dir).unwrap();
+        let lease = session_dir.join("lease");
+        let c_path = std::ffi::CString::new(lease.as_os_str().as_bytes()).unwrap();
+        assert_eq!(unsafe { libc::mkfifo(c_path.as_ptr(), 0o600) }, 0);
+        let (opened_tx, opened_rx) = tokio::sync::oneshot::channel();
+        let lease_thread = std::thread::spawn(move || {
+            // open() returns only when production discovery reaches this lease.
+            let file = std::fs::OpenOptions::new().write(true).open(lease).unwrap();
+            let _ = opened_tx.send(Instant::now());
+            std::thread::sleep(Duration::from_millis(800));
+            drop(file);
+        });
+        let request = axum::http::Request::builder()
+            .method("POST")
+            .uri("/agent/discover-session")
+            .header("content-type", "application/json")
+            .body(axum::body::Body::from(
+                serde_json::json!({
+                    "agentType": "ego", "cwd": dir.path(), "claimedIds": [],
+                    "agentPid": u32::MAX,
+                    "envOverrides": { "EGO_HOME": dir.path() }
+                })
+                .to_string(),
+            ))
+            .unwrap();
+        let router = crate::mcp_http::build_router(state.clone(), false, true);
+        let discovery = tokio::spawn(async move { router.oneshot(request).await.unwrap() });
+        let blocked_at = opened_rx.await.expect("discovery must reach the lease");
+        other_rx.borrow_and_update();
+        let (echo, next_frame) = tokio::join!(
+            async {
+                run_bounded_pty_input(move || writer.write_all(b"x").map_err(|e| e.to_string()))
+                    .await
+                    .unwrap();
+                let bytes = echo_rx.await.unwrap().unwrap();
+                (bytes, blocked_at.elapsed())
+            },
+            async {
+                other_rx.changed().await.unwrap();
+                blocked_at.elapsed()
+            }
+        );
+        let response = discovery.await.unwrap();
+        for stop in [stop_busy, stop_other, feed_busy, feed_other] {
+            stop.store(true, Ordering::Relaxed);
+        }
+        lease_thread.join().unwrap();
+        echo_thread.join().unwrap();
+        assert_eq!(response.status(), axum::http::StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), 1024)
+            .await
+            .unwrap();
+        assert_eq!(&body[..], b"null", "no match must retain the wire response");
+        assert_eq!(echo.0, *b"x", "kernel did not echo the submitted byte");
+        // This is a transport-service bound, NOT native keyboard-to-paint timing.
+        assert!(
+            echo.1 < Duration::from_millis(200),
+            "input echo waited {:?} behind discovery",
+            echo.1
+        );
+        assert!(
+            next_frame < Duration::from_millis(200),
+            "other session frame waited {next_frame:?} behind discovery"
+        );
+    }
+
     #[cfg(feature = "desktop")]
     #[tokio::test(flavor = "current_thread", start_paused = false)]
     async fn a_stalled_desktop_gate_does_not_stop_the_browser_frames() {

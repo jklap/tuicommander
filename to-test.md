@@ -1,3 +1,7 @@
+## Agent session discovery and frame receipts (2040-16b2) — Rust restart required
+
+- [ ] After Boss manually restarts `make dev` or installs `make build`, measure native keyboard-to-paint latency while a visible agent prints and other agent tabs perform session discovery. Confirm frame-receipt stalls no longer correlate with discovery file reads. The backend regression checks real PTY echo and an independent frame consumer under slow discovery I/O; it does not prove that every historical stall or native WebKit freeze is resolved. This peer did not restart or change the running desktop.
+
 ## ego Chat export diagnostics (2032-8dc3) — Rust restart required
 
 - [ ] After Boss manually restarts `make dev` or installs `make build`, verify an incompatible configured ego executable reports its path and failed export status. For the retained live failure, Settings points to `/Users/stefano.straus/bin/ego`, which rejects `--after`; select the transcript-capable `/Users/stefano.straus/.local/bin/ego`, then open Chat on a bound local ego session. Confirm the completed answer is shown and Chat stays open. This peer did not alter Settings, replace a binary, restart the app, or call desktop MCP tools.
