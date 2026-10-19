@@ -134,7 +134,7 @@ impl GixGitReads {
                 // Box the (large) open error to keep the Result small.
                 gix::ThreadSafeRepository::open(repo).map_err(Box::new)
             })
-            .map_err(|e: Arc<Box<gix::open::Error>>| e.to_string())?;
+            .map_err(|e: Arc<Box<gix::Error>>| e.to_string())?;
         Ok(tsr.to_thread_local())
     }
 
