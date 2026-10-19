@@ -14,7 +14,6 @@ members = [
     "patches/bm25",
     "patches/vte",
 ]
-exclude = ["patches/wayland-scanner"]
 resolver = "2"
 
 [workspace.package]
@@ -422,11 +421,6 @@ vte = { path = "patches/vte" }
 #      targets force `--vsenv`; compile/install go through Meson so each
 #      subprocess activates the same Visual Studio environment.
 webrtc-audio-processing-sys = { path = "patches/webrtc-audio-processing-sys" }
-# crates.io 0.31.10 pins vulnerable quick-xml 0.39. Keep that release's code
-# compatible with wayland-client/backend 0.31/0.3, while applying upstream's
-# quick-xml 0.41 parser adaptation. Patching current Wayland master here would
-# generate interfaces for its unreleased backend ABI and break Linux builds.
-wayland-scanner = { path = "patches/wayland-scanner" }
 
 [dev-dependencies]
 # Migration guards use an independent ECDH and ECDSA implementation.
