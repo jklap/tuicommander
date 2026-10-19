@@ -6,7 +6,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
-- Render mobile CLI answer markers as the desktop continuous green gutter instead of speech bubbles; preserve literal glyphs in prompts and code (#2070-773d).
+- Render mobile CLI answer markers as the desktop continuous green gutter instead of speech bubbles; preserve literal glyphs in prompts and code, including standalone fenced examples (#2070-773d).
 
 - Group native MCP switches in Settings by domain, with separate rare and conditional sections; preserve tool names, saved denials and Settings opt-in (#2063-baa9).
 

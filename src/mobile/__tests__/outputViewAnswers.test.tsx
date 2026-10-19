@@ -29,7 +29,7 @@ it("condenses recorded mobile answer bubbles into a continuous desktop gutter", 
 	expect(answers).toHaveLength(5);
 	for (const line of answers) expect((line as HTMLElement).style.boxShadow).toBe("inset 3px 0 0 var(--answer-rule)");
 	expect(answers.map((line) => line.textContent)).toEqual([
-		"• The answer highlight runs continuously across the full response.",
+		"•\uFE0E The answer highlight runs continuously across the full response.",
 		"",
 		"  Blank paragraph spacing stays preserved.",
 		"",
@@ -70,7 +70,7 @@ it("keeps answer links and span styles without marking prompts, tools or literal
 	const { container } = render(() => <OutputView sessionId="answer-boundaries" />);
 	await vi.waitFor(() => expect(container.textContent).toContain("Tool output"));
 	const answer = container.querySelector('[data-terminal-marker="answer"]');
-	expect(answer?.textContent).toBe("⏺ Read https://example.com");
+	expect(answer?.textContent).toBe("⏺\uFE0E Read https://example.com");
 	expect(answer?.querySelector("a")?.href).toBe("https://example.com/");
 	expect(answer?.querySelector("a span")?.getAttribute("style")).toContain("font-weight: 600");
 	expect(container.textContent).toContain("❯ Show 💬 literally");
