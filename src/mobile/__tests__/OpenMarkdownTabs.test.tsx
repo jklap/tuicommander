@@ -121,6 +121,7 @@ it("refreshes tabs closed before the first SSE connection opens", async () => {
 	await waitFor(() => expect(view.getByRole("button", { name: "guide.md docs/guide.md" })).toBeTruthy());
 	// No SSE subscriber existed when the desktop closed this tab.
 	tabs = [];
+	await waitFor(() => expect(streams).toHaveLength(1));
 	streams[0].onopen?.();
 	await waitFor(() => expect(view.getByText("No open Markdown tabs")).toBeTruthy());
 });
