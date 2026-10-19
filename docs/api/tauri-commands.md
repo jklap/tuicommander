@@ -599,7 +599,7 @@ JavaScript `String.slice` semantics for ASCII, accented text, and non-BMP emoji.
 
 | Command | Args | Returns | Description |
 |---------|------|---------|-------------|
-| `list_user_plugins` | -- | `Vec<PluginManifest>` | List valid plugin manifests |
+| `list_user_plugins` | -- | `Vec<PluginManifest>` | List valid plugin manifests with backend-derived optional `contentSha256` |
 | `get_plugin_readme_path` | `id` | `Option<String>` | Get plugin README.md path |
 | `read_plugin_data` | `plugin_id, path` | `Option<String>` | Read plugin data file |
 | `write_plugin_data` | `plugin_id, path, content` | `()` | Write plugin data file |
@@ -631,7 +631,8 @@ JavaScript `String.slice` semantics for ASCII, accented text, and non-BMP emoji.
 | Command | Args | Returns | Description |
 |---------|------|---------|-------------|
 | `plugin_github_action` | `plugin_id, account, reference, request` | `Value` | Account-scoped B6/B7 bridge; requires net:http, manifest github provider consent and matching PR reference |
-| `plugin_http_fetch` | `url, method?, headers?, body?, account?, plugin_id` | `HttpResponse` | Make HTTP request (validated against the on-disk manifest `allowedUrls`; with `account`, Rust injects that account's credential under the account host rule) |
+| `plugin_http_fetch` | `url, method?, headers?, body?, account?, plugin_id, request_id?` | `HttpResponse` | Make HTTP request (validated against the on-disk manifest `allowedUrls`; with `account`, Rust injects that account's credential under the account host rule) |
+| `plugin_http_cancel` | `plugin_id, request_id` | `()` | Cancel a plugin-scoped HTTP request, including its response body. |
 
 ## Code Intelligence / MDKB (`mdkb_commands.rs`)
 
