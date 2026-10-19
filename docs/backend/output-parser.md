@@ -738,6 +738,11 @@ not replaced by an earlier aside. Desktop tinting resolves the complete
 soft-wrapped logical line before mapping the boundary back to physical cells.
 Title-less rows keep their existing hard-break completion behavior.
 
+Vite watches the shared grammar and its parent directories even though other
+Rust sources remain excluded from frontend hot reload. A grammar edit must
+invalidate its imported JSON module together with the frontend classifier;
+otherwise a cached grammar can omit new fields and abort viewport marker planning.
+
 The parser does not remove terminal bytes. Desktop tint stops at the closing
 cell, including when the title wraps; mobile keeps trailing spans and links outside
 the tint. The CONTEXT header receives only the parsed description. Source evidence
