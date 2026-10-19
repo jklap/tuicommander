@@ -59,6 +59,8 @@ import {
 const ComposePanel = lazy(() =>
 	import("../ComposePanel/ComposePanel").then((module) => ({ default: module.ComposePanel })),
 );
+// Type-only: keeps ComposePanel out of the eager bundle.
+type ComposeAppendRequest = import("../ComposePanel/ComposePanel").ComposeAppendRequest;
 
 /** Trim trailing whitespace from each line of a terminal selection. */
 export function trimSelection(text: string): string {
@@ -188,6 +190,8 @@ export const Terminal: Component<TerminalProps> = (props) => {
 	const [composePinned, setComposePinned] = createSignal(false);
 	const [composeFocusRequest, setComposeFocusRequest] = createSignal(0);
 	const [composeTextRequest, setComposeTextRequest] = createSignal(0);
+	const [composeAppendRequest, setComposeAppendRequest] = createSignal<ComposeAppendRequest | null>(null);
+	let composeAppendSeq = 0;
 	// Chat owns its input slot without changing this tab's CLI Compose preferences.
 	const composeVisible = () => chatActive() || composeOpen();
 	const composeDocked = () => chatActive() || composePinned();
@@ -1179,8 +1183,25 @@ export const Terminal: Component<TerminalProps> = (props) => {
 			}
 		},
 		openComposeWithText: (text: string) => {
+			if (composeOpen() && !chatActive()) {
+				// An open CLI Compose keeps what the user is writing: the prompt is
+				// appended below the draft instead of replacing it.
+				composeAppendSeq += 1;
+				setComposeAppendRequest({ text, seq: composeAppendSeq });
+				return;
+			}
+			if (chatActive()) {
+				// The always-open Chat input keeps the draft too: the prompt goes
+				// below it, blank-line separated, exactly like the CLI Compose path.
+				// `pendingComposeText` mirrors the editor on every edit, so the
+				// combined text is correct even if the panel has not mounted yet.
+				const draft = pendingComposeText();
+				setPendingComposeText(draft.length > 0 ? `${draft}\n\n${text}` : text);
+				setComposeTextRequest((n) => n + 1);
+				return;
+			}
 			setPendingComposeText(text);
-			if (!chatActive()) setComposeOpen(true);
+			setComposeOpen(true);
 			setComposeTextRequest((n) => n + 1);
 		},
 		isComposeOpen: () => composeOpen(),
@@ -1579,6 +1600,7 @@ export const Terminal: Component<TerminalProps> = (props) => {
 						}}
 						focusRequest={composeFocusRequest}
 						textRequest={composeTextRequest}
+						appendRequest={composeAppendRequest}
 						canEnqueue={() => !!terminalsStore.get(props.id)?.agentType}
 						queuedCount={() => terminalsStore.get(props.id)?.queuedCommands ?? 0}
 						onClearQueue={async () => {
