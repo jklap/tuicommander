@@ -44,7 +44,8 @@ interface LocalIpEntry {
  */
 export const RemoteAccessPanel: Component = () => {
 	const { status, relayConnected, refresh } = useMcpStatusPoll();
-	const [localIps] = createResource(() => rpc<LocalIpEntry[]>("get_local_ips"));
+	const [localIps, { refetch: refetchLocalIps }] = createResource(() => rpc<LocalIpEntry[]>("get_local_ips"));
+	const availableIps = () => (localIps.error ? undefined : localIps());
 	const [selectedIp, setSelectedIp] = createSignal<string>("");
 
 	// Remote access form state
@@ -76,7 +77,7 @@ export const RemoteAccessPanel: Component = () => {
 
 	// Auto-select best IP when list loads (prefer Tailscale, then LAN/Wi-Fi)
 	createEffect(() => {
-		const ips = localIps();
+		const ips = availableIps();
 		if (!ips?.length || selectedIp()) return;
 		const preferred =
 			ips.find((e) => e.label.includes("Tailscale")) ??
@@ -85,7 +86,7 @@ export const RemoteAccessPanel: Component = () => {
 		setSelectedIp(preferred.ip);
 	});
 
-	const activeIp = () => selectedIp() || localIps()?.[0]?.ip;
+	const activeIp = () => (localIps.error ? undefined : selectedIp() || availableIps()?.[0]?.ip);
 
 	// Connect URL fetched from backend (token never reaches JS)
 	const [connectUrl, setConnectUrl] = createSignal<string | null>(null);
@@ -389,25 +390,44 @@ export const RemoteAccessPanel: Component = () => {
 									{(id, descriptionId) => (
 										<>
 											<Show
-												when={(localIps()?.length ?? 0) > 1}
-												fallback={<code class={s.url}>{activeIp() ?? "Not available"}</code>}
+												when={!localIps.error}
+												fallback={
+													<div>
+														<p role="alert" class={layout.discoveryError}>
+															Local IP discovery failed: {String(localIps.error)}
+														</p>
+														<button
+															type="button"
+															class={s.testBtn}
+															data-non-setting="Retry local network discovery"
+															onClick={() => void Promise.resolve(refetchLocalIps()).catch(() => {})}
+														>
+															Retry
+														</button>
+													</div>
+												}
 											>
-												<Select
-													data-non-setting="Displayed connection URL address selection; no persistence"
-													id={id}
-													aria-describedby={descriptionId()}
-													class={s.input}
-													value={selectedIp()}
-													onChange={(e) => setSelectedIp(e.currentTarget.value)}
+												<Show
+													when={(availableIps()?.length ?? 0) > 1}
+													fallback={<code class={s.url}>{activeIp() ?? "Not available"}</code>}
 												>
-													<For each={localIps()}>
-														{(entry) => (
-															<option value={entry.ip}>
-																{entry.label} — {entry.ip}
-															</option>
-														)}
-													</For>
-												</Select>
+													<Select
+														data-non-setting="Displayed connection URL address selection; no persistence"
+														id={id}
+														aria-describedby={descriptionId()}
+														class={s.input}
+														value={selectedIp()}
+														onChange={(e) => setSelectedIp(e.currentTarget.value)}
+													>
+														<For each={availableIps()}>
+															{(entry) => (
+																<option value={entry.ip}>
+																	{entry.label} — {entry.ip}
+																</option>
+															)}
+														</For>
+													</Select>
+												</Show>
 											</Show>
 											<p class={s.hint} style={{ "margin-top": "4px" }}>
 												{t("services.hint.qrScan", "Scan the QR code to connect from another device")}

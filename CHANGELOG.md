@@ -22,6 +22,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Publish typed Settings account enumeration and configured Ego interactive login start/status, with human terminal authentication and separate credential readback (#1790-1011).
 ### Fixed
 
+- Keep Remote Access settings and the mobile QR dialog available after local IP discovery fails, with an inline error and retry (#2049-2d50).
+
 - Use a theme-coloured monochrome icon in the Ideas panel heading instead of a platform emoji (#2048-5a9f).
 - Return the same structured static-validation errors from automation HTTP and MCP calls (#2007-59f6).
 
