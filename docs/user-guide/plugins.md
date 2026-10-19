@@ -75,6 +75,38 @@ The explicit flag confirms that the selected port belongs to the isolated deskto
 
 This probe does **not** prove Tasks rendering, the actual Tasks registry's unload cleanup, start-work delivery or live mutations. Those remain separate checks. Shut down only the verification instance when finished. Until the operator runs it, the account/desktop integration criterion remains unchecked.
 
+### Provider closure prerequisites
+
+A private headless backend and a worktree Vite frontend isolate backend state,
+but the normal browser loader skips user plugins before discovery. They do not
+provide an equivalent loaded-user-plugin E2E. Do not work around this by faking
+Tauri globals, manually substituting a host, or mocking authenticated HTTP. An
+agent must not start a second desktop app to bypass this limitation.
+
+The remaining checks need operator input:
+
+- **GitHub Work integration:** complete device-flow login for a test account with
+  `repo read:project`; configure its repository in Tasks; supply an accessible
+  issue, PR and Projects v2 project. In an approved loaded-plugin runtime, run
+  the read-only probe above and separately check the actual Tasks views.
+- **GitHub create metadata E2E:** authorize one issue creation in a named scratch
+  repository. With the installed plugin loaded, open Tasks → New task, select
+  Issue, confirm repository labels/milestones/assignees load, then submit the
+  authorized issue and read back its repository and metadata. Record its URL.
+  Discovery alone and the read-only probe do not prove issue creation.
+- **Jira recordings:** authorize a test site/account and read-only collection of
+  issue transitions, comment pages and agile board configuration with a
+  multi-status column. Keep the observed 429/Retry-After boundary unverified
+  until a real response is available; do not force a rate limit. Account
+  verification and post-write ADF read-back remain separate boundaries; the
+  latter needs explicit scratch-project write consent. The Jira fixture README
+  lists recorded and synthetic evidence separately.
+
+Enter credentials only through the core account login. Do not send them in chat,
+copy them from token stores, or commit them with fixtures. Until these prerequisites
+and the real-runtime checks are satisfied, keep the corresponding integration,
+recorded-fixture and create-E2E criteria unchecked.
+
 ### Settings → Plugins → Installed
 
 The Installed tab lists all installed plugins:
