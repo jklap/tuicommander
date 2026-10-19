@@ -1,13 +1,35 @@
+import { globalWorkspaceStore, MANUAL_SCOPE } from "../stores/globalWorkspace";
 import { paneLayoutStore } from "../stores/paneLayout";
 import { repositoriesStore } from "../stores/repositories";
+import { paneLayoutKey } from "../stores/savedPaneLayouts";
 import { terminalsStore } from "../stores/terminals";
+import { assignTabToActiveGroup } from "./paneTabAssign";
 
 /**
  * Navigate to a terminal: switch repo/branch context, activate the terminal,
  * deactivate other tab stores, activate the correct pane group, and focus.
  */
 export function navigateToTerminal(id: string): void {
+	if (!terminalsStore.get(id)) return;
+
+	// Unowned sessions are parked in the manual workspace, not in the selected
+	// repo. Open that tab strip before selecting the terminal's content.
 	const repoPath = repositoriesStore.getRepoPathForTerminal(id);
+	if (!repoPath && globalWorkspaceStore.getScopeMembers(MANUAL_SCOPE).includes(id)) {
+		const activeRepo = repositoriesStore.getActive();
+		const layoutKey = activeRepo?.activeWorkspaceId
+			? paneLayoutKey(activeRepo.path, activeRepo.activeWorkspaceId)
+			: undefined;
+		if (globalWorkspaceStore.getScope() !== MANUAL_SCOPE) {
+			globalWorkspaceStore.deactivate();
+			// Leave repo consolidation before opening the repo-independent workspace.
+			repositoriesStore.setActive(null);
+			globalWorkspaceStore.setScope(MANUAL_SCOPE);
+		}
+		globalWorkspaceStore.activate(layoutKey);
+	} else if (globalWorkspaceStore.isActive() && !globalWorkspaceStore.isPromoted(id)) {
+		globalWorkspaceStore.deactivate();
+	}
 	if (repoPath) {
 		const repo = repositoriesStore.state.repositories[repoPath];
 		if (repo) {
@@ -28,6 +50,9 @@ export function navigateToTerminal(id: string): void {
 	terminalsStore.setActive(id);
 
 	if (paneLayoutStore.isSplit()) {
+		if (!paneLayoutStore.getGroupForTab(id)) {
+			assignTabToActiveGroup(id, "terminal");
+		}
 		const groupId = paneLayoutStore.getGroupForTab(id);
 		if (groupId) {
 			paneLayoutStore.setActiveGroup(groupId);

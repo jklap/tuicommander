@@ -681,7 +681,7 @@ Tabbed side panel with four tabs: Changes, Log, Stashes, Branches. Replaces the 
 - Status color codes: green=working, yellow=waiting, red=rate-limited, gray=idle
 - Ready input composers remain gray/idle when an agent leaves a long-lived background terminal running
 - Rate limit indicators with countdown timers
-- Click any row to switch to that terminal and close the dashboard
+- Click any row to switch to that terminal and close the dashboard. Sessions outside registered repositories open their own Global Workspace tabs; the previous repository tab keeps its session. Opening an existing session focuses its tab without creating another session.
 - Relative timestamps auto-refresh ("2s ago", "1m ago")
 
 ### 3.13 Error Log Panel (`Cmd+Shift+E`)

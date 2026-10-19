@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+- Open parked Activity Dashboard sessions in their own Global Workspace tabs instead of displaying their content under the current repository tab; preserve existing session bindings (#2080-d401).
+
 - Invalidate the shared intent grammar during frontend hot reload so stale JSON cannot abort answer gutters or expose raw answer markers (#2073-8131).
 
 - Add `ui design_*` MCP actions with the existing Design Mode ownership, host grants and saved denials; keep the old tool until the explicit 2068 catalogue cutover (#2067-e708).
