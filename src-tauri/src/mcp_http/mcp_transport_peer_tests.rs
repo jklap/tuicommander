@@ -5954,7 +5954,12 @@ async fn ego_child_without_session_header_binds_through_process_ancestry() {
             .success()
     );
     let mut parent = std::process::Command::new(&holder)
-        .args(["-c", "env -u TUIC_SESSION sleep 60 & echo $! $$; wait"])
+        // Publish the PIDs from the scrubbed child, after `env` has exec'd it.
+        // An absent environment during exec is not proof that scrubbing finished.
+        .args([
+            "-c",
+            "env -u TUIC_SESSION \"$0\" -c 'echo \"$$ $PPID\"; exec sleep 60' & wait",
+        ])
         .env("TUIC_SESSION", TEST_UUID_A)
         .stdout(std::process::Stdio::piped())
         .spawn()
@@ -5970,13 +5975,8 @@ async fn ego_child_without_session_header_binds_through_process_ancestry() {
         Some(TEST_UUID_A.to_string()),
         "fixture: the launching process must hold the identity and be readable"
     );
-    // `env` still holds the variable until it has exec'd into `sleep`.
-    let bridge_n: u32 = bridge_pid.parse().unwrap();
-    while crate::process_env::read_process_env_var(bridge_n, "TUIC_SESSION").is_some() {
-        std::thread::sleep(std::time::Duration::from_millis(10));
-    }
     assert_eq!(
-        crate::process_env::read_process_env_var(bridge_n, "TUIC_SESSION"),
+        crate::process_env::read_process_env_var(bridge_pid.parse().unwrap(), "TUIC_SESSION"),
         None,
         "fixture: the stand-in bridge must not hold the identity itself"
     );
