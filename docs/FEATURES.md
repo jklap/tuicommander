@@ -25,7 +25,7 @@ publication remains a separate integration step.
 
 Mobile terminal Send supports long-press Queue for the next agent ready window.
 
-Published story workflows can start in Plans and Stories through the owning daemon. Run history renders graph positions, decisions, evidence and paged event payloads, with explicit graph recovery and cancellation. IPC/HTTP and the generated `workflow_run` MCP schema share the native run service. Plan start remains visibly unavailable pending plan dispatch.
+Published story workflows can start in Plans and Stories through the owning daemon. Run history renders graph positions, decisions, evidence and paged event payloads, with explicit graph recovery and cancellation. IPC/HTTP and the generated `workflow action=run` MCP schema share the native run service. Plan start remains visibly unavailable pending plan dispatch. The grouped `workflow` MCP tool exposes typed story, run, proposal_create, report and launch actions through existing service owners. Proposal retries preserve coordinator ownership and proposal-key idempotency. Legacy workflow tools remain until cutover; scheduled automations stay separate. `tuic workflow` forwards the same envelope.
 
 > Canonical capability inventory. Update this file when adding, changing, or removing user-visible features.
 > See [AGENTS.md](../AGENTS.md) for the maintenance requirement.

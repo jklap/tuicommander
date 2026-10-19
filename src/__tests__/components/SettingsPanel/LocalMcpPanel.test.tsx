@@ -151,7 +151,7 @@ describe("LocalMcpPanel", () => {
 			["Repositories", ["repo"]],
 			[
 				"Workflows and stories",
-				["story", "workflow_run", "workflow_story_create", "workflow_report", "workflow_launch"],
+				["workflow", "story", "workflow_run", "workflow_story_create", "workflow_report", "workflow_launch"],
 			],
 			["Automations", ["automations"]],
 			["User interface and Design Mode", ["ui", "design_mode"]],
