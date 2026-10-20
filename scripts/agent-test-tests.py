@@ -1,6 +1,7 @@
 """Focused launcher contracts. No test starts a desktop application."""
 import json
 import os
+import re
 from pathlib import Path
 import subprocess
 import unittest
@@ -19,6 +20,8 @@ class AgentTestPlanTests(unittest.TestCase):
         return json.loads(result.stdout)
 
     def test_dry_run_cannot_reuse_daily_config_binary_or_listener(self):
+        binary = ROOT / ".tmp/agent-test/agent-test/tuicommander-agent-test"
+        before = binary.stat() if binary.exists() else None
         plan = self.plan(TUIC_APP_INSTANCE="", TUIC_PORT="9876", TUIC_DEV_BIN_DIR="/unsafe")
         self.assertEqual(plan["environment"]["TUIC_APP_INSTANCE"], "agent-test")
         self.assertEqual(plan["environment"]["TUIC_PORT"], "19876")
@@ -30,7 +33,44 @@ class AgentTestPlanTests(unittest.TestCase):
         self.assertIn("tauri/custom-protocol", plan["cargo"])
         self.assertNotIn("dictation", plan["cargo"])
         self.assertNotIn("CARGO_TARGET_DIR", plan["environment"])
-        self.assertFalse(Path(plan["binary"]).exists(), "dry run must not copy/build the executable")
+        self.assertEqual(binary.stat() if binary.exists() else None, before,
+                         "dry run must neither create nor replace an existing warm executable")
+
+    def test_agent_test_window_profile_contract(self):
+        # Contract only: native visibility/paint/focus are observed separately
+        # by agent-test-visible.py, not inferred from these settings/source checks.
+        plan = self.plan()
+        override = json.loads(plan["build_environment"]["TAURI_CONFIG"])
+        window = override.get("app", {}).get("windows", [{}])[0]
+        for key, expected in {
+            "visible": False,
+            "focus": False,
+            "focusable": False,
+            "width": 640,
+            "height": 420,
+            "minWidth": 640,
+            "minHeight": 420,
+            "alwaysOnTop": True,
+            "backgroundThrottling": "disabled",
+        }.items():
+            with self.subTest(setting=key):
+                self.assertEqual(window.get(key), expected)
+        capabilities = override["app"]["security"]["capabilities"]
+        self.assertEqual(capabilities[0], "default")
+        self.assertEqual(capabilities[1]["windows"], ["main"])
+        self.assertEqual(capabilities[1]["permissions"],
+                         ["core:window:deny-set-focus", "core:window:deny-show"])
+        source = (ROOT / "src-tauri/src/lib.rs").read_text()
+        # The negated runtime policy is essential: test=false, daily=true.
+        # Window focus=false alone cannot stop Tauri's application activation.
+        self.assertTrue(re.search(r'let builder = tauri::Builder::default\(\);\s*#\[cfg\(target_os = "macos"\)\]\s*let builder = builder\.activate_ignoring_other_apps\(!agent_test::active\(\)\);', source), "macOS activation must be false for agent-test and true for daily")
+        self.assertRegex(source, r'if !agent_test::active\(\) \{\s*sanitize_window_state\(\);\s*\}')
+        self.assertTrue("agent_test::present_without_focus(&window)" in source, "Ready must present agent-test without making it key")
+        policy = (ROOT / "src-tauri/src/agent_test.rs").read_text()
+        self.assertTrue("native.orderFront(None)" in policy, "agent-test must use the non-key native presentation path")
+        self.assertNotIn("makeKeyAndOrderFront", policy)
+        self.assertNotIn(".show()", policy)
+        self.assertTrue(".with_filter(|_| !agent_test::active())" in source, "saved window restore must not focus agent-test")
 
     def test_overrides_remain_named_and_use_a_separate_socket(self):
         default = self.plan()
@@ -39,6 +79,11 @@ class AgentTestPlanTests(unittest.TestCase):
         self.assertEqual(other["environment"]["TUIC_PORT"], "19877")
         self.assertNotEqual(default["socket"], other["socket"])
         self.assertLess(len(other["socket"].encode()), 104)
+        # Bug caught: agents follow the TCP listener into a 401 instead of
+        # connecting to the selected instance's unauthenticated Unix socket.
+        for plan in [default, other]:
+            self.assertEqual(plan["connect"],
+                             f"curl --unix-socket '{plan['socket']}' http://localhost/health # Agents use this socket; TCP requires Basic auth")
 
     def test_static_wiring_keeps_guards_before_machine_wide_effects(self):
         # Static audit requested by the story: dropping a runtime guard must fail

@@ -60,3 +60,73 @@ Both owned PTYs were deleted. `sessions-after-cleanup.json` is `[]`. Backend PID
 No production code, tests or capture corpus changed. No story was closed and no acceptance criterion was newly checked.
 
 Remaining emulated checks: obtain a stable authenticated browser session, then capture actual busy and confidently-awaiting agent exits, shell input/output recovery, PTY closure and Back. Remaining physical checks for Boss: perform the 1985 exit flows on a phone; switch the installed standalone PWA away and back three times for 1900. If the grey screen recurs, retain its automatic lifecycle report and capture URL, DOM/root/shell geometry, viewport and console before reloading. Do not infer the missing failure cause from this successful shell-retention probe.
+
+
+## 1985 retry: isolated desktop, 2026-10-20 09:38–09:42 CEST
+
+Source: `aeebb64e819ea6e293e56f907b1fb843dab1d255`, branch `chore/desk-1985`.
+The authorized command was `make agent-test AGENT_TEST_INSTANCE=at-1985
+AGENT_TEST_PORT=19880`, after its dry run. The target built embedded assets and
+native macOS binaries through build-slot and mbx; mbx doctor reported zero
+failures. This was not an rb build or a test-suite run. No Vite server was needed.
+The named ab-stealth session `desk-1985` opened the instance's `/mobile` page at
+390×844. Authentication used the instance's session-token API through its own
+Unix socket, not the daily app or a credential-store read. The browser requests
+completed; the previous pending-request harness problem did not recur.
+
+Evidence is retained locally at `~/Gits/.tmp/results/desk-1985/`. One disposable
+PTY, `bdd756b5-34d8-45f4-9264-2beb39da1833`, ran two real Claude Code processes.
+The existing account was available; no login was performed. One short inference
+was interrupted while working; a second requested only an AskUserQuestion picker.
+No repository modification was requested from either process.
+
+| Check | Observed result | Evidence |
+| --- | --- | --- |
+| Busy exit | API reported `agent_type=claude`, `agent_state=working`, `awaiting_input=false`; SIGTERM to the recorded owned Claude PID restored Terminal branding and removed CLI/Chat controls | `busy-before-exit.json`, `busy-before-exit.txt`, `busy-after-exit.json`, `busy-after-exit.txt`, `busy-after-exit.png` |
+| Shell after busy exit | The mobile composer submitted `printf`; terminal output contained the separate result line `BUSY_EXIT_SHELL_OK` | `busy-shell-output.txt` |
+| Awaiting exit | Real AskUserQuestion displayed Red/Blue buttons; API reported `awaiting_input=true`, `question_confident=true`, and the actual choice prompt. SIGTERM restored Terminal branding and removed those answer buttons; the next API snapshot omitted agent/question fields and reported shell idle | `await-progress.json`, `await-progress.txt`, `awaiting-before-exit.png`, `await-after-exit.json`, `await-after-exit.txt` |
+| Shell after awaiting exit | The mobile composer submitted `printf`; terminal output contained `AWAIT_EXIT_SHELL_OK`. However, a later Input badge and Yes/No shortcuts appeared again: see the anomaly below | `await-shell-output.txt`, `await-shell-recovered.png` |
+| PTY closure | Submitting `exit` through the mobile composer displayed Session ended and Back, with composer/keybar disabled. Clicking Back returned to No active sessions | `pty-ended.txt`, `pty-ended.png`, `pty-ended.json`, `back-to-sessions.txt` |
+
+### Backend question re-arm anomaly: not an unqualified pass
+
+After awaiting-agent exit, `await-after-exit.json` shows the correct shell
+snapshot: no agent, no question, `awaiting_input=false`, `shell_state=idle`.
+The shell then printed the requested marker successfully. Nevertheless,
+`await-shell-output.txt` shows Terminal branding with an Input badge and Yes/No
+shortcuts, while the old native question footer remains in terminal history.
+The native backend log records new confident question events at
+`07:41:28.250719Z` and `07:41:29.043168Z`, both with
+`hook_instrumented=false`, after the shell-return snapshot. Thus this is not
+only evidence of the mobile retaining its pre-exit WebSocket object.
+
+The exact producer was not isolated by replay. Source inspection identifies
+`rearm_awaiting_for_open_dialog` and its full-screen call in `pty.rs` as a
+candidate: they accept a retained Ink footer without a foreground-agent argument.
+Do not treat that candidate as a proven root cause. No production change, RED
+regression, or new story was made for this separate backend detection finding.
+The coordinator must route it to the backend owner before claiming completely
+clean awaiting-exit state. Shell input/output recovery and ended-PTY navigation
+were proved despite the indicator anomaly.
+
+`exit-state-logs.txt` retains the relevant native events. The local-only
+`await-exit-local-only.tcap` starts after the original question was rendered; it
+contains subsequent exit/shell traffic, not the full question-start sequence.
+It is not a committed fixture and has no replay-oracle golden. Do not claim it
+alone can reproduce the complete detector transition.
+
+### Cleanup and criterion status
+
+The PTY exited normally and `/sessions` returned `[]`. The named browser tab and
+its own `ab-shared-desk-1985-81136` daemon were closed; shared Chrome was not
+stopped. The matching `make agent-test-stop` target stopped only `at-1985`.
+Recorded supervisor, shell and both Claude PIDs no longer existed; port 19880
+refused connections. No daily-app endpoint, installed binary, or daily config was
+used. The isolated instance retains its own configuration and local evidence.
+
+Criteria 2 and 3 were already checked; their check-criterion commands confirmed
+that state. `story-close.sh --check` returned check-ok and explicitly reported
+only the unchecked physical-phone VISUAL criterion 4. It remains unchecked for
+Boss. Chromium emulation is not physical-phone touch, iOS/WebKit, or standalone
+PWA evidence. No story was closed. The new backend anomaly remains a material
+limit on this retry, not a reason to weaken the physical-phone criterion.

@@ -1763,7 +1763,9 @@ pub fn run(mut context: tauri::Context<tauri::Wry>) {
     // Skips agents the user explicitly disabled via Settings > Agents.
     agent_mcp::ensure_mcp_configs(&config.disabled_mcp_agents);
 
-    sanitize_window_state();
+    if !agent_test::active() {
+        sanitize_window_state();
+    }
 
     let themes_dir = config::config_dir().join("themes");
     if let Err(e) = themes::seed_builtin_themes(&themes_dir) {
@@ -1781,6 +1783,8 @@ pub fn run(mut context: tauri::Context<tauri::Wry>) {
     }
     let index_strategy = config.index_strategy.clone();
     let builder = tauri::Builder::default();
+    #[cfg(target_os = "macos")]
+    let builder = builder.activate_ignoring_other_apps(!agent_test::active());
     let builder = plugins::register_plugin_protocol(builder);
     let builder = builder
         .plugin(tauri_plugin_opener::init())
@@ -1842,6 +1846,7 @@ pub fn run(mut context: tauri::Context<tauri::Wry>) {
         .plugin(tauri_plugin_process::init())
         .plugin(
             tauri_plugin_window_state::Builder::new()
+                .with_filter(|_| !agent_test::active())
                 .with_state_flags(
                     // Exclude SIZE to prevent progressive shrinking with titleBarStyle Overlay
                     tauri_plugin_window_state::StateFlags::POSITION
@@ -2638,7 +2643,14 @@ pub fn run(mut context: tauri::Context<tauri::Wry>) {
                 // not in setup() which fires before the plugin applies its state.
                 tauri::RunEvent::Ready => {
                     if let Some(window) = app_handle.get_webview_window("main") {
-                        ensure_window_visible(&window);
+                        if agent_test::active() {
+                            #[cfg(target_os = "macos")]
+                            if let Err(error) = agent_test::present_without_focus(&window) {
+                                tracing::warn!(%error, "Failed to present agent-test window");
+                            }
+                        } else {
+                            ensure_window_visible(&window);
+                        }
                     }
                 }
                 // Dock-icon click (applicationShouldHandleReopen). macOS suppresses

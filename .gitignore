@@ -50,6 +50,7 @@ benchmarks
 .mdkb
 scripts/*
 !scripts/agent-test.py
+!scripts/agent-test-visible.py
 !scripts/agent-test-tests.py
 !scripts/test-agent-test.sh
 !scripts/check-desktop-embedding.sh

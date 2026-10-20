@@ -817,6 +817,15 @@ fn spawn_silence_timer(
                 }
             }
 
+            // Chat-question heuristics, like open-dialog recovery in the reader,
+            // require a live agent. Its old title can remain above the returned
+            // shell prompt and must not become a new wait after ten quiet seconds.
+            if agent_type.is_none() {
+                silence.lock().clear_stale_question();
+                emit_question_cleared_if_stale(&state, &session_id);
+                continue;
+            }
+
             // Check temporal conditions first (shared by both strategies).
             // Snapshot the epoch while holding the lifecycle mutex shared with
             // `note_submitted_input`. If input begins after this point, the
@@ -2858,7 +2867,11 @@ impl ChunkProcessor {
         // spurious clear, never one per frame. This applies to hooked sessions
         // too: later busy hooks can clear awaiting while the dialog stays open,
         // and a multi-question tool emits its awaiting hook only once.
-        if let Some(screen) = screen_cache {
+        // A returned shell can retain the agent's footer above its prompt. Only
+        // a live agent identity makes those retained rows an open agent dialog.
+        if agent_type.is_some()
+            && let Some(screen) = screen_cache
+        {
             let (awaiting, has_choice) = state
                 .session_maps
                 .session_states
@@ -2969,10 +2982,11 @@ impl ChunkProcessor {
             // soon as the prompt leaves the screen (see the screen-absence reset
             // above), so this guards one pending prompt, not the whole session.
             if let ParsedEvent::Question { prompt_text, .. } = event {
-                // Native ego awaiting has an empty title, so text absence
-                // cannot retire it. Admit a fresh wait after busy cleared it.
+                // Ego's empty title is a native awaiting marker, not screen
+                // content. Each marker establishes a wait independently of the
+                // previous dialog's presence, shape or repaint bookkeeping.
                 if self.last_question_text.as_deref() == Some(prompt_text.as_str())
-                    && !(agent_type.as_deref() == Some("ego") && self.choice_prompt_needs_repaint)
+                    && !(agent_type.as_deref() == Some("ego") && prompt_text.is_empty())
                 {
                     continue;
                 }

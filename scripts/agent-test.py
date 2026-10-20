@@ -35,18 +35,32 @@ def plan(instance: str, port: str) -> dict:
     if len(os.fsencode(socket)) >= 104:
         raise ValueError("runtime socket path exceeds the macOS Unix socket limit")
     executable = ROOT / ".tmp/agent-test" / instance / BINARY
+    # Tao's launch activation hack makes every initially visible window key,
+    # even with focus=false. Agent-test presents it without a key only at Ready.
+    config = json.loads((ROOT / "src-tauri/tauri.conf.json").read_text())
+    window = {**config["app"]["windows"][0], "visible": False, "focus": False,
+              "focusable": False, "center": False, "alwaysOnTop": True,
+              "width": 640, "height": 420, "minWidth": 640, "minHeight": 420,
+              "backgroundThrottling": "disabled"}
+    override = {"identifier": "com.tuic.commander.agent-test",
+                "productName": "TUICommander Agent Test", "bundle": {"externalBin": []},
+                "app": {"windows": [window], "security": {"capabilities": ["default", {
+                    "identifier": "agent-test-presentation", "windows": ["main"],
+                    "permissions": ["core:window:deny-set-focus", "core:window:deny-show"]
+                }]}}}
     cargo = ["cargo", "build", "--manifest-path", "src-tauri/Cargo.toml", "-p", "tuicommander", "-p", "tuic-bridge", "-p", "tuic-cli", "--bin", BINARY, "--bin", "tuic-bridge", "--bin", "tuic", "--features", "tauri/custom-protocol", "--message-format=json-render-diagnostics"]
     return {
         "binary": str(executable),
         "config_dir": str(Path.home() / "Library/Application Support/com.tuic.commander/instances" / instance),
         "listener": f"127.0.0.1:{int(port)} (no port fallback)",
         "socket": str(socket),
+        "connect": f"curl --unix-socket '{socket}' http://localhost/health # Agents use this socket; TCP requires Basic auth",
         "pid_file": str(runtime / "desktop.pid"),
         "stop_fifo": str(runtime / "stop.fifo"),
         "environment": {"TUIC_APP_INSTANCE": instance, "TUIC_PORT": str(int(port)), "TMPDIR": str(runtime) + "/"},
         "cargo": cargo,
         "frontend": ["pnpm", "exec", "vite", "build"],
-        "build_environment": {"PATH_prefix": str(Path.home() / "Library/Application Support/mbx/bin"), "TAURI_CONFIG": json.dumps({"identifier": "com.tuic.commander.agent-test", "productName": "TUICommander Agent Test", "bundle": {"externalBin": []}})},
+        "build_environment": {"PATH_prefix": str(Path.home() / "Library/Application Support/mbx/bin"), "TAURI_CONFIG": json.dumps(override)},
         "launch": [str(executable)],
         "disabled": ["global shortcuts", "dictation/microphone", "Telegram", "updater", "global MCP install", "global CLI mutations", "global agent hooks", "deep links", "sleep inhibition"],
     }
