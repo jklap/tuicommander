@@ -36,9 +36,9 @@ class AgentTestPlanTests(unittest.TestCase):
         self.assertEqual(binary.stat() if binary.exists() else None, before,
                          "dry run must neither create nor replace an existing warm executable")
 
-    def test_agent_test_window_renders_visible_without_focus(self):
-        # Bug caught: inherited daily defaults hide/throttle the test WebView or
-        # activate the application while another app owns keyboard focus.
+    def test_agent_test_window_profile_contract(self):
+        # Contract only: native visibility/paint/focus are observed separately
+        # by agent-test-visible.py, not inferred from these settings/source checks.
         plan = self.plan()
         override = json.loads(plan["build_environment"]["TAURI_CONFIG"])
         window = override.get("app", {}).get("windows", [{}])[0]
@@ -46,7 +46,10 @@ class AgentTestPlanTests(unittest.TestCase):
             "visible": False,
             "focus": False,
             "focusable": False,
-            "center": True,
+            "width": 640,
+            "height": 420,
+            "minWidth": 640,
+            "minHeight": 420,
             "alwaysOnTop": True,
             "backgroundThrottling": "disabled",
         }.items():

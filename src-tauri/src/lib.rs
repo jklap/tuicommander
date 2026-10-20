@@ -2643,12 +2643,13 @@ pub fn run(mut context: tauri::Context<tauri::Wry>) {
                 // not in setup() which fires before the plugin applies its state.
                 tauri::RunEvent::Ready => {
                     if let Some(window) = app_handle.get_webview_window("main") {
-                        ensure_window_visible(&window);
-                        #[cfg(target_os = "macos")]
-                        if agent_test::active()
-                            && let Err(error) = agent_test::present_without_focus(&window)
-                        {
-                            tracing::warn!(%error, "Failed to present agent-test window");
+                        if agent_test::active() {
+                            #[cfg(target_os = "macos")]
+                            if let Err(error) = agent_test::present_without_focus(&window) {
+                                tracing::warn!(%error, "Failed to present agent-test window");
+                            }
+                        } else {
+                            ensure_window_visible(&window);
                         }
                     }
                 }

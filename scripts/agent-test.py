@@ -39,7 +39,8 @@ def plan(instance: str, port: str) -> dict:
     # even with focus=false. Agent-test presents it without a key only at Ready.
     config = json.loads((ROOT / "src-tauri/tauri.conf.json").read_text())
     window = {**config["app"]["windows"][0], "visible": False, "focus": False,
-              "focusable": False, "center": True, "alwaysOnTop": True,
+              "focusable": False, "center": False, "alwaysOnTop": True,
+              "width": 640, "height": 420, "minWidth": 640, "minHeight": 420,
               "backgroundThrottling": "disabled"}
     override = {"identifier": "com.tuic.commander.agent-test",
                 "productName": "TUICommander Agent Test", "bundle": {"externalBin": []},

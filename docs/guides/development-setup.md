@@ -118,7 +118,9 @@ is not a symlink into mbx's target cache. The default instance stores app state
 in `~/Library/Application Support/com.tuic.commander/instances/agent-test/`.
 It never seeds from the daily config. Never copy daily tokens or config there.
 
-The test window is centered and always on top so macOS does not fully
+The test window is 640×420 logical pixels, with matching minimum dimensions,
+at the bottom-right of the primary screen work area (16 logical pixels inset).
+It is always on top so macOS does not fully
 occlude its WebView behind the active application. It cannot become key or take
 keyboard focus. Background throttling is disabled (supported on macOS 14+), and
 initial application activation is disabled only for the agent-test runtime.
@@ -132,6 +134,36 @@ uses `makeKeyAndOrderFront` for those APIs. The agent-test capability override
 denies `show` and `set-focus`; it adds no presentation permission. The daily
 capability file is unchanged. Stop the instance when the check ends to remove
 the floating window. The daily window configuration remains unchanged.
+
+#### Native visibility regression (authorized macOS runs only)
+
+The unattended `scripts/agent-test-tests.py` checks launcher/configuration and
+source-wiring contracts. It does **not** observe a rendered window. The separate
+native regression launches this worktree's `make agent-test`, observes the real
+WebView through its Unix socket, and stops the supervised instance in cleanup:
+
+```bash
+python3 -B scripts/agent-test-visible.py --instance at-2090 --port 19883 \
+  --evidence-dir "$HOME/Gits/.tmp/results/agent-test-visible-$(date +%s)"
+```
+
+This needs explicit desktop-execution authorization, macOS, a linked worktree
+with build inputs, an unused named instance/port, and an unrelated foreground
+application. Keep that foreground application unchanged during the build and
+check. Do not use an existing instance with sessions. The evidence directory
+must be new and under `~/Gits`.
+
+`agent_test_window_renders_visible_without_focus` checks document/native
+visibility, positive terminal canvas area, actual `fillText` paint, no native or
+document focus, and the same unrelated frontmost PID before launch, at readiness
+and after painting. It also verifies the compact viewport and corner geometry.
+It retains JSON receipts, the native build log and canvas-only PNGs, deletes
+only sessions created by the check, calls `make agent-test-stop`, and checks
+`ps` for this worktree's executable. It never captures the desktop or drives
+the daily instance. A failure exits nonzero after cleanup. Commenting out the
+native `orderFront` presentation must make this observer fail; source contracts
+alone are not behavioral RED evidence. This native check is intentionally not
+part of the unattended shell/Rust/JS suites.
 
 #### Shared-resource audit
 
