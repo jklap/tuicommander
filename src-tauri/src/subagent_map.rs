@@ -298,6 +298,8 @@ impl LaneSummary {
 pub(crate) struct MapCache {
     lanes: HashMap<PathBuf, LaneCursor>,
     parents: HashMap<PathBuf, SpawnCursor>,
+    #[cfg(test)]
+    meta_reads: usize,
 }
 
 #[derive(Default)]
@@ -576,6 +578,10 @@ fn collect_lanes(
 
     let mut lanes: Vec<LaneData> = Vec::new();
     for (agent_id, meta_path, jsonl_path) in found {
+        #[cfg(test)]
+        {
+            cache.meta_reads += 1;
+        }
         let Ok(meta) = std::fs::read_to_string(&meta_path) else {
             continue;
         };
@@ -1319,6 +1325,24 @@ mod tests {
         let transcript = tmp.join("parent.jsonl");
         std::fs::write(&transcript, parent).expect("write the parent transcript");
         (dir, transcript)
+    }
+
+    /// Catches unchanged meta files being reopened on every Flow refresh even
+    /// though transcript byte cursors already skip unchanged contents.
+    #[test]
+    fn subagent_map_unchanged_flow_does_not_reread_meta() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let (dir, parent) = session_tree(tmp.path(), PARENT_JSONL);
+        let mut cache = MapCache::default();
+        let first = subagent_flows(&mut cache, &dir, &parent);
+        let reads = cache.meta_reads;
+        let second = subagent_flows(&mut cache, &dir, &parent);
+        assert_eq!(first, second);
+        assert_eq!(reads, 1, "the initial refresh must actually read the meta");
+        assert_eq!(
+            cache.meta_reads, reads,
+            "unchanged metas must not be reopened"
+        );
     }
 
     fn flows(dir: &Path, parent: &Path) -> Vec<SubagentFlow> {
