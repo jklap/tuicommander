@@ -44,13 +44,19 @@ fn option_text(row: &str, multiple: bool) -> Option<(&str, &str)> {
         .filter(|(key, _)| !key.is_empty() && key.bytes().all(|ch| ch.is_ascii_digit()))
 }
 
-/// Native diagnostics, working chrome and a submitted composer delimit the
+/// Native diagnostics, receipts, working chrome and a submitted composer delimit the
 /// question. Both modal forms share this boundary contract; soft-wrapped rows
 /// have already been joined from terminal-grid metadata by the PTY adapter.
 fn is_question_boundary(row: &str) -> bool {
     let row = row.trim();
     row.is_empty()
         || row.starts_with("εgo:")
+        || (row.starts_with("TUICommander v") && row.ends_with(" is connected."))
+        || row.starts_with("intent: ")
+        // Ego's finished tool rows begin with the outcome mark. They are not
+        // question prose, even when no blank row separates the next modal.
+        || row.starts_with("✓ ")
+        || row.starts_with("✗ ")
         || row.starts_with('>')
         || (crate::chrome::is_spinner_row(row) && row.contains("Esc to interrupt"))
         || row.starts_with("Ctrl+B backgrounds")
@@ -365,6 +371,47 @@ mod tests {
                 matches!(question, Some(ParsedEvent::Question { prompt_text, confident: true })
                 if prompt_text == "Which release checks should we run?")
             );
+        }
+    }
+
+    /// Catches: connection/intent or finished tool rows becoming wrapped modal titles.
+    #[test]
+    fn ego_question_titles_stop_at_receipt_and_status_rows() {
+        for boundary in [
+            "TUICommander v2.0.0 is connected.",
+            "intent: Verifying session status and colour selection (Live verification)",
+            "✓ call_tool {\"tool_name\":\"session\"} · 542ms · approval 17.7s",
+            "✗ call_tool {\"tool_name\":\"session\"} · 542ms",
+        ] {
+            for (options, footer) in [
+                (["> 1. Red", "  2. Green"], FOOTER),
+                (["> [x] 1. Red", "  [ ] 2. Green"], MULTIPLE_FOOTER),
+            ] {
+                let Some(ParsedEvent::ChoicePrompt { title, .. }) = parse_ego_question(&rows(&[
+                    "Previous output",
+                    boundary,
+                    "Pick a colour",
+                    "for the release?",
+                    options[0],
+                    options[1],
+                    footer,
+                ])) else {
+                    panic!("selector lost after {boundary}");
+                };
+                assert_eq!(title, "Pick a colour for the release?", "{boundary}");
+            }
+            let Some(ParsedEvent::Question { prompt_text, .. }) =
+                parse_ego_free_text_question(&rows(&[
+                    "Previous output",
+                    boundary,
+                    "Pick a colour",
+                    "for the release?",
+                    ">",
+                ]))
+            else {
+                panic!("free-text question lost after {boundary}");
+            };
+            assert_eq!(prompt_text, "Pick a colour for the release?", "{boundary}");
         }
     }
 

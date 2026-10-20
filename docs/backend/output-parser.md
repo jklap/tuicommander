@@ -678,6 +678,8 @@ Selector and free-text title extraction share boundaries at `εgo:` diagnostics,
 
 Ego enforced-approval buttons also send only their native key. In particular, `n` opens the refusal explanation without an appended Enter that would immediately settle it.
 
+Selector and free-text title extraction share the same boundary rules. In addition to native diagnostics, working/composer and help rows, TUIC connection acknowledgements, column-zero `intent:` rows and ego finished-tool outcome rows (`✓` / `✗`) end preceding output. A contiguous receipt must not become part of the next question. The unchanged `ego-selector-receipt-title-2088.tcap` records a successful MCP receipt directly above `Pick a colour?`; its accumulator replay checks both `choice_prompt.title` and `question_text`. Wrapped genuine question rows remain part of the title.
+
 ### ego terminal provider recovery (1902)
 
 The existing OSC 7770 consumer accepts the following UTF-8 byte frames (the
