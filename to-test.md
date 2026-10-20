@@ -2682,3 +2682,5 @@ Needs an iPhone (iOS 16.4+, 18.4+ preferred), the desktop TUICommander running a
 ## ZIP 9 dependency migration (2037-6c5a) — backend rebuild required
 
 - [ ] After Boss rebuilds/restarts the app, install a disposable plugin ZIP with a root manifest and another with a single top-level directory; confirm their files load. On Windows, install the speech runtime from its ZIP and confirm the selected library loads. Automated extraction/name tests run on rb; this item records that the currently running backend cannot load the ZIP 9 migration without a rebuild. Do not restart the running app for this check.
+
+- [x] Mobile AI Chat tab availability (#2087-07bf): isolated worktree Vite + headless backend at 390×844 shows four tabs without ego and five with ego; host config saves update the tab over SSE without page reload. _(verified: ~/Gits/.tmp/feat-2087-visual/transcript.txt and with-ego.png / without-ego.png)_

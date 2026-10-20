@@ -117,7 +117,7 @@ describe("visual review layout regressions", () => {
 	it("catches mobile tabs painted dark over the light theme", () => {
 		css("src/mobile/components/BottomTabs.module.css");
 		document.documentElement.style.setProperty("--bg-secondary", "rgb(243, 243, 243)");
-		const { getByRole } = render(() => <BottomTabs active="sessions" onSelect={noop} />);
+		const { getByRole } = render(() => <BottomTabs aiChatAvailable={true} active="sessions" onSelect={noop} />);
 		expect(getComputedStyle(getByRole("navigation")).backgroundColor).toBe("rgb(243, 243, 243)");
 	});
 

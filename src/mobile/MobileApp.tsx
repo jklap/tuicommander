@@ -112,9 +112,11 @@ export default function MobileApp() {
 		line?: number;
 		root?: string;
 	} | null>(null);
-	const { sessions, loading, refreshing, error, authError, refresh, markSeen, subscribeChatWake } = useSessions(() =>
-		setRecoveryRevision((revision) => revision + 1),
-	);
+	const { aiChatAvailable, sessions, loading, refreshing, error, authError, refresh, markSeen, subscribeChatWake } =
+		useSessions(() => setRecoveryRevision((revision) => revision + 1));
+	createEffect(() => {
+		if (!aiChatAvailable() && activeTab() === "chat") setActiveTab("sessions");
+	});
 	const { updateAvailable, applyUpdate } = useVersionCheck();
 	ideasStore.hydrate();
 
@@ -239,6 +241,7 @@ export default function MobileApp() {
 						</main>
 						<BottomTabs
 							active={activeTab()}
+							aiChatAvailable={aiChatAvailable()}
 							onSelect={(tab) => {
 								setChatFileLink(null);
 								setActiveTab(tab);
