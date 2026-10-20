@@ -6,6 +6,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+- Keep macOS App Nap off for the whole desktop process. An occluded window without a busy agent no longer demotes PTY readers, the local API and the heartbeat to the background band; measured 41.6 s heartbeat and 40 s backend stalls before the change (#1638-c94c).
 - Keep clipped Claude native questions answerable with explicit previous/next/select controls instead of generic Yes/No or guessed hidden choices (#2093-0be6).
 - Export the first Codex /plan question in narrow terminals, including the split footer and independently wrapped answer labels and descriptions; keep its controls active through a delayed idle hook (#2094-da19).
 - Give reader-applied terminal input output bounded priority over animation frame floors on desktop and HTTP/PWA, using the existing gated serializer (#2040-16b2).

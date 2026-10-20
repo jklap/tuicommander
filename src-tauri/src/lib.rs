@@ -150,6 +150,8 @@ pub(crate) mod plugin_settings;
 pub(crate) mod plugins;
 pub(crate) mod pr_review;
 #[cfg(feature = "desktop")]
+mod app_nap;
+#[cfg(feature = "desktop")]
 mod press_and_hold;
 pub(crate) use tuic_core::process_env;
 pub(crate) mod progress;
@@ -2014,6 +2016,10 @@ pub fn run(mut context: tauri::Context<tauri::Wry>) {
                 // Disable macOS press-and-hold accent popup so held keys repeat
                 // in the terminal's hidden input (vim j/l/i — issue #79)
                 press_and_hold::disable();
+
+                // An occluded window must not nap the backend: PTYs, the local
+                // API and the heartbeat share this process (story 1638-c94c).
+                app_nap::disable();
             }
 
             // Themes are seeded before window creation so the first paint uses

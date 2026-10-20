@@ -1,3 +1,7 @@
+## App Nap opt-out (1638-c94c) — Rust restart required
+
+- [ ] After Boss manually restarts a rebuilt backend, check the log line `App Nap disabled for the process lifetime` (source `app-nap`). Cover the TUIC window with a full-screen app while no agent is busy, wait two minutes, and check that `/logs` contains no `Sleep-wake detected` or `Frontend unresponsive` line for that period and that remote clients stay live. This Rust change does not hot-reload into the daily app.
+
 ## First narrow Codex /plan question (2094-da19) — Rust restart required
 
 - [ ] After Boss manually restarts a rebuilt backend, open the first Codex /plan question in a narrow terminal. Check Input in the mobile list and named answer controls in CLI and Chat. Answer once and check native completion. This Rust parser change does not hot-reload into the daily app; isolated worktree verification is recorded in the story.

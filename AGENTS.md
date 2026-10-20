@@ -291,6 +291,8 @@ When enabled, emits health snapshots every 30s and alerts on FD/thread growth tr
 Frontend unresponsive: no heartbeat for 30s — the WebView main thread is blocked or gone.
 ```
 
+**Whole-process silence is not a frontend block.** When the heartbeat gap coincides with an empty backend log and `Sleep-wake detected` lines while the Mac is awake, every thread was starved. On 2026-10-20 an occluded agent-test instance without a power assertion was App-Napped: `ps -M -p <pid>` showed ~100 threads at priority 4, and a sync IPC command was blocked 40 s in `rename(2)`. `app_nap.rs` now keeps App Nap off for the process lifetime (story 1638-c94c).
+
 **Persistent stall evidence:** selected numeric slow-event metadata survives ring overflow and graceful restart in a bounded journal. See `docs/backend/stall-journal.md` for retention, replay inputs and limits; this is not proof of historical stall attribution.
 
 **Lost document (always on, desktop only):** a *second*, different white screen. The `webview-recovery` thread reads the main frame's URL every 15s (`webview_recovery.rs`); anything on the `about:` scheme means the app is no longer in the DOM, and it navigates back to the last healthy URL by itself, logging once. This is not the heartbeat's job and the heartbeat cannot see it: the app is gone rather than blocked, so it never beats from the blank document, and "never beat" is deliberately silent (`tuic-remote` has no WebView).
