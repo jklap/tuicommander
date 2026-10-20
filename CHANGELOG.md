@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+- Accept the recorded managed Claude startup trust dialog with No selected above Yes; send Down then Enter once and leave incomplete or unmanaged dialogs untouched (#2097-5739).
+
 - Keep clipped Claude native questions answerable with explicit previous/next/select controls instead of generic Yes/No or guessed hidden choices (#2093-0be6).
 - Export the first Codex /plan question in narrow terminals, including the split footer and independently wrapped answer labels and descriptions; keep its controls active through a delayed idle hook (#2094-da19).
 - Give reader-applied terminal input output bounded priority over animation frame floors on desktop and HTTP/PWA, using the existing gated serializer (#2040-16b2).
