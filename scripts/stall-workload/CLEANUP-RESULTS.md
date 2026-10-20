@@ -85,8 +85,9 @@ received after each run's `done` callback. The native-heartbeat sample counts ar
 7, 5, 6, 7 and 5. Timer sample counts are 346, 112, 41, 41 and 33. The corresponding
 independent backend sample counts remain 144, 148, 145, 144 and 103.
 
-Run 4's last native-heartbeat callback arrived 328 ms after `done` at the collector;
-its measured command RTT was 27 ms. Run 5's last timer and native-heartbeat
+Run 4's last native-heartbeat callback arrived 2 ms after `done` at the collector
+(`received_ms` 1792493578006 → 1792493578008), or 13 ms later by WebView wall
+clock. Its measured command RTT was 27 ms. Run 5's last timer and native-heartbeat
 callbacks arrived 1 ms and 4 ms after `done`, respectively. That native-heartbeat
 command **completed successfully in 19,530 ms**. Its WebView wall timestamp is
 30 ms after `done`; the spacing from the previous native-heartbeat completion is
