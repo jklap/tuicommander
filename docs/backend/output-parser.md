@@ -676,7 +676,11 @@ The terminal ego CLI reports human-question waits with OSC 7770 awaiting and res
 
 Selector and free-text title extraction share boundaries at `εgo:` diagnostics, submitted composer rows and native working rows. Wrapped question text below the boundary remains intact. Default-mode CLI approvals use a separate strict surface: an `Allow …?` title, a `Risk:` row and the native `y/a/n/e/d` controls. Refusing with `n` replaces the buttons with the CLI explanation prompt; Enter then settles the wait. Real captures cover selector titles and the refusal path, not edit/details or persistent approval actions.
 
+Default-mode approval titles can contain explicit CRLF continuation rows. The parser joins the contiguous `Allow` title immediately before `Risk:` without crossing a question boundary, and still requires the exact native controls. Each empty-title ego OSC awaiting marker establishes a fresh wait; content dedup must not depend on whether an earlier approval produced a choice prompt or changed rows. The `ego-mcp-questions-2088-2089.tcap` recording covers three MCP approvals, including both bare-key and key-plus-Enter answers.
+
 Ego enforced-approval buttons also send only their native key. In particular, `n` opens the refusal explanation without an appended Enter that would immediately settle it.
+
+Selector and free-text title extraction share the same boundary rules. In addition to native diagnostics, working/composer and help rows, TUIC connection acknowledgements, column-zero `intent:` rows and ego finished-tool outcome rows (`✓` / `✗`) end preceding output. A contiguous receipt must not become part of the next question. The unchanged `ego-mcp-questions-2088-2089.tcap` records a successful MCP receipt directly above `Pick a colour?`; its accumulator replay checks both `choice_prompt.title` and `question_text`. Wrapped genuine question rows remain part of the title.
 
 ### ego terminal provider recovery (1902)
 
