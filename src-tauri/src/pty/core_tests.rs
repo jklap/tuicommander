@@ -13485,6 +13485,88 @@ mod grid_delivery_tests {
         stop
     }
 
+    /// Catches: post-input echo remaining behind the sustained/typing rate floor
+    /// even though the real reader applied it and the subscriber is caught up.
+    #[tokio::test(flavor = "current_thread")]
+    async fn input_echo_reaches_grid_before_animation_floor() {
+        struct ChunkReader(std::sync::mpsc::Receiver<Vec<u8>>);
+        impl Read for ChunkReader {
+            fn read(&mut self, bytes: &mut [u8]) -> std::io::Result<usize> {
+                match self.0.recv() {
+                    Ok(chunk) => {
+                        bytes[..chunk.len()].copy_from_slice(&chunk);
+                        Ok(chunk.len())
+                    }
+                    Err(_) => Ok(0),
+                }
+            }
+        }
+        fn carries_echo(bytes: &[u8]) -> bool {
+            if bytes.len() < 26 {
+                return false;
+            }
+            let rows = u16::from_le_bytes([bytes[0], bytes[1]]);
+            let mut at = 26usize;
+            for _ in 0..rows {
+                let flagged = u16::from_le_bytes([bytes[at + 2], bytes[at + 3]]);
+                at += 4;
+                if flagged & 0x4000 != 0 {
+                    at += 2;
+                }
+                for _ in 0..(flagged & 0x3fff) {
+                    let codepoint = u32::from_le_bytes(bytes[at..at + 4].try_into().unwrap());
+                    if codepoint == '⑤' as u32 {
+                        return true;
+                    }
+                    at += 11;
+                }
+            }
+            false
+        }
+
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+        let sid = "input-priority-echo";
+        let mut rx = grid_session(&state, sid);
+        let (tx, reader) = std::sync::mpsc::channel();
+        spawn_reader_thread(
+            Box::new(ChunkReader(reader)),
+            Arc::new(AtomicBool::new(false)),
+            sid.to_string(),
+            state.clone(),
+            None,
+        );
+        let stop_feed = feed_continuously(&state, sid);
+        let observed = tokio::time::timeout(TICKER_LIVENESS_BOUND, async {
+            // Warm through ten actual publications. This guarantees the ticker
+            // has crossed six dirty ticks; setup speed is not the assertion.
+            for _ in 0..10 {
+                rx.changed().await.unwrap();
+                rx.borrow_and_update();
+            }
+            // The last publication just reset last_sent. Submit a controlled
+            // PTY chunk through the real reader, not by setting grid damage.
+            let submitted = std::time::Instant::now();
+            stamp_input_ms(&state, sid);
+            tx.send("⑤".as_bytes().to_vec()).unwrap();
+            loop {
+                rx.changed().await.unwrap();
+                if carries_echo(&rx.borrow_and_update().frame) {
+                    break submitted.elapsed();
+                }
+            }
+        })
+        .await;
+        stop_feed.store(true, Ordering::Relaxed);
+        drop(tx); // EOF stops the owned reader/ticker even when the assertion fails.
+        let elapsed = observed.expect("the real reader/ticker never delivered the echo");
+        // One 16ms tick plus 8ms scheduling tolerance, still well below the
+        // 33/50ms floor. The bound is the behavior, not a setup deadline.
+        assert!(
+            elapsed < std::time::Duration::from_millis(24),
+            "post-input echo waited {elapsed:?} for the animation/typing floor"
+        );
+    }
+
     /// Every frame a subscriber was handed, in the order it was handed them.
     #[cfg(feature = "desktop")]
     type RecordedFrames = Arc<Mutex<Vec<Vec<u8>>>>;
