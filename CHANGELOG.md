@@ -6,6 +6,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+- Export the first Codex /plan question in narrow terminals, including the split footer and independently wrapped answer labels and descriptions; keep its controls active through a delayed idle hook (#2094-da19).
 - Give reader-applied terminal input output bounded priority over animation frame floors on desktop and HTTP/PWA, using the existing gated serializer (#2040-16b2).
 - Re-measure mobile shell height and top on page restore, foreground visibility and document resume so stale viewport geometry is not retained (#1900-5ff6).
 

@@ -2363,29 +2363,30 @@ impl ChunkProcessor {
                             &payload,
                         ),
                         "state" => {
-                            // A delayed Codex completion can arrive while its native
-                            // enforced approval is still open (#2075). It cannot settle
-                            // that unanswered dialog. Require both the current native
-                            // shape and its still-active controls: real answer input
-                            // retires the controls before a subsequent idle is accepted.
-                            let open_codex_approval = payload == "idle"
+                            // Codex can emit completion while an approval or /plan
+                            // question is still unanswered. Require the same currently
+                            // rendered dialog and its active controls. Real answer input
+                            // retires the controls before subsequent idle is accepted.
+                            let open_codex_dialog = payload == "idle"
                                 && agent_type.as_deref() == Some("codex")
                                 && state
                                     .session_maps
                                     .session_states
                                     .get(session_id)
                                     .is_some_and(|session| {
-                                        session.awaiting_input && session.choice_prompt.is_some()
-                                    })
-                                && matches!(
-                                    crate::output_parser::parse_choice_prompt(&screen_buf),
-                                    Some(ParsedEvent::ChoicePrompt { title, .. })
-                                        if title == "Would you like to run the following command?"
-                                );
-                            if open_codex_approval {
+                                        session.awaiting_input
+                                            && session.choice_prompt.as_ref().is_some_and(|prompt| {
+                                                matches!(
+                                                    crate::output_parser::parse_choice_prompt(&screen_buf),
+                                                    Some(ParsedEvent::ChoicePrompt { title, .. })
+                                                        if title == prompt.title
+                                                )
+                                            })
+                                    });
+                            if open_codex_dialog {
                                 tracing::warn!(
                                     session_id,
-                                    "Ignoring delayed idle while native Codex approval is unanswered"
+                                    "Ignoring delayed idle while native Codex dialog is unanswered"
                                 );
                                 continue;
                             }
