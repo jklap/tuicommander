@@ -30,17 +30,17 @@ authors and communities behind each project.
 | chrono-tz | 0.10.4 | MIT OR Apache-2.0 |
 | clap | 4.6.3 | MIT OR Apache-2.0 |
 | console-subscriber | 0.5.0 | MIT |
-| cpal | 0.17.3 | Apache-2.0 |
+| cpal | 0.18.2 | Apache-2.0 |
 | croner | 4.0.1 | MIT |
 | ctor | 0.8.0 | Apache-2.0 OR MIT |
 | cursor-icon | 1.2.0 | MIT OR Apache-2.0 OR Zlib |
 | dashmap | 6.2.1 | MIT |
 | deunicode | 1.6.2 | BSD-3-Clause |
-| dirs | 6.0.0 | MIT OR Apache-2.0 |
+| dirs | 7.0.0 | MIT OR Apache-2.0 |
 | drag | 2.1.1 | Apache-2.0 OR MIT |
 | flate2 | 1.1.10 | MIT OR Apache-2.0 |
 | futures-util | 0.3.33 | MIT OR Apache-2.0 |
-| gix | 0.85.0 | MIT OR Apache-2.0 |
+| gix | 0.89.0 | MIT OR Apache-2.0 |
 | glob | 0.3.4 | MIT OR Apache-2.0 |
 | grep-matcher | 0.1.9 | Unlicense OR MIT |
 | grep-regex | 0.1.14 | Unlicense OR MIT |
@@ -75,7 +75,7 @@ authors and communities behind each project.
 | reqwest | 0.13.4 | MIT OR Apache-2.0 |
 | rfd | 0.16.0 | MIT |
 | ring | 0.17.14 | Apache-2.0 AND ISC |
-| rodio | 0.22.2 | MIT OR Apache-2.0 |
+| rodio | 0.23.0 | MIT OR Apache-2.0 |
 | rusqlite | 0.40.1 | MIT |
 | rust-stemmers | 1.2.0 | MIT OR BSD-3-Clause |
 | rustls | 0.23.45 | Apache-2.0 OR ISC OR MIT |
@@ -88,7 +88,7 @@ authors and communities behind each project.
 | serde_yaml | 0.9.34+deprecated | MIT OR Apache-2.0 |
 | sha2 | 0.11.0 | MIT OR Apache-2.0 |
 | sourcemap | 9.3.2 | BSD-3-Clause |
-| ssh2-config | 0.7.2 | MIT |
+| ssh2-config | 0.8.2 | MIT |
 | stop-words | 0.9.0 | MIT OR Apache-2.0 |
 | tar | 0.4.46 | MIT OR Apache-2.0 |
 | tauri | 2.12.1 | Apache-2.0 OR MIT |

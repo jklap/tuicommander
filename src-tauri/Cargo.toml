@@ -14,7 +14,6 @@ members = [
     "patches/bm25",
     "patches/vte",
 ]
-exclude = ["patches/wayland-scanner"]
 resolver = "2"
 
 [workspace.package]
@@ -219,7 +218,7 @@ base32 = "0.5.1"
 zeroize = { version = "1", features = ["alloc"] }
 hex = "0.4"
 ring = "0.17"
-dirs = "6"
+dirs = "7"
 tauri-plugin-dialog = { version = "2.7", optional = true }
 # Keep the Rust/npm notification pair on the tested 2.4 line.
 tauri-plugin-notification = { version = "~2.4.0", optional = true }
@@ -230,7 +229,7 @@ rfd = { version = "0.16", default-features = false, features = [
     "common-controls-v6",
 ], optional = true }
 tauri-plugin-single-instance = { version = "2", optional = true }
-rodio = { version = "0.22.2", default-features = false, features = ["playback"], optional = true }
+rodio = { version = "0.23", default-features = false, features = ["playback"], optional = true }
 # gzip/brotli: the daemon compresses every response above 860 bytes
 # (`CompressionLayer` in mcp_http), but only for a client that advertises the
 # encoding. A browser does it unasked; reqwest does not, so without these two
@@ -260,6 +259,8 @@ notify = "8"
 same-file = "1.0.6"
 keepawake = "0.6"
 # Keep the Rust/npm updater pair on the tested 2.11 line.
+# DEFERRED (2026-10-19) — this is the only remaining dirs 6 consumer; the paired
+# updater upgrade to dirs 7 belongs to story 2039-428c.
 tauri-plugin-updater = { version = "~2.11.0", optional = true }
 tauri-plugin-process = { version = "2", optional = true }
 tauri-plugin-deep-link = { version = "2", optional = true }
@@ -307,7 +308,7 @@ chromey = { version = "2.58", default-features = false, features = ["bytes"], op
 sourcemap = { version = "9.3.2", optional = true }
 toml = "1"
 rusqlite = { version = "0.40", features = ["bundled"] }
-ssh2-config = "0.7"
+ssh2-config = "0.8"
 
 [features]
 default = ["desktop"]
@@ -420,11 +421,6 @@ vte = { path = "patches/vte" }
 #      targets force `--vsenv`; compile/install go through Meson so each
 #      subprocess activates the same Visual Studio environment.
 webrtc-audio-processing-sys = { path = "patches/webrtc-audio-processing-sys" }
-# crates.io 0.31.10 pins vulnerable quick-xml 0.39. Keep that release's code
-# compatible with wayland-client/backend 0.31/0.3, while applying upstream's
-# quick-xml 0.41 parser adaptation. Patching current Wayland master here would
-# generate interfaces for its unreleased backend ABI and break Linux builds.
-wayland-scanner = { path = "patches/wayland-scanner" }
 
 [dev-dependencies]
 # Migration guards use an independent ECDH and ECDSA implementation.

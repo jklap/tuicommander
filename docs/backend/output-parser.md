@@ -472,13 +472,15 @@ ParsedEvent::ChoicePrompt {
 
 **Detection:**
 - **Footer match** extracts `dismiss_key` / `amend_key` from `Esc to <word>` / `Tab to <word>` (or locale equivalents).
-- **Codex enforced command approval** requires the exact `Press enter to confirm or esc to cancel` footer and `Would you like to run the following command?` title. Command metadata between title and options is not part of the question. Captured numeric refusal submits immediately, despite the footer wording; Escape cancels.
+- **Codex enforced command approval** requires the exact `Press enter to confirm or esc to cancel` footer and `Would you like to run the following command?` title. Command metadata between title and options is not part of the question. Captured numeric refusal submits immediately, despite the footer wording; Escape cancels. An unanswered native approval with active controls rejects a delayed OSC 7770 idle completion while that exact dialog is still on screen. Real answer input retires the controls, so subsequent completion remains valid. The original 0.163.0 failure and its three-minute mobile subscription are recorded in `codex-enforced-hook-idle-2075.tcap`.
 - **Codex panel** requires its `Queued follow-up inputs` heading near the question. The numbered option key submits immediately; `Ctrl+]` skips and `Shift+Right` returns to the main prompt. The heading guard keeps a quoted menu from becoming an interactive choice. This supports the installed Codex 0.162.1 format, including imperative titles such as `Pick a color.`; the older footer is not supported.
 - **Option regex** `^\s*(?:[❯›>]\s*)?(\d+)[.)]\s+(.+?)\s*$` — numbered items, optional cursor marker (`❯`, `›`, `>`).
 - **Title heuristics** walk up past blank rows and require either a `?` suffix or a verb prefix (`do you want`, `proceed`, `continue`, `should i`, `confirm`, `apply`, `allow`) to avoid matching Markdown numbered lists.
 - **Minimum two options** required to reduce false positives.
 
 **Destructive flag:** labels matching `"no"`, `"cancel"`, `"reject"`, `"abort"`, `"deny"`, or the prefixes `"don't"` / `"do not"` are flagged so the PWA overlay and plugins can style them as destructive.
+
+**Claude native titles:** `parse_claude_ask_user_question` uses the nearest nonblank title row above option 1 of the active form, not a question-mark suffix. Imperative titles such as `Pick a colour` export the same ordered choices and `navigate-enter` contract as question-mark titles. The column-zero Ink footer remains mandatory outside the Submit review; indented quoted footers do not establish a form. The authentic `claude-imperative-title-2074.tcap` captures the title, option descriptions, native Green answer and return to the composer.
 
 **Claude multi-question forms:** every tab (`← ☒ Lista  ☐ Branch  ✔ Submit →`) parses as its own prompt. The closing Submit review has no `Enter to select` footer, so `parse_claude_ask_user_question` anchors on the column-zero tab bar and ends at the next separator row (`claude-askuser-multi-question-20261012.tcap`). The mobile choice buttons re-arm whenever the prompt title or labels change, not only when the prompt disappears.
 
