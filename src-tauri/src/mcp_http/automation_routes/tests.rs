@@ -15,7 +15,7 @@ async fn automation_mcp_http_cli_wire_cannot_drift() {
     use crate::mcp_http::mcp_transport::handle_mcp_tool_call;
     use axum::extract::ConnectInfo;
     let state = test_state();
-    state.config.write().disabled_native_tools.clear();
+    state.config.write().mcp_capabilities.denied.clear();
     state
         .mcp
         .to_session

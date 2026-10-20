@@ -1,10 +1,12 @@
 # TUICommander Specification
 
+MCP capability cutover (#2068-63b9): persist `mcp_capabilities`, migrate saved tool denials once with visible unknown-name diagnostics, enforce parent/member restrictions on discovery and dispatch, and remove retired names without aliases. Clients must reconnect and review external allow rules.
+
 Native MCP guidance (#2069-7347): session, agent, repo, ui, voice, telegram and automations expose compact agent-facing action contracts. Their action=help returns every displaced rule from the full native guide. Existing action validation, conditional availability, disabled-tool gates and Settings copy remain unchanged.
-UI Design Mode actions (#2067-e708): `ui design_start/stop/status/reload/navigate/screenshot/errors/eval` reuse the Design Mode owner, armed caller/repository checks and extension host grants. Saved `design_mode` denials apply to the grouped actions. The old tool remains until the pending 2068 catalogue cutover.
+UI Design Mode actions (#2067-e708): `ui design_start/stop/status/reload/navigate/screenshot/errors/eval` reuse the Design Mode owner, armed caller/repository checks and extension host grants. Saved `design_mode` denials apply to the grouped actions. The old tool is removed by the 2068 capability cutover; use `ui design_*`.
 
 
-Conditional MCP tools (#2066-516c, conditional portion of #2067-e708): remote requires a live authenticated connected server; voice requires persisted dictation enabled and spoken replies enabled; Telegram requires enabled setup, a bot alias and its private token file. Shared predicates gate listing, search, schema lookup and calls. Owner changes invalidate the catalogue. Configuration does not replace conversation binding, Telegram registration or deployment consent. Design Mode regrouping remains a separate cutover.
+Conditional MCP tools (#2066-516c, conditional portion of #2067-e708): remote requires a live authenticated connected server; voice requires persisted dictation enabled and spoken replies enabled; Telegram requires enabled setup, a bot alias and its private token file. Shared predicates gate listing, search, schema lookup and calls. Owner changes invalidate the catalogue. Configuration does not replace conversation binding, Telegram registration or deployment consent. Design Mode uses grouped `ui design_*` actions after the catalogue cutover.
 - [x] Mobile CLI answers reuse the desktop answer planner and green gutter style instead of displaying protocol speech bubbles; prompts and fenced examples stay literal (#2070-773d).
 
 - [x] Native MCP Settings rows use domain sections without changing tool names, saved disabled values or effective denials (#2063-baa9).
@@ -30,7 +32,7 @@ Desktop close policy (B1, #1802-e6b8): Rust owns `app.close_behavior` (`ask` def
 Agent capture tooling: `scripts/agent_capture/run.py` records real installed CLIs through isolated headless sessions, promotes reviewed captures with ordered expected states, and integrates with the 1342 replay oracle. Missing or unauthenticated CLIs remain unverified.
 
 
-Published story workflows can start in Plans and Stories through the owning daemon. Run history renders graph positions, decisions, evidence and paged event payloads, with explicit graph recovery and cancellation. IPC/HTTP and the generated `workflow action=run` MCP schema share the native run service. Plan start remains visibly unavailable pending plan dispatch. The grouped `workflow` MCP tool exposes typed story, run, proposal_create, report and launch actions through existing service owners. Proposal retries preserve coordinator ownership and proposal-key idempotency. Legacy workflow tools remain until cutover; scheduled automations stay separate. `tuic workflow` forwards the same envelope.
+Published story workflows can start in Plans and Stories through the owning daemon. Run history renders graph positions, decisions, evidence and paged event payloads, with explicit graph recovery and cancellation. IPC/HTTP and the generated `workflow action=run` MCP schema share the native run service. Plan start remains visibly unavailable pending plan dispatch. The grouped `workflow` MCP tool exposes typed story, run, proposal_create, report and launch actions through existing service owners. Proposal retries preserve coordinator ownership and proposal-key idempotency. Legacy workflow tool names are removed without aliases; scheduled automations stay separate. `tuic workflow` forwards the same envelope.
 
 **Version:** 2.0.0
 **Last Updated:** 2026-09-16
@@ -669,8 +671,8 @@ Some frontend-only stores persist to localStorage:
 - [x] SolidJS migration
 
 ### Completed (P2)
-- [x] Terminal HTTP(S) link menu starts Design Mode with the owning agent and exact URL; HTTP/IPC optional `url` and MCP `design_mode` start/stop/status share the lifecycle. Agents use URL-aware start as the default path for layout work.
-- [x] Design Mode extension heartbeat: every 5 seconds, expiry after 60 seconds without a beat (600 seconds before the first beat), and MCP `design_mode action=reload` delivered on the next heartbeat.
+- [x] Terminal HTTP(S) link menu starts Design Mode with the owning agent and exact URL; HTTP/IPC optional `url` and MCP `ui design_start/design_stop/design_status` share the lifecycle. Agents use URL-aware start as the default path for layout work.
+- [x] Design Mode extension heartbeat: every 5 seconds, expiry after 60 seconds without a beat (600 seconds before the first beat), and MCP `ui action=design_reload` delivered on the next heartbeat.
 - [x] Design Mode v2 pilot: dedicated browser profile with automatic extension loading on cold Edge starts (running profiles must close first; branded Chrome reports an unsupported-autoload error), extension sidebar, explicit picking, per-pick comments, launching-agent default, same-repository recipient selection, native messaging, idle-gated Send and live dev-server discovery; native Edge validation remains tracked in to-test.md
 - [x] Split pane layout
 - [x] Touch branch action trays: left swipe reveals existing actions; vertical scrolling and desktop hover controls remain unchanged

@@ -1208,7 +1208,12 @@ fn task_call(
     args: serde_json::Value,
     mcp_sid: Option<&str>,
 ) -> serde_json::Value {
-    handle_task(state, addr.parse().unwrap(), &args, mcp_sid)
+    super::super::mcp_transport_session_agent::handle_task(
+        state,
+        addr.parse().unwrap(),
+        &args,
+        mcp_sid,
+    )
 }
 
 // ── blocking wait tests (Step 3) ────────────────────────────────
@@ -4173,7 +4178,7 @@ async fn literal_codex_default_does_not_ignore_settings_or_restore_removed_bypas
         let binary = root.path().join("codex");
         std::fs::write(
             &binary,
-            "#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$ARGV_OUTPUT\"\n",
+            "#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$ARGV_OUTPUT\"\nread -r hold\n",
         )
         .unwrap();
         std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o700)).unwrap();
@@ -4214,6 +4219,7 @@ async fn literal_codex_default_does_not_ignore_settings_or_restore_removed_bypas
             "perform the task"
         );
         let actual = wait_for_file_content_async(&output, std::time::Duration::from_secs(60)).await;
+        kill_test_session(&state, session);
         let mut expected = vec!["-c", "check_for_update_on_startup=false"];
         expected.extend(args);
         assert_eq!(actual, expected.join("\n") + "\n");

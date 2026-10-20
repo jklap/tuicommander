@@ -81,7 +81,7 @@ async fn workflow_launch_accepts_registered_branch_worktree() {
     insert_managed_test_session(&state, "workflow-caller", worktree.to_str().unwrap());
     state.bind_live_pty(TEST_UUID_A, "workflow-caller");
     crate::repo_watcher::start_watching(project, &state).unwrap();
-    let args = serde_json::json!({"input": {
+    let args = serde_json::json!({"action":"launch", "input": {
         "runId": run.id, "attemptId": attempt_id,
         "worktreePath": worktree, "agentType": "Workflow shell"
     }});
@@ -91,7 +91,7 @@ async fn workflow_launch_accepts_registered_branch_worktree() {
     let rejected = handle_mcp_tool_call_with_context(
         &state,
         "127.0.0.1:1".parse().unwrap(),
-        "workflow_launch",
+        "workflow",
         &main_args,
         Some(mcp_sid),
         None,
@@ -109,7 +109,7 @@ async fn workflow_launch_accepts_registered_branch_worktree() {
     let rejected = handle_mcp_tool_call_with_context(
         &state,
         "127.0.0.1:1".parse().unwrap(),
-        "workflow_launch",
+        "workflow",
         &args,
         Some(mcp_sid),
         None,
@@ -126,7 +126,7 @@ async fn workflow_launch_accepts_registered_branch_worktree() {
     let launched = handle_mcp_tool_call_with_context(
         &state,
         "127.0.0.1:1".parse().unwrap(),
-        "workflow_launch",
+        "workflow",
         &args,
         Some(mcp_sid),
         None,

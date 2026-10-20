@@ -59,7 +59,7 @@ verify the selected check against that PR head.
 
 ## Native stories
 
-The `story` MCP tool accepts `{ input: StoryAction }`. It resolves the owning project and live PTY from the bound MCP caller; caller-supplied project and session IDs are ignored. The shared Rust story service enforces revision and project checks. `list_plan_sources` discovers Markdown plans in the project's `plans/` and `.claude/plans/` roots; `add_plan_source` derives a title from the selected document and reuses an existing record for that source. The dialog calls the same actions, so agents and users see one discovery result. Its `remove_dependency` action is refused for bound agent sessions: only a human may remove a direct WontFix prerequisite from a Backlog story. The `plan_view` action returns Rust-derived story abandonment and cancellation summary without storing those projections. The HTTP route `/stories/action` and desktop command `story_action_command` use the same service. `tuic story '<JSON action>' [--project PATH] [--session-id PTY]` provides a local CLI path. The first native slice does not include story import/export.
+The `workflow action=story` MCP entry accepts `{ action: "story", input: StoryAction }`. It resolves the owning project and live PTY from the bound MCP caller; caller-supplied project and session IDs are ignored. The shared Rust story service enforces revision and project checks. `list_plan_sources` discovers Markdown plans in the project's `plans/` and `.claude/plans/` roots; `add_plan_source` derives a title from the selected document and reuses an existing record for that source. The dialog calls the same actions, so agents and users see one discovery result. Its `remove_dependency` action is refused for bound agent sessions: only a human may remove a direct WontFix prerequisite from a Backlog story. The `plan_view` action returns Rust-derived story abandonment and cancellation summary without storing those projections. The HTTP route `/stories/action` and desktop command `story_action_command` use the same service. `tuic story '<JSON action>' [--project PATH] [--session-id PTY]` provides a local CLI path. The first native slice does not include story import/export.
 
 `GET /stories/capabilities` mirrors the desktop `story_capabilities` probe. It returns JSON `true` without opening the story database; the dialog uses it to distinguish an outdated backend from an action error.
 
@@ -69,7 +69,7 @@ Workflow definitions use the shared `/workflows/definition/action` HTTP route an
 
 The grouped `workflow` MCP tool exposes five generated discriminated actions: `story`, `run`, `proposal_create`, `report` and `launch`. Pass the existing service action as `input` for `story` (`StoryAction`) and `run` (`RunAction`). The other three actions use their generated typed service inputs. The advertised schema is the pre-dispatch contract: missing, mistyped, cross-action and unknown fields are rejected before effects. The dispatcher reuses the existing handlers and their project, revision, ownership and local-launch checks; there is no new persistence owner.
 
-This is an additive rollout. The `story`, `workflow_run`, `workflow_story_create`, `workflow_report` and `workflow_launch` tools remain registered until story 2068 removes the old names. An existing member denial also denies and hides that member's grouped action. Disabling `workflow` hides and denies the grouped entry, not the separate `automations` scheduler. No saved denial or external policy rule is migrated in this slice. Review policy rules for the new `workflow` name before allowing it: it covers all five actions.
+The catalogue cutover removes the old `story` and `workflow_*` tool names without aliases. Saved member denials migrate to action capabilities and still hide and deny those grouped actions. Disabling `workflow` hides and denies the grouped entry, not the separate `automations` scheduler. External policy rules need review: the `workflow` name covers all five actions.
 
 `workflow action=launch` takes `{input:{runId,attemptId,worktreePath,agentType,skills?,feedback?}}` from a bound local managed PTY. The worktree must be a registered branch checkout of the project, outside the archive pool, and cannot be the main checkout or have a Git operation in progress. Launch validation is separate from detached-orphan removal, which still refuses attached branch checkouts. Plan attempts use the caller's isolated worktree; story attempts require that run's active coordinator and bind a distinct registered worktree to the story before worker spawn. It renders the pinned prompt in Rust, reserves the spawn effect, launches through the existing managed-agent path, and binds the returned session and task handle to the durable attempt. A story worker requires the caller to own the run's active coordinator attempt. `workflow action=report` takes `{input:AttemptReport}` with `contractVersion`, `runId`, `storyId`, `storyRevision`, `attemptId`, `generation`, `outcome`, `summary`, `criterionResults`, and `evidence`. The server derives the reporting PTY and project from the MCP connection, validates attempt ownership and revision, and records an idempotent run event. Plan-agent reports use `storyId=planId`, `storyRevision=0`, and no criterion results. Generic `agent send` and process exit are observations, never semantic completion reports.
 
@@ -81,7 +81,7 @@ For `workflow action=report`, a `needs_input` outcome requires `inputRequest {qu
 
 The compact `progress` native tool is available directly in classic and
 every collapsed discovery (Grok, ego), and through the meta-tool index, unless disabled by
-`disabled_native_tools` or by the global `progress_tracking` flag. It takes
+`mcp_capabilities.denied` or by the global `progress_tracking` flag. It takes
 `{ type, text, step? }` with `type` restricted to `done` or `blocked`, derives
 the project and the reporting agent from the caller, appends to the shared
 journal, and then dual-emits `progress-recorded`. A per-agent
@@ -765,9 +765,9 @@ lag recovery. Dispatch still checks live permissions and visibility; a cached sc
 never grants access. Clients must implement admission and invalidation themselves;
 server tests are not evidence of a real ego client's hop reduction.
 
-**Filter enforcement.** Both `search_tools` and `call_tool` re-apply the safety filters that the full listing would apply: `disabled_native_tools` is checked up-front in `handle_call_tool`, and upstream allow/deny filters are enforced at both enumeration time (`aggregated_tools`) and dispatch time (`proxy_tool_call`). This is critical under collapse mode: discovery no longer gates dispatch, so an agent that knows a filtered tool name cannot bypass the filter by calling `call_tool` directly. `search_tools` and `get_tool_schema` also reject meta-tool names, and `call_tool` refuses to recurse into itself.
+**Filter enforcement.** Both `search_tools` and `call_tool` re-apply the safety filters that the full listing would apply: `mcp_capabilities.denied` is checked up-front in `handle_call_tool`, and upstream allow/deny filters are enforced at both enumeration time (`aggregated_tools`) and dispatch time (`proxy_tool_call`). This is critical under collapse mode: discovery no longer gates dispatch, so an agent that knows a filtered tool name cannot bypass the filter by calling `call_tool` directly. `search_tools` and `get_tool_schema` also reject meta-tool names, and `call_tool` refuses to recurse into itself.
 
-The BM25 index lives in `AppState::tool_search_index` (`parking_lot::RwLock<ToolSearchIndex>`, backed by `src-tauri/src/tool_search.rs`). A background task subscribes to the `mcp_tools_changed` broadcast and rebuilds the index whenever the tool set changes (upstream connect/disconnect, `disabled_native_tools` edit, `collapse_tools` toggle).
+The BM25 index lives in `AppState::tool_search_index` (`parking_lot::RwLock<ToolSearchIndex>`, backed by `src-tauri/src/tool_search.rs`). A background task subscribes to the `mcp_tools_changed` broadcast and rebuilds the index whenever the tool set changes (upstream connect/disconnect, `mcp_capabilities.denied` edit, `collapse_tools` toggle).
 
 The MCP instructions string returned by `initialize` (`build_mcp_instructions`) swaps to a "lazy discovery" guide when `collapse_tools: true` or the connecting Grok session requires compatibility mode, so agents know to call `search_tools` first rather than looking for a flat tool table.
 The initialize instructions carry no repository paths. The `## Repos` section is one line: the repository count, the count per group and per remote connection, and the `repo action=list` call (the `call_tool` form when tools are collapsed). `repo action=list` returns each repository with its `group` and, for a repository on a remote connection, `connection_id`; local rows have no `connection_id`. The `## What TUIC gives you` section names the native tools registered on that install by purpose (reach the user, drive the platform, other) and the connected upstream servers with their tool counts and how to discover those tools (ToolSearch for Claude Code, `search_tools` when collapsed). It names only tools that `tools/list` serves and is omitted when there are none. The `suggest:` marker is omitted for a spawned child (an MCP session bound to a peer with a parent session); root sessions keep it. Upstream servers have no description field in their configuration, so only names are listed.
@@ -898,7 +898,7 @@ that no deduplication can touch is now the larger half at 1,178. Read any
 claimed saving against that split before believing it.
 
 **Checkout measurement, before and after the deduplication** — same fixture both
-sides (`test_state`, which leaves `disabled_native_tools` empty, so its classic
+sides (`test_state`, which leaves `mcp_capabilities.denied` empty, so its classic
 figure covers all nine native tools where production hides `config` and `debug`);
 `.empty` is zero repos/sessions/peers, `.loaded` is 8 repos, 12 sessions, 6 peers:
 
@@ -939,7 +939,7 @@ instead of nine, keeps a measurable 10.7%.
 
 ### MCP Native Tools
 
-Native tools are organized by domain. Two (`settings`, `debug`) are disabled by default via `disabled_native_tools`; listing, search, schema lookup and dispatch respect this filter in both full and collapsed mode. The enabled `progress` tool is additionally kept on the direct collapsed surface.
+Native tools are organized by domain. Settings access and diagnostics are disabled by default via capability denials; listing, search, schema lookup and dispatch respect this filter in both full and collapsed mode. The enabled `progress` tool is additionally kept on the direct collapsed surface.
 
 The payload measurements above predate `voice` and are left as recorded: they
 say what was measured, not what the list costs today.
@@ -948,20 +948,36 @@ say what was measured, not what the list costs today.
 |------|---------|---------|
 | `session` | list, create, submit, input, output, status, wait, resize, rename, close, kill, pause, resume | Enabled |
 | `agent` | spawn, wait, register, list_peers, send, inbox, subscribe, ack, unsubscribe, task_get, task_cancel | Enabled |
-| `task` | get, cancel | Enabled |
 | `remote` | preview, update | Only with a connected remote server |
 | `repo` | list, active, status, branch_integrations, branch_integration, worktree_list, worktree_lifecycle, worktree_create, worktree_remove, orphan_cleanup_answer, branch_delete, progress_list | Enabled |
 | `progress` | *(no actions — appends one `done` or `blocked` entry)* | Enabled, unless `progress_tracking` is off |
-| `ui` | tab, toast, confirm, screenshot | Enabled |
+| `ui` | tab, toast, confirm, screenshot, design_start/stop/status/reload/navigate/screenshot/errors/eval | Enabled |
+| `workflow` | story, run, proposal_create, report, launch | Enabled |
+| `automations` | Scheduled definitions and runs | Enabled |
 | `plugin_dev_guide` | *(no actions — returns guide text)* | Enabled |
 | `voice` | speak, stop, status | Only with voice configured |
 | `telegram` | register, unregister, begin, activity, finish, send | Only with Telegram configured |
 | `settings` | describe, get, set, reset, patch, perform, refresh | Disabled; trusted UI opt-in required |
 | `debug` | agent_detection, logs, sessions, invoke_js, help | Disabled |
 
-The `disabled_native_tools` config key accepts an array of tool names to hide from `tools/list`. Default: `["settings", "debug"]`.
+### Capability cutover and client migration
 
-Settings reads `native_tools` from `get_mcp_status` / `GET /mcp/status`. Both transports use `native_tool_catalog`, projected from the same unfiltered definitions used by MCP. Entries contain `name`, a dedicated user-facing English `summary` (at most 70 characters) declared alongside the registry, and the complete `description`. The `workflow_run` entry summarizes graph starts and execution history. Summaries are app metadata only and are not added to MCP `tools/list`; full MCP descriptions stay unchanged. Disabled tools remain in this app inventory so users can re-enable them. No native tool is always on: even `progress` can be disabled and is also gated by global `progress_tracking`. Upstream tools and meta-tools do not belong to this inventory.
+`mcp_capabilities` is the persisted policy object. `denied` defaults to `["settings", "diagnostics"]`. Settings access additionally requires trusted UI opt-in. Parent capabilities deny every action in their domain; member capabilities deny only their actions. Listing, search, exact schema lookup and direct/meta dispatch apply the same live policy, including before the search index refreshes.
+
+On the first load, `disabled_native_tools` migrates to this object and is removed on save. Mappings: `task` → `agent_tasks`; `story` → `workflow.story`; `workflow_run` → `workflow.run`; `workflow_story_create` → `workflow.proposals`; `workflow_report` → `workflow.reports`; `workflow_launch` → `workflow.launch`; `design_mode` → `design`; `debug` → `diagnostics`; `remote` → `remote_deployment`; `plugin_dev_guide` → `plugin_reference`. Other current tool names map to the same-named capability. An old parent denial still denies all grouped actions. Unknown names are logged and retained in `migration_unknown_tools`; Settings displays them for review. They are not silently dropped.
+
+**Breaking change:** retired MCP names have no aliases. Use `agent action=task_get/task_cancel`, `workflow action=story/run/proposal_create/report/launch` (retain the generated `input` object), and `ui action=design_*`. Reconnect cached clients and update literal CLI calls and external allow rules. Existing `agent`, `workflow` and `ui` allow rules now cover their grouped actions; review that scope explicitly. HTTP/IPC service routes and `tuic story` do not change. Unknown external callers cannot be migrated automatically.
+
+Compact `tools/list` measurement (2026-10-20, serialized `tools` array only; no JSON-RPC envelope):
+
+| Mode | Before (`c79f74bfe3`) | After cutover | Change |
+|------|-----------------------|---------------|--------|
+| Classic | 92,781 bytes | 73,435 bytes | −19,346 bytes (20.9%) |
+| Collapsed | 3,581 bytes | 3,581 bytes | Unchanged |
+
+Both runs use zero upstreams, Settings enabled and optional owners unconfigured. The regression test `capability_cutover_rejects_retired_names_and_measures_catalogue` prints these compact byte counts and rejects every retired name. These are byte measurements, not token estimates or a complete configured-owner inventory.
+
+Settings reads `native_capabilities` from `get_mcp_status` / `GET /mcp/status`; each entry has `name`, `title`, `description` and `optional`. The six optional switches are Secrets, Telegram, Settings access, Diagnostics / JS inspection, Remote daemon deployment and Progress tracking. Additional restrictions contain core domains and migrated member capabilities. The unfiltered `native_tools` reference inventory remains available separately. Disabled and unavailable capabilities remain configurable; upstream policy, trusted Settings opt-in, Design Mode host grants, voice binding and deployment consent remain separate.
 
 Native MCP inputs use `path` for a repository root in `agent register/list_peers` and `repo`, and `branch` for `repo worktree_lifecycle/worktree_remove`. The old `project` and `workspace_id` input names are rejected. The shared `worktree_create` response still includes `workspace_id` alongside `branch` for HTTP parity. `spawn_session=true` on worktree creation starts a bare shell PTY; spawn an agent separately when one is needed.
 
@@ -971,7 +987,7 @@ worktree for tracked or untracked changes, a HEAD reachable from a branch and
 live sessions inside it; an unsafe or stale request is refused. The frontend consumes the answer and
 closes the dialog before removal.
 
-Removed MCP actions report the replacement route in their error: `agent detect` → `GET /agents`, `agent stats` → `GET /stats`, `agent metrics` → `GET /metrics`, `session process_stats` → `GET /process/stats`, `repo prs` → `GET /repo/prs`, `repo issues` → `GET /repo/issues`, `repo close_issue` → `POST /repo/issues/close`, `repo reopen_issue` → `POST /repo/issues/reopen`, and `repo ci_logs` → `GET /repo/ci-failure-logs`. `repo active/status`, `session pause/resume/status`, and `task` remain because their behavior has no equivalent single-call replacement.
+Removed MCP actions report the replacement route in their error: `agent detect` → `GET /agents`, `agent stats` → `GET /stats`, `agent metrics` → `GET /metrics`, `session process_stats` → `GET /process/stats`, `repo prs` → `GET /repo/prs`, `repo issues` → `GET /repo/issues`, `repo close_issue` → `POST /repo/issues/close`, `repo reopen_issue` → `POST /repo/issues/reopen`, and `repo ci_logs` → `GET /repo/ci-failure-logs`. `repo active/status`, `session pause/resume/status`, and `agent task_get/task_cancel` remain because their behavior has no equivalent single-call replacement.
 
 #### Conditional native tools
 
@@ -1125,9 +1141,9 @@ the outcome entirely.
 The handle is polled with `agent action=task_get` instead of holding a wait open. This is
 purely additive — every field a pre-task client already read keeps its name and type,
 and a client that ignores `task_id` behaves exactly as before.
-The existing `task` tool stays available until the explicit catalogue cutover in
-story 2068. Both adapters use the same handler and registry. Existing `task` tool
-denials also block `agent task_get/task_cancel`; disabling `agent` blocks all of its actions.
+The retired `task` tool has no alias. Its saved denials migrate to `agent_tasks`,
+which blocks `agent task_get/task_cancel`; disabling `agent` blocks all of its actions.
+The grouped actions use the existing task handler and registry.
 
 **Lifecycle.** A task is created `working` once the PTY is live (a refused or failed
 spawn leaves none). `mark_session_exited` (`pty.rs`) drives it to `completed` with
@@ -1184,8 +1200,9 @@ Custom URL schemes (`vscode://`, `x-devonthink://`, etc.) do **not** work inside
 
 ### One tool family, and why the second one went
 
-TUICommander exposes **one** MCP tool family: `session`, `agent`, `task`,
-`remote`, `repo`, `story`, `progress`, `ui`, `plugin_dev_guide`, `voice`, `settings`, `debug`. Few tools,
+TUICommander exposes **one** MCP tool family: `session`, `agent`, `repo`,
+`workflow`, `automations`, `remote`, `secret`, `progress`, `ui`, `plugin_dev_guide`,
+`voice`, `settings`, `debug`. Few tools,
 many actions.
 
 It used to expose a second — 13 flat `ai_terminal_*` tools behind the
@@ -2399,7 +2416,7 @@ an explicit create action. These actions match across HTTP, IPC, MCP and CLI.
 
 ### Design Mode lifecycle tool
 
-The `ui` tool exposes `design_start`, `design_stop`, `design_status`, `design_reload`, `design_navigate`, `design_screenshot`, `design_errors` and `design_eval`. These actions delegate to the existing Design Mode owner: the caller must own the armed repository for browser commands, remote hosts still require an extension host grant, and JavaScript still requires its optional host grant. A saved `design_mode` denial also blocks the new actions; disabling `ui` blocks all UI actions. The separate `design_mode` tool remains until the explicit breaking catalogue cutover in story 2068, not the Design Mode v2 rollout in story 1672. It exposes the same unprefixed actions and caller checks. Start accepts `session_id`, optional `browser` (`chrome` or `edge`) and optional absolute HTTP(S) `url`. Session references resolve like the session tool. Stop accepts `repo_path` from start/status. Reload takes the same `repo_path` and bumps a per-repository reload sequence; the extension reloads the reviewed tab once on its next heartbeat. Navigate takes `repo_path` and `url` (HTTP(S) on `localhost`, `127.0.0.1` or `[::1]`, no credentials); the heartbeat reply then carries `navigate: {seq, url}` and the extension opens the URL in the reviewed tab once per sequence. The sequence survives a re-arm but the URL does not, so a new Start never replays an old navigation. Reload and navigate answer "Design Mode is not running for this repository" when nothing is armed. The extension posts `heartbeat` to `/design-mode/extension` every 5 s (reply `{armed, reloadSeq, navigate?}`); an armed mode is stopped 60 s after the last heartbeat, or 10 min after Start when none arrived. The adapter uses the same lifecycle core as HTTP and IPC; headless builds return an explicit desktop-host-required error. URL-aware start is the default coordinator path for layout work.
+The `ui` tool exposes `design_start`, `design_stop`, `design_status`, `design_reload`, `design_navigate`, `design_screenshot`, `design_errors` and `design_eval`. These actions delegate to the existing Design Mode owner: the caller must own the armed repository for browser commands, remote hosts still require an extension host grant, and JavaScript still requires its optional host grant. A saved `design_mode` denial migrates to the `design` capability and still blocks these actions; disabling `ui` blocks all UI actions. The separate `design_mode` tool is removed without an alias. Start accepts `session_id`, optional `browser` (`chrome` or `edge`) and optional absolute HTTP(S) `url`. Session references resolve like the session tool. Stop accepts `repo_path` from start/status. Reload takes the same `repo_path` and bumps a per-repository reload sequence; the extension reloads the reviewed tab once on its next heartbeat. Navigate takes `repo_path` and `url` (HTTP(S) on `localhost`, `127.0.0.1` or `[::1]`, no credentials); the heartbeat reply then carries `navigate: {seq, url}` and the extension opens the URL in the reviewed tab once per sequence. The sequence survives a re-arm but the URL does not, so a new Start never replays an old navigation. Reload and navigate answer "Design Mode is not running for this repository" when nothing is armed. The extension posts `heartbeat` to `/design-mode/extension` every 5 s (reply `{armed, reloadSeq, navigate?}`); an armed mode is stopped 60 s after the last heartbeat, or 10 min after Start when none arrived. The adapter uses the same lifecycle core as HTTP and IPC; headless builds return an explicit desktop-host-required error. URL-aware start is the default coordinator path for layout work.
 
 The GitHub settings owner adapter supplies typed device-login, Enterprise account,
 credential, label and binding actions for the later settings transport cutover.

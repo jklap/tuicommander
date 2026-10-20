@@ -30,14 +30,19 @@ use super::mcp_transport_ancillary::handle_repo;
 use super::mcp_transport_ancillary::handle_repo_with_caller;
 #[cfg(test)]
 use super::mcp_transport_ancillary::handle_screenshot;
+#[cfg(test)]
 use super::mcp_transport_ancillary::handle_story;
 #[cfg(test)]
 use super::mcp_transport_ancillary::handle_ui;
 use super::mcp_transport_ancillary::handle_ui_unified;
 use super::mcp_transport_ancillary::handle_voice;
+#[cfg(test)]
 use super::mcp_transport_ancillary::handle_workflow_launch;
+#[cfg(test)]
 use super::mcp_transport_ancillary::handle_workflow_report;
+#[cfg(test)]
 use super::mcp_transport_ancillary::handle_workflow_run;
+#[cfg(test)]
 use super::mcp_transport_ancillary::handle_workflow_story_create;
 #[cfg(test)]
 use super::mcp_transport_ancillary::handle_worktree;
@@ -70,8 +75,6 @@ use super::mcp_transport_catalogue::REPO_ACTIONS;
 use super::mcp_transport_catalogue::RepoSummary;
 #[cfg(test)]
 use super::mcp_transport_catalogue::SESSION_ACTIONS;
-#[cfg(test)]
-use super::mcp_transport_catalogue::TASK_ACTIONS;
 #[cfg(test)]
 use super::mcp_transport_catalogue::UI_ACTIONS;
 #[cfg(test)]
@@ -181,7 +184,6 @@ use super::mcp_transport_session_agent::handle_session;
 pub(super) use super::mcp_transport_session_agent::handle_session_submit;
 use super::mcp_transport_session_agent::handle_session_suspend;
 use super::mcp_transport_session_agent::handle_session_wait;
-use super::mcp_transport_session_agent::handle_task;
 #[cfg(test)]
 use super::mcp_transport_session_agent::is_direct_codex_executable;
 #[cfg(test)]
@@ -554,21 +556,12 @@ async fn dispatch_mcp_tool_call_with_context(
     if name == "config" {
         return serde_json::json!({"error":"Unknown tool 'config'"});
     }
-    if let Some(error) = super::mcp_transport_catalogue::native_tool_unavailability(state, name) {
+    if let Some(error) = super::mcp_transport_catalogue::native_action_unavailability(
+        state,
+        name,
+        args["action"].as_str(),
+    ) {
         return serde_json::json!({"error": error});
-    }
-    // Grouped actions retain the underlying owner's explicit tool denial.
-    if state.config.read().disabled_native_tools.iter().any(|d| {
-        (name == "workflow"
-            && Some(d.as_str())
-                == super::mcp_transport_catalogue::workflow_member_tool(
-                    args["action"].as_str().unwrap_or(""),
-                ))
-            || (d == "task"
-                && name == "agent"
-                && matches!(args["action"].as_str(), Some("task_get" | "task_cancel")))
-    }) {
-        return serde_json::json!({"error": format!("Tool '{}' is disabled by configuration", name)});
     }
     if let Some(action) = args["action"].as_str()
         && let Some(replacement) = removed_native_action_replacement(name, action)
@@ -608,16 +601,10 @@ async fn dispatch_mcp_tool_call_with_context(
         .map(|meta| meta.is_claude_code)
         .unwrap_or(false);
     match name {
-        "design_mode" => handle_design_mode_with_caller(state, args, mcp_session_id).await,
         "ui" if args["action"]
             .as_str()
             .is_some_and(|action| action.starts_with("design_")) =>
         {
-            if let Some(error) =
-                super::mcp_transport_catalogue::native_tool_unavailability(state, "design_mode")
-            {
-                return serde_json::json!({"error":error});
-            }
             let mut design_args = args.clone();
             design_args["action"] = serde_json::json!(
                 args["action"]
@@ -771,20 +758,10 @@ async fn dispatch_mcp_tool_call_with_context(
                 )
             }
         }
-        "task" => {
-            let state = state.clone();
-            let args = args.clone();
-            let sid = mcp_session_id.map(str::to_owned);
-            run_blocking_handler(move || handle_task(&state, addr, &args, sid.as_deref())).await
-        }
+
         "repo" => handle_repo_with_caller(state, args, is_claude_code, mcp_session_id).await,
         "remote" => handle_remote_update(state, args).await,
-        "story" => {
-            let state = state.clone();
-            let args = args.clone();
-            let sid = mcp_session_id.map(str::to_owned);
-            run_blocking_handler(move || handle_story(&state, &args, sid.as_deref())).await
-        }
+
         "workflow" => {
             let state = state.clone();
             let args = args.clone();
@@ -794,37 +771,7 @@ async fn dispatch_mcp_tool_call_with_context(
             })
             .await
         }
-        "workflow_run" => {
-            let state = state.clone();
-            let args = args.clone();
-            let sid = mcp_session_id.map(str::to_owned);
-            run_blocking_handler(move || handle_workflow_run(&state, &args, sid.as_deref())).await
-        }
-        "workflow_story_create" => {
-            let state = state.clone();
-            let args = args.clone();
-            let sid = mcp_session_id.map(str::to_owned);
-            run_blocking_handler(move || {
-                handle_workflow_story_create(&state, &args, sid.as_deref())
-            })
-            .await
-        }
-        "workflow_report" => {
-            let state = state.clone();
-            let args = args.clone();
-            let sid = mcp_session_id.map(str::to_owned);
-            run_blocking_handler(move || handle_workflow_report(&state, &args, sid.as_deref()))
-                .await
-        }
-        "workflow_launch" => {
-            let state = state.clone();
-            let args = args.clone();
-            let sid = mcp_session_id.map(str::to_owned);
-            run_blocking_handler(move || {
-                handle_workflow_launch(&state, addr, &args, sid.as_deref())
-            })
-            .await
-        }
+
         "progress" => handle_progress(state, args, mcp_session_id).await,
         "ui" => handle_ui_unified(state, addr, args, mcp_session_id).await,
         "plugin_dev_guide" => {
@@ -832,12 +779,11 @@ async fn dispatch_mcp_tool_call_with_context(
         }
         "settings" => {
             let enabled = state.config.read().settings_mcp_enabled
-                && !state
+                && state
                     .config
                     .read()
-                    .disabled_native_tools
-                    .iter()
-                    .any(|name| name == "settings");
+                    .mcp_capabilities
+                    .allows("settings", None);
             let caller = crate::settings::policy::Caller::mcp(
                 addr,
                 mcp_session_id.unwrap_or("headerless").to_owned(),
@@ -860,7 +806,7 @@ async fn dispatch_mcp_tool_call_with_context(
             handle_call_tool(state, addr, args, mcp_session_id, managed_parent_cwd).await
         }
         _ => serde_json::json!({"error": format!(
-            "Unknown tool '{}'. Available: session, agent, task, remote, repo, workflow, story, progress, ui, plugin_dev_guide, settings, debug, voice, search_tools, get_tool_schema, call_tool", name
+            "Unknown tool '{}'", name
         )}),
     }
 }
@@ -1652,13 +1598,23 @@ mod critic_story_tool_text {
             .as_array()
             .expect("definitions")
             .iter()
-            .find(|tool| tool["name"] == "story")
-            .expect("story tool")
+            .find(|tool| tool["name"] == "workflow")
+            .expect("workflow tool")
             .clone();
         let description = definition["description"].as_str().unwrap_or_default();
-        let variants = definition["inputSchema"]["properties"]["input"]["anyOf"]
+        let workflow_schema = super::super::mcp_transport_ancillary::workflow_action_schema();
+        let workflow_variants = workflow_schema["oneOf"]
             .as_array()
-            .expect("anyOf");
+            .expect("workflow actions");
+        let story = workflow_variants
+            .iter()
+            .find(|variant| variant["properties"]["action"]["const"] == "story")
+            .expect("story action is published");
+        let variants = &story["properties"]["input"];
+        let variants = variants["oneOf"]
+            .as_array()
+            .or_else(|| variants["anyOf"].as_array())
+            .expect("story actions");
         let mut missing = Vec::new();
         for variant in variants {
             let action = &variant["properties"]["action"];
@@ -1684,8 +1640,8 @@ mod critic_story_tool_text {
             .as_array()
             .expect("definitions")
             .iter()
-            .find(|tool| tool["name"] == "story")
-            .expect("story tool")
+            .find(|tool| tool["name"] == "workflow")
+            .expect("workflow tool")
             .clone();
         let description = definition["description"].as_str().unwrap_or_default();
         assert!(description.contains("receipt"), "{description}");
