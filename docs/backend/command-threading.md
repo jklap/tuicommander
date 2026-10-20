@@ -51,6 +51,38 @@ Before story 607-f483 the two had drifted in both directions: `search_files`
 offloaded over HTTP but not over IPC, while `search_content_all` offloaded over
 IPC but not over HTTP.
 
+## Agent session discovery (2026-10-19)
+
+`discover_agent_session` is async and moves all filesystem and process reads to
+`spawn_blocking`. Its HTTP route awaits the same command. The synchronous
+`discover_agent_session_blocking` service remains available to the subagent-map
+and suspended-session paths, which already run on blocking owners.
+
+Ego discovery caches the binding by sessions root and pid. A cache hit reads only
+the bound lease and checks its pid and writer lock. Ego leaves its lease file
+behind after exit, and its heartbeat is written at acquisition rather than
+renewed, so matching pid text alone cannot validate a cache hit after pid reuse.
+An unlocked, missing, corrupt or changed-pid lease invalidates the cache. A miss
+scans the store and chooses the matching pid with the latest heartbeat, as before.
+Only a binding with a held writer lock is cached. No filesystem work runs while
+the cache mutex is held.
+
+### Transport regression (2040-16b2)
+
+The retained 2026-10-19 09:00 macOS sample shows the native main thread inside
+`discover_agent_session` → `ego_session_for_pid` → filesystem reads. A synchronous
+scan blocks shared IPC dispatch, including input and frame receipts from other
+sessions. This is evidence of a shared-thread delay, not proof that every
+historical frame-gate warning came from discovery.
+
+The Unix regression uses an 800 ms FIFO-backed lease read, continuous terminal
+output, real kernel PTY echo and a second session's production frame ticker.
+Echo and the second frame consumer must progress within 200 ms of the read
+starting. The test exercises the HTTP route on a single-thread async runtime;
+it protects the shared async discovery boundary, not native WebKit
+keyboard-to-paint timing. The same regression fails before 2057 moved discovery
+to the blocking pool.
+
 ## Audit (2026-08-18)
 
 ### Application launchers (2026-10-11)
@@ -77,7 +109,7 @@ and restart verification await without blocking the IPC main thread.
 
 ### Native stories (2026-09-25)
 
-`story_action_command` is `async fn` and offloads SQLite and ownership resolution with `spawn_blocking`. The headless-compatible `/stories/action` route offloads the same shared Rust service independently; the MCP `story` tool runs it through the existing blocking handler. This keeps disk I/O off the macOS IPC thread and Tokio workers.
+`story_action_command` is `async fn` and offloads SQLite and ownership resolution with `spawn_blocking`. The headless-compatible `/stories/action` route offloads the same shared Rust service independently; the MCP `workflow action=story` entry runs it through the existing blocking handler. This keeps disk I/O off the macOS IPC thread and Tokio workers.
 
 `workflow_definition_action` and its HTTP twin use `spawn_blocking` around graph validation and SQLite publication for the same reason.
 `workflow_run_action` and its HTTP twin also use `spawn_blocking` for SQLite run transitions and event paging.

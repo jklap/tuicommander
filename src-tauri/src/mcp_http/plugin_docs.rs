@@ -466,7 +466,7 @@ await host.invoke("delete_plugin_data", {
 Core renders the following Solid components. Plugins supply manifest metadata and host registrations; they do not import or mount these components.
 
 ### Manifest UX field inventory
-`agentTypes`, `allowedUrls`, `author`, `binaries`, `capabilities`, `description`, `id`, `main`, `minAppVersion`, `name`, `providers`, `settings`, `version`.
+`agentTypes`, `allowedUrls`, `author`, `binaries`, `capabilities`, `contentSha256`, `description`, `id`, `main`, `minAppVersion`, `name`, `providers`, `settings`, `version`.
 
 ### Core UX component inventory
 `BrowseRow`, `PluginLogViewer`, `PluginRow`, `PluginsTab`.
@@ -485,7 +485,7 @@ The expanded Logs view shows the plugin ring buffer's timestamp, level and messa
 
 #### BrowseRow
 
-The Browse row shows registry name, version, description, author, tags and minimum app version. It offers Install for an absent package, Update when a newer version is available, or Installed for the current version. Registry metadata is separate from the installed manifest.
+The Browse row shows registry name, version, description, author, tags and minimum app version. It offers Install for an absent package, Update when a newer version is available or same-version payload identities differ, or Installed otherwise. Registry metadata is separate from the installed manifest. `contentSha256` is derived by Rust from installed payload files, not accepted from manifest input. Mutable data and packaging files are excluded. Unknown identities retain version-only comparison, and newer installed versions are never downgraded.
 
 ### Settings schema and Tasks views
 

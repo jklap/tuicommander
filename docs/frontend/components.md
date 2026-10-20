@@ -37,7 +37,7 @@ picker and per-type fields with `SettingField` and `SettingMultiSelect`.
 request cancellation and stale-response fencing. Free labels keep raw text until
 collection; required-field messages sit beside their inputs.
 
-Slice F exposes `start_graph {target:{type:story|plan,id},expected_revision?,definition_id,definition_revision,request_id,limits?}` through the existing owning-daemon service. Story starts require the current native revision and pin the selected publication; the request ID is bound to its payload. Omitted limits use Rust defaults. Plan dispatch remains unavailable in this build and its start control says so. The `workflow_run` MCP tool uses an inline schema generated from `RunAction` and the public `RunCommand` variants; it returns the same scoped snapshots and cursor-ordered events as IPC/HTTP. Run history shows pinned activations, decisions/evidence, repair counters, pause targets and complete event payloads across pages. Graph recovery uses `resume_graph {execution_id,activation_id,resolution}` after answering pending input; pause and cancel use the existing sequence-fenced commands. Legacy runs offer inspection and cancellation in the UI. No new persistence or client scheduler is added.
+Slice F exposes `start_graph {target:{type:story|plan,id},expected_revision?,definition_id,definition_revision,request_id,limits?}` through the existing owning-daemon service. Story starts require the current native revision and pin the selected publication; the request ID is bound to its payload. Omitted limits use Rust defaults. Plan dispatch remains unavailable in this build and its start control says so. The `workflow action=run` MCP entry uses an inline schema generated from `RunAction` and the public `RunCommand` variants; it returns the same scoped snapshots and cursor-ordered events as IPC/HTTP. Run history shows pinned activations, decisions/evidence, repair counters, pause targets and complete event payloads across pages. Graph recovery uses `resume_graph {execution_id,activation_id,resolution}` after answering pending input; pause and cancel use the existing sequence-fenced commands. Legacy runs offer inspection and cancellation in the UI. No new persistence or client scheduler is added.
 
 All components are SolidJS functional components in `src/components/`.
 
@@ -188,7 +188,7 @@ Copy buttons use a single unwrapped line, including in the full app shell.
 `Transcript` interprets complete ACP answer text as it streams: it hides the
 connection acknowledgement, shows a declared intent as status, and offers
 bracketed `suggest:` items as prompt buttons. Markdown examples stay literal.
-Messages, tool output and code blocks have copy actions. The transcript has
+Messages, tool output and code blocks have copy actions. Chat preserves fenced-code padding inside highlighted answers and places Copy in a normal-flow row above the code, so the control neither clips nor covers wrapped text. The transcript has
 text selection and find/select-all/clear shortcuts. Find selects phrases across
 inline Markdown within each block, skips collapsed disclosure bodies, and closes
 on Escape from the input or navigation buttons. Local file paths use the
@@ -210,6 +210,8 @@ prompts, and can remove any queued ID. The list follows ACP snapshots and
 events, so another window or a phone sees the same order and cancellations.
 
 ## Mobile Screens (`src/mobile/`)
+
+`useSessionChatView` offers the existing header CLI / Chat switch for Claude, Grok, Codex and ego through the same supported-adapter predicate as desktop. `chat_view_snapshot` owns transcript binding; a refusal returns to CLI with its reason. The shared transcript does not replace the mounted terminal, composer, keyboard bar or native question controls.
 
 `SessionDetailScreen` replaces its state with each complete WebSocket or polled
 session snapshot, except polls whose `last_activity_ms` is older than the applied
@@ -239,7 +241,7 @@ The session composer has a 44 px paperclip in its existing row. It uploads a
 selected file and stages `@path` without Enter; the upload chip floats above
 the row. Mobile AI Chat uses the shared composer to stage images as ACP image
 blocks and other files as ACP resource links with a readable path in text.
-The mobile PWA opens on Sessions. Its five bottom tabs are Sessions, Chat,
+The mobile PWA opens on Sessions. Its bottom tabs are Sessions, Chat (only with ego configured),
 Files, Progress, and Activity; Settings opens from the app-bar overflow.
 The session detail screen loads after a session is selected (or opened from a
 deep link), keeping its terminal and attachment controls out of the Sessions
@@ -250,7 +252,7 @@ the backend list and card order remain unchanged. Closing search clears the quer
 Waiting sessions sort above idle agents and shells without changing order within each
 group. The new-session sheet chooses an agent and repository, then opens the new
 session after `spawn_agent` succeeds. The question counter opens the first waiting
-session; each banner shows its session name and repository.
+session from the AWAITING tile, without a duplicate app-bar count; each banner shows its session name and repository.
 Each session card uses separate buttons to open or kill the session. Both have
 accessible names, and the kill button has a 44 px hit area. The list reserves
 space below its last card so the floating new-session button cannot cover it.
@@ -274,6 +276,8 @@ viewer only within a registered repository. External paths show a toast with the
 resolved path. HTTP(S) output links open outside the PWA.
 Markdown images in the Files viewer resolve relative to their source file and
 load through the authenticated `/fs/markdown-image` route.
+
+`FilesScreen` receives the existing mobile session list and the originating session ID from `MobileApp`. Its Markdown review controls select a live agent in the owning repository and call `enqueue_agent_command` over HTTP. Desktop and mobile use `buildMarkdownReviewPrompt` for the same path, checkbox, and tweak-comment contract. Successful sends clear only the acknowledged review state; failed sends remain retryable.
 
 The embedded Progress list clamps long messages to four lines until More is
 pressed. Activity presents local 24-hour times, minute durations, and singular
@@ -405,7 +409,7 @@ label row above its pages, and the configured repositories follow under
   - **Smart Prompts** (`SmartPromptsTab`)
 - **Integrations**
   - **MCP** (`LocalMcpPanel` + `UpstreamMcpPanel`) — HTTP API server status, TUIC tools, upstream MCP servers
-  - **Remote Access** (`RemoteAccessPanel`) — Remote access, Tailscale HTTPS, QR/connect URL, cloud relay
+  - **Remote Access** (`RemoteAccessPanel`) — Remote access, Tailscale HTTPS, QR/connect URL, cloud relay; local IP discovery failures stay inline with retry while the remaining controls stay available
   - **Remote Machines** (`RemoteMachinesTab`) — `tuic-remote` connections
   - **Plugins** (`PluginsTab`) — Plugin management, enable/disable, log viewer
 - **Repositories**
@@ -711,6 +715,13 @@ system and never turns an absent provider value into zero.
 | Project Progress | Command palette / bell | `progressStore.toggle()` |
 | Worktree Manager | `Cmd+Shift+W` | `worktreeManagerStore.toggle()` |
 
+Dashboard row navigation uses the shared `navigateToTerminal` path. It opens the
+manual Global Workspace for parked sessions before activating their content,
+leaves that workspace for a repository session that is not a member, and focuses
+its existing pane group when present. Undocked terminals use the full-page overlay
+without changing the split layout being left. Existing tab/session bindings are
+preserved. Notification and detached-dashboard navigation use the same path.
+
 Activity Dashboard uses a 500px inline overlay and the same compact row layout
 in its detached window. On startup and reopening, saved detached geometry cannot
 make the Activity window larger than its 550×650 default; smaller saved sizes
@@ -795,7 +806,9 @@ The mobile session header uses a handset icon and Start/Stop voice call labels f
 
 Restored dictated drafts stay in the composer without writing to the terminal on mount. Send or the first edit reconciles the saved text with the current PTY input line through the existing delta path. Later edits use the local baseline so delayed terminal echoes do not replay text.
 
-`CommandInput` mounts `useBrowserDictation`, a feature-detected browser interaction hook. Its mic is directly before Send in the existing row; interim hypotheses are replaced and final speech stays in the current draft without focus or automatic Enter. `SessionDetailScreen` excludes server hands-free while browser recognition is pending or active, and `useMobileVoice.recording` blocks browser starts during server arming/recording. Manual typing or keybar text insertion cancels recognition and preserves the edited draft. The mic stays claimed until the browser emits `end`, including after an error; queued results from that recording are ignored. Tap the mic to resume after `end`. Browser failures are logged as well as toasted. The hook also stops on send, session end, or unmount. No setting or backend route is added.
+`CommandInput` mounts `useBrowserDictation`, a feature-detected browser interaction hook. Its mic is directly before Send in the existing row; interim hypotheses are replaced and final speech stays in the current draft without focus or automatic Enter. `SessionDetailScreen` excludes server hands-free while browser recognition is pending or active, and `useMobileVoice.recording` blocks browser starts during server arming/recording. Manual typing or keybar text insertion cancels recognition and preserves the edited draft. The mic stays claimed until the browser emits `end`, including after an error; queued results from that recording are ignored. Tap the mic to resume after `end`. Browser errors request cancellation through the same shutdown path as an edit or send. Browser failures are logged as well as toasted; the existing “Dictation failed” label stays beside the mic in the keyboard-visible composer until the next take starts. The hook also stops on send, session end, or unmount. No setting or backend route is added. Bounded lifecycle diagnostics use source `dictation`, level `debug`: start attempt, first result, first error with code, abort request, end and ownership release. Each record includes the captured session ID, a random take ID and a per-take sequence number, not transcript text. The sequence preserves event order even if uploads arrive out of order. Unbound AI Chat drafts use a null session ID. At most six records are emitted per take; they reach the owner through the existing log route.
+
+`IdeasOverlay` reuses the same hook and `MobileDictationButton`. `SessionDetailScreen` passes its existing voice-call and terminal-dictation recording signals to block the Ideas hook and disable its mic while either owns the microphone. It supplies an optional `getSelection` accessor, so each take captures its insertion range and replaces only that range as hypotheses change. Empty hypotheses preserve the original selection. Typing and explicit idea submission cancel recognition before changing the draft. Speech updates only the unsaved idea input, never the terminal or idea store. The hook keeps tail insertion for consumers that omit `getSelection`.
 
 ## Tasks board
 
@@ -858,3 +871,11 @@ backend recovery snapshot exists; its one-second display timer stops on unmount.
 The component displays phase, attempt, next-time and a zero-clamped countdown,
 with a single-flight Force retry button using the shared backend retry transaction.
 A non-empty composer refuses the retry; the status bar displays the error.
+
+Voice correction controls carry `corrections.replacements.{from}.from` and
+`corrections.replacements.{from}.to` catalogue identities. Import, add and remove
+retain the existing TextCorrector workflow; export does not change settings.
+
+Desktop `TerminalChatView` renders active native questions from the existing session lifecycle store below the shared transcript. `ChoicePromptOverlay` has an embedded layout; desktop and mobile share `sendNativeChoice` for agent-specific PTY keys. Compose drafts and ACP interaction state are not involved.
+
+Mobile offers the **Chat** tab only when the host has a configured ego executable, using the same availability predicate as desktop. Host settings changes update the tab without reloading. Removing ego configuration returns an open Chat view to **Sessions**; unavailable saved Chat links also stay on **Sessions**.

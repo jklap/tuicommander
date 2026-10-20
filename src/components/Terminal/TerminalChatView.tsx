@@ -1,14 +1,17 @@
-import { type Component, createEffect, Show } from "solid-js";
+import { type Component, createEffect, createMemo, createSignal, onCleanup, Show } from "solid-js";
+import { invoke } from "../../invoke";
+import { ChoicePromptOverlay } from "../../mobile/components/ChoicePromptOverlay";
 import { appLogger } from "../../stores/appLogger";
 import { chatViewAvailability, chatViewStore } from "../../stores/chatView";
 import { terminalsStore } from "../../stores/terminals";
 import { openFileLinkHere, resolveFileLink } from "../../utils/openFileLink";
+import { sendNativeChoice } from "../../utils/sendNativeChoice";
 import type { TranscriptSearchRef } from "../AIChatPanel/Transcript";
 import { TerminalChatTranscript } from "./TerminalChatTranscript";
 import s from "./TerminalChatView.module.css";
 
 /**
- * Read-only transcript of a Claude terminal, shown in place of the grid.
+ * PTY transcript and native question controls, shown in place of the grid.
  *
  * Mounted only while the terminal is in chat mode; the grid stays mounted and
  * hidden by the caller. Falls back to the grid on its own when the agent goes
@@ -19,6 +22,70 @@ export const TerminalChatView: Component<{
 	sessionId: string;
 	onSearchRef?: (ref: TranscriptSearchRef | undefined) => void;
 }> = (props) => {
+	let disposed = false;
+	onCleanup(() => {
+		disposed = true;
+	});
+	const term = () => terminalsStore.get(props.terminalId);
+	const bound = () =>
+		term()?.sessionId === props.sessionId &&
+		chatViewAvailability(term()).available &&
+		chatViewStore.unavailableReason(props.sessionId) === null;
+	const prompt = () => (bound() && term()?.awaitingInput === "question" ? term()?.choicePrompt : null);
+	const signature = createMemo(() =>
+		JSON.stringify([
+			props.sessionId,
+			prompt()?.title,
+			prompt()?.selection_mode,
+			prompt()?.dismiss_key,
+			prompt()?.options.map((o) => [
+				o.key,
+				o.label,
+				...(prompt()?.selection_mode === "toggle-enter" ? [o.highlighted] : []),
+			]),
+		]),
+	);
+	const [sending, setSending] = createSignal(false);
+	const [error, setError] = createSignal<string | null>(null);
+	createEffect(() => {
+		signature();
+		setSending(false);
+		setError(null);
+	});
+	async function select(key: string) {
+		const question = prompt();
+		if (!question || sending()) return;
+		const sessionId = props.sessionId;
+		const owner = signature();
+		const agent = term()?.agentType;
+		const agentSession = term()?.agentSessionId;
+		const exactSession = term()?.exactAgentSessionId;
+		setSending(true);
+		try {
+			const write = async (data: string) => {
+				// Every continuation remains on its original live PTY and dialog. Never
+				// retarget an answer after terminal replacement or transcript fallback.
+				if (
+					disposed ||
+					!bound() ||
+					props.sessionId !== sessionId ||
+					signature() !== owner ||
+					term()?.agentType !== agent ||
+					term()?.agentSessionId !== agentSession ||
+					term()?.exactAgentSessionId !== exactSession
+				)
+					throw new Error("The native question changed; answer the current prompt instead.");
+				await invoke<void>("write_pty", { sessionId, data });
+			};
+			await sendNativeChoice(write, question, agent, key, () => terminalsStore.setViewMode(props.terminalId, "cli"));
+		} catch (err) {
+			if (signature() === owner) {
+				setSending(false);
+				setError(err instanceof Error ? err.message : String(err));
+			}
+			appLogger.warn("terminal", "Native Chat answer failed", err);
+		}
+	}
 	createEffect(() => {
 		const availability = chatViewAvailability(terminalsStore.get(props.terminalId));
 		const reason = availability.available ? chatViewStore.unavailableReason(props.sessionId) : availability.reason;
@@ -41,14 +108,41 @@ export const TerminalChatView: Component<{
 	};
 
 	return (
-		<TerminalChatTranscript
-			sessionId={props.sessionId}
-			terminalAgent={terminalsStore.get(props.terminalId)?.agentType ?? undefined}
-			onSearchRef={props.onSearchRef}
-			onOpenFile={openFile}
-			onUnavailable={() => terminalsStore.setViewMode(props.terminalId, "cli")}
-			hint="Reply below with Compose. Switch to CLI to answer permission prompts."
-		/>
+		<>
+			<TerminalChatTranscript
+				sessionId={props.sessionId}
+				terminalAgent={terminalsStore.get(props.terminalId)?.agentType ?? undefined}
+				onSearchRef={props.onSearchRef}
+				onOpenFile={openFile}
+				onUnavailable={() => terminalsStore.setViewMode(props.terminalId, "cli")}
+			/>
+			<Show when={bound() && term()?.awaitingInput === "question"}>
+				<section class={s.nativeQuestion} aria-label="Native terminal question">
+					<Show
+						when={prompt()}
+						fallback={
+							<div class={s.fallbackBanner}>
+								{term()?.questionText}
+								<button
+									type="button"
+									class={s.toggleButton}
+									onClick={() => terminalsStore.setViewMode(props.terminalId, "cli")}
+								>
+									Answer in CLI
+								</button>
+							</div>
+						}
+					>
+						{(question) => <ChoicePromptOverlay prompt={question()} embedded disabled={sending()} onSelect={select} />}
+					</Show>
+					<Show when={error()}>
+						<div role="alert" class={s.fallbackBanner}>
+							{error()}
+						</div>
+					</Show>
+				</section>
+			</Show>
+		</>
 	);
 };
 

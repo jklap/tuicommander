@@ -1,9 +1,10 @@
 # Git Operations
 
-Terminal placement uses reported cwd, not `placementPath` or a persisted
-`declaredWorktrees` association. Creating a checkout through `git -C` does not
-move the caller's process or its tab into that checkout. Cold saved-terminal
-restoration and reconnect also resolve the workspace from cwd.
+Terminal placement uses a valid caller-bound `declaredWorktrees` association when
+one exists, otherwise reported cwd. Creating a checkout through `git -C` does not
+move the caller's process or its tab into that checkout. An explicit declaration
+moves only its tab; saved-terminal restoration, reconnect and OSC 7 retain that
+placement without changing shell cwd. Legacy `placementPath` alone is not authority.
 
 **Modules:** `src-tauri/crates/tuic-git/src/{git,git_cli,git_graph,git_locks,git_reads,worktree,cow}.rs` (domain), `src-tauri/src/{git,git_graph,worktree}.rs` (app adapters)
 
@@ -37,9 +38,9 @@ Internal callers that need synchronous access use `_impl` suffixes (e.g. `get_di
 
 ## GitReads Port (gix migration)
 
-Read operations go through a reversible `GitReads` port (`src-tauri/crates/tuic-git/src/git_reads.rs`) so individual ops can be served by in-process **gix** (gitoxide 0.84) instead of shelling out, removing the process spawn + FD + stdout-parse cost on hot paths. `CliGitReads` delegates to the existing `git_cmd`-based functions; `GixGitReads` implements the same trait with a `moka` handle cache (`ThreadSafeRepository` per path → thread-local `Repository` per call). `GitReadsRouter` (the global `git_reads()`) dispatches each op to its backend via a per-op `PerOpBackend`.
+Read operations go through a reversible `GitReads` port (`src-tauri/crates/tuic-git/src/git_reads.rs`) so individual ops can be served by in-process **gix** (gitoxide 0.89) instead of shelling out, removing the process spawn + FD + stdout-parse cost on hot paths. `CliGitReads` delegates to the existing `git_cmd`-based functions; `GixGitReads` implements the same trait with a `moka` handle cache (`ThreadSafeRepository` per path → thread-local `Repository` per call). `GitReadsRouter` (the global `git_reads()`) dispatches each op to its backend via a per-op `PerOpBackend`.
 
-**An op is flipped to gix only behind a byte-for-byte parity ("shootout") test** comparing gix output to the CLI on a fixture repo. Where gix 0.84 cannot match git's exact output, the op stays on the CLI.
+**An op is flipped to gix only behind a byte-for-byte parity ("shootout") test** comparing gix output to the CLI on a fixture repo. Where gix cannot match git's exact output, the adapter retains its CLI fallback.
 
 | Op | Backend | Notes |
 |----|---------|-------|
@@ -52,6 +53,8 @@ Read operations go through a reversible `GitReads` port (`src-tauri/crates/tuic-
 | `diff_stats` | **gix** (worktree) | unstaged worktree-vs-index `--shortstat` via per-blob `imara` (Myers + slider), binary excluded. Staged (`--cached`) and commit (`hash^..hash`) modes → CLI; sparse/submodule/error → CLI. |
 
 **All 8 read ops are served by gix**, each gated by a byte-for-byte shootout test; the gix adapters fall back to the CLI internally for their unsupported edge cases (sparse/submodule, renamed-history blame, staged/commit diff). `Backend::Cli` is retained in `PerOpBackend` as a per-op rollback lever. The lever is temporary: after **2026-12-05**, if the shootout tests have stayed green and no op has been rolled back, `Backend::Cli` and its router arms are deleted (`CliGitReads` itself stays — the gix fallbacks and the shootout tests both use it).
+
+The 0.85 → 0.89 dependency migration retains these operations, features and fallbacks. The cached repository-open error uses the unified `gix::Error` type. Upstream raises its minimum Rust version to 1.88, below this repository's CI compiler. Repository, status, blame and worktree facade calls keep the same inputs; worktree proxy paths are now anchored to the repository's opening directory. The existing CLI parity tests remain the behavior contract on macOS, Linux and Windows.
 
 The displayed unified diff/patch (`get_git_diff`), stash, reflog, and **all writes/auth stay on the CLI permanently** — they are not part of the port. The `gix` dependency uses `default-features = false` with only `["sha1","revision","status","blame","blob-diff","dirwalk","parallel"]` (pure Rust, no C toolchain).
 
@@ -252,9 +255,9 @@ changes; a virtual no-op merge can cover the final tree instead. The removal
 result names the matching rule.
 
 Default-branch resolution uses only verified local Git refs, without a fetch:
-`origin/HEAD` (local branch when present, otherwise the remote-tracking ref),
-then the main checkout branch's `branch.<name>.tuicommander-base`, then local
-`main` or `master`, then the main checkout's attached HEAD branch. A linked
+the main checkout branch's explicit `branch.<name>.tuicommander-base`, then
+local `main`, then local `master`, then `origin/HEAD` (local branch when present,
+otherwise the remote-tracking ref), then the main checkout's attached HEAD branch. A linked
 checkout never supplies the fallback HEAD. If none resolves to a commit,
 lifecycle inspection blocks removal with an actionable reason; the sidebar
 shows **No base branch**, with the full reason in its tooltip.
@@ -267,6 +270,14 @@ unmerged PRs, mismatched heads, and unavailable API data never prove deletion.
 The request uses the repository-bound GitHub account and host. An incomplete
 pagination read is unknown and is not cached; monitoring reuses definitive
 answers for 300 seconds, while removal always asks again.
+MCP worktree listing uses local monitoring proofs keyed by current refs without
+resolving the full worktree inventory again for each entry. It reads GitHub proof
+from the existing definitive-answer cache only; a miss stays locally unproven and
+never starts network I/O. Background monitoring may populate the cache, while
+destructive preflights still ask freshly. Its dirt,
+fingerprint and submodule fields are still inspected freshly. A checkout HEAD
+that differs from its branch ref bypasses the proof cache; destructive lifecycle
+preflights always bypass it.
 MCP `branch_integrations` and `branch_integration`, the branch panel's merged
 set, and workspace lifecycle share `classify_branch_merge` in `tuic-git`.
 The integration query does not treat `in_sync` as merged and supplies no proof
@@ -519,7 +530,12 @@ before closing it and uses directory-boundary, separator-independent containment
 Missing cwd is not permission to close. Surviving tabs from a removed row are
 reconciled to their cwd workspace or parked in the Global Workspace.
 
-Creation declarations remain backend metadata. They do not override cwd for tab
-placement on creation, OSC 7, reload or saved-tab restore. A repo-root session waits
+Creation alone remains cwd-based. Explicit caller declarations override cwd only
+for display placement, never terminal cleanup. A declaration must match an existing
+workspace id and checkout path; removal retracts it. An undeclared repo-root session waits
 for the root workspace to be discovered rather than joining the selected linked
 worktree.
+
+Explicit worktree removal uses the same current-cwd terminal cleanup as removal
+events and refresh. Sidebar membership does not authorize closing a PTY. Tabs
+outside the removed checkout are rehomed after successful removal.

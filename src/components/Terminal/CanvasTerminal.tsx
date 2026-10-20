@@ -87,6 +87,7 @@ import {
 	shouldFireReconcile,
 	snapLineHeight,
 	textSpanToCellRanges,
+	utf16SpanToCellRange,
 } from "./canvasTerminalUtils";
 import { installFrameTimingDebugHook, isFrameTimingEnabled, recordFrameTiming, resetFrameTiming } from "./frameTiming";
 import {
@@ -625,6 +626,7 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 		const workloadStart = isFrameWorkloadEnabled() ? performance.now() : 0;
 		const paintOptions = {
 			fullRepaint: fullRepaintNeeded,
+			viewportTop: frame.historyBase + frame.historySize - frame.displayOffset,
 			projection: viewportProjection,
 			dirtyIndices:
 				dirtyIndices &&
@@ -648,6 +650,7 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 				neutral: cachedNeutralSurface,
 				hidden,
 				fullRepaint: paintOptions.fullRepaint,
+				viewportTop: paintOptions.viewportTop,
 				projectionChanged,
 				dirtyIndices: paintOptions.dirtyIndices ? [...paintOptions.dirtyIndices] : undefined,
 				hiddenRows: [...markers.hidden],
@@ -1017,7 +1020,7 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 	const markerPromptReads = new Set<number>();
 	let markerPromptGeneration = -1;
 	const cachedPlanCanvasMarkers = createCanvasMarkerPlanner();
-	const markerSnapshot = cachedMarkerSnapshot(rowText);
+	const markerSnapshot = cachedMarkerSnapshot(rowText, (row, end) => utf16SpanToCellRange(row, 0, end)[1]);
 	const NO_MARKERS: MarkerPlan = { hidden: new Set(), answerMarkers: new Set(), key: "", blocks: [] };
 	let lastMarkerPlan: MarkerPlan = NO_MARKERS;
 	/** The hidden set the main canvas was last painted with. */
@@ -1135,13 +1138,13 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 			return row === null ? [] : [{ ...block, row }];
 		});
 		const key = answerOverlayKey(
-			plan.key,
+			`${plan.key}:${m.cellWidth}`,
 			m.cellHeight,
 			blocks.map((block) => block.row),
 		);
 		if (key === lastSuggestOverlayKey) return;
 		lastSuggestOverlayKey = key;
-		paintOverlayBlocks(overlayRef, blocks, m.cellHeight);
+		paintOverlayBlocks(overlayRef, blocks, m.cellHeight, m.cellWidth);
 	}
 
 	function startBlink() {
@@ -1796,8 +1799,8 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 		if (decision.fullReplace) {
 			reconcileHealPending = false;
 			clearDetectedLinks();
-
-			fullRepaintNeeded = true;
+			// A full wire replacement is not a canvas invalidation. The renderer
+			// can retain matching pixels; geometry/screen/theme changes invalidate separately.
 		}
 		// Damage can include unchanged text (cursor, colours, or a full redraw).
 		// Compare before installing the new rows: clearing those matches while the

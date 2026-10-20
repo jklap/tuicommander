@@ -112,8 +112,11 @@ export default function MobileApp() {
 		line?: number;
 		root?: string;
 	} | null>(null);
-	const { sessions, loading, refreshing, error, authError, refresh, questionCount, markSeen, subscribeChatWake } =
+	const { aiChatAvailable, sessions, loading, refreshing, error, authError, refresh, markSeen, subscribeChatWake } =
 		useSessions(() => setRecoveryRevision((revision) => revision + 1));
+	createEffect(() => {
+		if (!aiChatAvailable() && activeTab() === "chat") setActiveTab("sessions");
+	});
 	const { updateAvailable, applyUpdate } = useVersionCheck();
 	ideasStore.hydrate();
 
@@ -176,15 +179,7 @@ export default function MobileApp() {
 				when={showDetail()}
 				fallback={
 					<>
-						<TopBar
-							notificationCount={questionCount()}
-							isConnected={error() === null}
-							onOpenSettings={() => setActiveTab("settings")}
-							onNotificationsClick={() => {
-								const waiting = sessions().find((session) => session.state?.awaiting_input);
-								if (waiting) navigateToSession(waiting.session_id);
-							}}
-						/>
+						<TopBar isConnected={error() === null} onOpenSettings={() => setActiveTab("settings")} />
 						{updateBanner()}
 						<QuestionBanner sessions={sessions()} onNavigate={navigateToSession} />
 						<main class={styles.content}>
@@ -213,9 +208,13 @@ export default function MobileApp() {
 										<ActivityScreen recoveryRevision={recoveryRevision()} onNavigateSession={navigateToSession} />
 									</Match>
 									<Match when={activeTab() === "files"}>
-										<Show when={chatFileLink()} fallback={<FilesScreen recoveryRevision={recoveryRevision()} />}>
+										<Show
+											when={chatFileLink()}
+											fallback={<FilesScreen sessions={sessions()} recoveryRevision={recoveryRevision()} />}
+										>
 											{(link) => (
 												<FilesScreen
+													sessions={sessions()}
 													recoveryRevision={recoveryRevision()}
 													initialRepo={{ cwd: link().cwd, worktreePath: link().cwd }}
 													initialLink={{ candidate: link().candidate }}
@@ -242,6 +241,7 @@ export default function MobileApp() {
 						</main>
 						<BottomTabs
 							active={activeTab()}
+							aiChatAvailable={aiChatAvailable()}
 							onSelect={(tab) => {
 								setChatFileLink(null);
 								setActiveTab(tab);
@@ -269,7 +269,9 @@ export default function MobileApp() {
 				<Show when={sessionFilesOpen()}>
 					<main class={styles.content}>
 						<FilesScreen
+							sessions={sessions()}
 							recoveryRevision={recoveryRevision()}
+							initialSessionId={lastKnownSession()!.session_id}
 							initialLink={sessionFileLink() ?? undefined}
 							initialRepo={{
 								worktreePath: sessionFileLink()?.root ?? lastKnownSession()!.worktree_path,

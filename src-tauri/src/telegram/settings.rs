@@ -46,6 +46,12 @@ pub(super) async fn changed(paths: &Paths, previous: &[Option<std::time::SystemT
         }
     }
 }
+#[cfg(test)]
+pub(crate) fn paths() -> Result<Paths, Error> {
+    Ok(Paths::new(crate::config::config_dir().join("telegram")))
+}
+
+#[cfg(not(test))]
 pub(crate) fn paths() -> Result<Paths, Error> {
     let home = dirs::home_dir().ok_or(Error::Config)?;
     Ok(Paths::new(home.join(".config/tuic-telegram")))
@@ -87,6 +93,17 @@ pub(crate) struct Snapshot {
     polling_owner: Option<&'static str>,
     last_error: Option<String>,
     last_message_time: Option<u64>,
+}
+
+/// Match setup's opt-in without reading the bot credential or requiring a live
+/// polling connection. Registration remains a separate, caller-bound gate.
+pub(crate) fn configured() -> bool {
+    paths().is_ok_and(|paths| configured_at(&paths))
+}
+
+fn configured_at(paths: &Paths) -> bool {
+    config(paths).is_ok_and(|config| config.enabled && !config.bot_alias.is_empty())
+        && super::config::private_open(&paths.file("bot.token"), false).is_ok()
 }
 
 fn config(paths: &Paths) -> Result<Config, Error> {
@@ -236,8 +253,11 @@ fn snapshot(paths: &Paths, state: &AppState) -> Result<Snapshot, Error> {
 }
 
 pub(crate) async fn change(state: &Arc<AppState>, change: Change) -> Result<Value, Error> {
-    let _ = state;
-    change_owner(paths()?, change).await
+    let result = change_owner(paths()?, change).await;
+    if result.is_ok() {
+        crate::settings::api::publish_change(state, "telegram", true);
+    }
+    result
 }
 pub(crate) async fn change_owner(paths: Paths, change: Change) -> Result<Value, Error> {
     change_owner_with_phase(paths, change, &mut false).await

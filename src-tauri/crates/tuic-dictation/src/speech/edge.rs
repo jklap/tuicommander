@@ -830,6 +830,34 @@ mod tests {
     }
 
     #[test]
+    fn one_italian_reply_sends_one_request_with_the_resolved_italian_voice_1996() {
+        // Catches: a short reply being synthesized twice or the selected Italian
+        // voice being replaced by an English voice at the request boundary.
+        // The response is the recorded service stream, not proof of live audio.
+        for (configured, expected) in [
+            ("it-IT-ElsaNeural", "it-IT-ElsaNeural"),
+            ("en-US-AriaNeural", "it-IT-IsabellaNeural"),
+            ("", "it-IT-IsabellaNeural"),
+        ] {
+            let voice = choose_voice("it", configured).expect("Italian voice resolves");
+            assert_eq!(voice, expected);
+            let (engine, sent) = engine_playing(recorded_frames(), || Frame::Closed);
+            let audio = engine
+                .synthesize(SENTENCE, &voice, &SpeechCancel::new())
+                .expect("recorded response decodes without another engine");
+            assert!(!audio.samples.is_empty());
+            let sent = sent.lock().unwrap();
+            assert_eq!(sent.len(), 2, "one config and one SSML request: {sent:?}");
+            assert_eq!(message_path(&sent[0]), Some("speech.config"));
+            assert_eq!(message_path(&sent[1]), Some("ssml"));
+            assert_eq!(sent[1].matches("<voice ").count(), 1);
+            assert!(sent[1].contains(&format!("<voice name='{expected}'>")));
+            assert!(sent[1].contains(SENTENCE));
+            assert!(!sent[1].contains("en-US-AriaNeural"));
+        }
+    }
+
+    #[test]
     fn cancelling_while_the_service_is_silent_stops_the_request() {
         // Catches: a read loop that only checks the flag between frames, so an
         // abandoned reply on a stalled connection hangs until the deadline.

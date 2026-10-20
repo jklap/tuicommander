@@ -37,6 +37,7 @@ pub(crate) struct TokenManager {
     resource: Option<String>,
     /// Guards concurrent refresh — only one refresh executes at a time.
     refresh_lock: Arc<Mutex<()>>,
+    settings_publisher: crate::settings::changes::Publisher,
 }
 
 /// Result of generating a PKCE challenge for the authorization request.
@@ -70,7 +71,16 @@ impl TokenManager {
             token_endpoint,
             resource,
             refresh_lock: Arc::new(Mutex::new(())),
+            settings_publisher: Default::default(),
         }
+    }
+
+    pub(crate) fn with_settings_publisher(
+        mut self,
+        publisher: crate::settings::changes::Publisher,
+    ) -> Self {
+        self.settings_publisher = publisher;
+        self
     }
 
     /// Generate a new PKCE S256 challenge pair for an authorization request.
@@ -133,6 +143,7 @@ impl TokenManager {
         let token_set = self.token_response_to_set(token_resp);
         save_oauth_tokens(&self.upstream_name, &token_set, &self.upstream_url)
             .map_err(|e| anyhow::anyhow!("{e}"))?;
+        self.settings_publisher.publish("upstreams", true);
         Ok(token_set)
     }
 
@@ -223,6 +234,7 @@ impl TokenManager {
 
         save_oauth_tokens(&self.upstream_name, &token_set, &self.upstream_url)
             .map_err(|e| anyhow::anyhow!("{e}"))?;
+        self.settings_publisher.publish("upstreams", true);
         Ok(Some(token_set))
     }
 
@@ -385,6 +397,8 @@ mod tests {
 
     #[tokio::test]
     async fn exchange_code_error_response() {
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+        let mut events = state.event_bus.subscribe();
         let mut server = mockito::Server::new_async().await;
         server
             .mock("POST", "/token")
@@ -400,16 +414,23 @@ mod tests {
             None,
             format!("{}/token", server.url()),
             None,
-        );
+        )
+        .with_settings_publisher(crate::settings::changes::Publisher::new(&state));
         let err = mgr
             .exchange_code("bad-code", "verifier", "http://localhost/callback")
             .await
             .unwrap_err();
         assert!(err.to_string().contains("400"), "got: {err}");
+        assert!(
+            events.try_recv().is_err(),
+            "failed OAuth must not publish persistence"
+        );
     }
 
     #[tokio::test]
     async fn exchange_code_happy_path() {
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+        let mut events = state.event_bus.subscribe();
         let mut server = mockito::Server::new_async().await;
         let mock = server
             .mock("POST", "/token")
@@ -441,7 +462,8 @@ mod tests {
             None,
             format!("{}/token", server.url()),
             None,
-        );
+        )
+        .with_settings_publisher(crate::settings::changes::Publisher::new(&state));
         let set = mgr
             .exchange_code(
                 "auth-code-123",
@@ -454,6 +476,18 @@ mod tests {
         assert_eq!(set.refresh_token, Some("new-rt".into()));
         assert_eq!(set.scope, Some("read".into()));
         mock.assert_async().await;
+        let notice = match events
+            .try_recv()
+            .expect("OAuth credential persistence must refresh Settings")
+        {
+            crate::state::AppEvent::SettingsChanged(notice) => notice,
+            other => panic!("unexpected event: {other:?}"),
+        };
+        assert_eq!(notice.section, "upstreams");
+        assert!(notice.persisted && notice.applied);
+        assert!(!serde_json::to_string(&notice).unwrap().contains("new-at"));
+        assert!(!serde_json::to_string(&notice).unwrap().contains("new-rt"));
+        assert!(events.try_recv().is_err());
     }
 
     #[tokio::test]

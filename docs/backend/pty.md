@@ -17,6 +17,23 @@ to use the shared named-pipe transport.
 
 Manages pseudo-terminal sessions for all terminal tabs in the application.
 
+## Frame receipts and shared IPC delays
+
+Each session has its own frame ticker and desktop receipt gate. A closed gate
+stops ordinary desktop frames for that session, not another session's input or
+frames. Browser grid watchers have independent delivery even when the desktop
+gate is closed. The visible frontend acknowledges receipt before decoding and
+schedules canvas painting separately; an acknowledgement is not a paint receipt.
+
+The 500 ms gate warning reports a missing receipt, not its cause. Delayed
+WebView callbacks, IPC dispatch or acknowledgement delivery can all leave the
+gate closed. Native IPC dispatch is shared across sessions: blocking filesystem
+work there can delay their input dispatch and frame receipts together. Agent
+session discovery therefore uses the blocking pool on both IPC and HTTP. See
+[Command threading](command-threading.md#agent-session-discovery-2026-10-19) for the
+retained sample and regression evidence. This does not establish native
+keyboard-to-paint timing or attribute every historical stall.
+
 ## Bounded input and teardown
 
 Raw desktop, HTTP, WebSocket and MCP input runs on the blocking pool. The caller
@@ -159,8 +176,15 @@ non-shell probes retain the previous identity and do not revoke registration.
 Each session spawns a dedicated reader thread that reads from the PTY master fd:
 
 ```rust
-spawn_reader_thread(reader, paused, session_id, app, state)
+spawn_reader_thread(reader, paused, session_id, state, tuic_session)
 ```
+
+Readers without an explicit identity resolve it from the live PTY binding before
+processing output. This includes HTTP agent spawns, MCP agent spawns and generic
+HTTP shell sessions. The identity matches the inherited `TUIC_SESSION` and the
+`session-created` event, including a restored identity that differs from the PTY
+key. Native Codex hook ownership checks remain exact; an unbound reader does not
+accept a self-announced owner.
 
 **Processing pipeline per read:**
 
@@ -364,6 +388,12 @@ PTY identity applies Claude's primary-screen environment control only while that
 Grid WebSocket attachment sends the existing viewport as a full frame, including history metadata, without waiting for new PTY output. If a live grid watch has no available frame, the server sends `{"type":"grid-replay-empty"}` so an idle empty session completes replay explicitly. The client bounds initial replay to 15 seconds and reconnects with a persistent error toast when replay stalls or decoding fails. Healthy idle sessions have no subsequent-output deadline.
 
 `spawn_headless_reader_thread()` — used for HTTP-created sessions (no Tauri app handle). Same pipeline but skips Tauri event emission; only writes to ring buffer and WebSocket. Includes `extract_question_line()` for silence-based question detection, session lifecycle events (`session-created`, `session-closed`), and full output parser integration.
+
+Generic HTTP sessions (`POST /sessions`) and native MCP/HTTP agent spawns publish
+the backend-bound `tuic_session` in `session-created`, matching SSE and session-list
+rows. Generic sessions without a requested identity use their bound PTY key. Live tabs use that identity
+to match worktree declarations without changing the process cwd. Unbound sessions
+publish a null identity. All three native producers share the emission boundary.
 
 Named agent sessions propagate their stable `display_name` through the
 `session-created` event. That launch label is a replaceable base title: OSC and
@@ -663,6 +693,12 @@ command. While a meaningful descendant of the agent is alive, session state
 reports `background_work=true` and keeps `agent_state=working`; `shell_state`
 remains `idle` because terminal input readiness is a separate fact.
 
+Ego is turn-scoped: once its shell state is `idle`, a descendant or pending
+process probe does not promote `agent_state` to `working`. Its OSC 7770 idle
+signal ends the active turn even while a background job waits. The shared
+snapshot keeps `background_work` and probe metadata for suspend and standby
+safety. Desktop, mobile, and `agent ls` read this same derived lifecycle state.
+
 A descendant is excluded from that judgement two ways. By name: the persistent
 integration helpers (`mdkb`, `tuic-bridge`, and `node_repl`) and Claude's
 standalone timed `caffeinate -i -t <seconds>` assertion. Unix classification
@@ -951,7 +987,7 @@ new runtime PTY ids, so their read grants point to fresh storage.
 
 Suggest choices are published once when the agent is ready, including while background descendants keep the shell busy. The completion lifecycle event still waits for an idle shell and settled background work; publishing choices does not release that gate.
 
-Pending follow-up choices survive a working spinner until the turn has settled. While the shell is busy, public Claude session snapshots use that same settled-completion predicate, so a retained final marker does not report completed/idle during active Claude Stop hooks. A final `suggest:` marker may share a Claude redraw with its spinner; this is not a new turn. Working evidence can still reopen an idle or delivered completion (including a blocking Stop hook or a Codex internal continuation).
+Pending follow-up choices survive a working spinner until they are published, including a Stop-hook repaint after Claude has already emitted its idle hook. Reopening working state retracts completion but retains undelivered choices for the same input epoch; published choices and choices from a submitted previous turn are discarded. While the shell is busy, public Claude session snapshots use that same settled-completion predicate, so a retained final marker does not report completed/idle during active Claude Stop hooks. A final `suggest:` marker may share a Claude redraw with its spinner; this is not a new turn. Working evidence can still reopen an idle or delivered completion (including a blocking Stop hook or a Codex internal continuation).
 
 ### Background desktop visibility and remote observers
 
@@ -981,7 +1017,7 @@ A failed SIGCONT retains the record for retry.
 
 ### Rust-owned suspended tabs
 
-Rust owns tab suspension in `suspended_sessions.rs`. It checks the current parsed/shell state, persists a record keyed by stable TUIC identity before closing the PTY, and dual-emits `session-suspended` before EOF. `session_resume.rs` verifies the agent store using the saved launch environment. Resume creates the replacement PTY in Rust and the frontend attaches its returned id. No WebView response is needed; working agents, busy shells, unanswered input and queued commands remain refused.
+Rust owns tab suspension in `suspended_sessions.rs`. It checks the current parsed/shell state, persists a record keyed by stable TUIC identity before closing the PTY, and dual-emits `session-suspended` before EOF. `session_resume.rs` verifies the agent store using the saved launch environment. Resume creates the replacement PTY in Rust and the frontend attaches its returned id. No WebView response is needed; working agents, busy shells, unanswered input and queued commands remain refused. A current-turn pending descendant probe also refuses suspension directly, even when an ego turn is displayed as idle and `background_work` is false.
 
 Each Resume allocates a fresh PTY key and binds the saved TUIC identity before spawning the child. Exit tombstones and delayed cleanup belong to the previous PTY. Suspended-session RPC callers supply top-level session/repository/cwd ownership context, so remote operations stay on the owning daemon even after suspension clears the live session id.
 
@@ -1022,8 +1058,17 @@ once (no automatic retry or queue). See output-parser.md for the wire contract.
 
 ### ego transcript Chat view
 
-The foreground ego PID is matched to `lease.pid` in the process-owned
-`EGO_HOME/sessions`; no newest-file fallback is used. A failed environment read
+The export reader checks the child exit status before reporting an absent header.
+An incompatible executable that refuses `--after` returns an export failure with
+its configured path and status, not a misleading transcript-format error. A
+successful empty export still reports the missing v1 header.
+
+The foreground ego PID first resolves through the process-owned
+`EGO_HOME/pids/<pid>.json`. The indexed UUID must have a held writer lease
+with the same PID under `EGO_HOME/sessions`. A corrupt, mismatched or unlocked
+index target fails closed; only an absent index uses the legacy lease scan.
+The root/PID cache still validates held leases for older ego versions.
+No newest-file fallback is used. A failed environment read
 fails closed rather than selecting the host's default ego store. The configured
 absolute ego executable reads the bound session through the published local
 transcript v1 command, `ego export SESSION --format transcript --after SEQ`.
@@ -1047,3 +1092,11 @@ transcript v1 contract; older executables return an unavailable reason.
 ### Exact soft-wrap text boundaries
 
 Grid text and styled log extraction preserve trailing cells on WRAPLINE rows. Those spaces are source content, not padding. MCP text output concatenates these rows without inserting a separator. Styled HTTP, WebSocket and IPC log rows include `wrapped: boolean`; a finalized row can still continue into the current screen. Only non-wrapped row tails are trimmed.
+
+### Slash-menu replacement and retraction
+
+The chunk processor parses the current screen while the input FSM is in slash
+mode. A single filtered command is a valid menu. A previously published menu
+gets one empty `SlashMenu` event when the menu disappears or slash mode ends,
+so the shared session state cannot retain an older list. Empty-menu retraction
+is not emitted repeatedly during busy output. No mobile-only filter is used.

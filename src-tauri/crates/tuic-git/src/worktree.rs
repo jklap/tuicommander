@@ -1405,16 +1405,72 @@ pub fn inspect_workspace_lifecycle_with_pr(
     workspace_id: &str,
     pr_proves_tip: impl Fn(&Path, &str, &str) -> bool,
 ) -> WorkspaceLifecycleStatus {
+    inspect_workspace_lifecycle_resolved_with_pr(
+        base_repo,
+        resolve_removable_workspace(base_repo, workspace_id),
+        false,
+        pr_proves_tip,
+    )
+}
+
+/// Listing already owns the inventory. Reuse unchanged integration proofs, but
+/// always read fresh checkout safety fields; removal preflights never use this cache.
+pub fn inspect_workspace_listing_with_pr(
+    base_repo: &Path,
+    workspace: &WorkspaceWorktree,
+    pr_proves_tip: impl Fn(&Path, &str, &str) -> bool,
+) -> WorkspaceLifecycleStatus {
+    inspect_workspace_lifecycle_resolved_with_pr(
+        base_repo,
+        Ok(workspace.clone()),
+        true,
+        pr_proves_tip,
+    )
+}
+
+fn lifecycle_branch_merge(
+    base_repo: &Path,
+    branch: &str,
+    tip: &str,
+    monitoring: bool,
+    pr_proves_tip: impl Fn(&Path, &str, &str) -> bool,
+) -> Result<MonitoringMerge, String> {
+    // During rebase the checkout HEAD may differ from its branch ref. The
+    // monitoring cache classifies the ref, so retain fresh HEAD classification
+    // in that case rather than changing the lifecycle verdict.
+    let branch_matches_head = monitoring
+        && gix::open(base_repo)
+            .ok()
+            .and_then(|repo| {
+                repo.rev_parse_single(format!("refs/heads/{branch}").as_str())
+                    .ok()
+                    .map(|id| id == tip)
+            })
+            .unwrap_or(false);
+    if branch_matches_head {
+        let ref_key = monitoring_ref_key(base_repo, branch)?;
+        monitoring_branch_merge(base_repo, branch, &ref_key, true, pr_proves_tip)
+    } else {
+        let default = get_remote_default_branch(&base_repo.to_string_lossy())?;
+        classify_branch_merge(base_repo, branch, tip, &default, pr_proves_tip)
+    }
+}
+
+fn inspect_workspace_lifecycle_resolved_with_pr(
+    base_repo: &Path,
+    workspace: Result<WorkspaceWorktree, String>,
+    monitoring: bool,
+    pr_proves_tip: impl Fn(&Path, &str, &str) -> bool,
+) -> WorkspaceLifecycleStatus {
     let inspected = (|| -> Result<WorkspaceLifecycleStatus, String> {
-        let workspace = resolve_removable_workspace(base_repo, workspace_id)?;
+        let workspace = workspace?;
         if !Path::new(&workspace.path).exists() {
-            let default_branch = get_remote_default_branch(&base_repo.to_string_lossy())?;
             let tip = rev_at(base_repo, &format!("refs/heads/{}", workspace.branch))?;
-            let (commit_status, merge_proof) = classify_branch_merge(
+            let (commit_status, merge_proof) = lifecycle_branch_merge(
                 base_repo,
                 &workspace.branch,
                 &tip,
-                &default_branch,
+                monitoring,
                 pr_proves_tip,
             )?;
             return Ok(WorkspaceLifecycleStatus {
@@ -1432,14 +1488,13 @@ pub fn inspect_workspace_lifecycle_with_pr(
         let (dirty_fingerprint, submodule_unpushed_commits) =
             dirty_fingerprint_at(Path::new(&workspace.path))?;
         let dirty = dirty_files > 0;
-        let default_branch = get_remote_default_branch(&base_repo.to_string_lossy())?;
         let workspace_path = Path::new(&workspace.path);
         let tip = rev_at(workspace_path, "HEAD")?;
-        let (commit_status, merge_proof) = classify_branch_merge(
+        let (commit_status, merge_proof) = lifecycle_branch_merge(
             base_repo,
             &workspace.branch,
             &tip,
-            &default_branch,
+            monitoring,
             pr_proves_tip,
         )?;
         Ok(WorkspaceLifecycleStatus {
@@ -3641,7 +3696,7 @@ pub fn list_local_branches(repo_path: String) -> Result<Vec<String>, String> {
 }
 
 /// Resolve a verified integration branch without network access.
-/// Prefer origin/HEAD, the main checkout's configured base, main/master, then
+/// Prefer the main checkout's configured base, main/master, origin/HEAD, then
 /// the main checkout's attached HEAD (never a linked checkout's HEAD).
 pub fn get_remote_default_branch(repo_path: &str) -> Result<String, String> {
     let repo = Path::new(repo_path);
@@ -3664,16 +3719,6 @@ pub fn get_remote_default_branch(repo_path: &str) -> Result<String, String> {
         }
         None
     };
-    if let Some(out) = git_cmd(repo)
-        .args(["symbolic-ref", "refs/remotes/origin/HEAD"])
-        .run_silent()
-        && let Some(branch) = out.stdout.trim().strip_prefix("refs/remotes/origin/")
-        && let Some(reference) = verified(&format!("refs/heads/{branch}"))
-            .or_else(|| verified(&format!("refs/remotes/origin/{branch}")))
-    {
-        return Ok(reference);
-    }
-
     let worktrees = git_cmd(repo)
         .args(["worktree", "list", "--porcelain"])
         .run()
@@ -3693,10 +3738,20 @@ pub fn get_remote_default_branch(repo_path: &str) -> Result<String, String> {
             return Ok(branch.to_string());
         }
     }
+    if let Some(out) = git_cmd(repo)
+        .args(["symbolic-ref", "refs/remotes/origin/HEAD"])
+        .run_silent()
+        && let Some(branch) = out.stdout.trim().strip_prefix("refs/remotes/origin/")
+        && let Some(reference) = verified(&format!("refs/heads/{branch}"))
+            .or_else(|| verified(&format!("refs/remotes/origin/{branch}")))
+    {
+        return Ok(reference);
+    }
+
     if let Some(reference) = main_branch.as_deref().and_then(verified) {
         return Ok(reference);
     }
-    Err("Cannot resolve default branch: no valid origin/HEAD, configured base, main/master, or attached main checkout branch. Attach the main checkout to a branch or configure its branch.<name>.tuicommander-base.".to_string())
+    Err("Cannot resolve default branch: no valid configured base, main/master, origin/HEAD, or attached main checkout branch. Attach the main checkout to a branch or configure its branch.<name>.tuicommander-base.".to_string())
 }
 
 /// Fetch a remote ref if the ref name is a remote tracking branch (e.g. "origin/main").
@@ -5843,16 +5898,92 @@ mod tests {
         );
     }
 
-    /// Catches precedence inversion when a configured base differs from main.
+    /// Catches a stale main branch hiding work already integrated into the configured trunk.
     #[test]
-    fn default_branch_prefers_verified_origin_then_main_checkout_configured_base() {
+    fn worktree_lifecycle_stale_main_must_not_override_configured_develop() {
+        let (_temp, repo, _) = workspace_fixture();
+        git_cmd(&repo)
+            .args(["branch", "-m", "develop"])
+            .run()
+            .unwrap();
+        git_cmd(&repo).args(["branch", "main"]).run().unwrap();
+        git_cmd(&repo)
+            .args(["checkout", "-b", "feature/session"])
+            .run()
+            .unwrap();
+        set_branch_base(&repo.to_string_lossy(), "feature/session", "develop").unwrap();
+        let worktree = add_worktree(&repo, "feature/integrated");
+        commit_file(&worktree, "feature.txt", "completed work\n");
+        git_cmd(&repo)
+            .args(["branch", "-f", "develop", "feature/integrated"])
+            .run()
+            .unwrap();
+
+        let status = inspect_workspace_lifecycle(&repo, "feature/integrated");
+        assert_eq!(
+            status.commit_status,
+            WorkspaceCommitStatus::Merged,
+            "integrated into configured develop, not stale main: {status:?}"
+        );
+    }
+
+    /// Catches remote HEAD overriding the conventional trunk without explicit configuration.
+    #[test]
+    fn default_branch_prefers_main_then_master_before_remote_head() {
         let (_temp, repo, _) = workspace_fixture();
         git_cmd(&repo).args(["branch", "-m", "main"]).run().unwrap();
+        git_cmd(&repo).args(["branch", "master"]).run().unwrap();
         git_cmd(&repo)
             .args(["branch", "integration"])
             .run()
             .unwrap();
-        set_branch_base(&repo.to_string_lossy(), "main", "integration").unwrap();
+        git_cmd(&repo)
+            .args(["update-ref", "refs/remotes/origin/trunk", "HEAD"])
+            .run()
+            .unwrap();
+        git_cmd(&repo)
+            .args([
+                "symbolic-ref",
+                "refs/remotes/origin/HEAD",
+                "refs/remotes/origin/trunk",
+            ])
+            .run()
+            .unwrap();
+        assert_eq!(
+            get_remote_default_branch(&repo.to_string_lossy()).unwrap(),
+            "main"
+        );
+        git_cmd(&repo)
+            .args(["branch", "-m", "feature"])
+            .run()
+            .unwrap();
+        assert_eq!(
+            get_remote_default_branch(&repo.to_string_lossy()).unwrap(),
+            "master"
+        );
+        git_cmd(&repo)
+            .args(["branch", "-D", "master"])
+            .run()
+            .unwrap();
+        assert_eq!(
+            get_remote_default_branch(&repo.to_string_lossy()).unwrap(),
+            "origin/trunk"
+        );
+    }
+
+    /// Catches remote HEAD overriding an explicitly configured integration base.
+    #[test]
+    fn default_branch_prefers_verified_main_checkout_configured_base() {
+        let (_temp, repo, _) = workspace_fixture();
+        git_cmd(&repo)
+            .args(["branch", "-m", "feature/base"])
+            .run()
+            .unwrap();
+        git_cmd(&repo)
+            .args(["branch", "integration"])
+            .run()
+            .unwrap();
+        set_branch_base(&repo.to_string_lossy(), "feature/base", "integration").unwrap();
         assert_eq!(
             get_remote_default_branch(&repo.to_string_lossy()).unwrap(),
             "integration"
@@ -5871,11 +6002,11 @@ mod tests {
             .unwrap();
         assert_eq!(
             get_remote_default_branch(&repo.to_string_lossy()).unwrap(),
-            "origin/trunk"
+            "integration"
         );
         let options = list_base_ref_options(repo.to_string_lossy().into_owned()).unwrap();
-        assert_eq!(options[0].name, "origin/trunk");
-        assert_eq!(options[0].kind, "remote");
+        assert_eq!(options[0].name, "integration");
+        assert_eq!(options[0].kind, "local");
         assert_eq!(
             options
                 .iter()
@@ -9357,6 +9488,26 @@ branch refs/heads/feat
             .args(["commit", "-m", name])
             .run()
             .expect("git commit");
+    }
+
+    // Catches: a checkout HEAD changes after inventory, but listing reuses the
+    // branch-ref proof and reports that different checkout tip as unmerged.
+    #[test]
+    fn listing_lifecycle_does_not_reuse_branch_proof_for_detached_head() {
+        let (_temp, repo, _) = workspace_fixture();
+        let base = rev_at(&repo, "HEAD").unwrap();
+        let checkout = add_worktree(&repo, "listing-head");
+        commit_file(&checkout, "feature.txt", "own commit\n");
+        let workspace = resolve_workspace(&repo, "listing-head").unwrap();
+        let before = inspect_workspace_listing_with_pr(&repo, &workspace, |_, _, _| false);
+        assert_eq!(before.commit_status, WorkspaceCommitStatus::Unmerged);
+        git_cmd(&checkout)
+            .args(["checkout", "--detach", &base])
+            .run()
+            .unwrap();
+        let after = inspect_workspace_listing_with_pr(&repo, &workspace, |_, _, _| false);
+        assert_eq!(after.commit_status, WorkspaceCommitStatus::Merged);
+        assert_ne!(before.dirty_fingerprint, after.dirty_fingerprint);
     }
 
     /// A branch sitting exactly on the default branch's tip never merged

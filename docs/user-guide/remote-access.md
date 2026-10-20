@@ -24,6 +24,10 @@ Once enabled, the settings panel shows the access URL: `http://<your-ip>:<port>`
 
 The settings panel shows a QR code for the access URL — scan it from a phone or tablet to connect quickly. The QR code uses your actual local IP address.
 
+If local IP discovery fails, the settings controls and QR dialog remain open. The
+network address area shows the error and a **Retry** action. Retry repeats address
+discovery without changing the saved remote-access configuration.
+
 ## What Works Remotely
 
 The browser client provides the same UI as the desktop app:
@@ -86,6 +90,12 @@ TUICommander includes a phone-optimized interface for monitoring agents from you
 
 Opening `/` also offers the form login. iPad Safari selects the touch interface, including when it requests the desktop website with a Mac user agent. Desktop browsers keep the full interface. In that interface, **Add Repository** browses folders on the computer running TUICommander, starting at its home directory; it does not browse the device opening Safari.
 
+At widths of 768 px or more, tap **Markdown** in the session top bar to open a desktop Markdown tab from the same repository. On phones, open **More session actions → Markdown** instead. The list refreshes in place when desktop tabs change; ordinary session polls do not reset it.
+
+After you tick Markdown checkboxes, save source edits, or add block comments, use **Agent** and **Send** to request changes. The session you opened Files from is selected when available; you can choose another agent in the same repository. A transient toast says whether the request was delivered now or queued for the agent’s next idle window. Commented blocks use the same amber highlight as desktop Markdown. Failed requests keep the changes available to send again.
+
+In **Sessions → New session**, the Agent picker lists installed CLI agents from the shared registry, including ego. Git and direct API entries are excluded. The first installed agent is selected. Creation stays disabled while detection runs or when no agents are installed; detection failures show an error instead of a fallback list.
+
 ### Add to Home Screen
 
 The mobile UI supports PWA (Progressive Web App) installation:
@@ -101,8 +111,11 @@ At phone widths up to 430 px, the session header keeps CLI/Chat one tap away.
 Open **More session actions** for **Start voice call** / **Stop voice call** (with the same handset icon as the header) and session tasks. Tablet
 headers keep these controls directly in the bar. Tap the session name for details.
 
-For Claude sessions on a phone, tap **Read file edits in Chat** above the CLI
-output. This switches the reading surface without closing the terminal or
+A choice answer stays bound to the terminal that showed the question, even if you
+leave the detail screen while its keys are being sent. A failed send shows an error
+and enables the choice buttons again. Send and Queue also keep their original terminal.
+
+For Claude sessions on a phone, tap **Chat** in the session header. This switches the reading surface without closing the terminal or
 clearing its history; returning to CLI follows the latest output. Expand the tool activity and edit to read its **Old**
 and **New** text. Tab stops align at four spaces. Swipe the edit block sideways
 for long lines rather than wrapping coloured terminal rows. Switch back with
@@ -567,6 +580,11 @@ sent to a daemon, including when every registered repository is remote.
 **Settings edits the machine you pick.** The Agents tab and the upstream-MCP panel carry a
 machine selector; it defaults to the machine of the repository the settings nav is standing
 on, and an explicit pick overrides it, so a remote machine is editable from a local repo.
+
+Authenticated Settings actions are available on the headless daemon through the same
+`POST /settings/action` contract as the desktop server. The daemon also serves the
+authenticated `/config` snapshot used to load and refresh browser Settings. Successful durable edits publish
+`settings-changed` over SSE so connected Settings readers can refresh without saving.
 
 Three things stay local even while a remote machine is selected, because they cannot work
 anywhere else: installing or removing the TUIC MCP bridge (`install_agent_mcp`), opening an

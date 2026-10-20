@@ -132,16 +132,15 @@ impl LogLine {
         s
     }
 
-    /// Strip structural tokens (`intent: ...`, `suggest: ...`) from span text.
-    /// These tokens are parsed by the output parser for state updates but should not
-    /// appear in rendered log output (PWA/REST consumers).
+    /// Strip suggestion tokens from span text. Intent rows stay visible so
+    /// PWA/REST consumers can tint the complete logical line, like the desktop.
     pub fn strip_structural_tokens(&mut self) {
         // The grammar lives in `output_parser`, next to the regexes that READ
         // these tokens. A second copy here knew only the two Ink bullets and
         // drifted: the parser learned Codex's `•`/`◦` and the ack prefix, this
         // did not, so tokens TUIC had consumed were still shown to the user.
         for span in &mut self.spans {
-            if span.text.contains("intent:") || span.text.contains("suggest:") {
+            if span.text.contains("suggest:") {
                 let replaced = output_parser::strip_plain_prefix_tokens(&span.text);
                 span.text = replaced.into_owned();
             }

@@ -1303,6 +1303,8 @@ struct ChunkProcessor {
     /// Dedup: last emitted ChoicePrompt signature (title + option keys).
     /// Prevents re-emit on repaint while the dialog stays on screen.
     last_choice_prompt_sig: Option<String>,
+    /// Whether a published slash menu still needs an explicit retraction.
+    slash_menu_visible: bool,
     /// A busy hook cleared the choice; wait for a dialog-row repaint before
     /// admitting the same signature again, so stale screen cells cannot re-arm it.
     choice_prompt_needs_repaint: bool,
@@ -1455,6 +1457,7 @@ impl ChunkProcessor {
             last_question_text: None,
             raw_carry: String::new(),
             last_choice_prompt_sig: None,
+            slash_menu_visible: false,
             choice_prompt_needs_repaint: false,
             session_cwd,
             pending_planfiles: Vec::new(),
@@ -2350,6 +2353,32 @@ impl ChunkProcessor {
                             &payload,
                         ),
                         "state" => {
+                            // A delayed Codex completion can arrive while its native
+                            // enforced approval is still open (#2075). It cannot settle
+                            // that unanswered dialog. Require both the current native
+                            // shape and its still-active controls: real answer input
+                            // retires the controls before a subsequent idle is accepted.
+                            let open_codex_approval = payload == "idle"
+                                && agent_type.as_deref() == Some("codex")
+                                && state
+                                    .session_maps
+                                    .session_states
+                                    .get(session_id)
+                                    .is_some_and(|session| {
+                                        session.awaiting_input && session.choice_prompt.is_some()
+                                    })
+                                && matches!(
+                                    crate::output_parser::parse_choice_prompt(&screen_buf),
+                                    Some(ParsedEvent::ChoicePrompt { title, .. })
+                                        if title == "Would you like to run the following command?"
+                                );
+                            if open_codex_approval {
+                                tracing::warn!(
+                                    session_id,
+                                    "Ignoring delayed idle while native Codex approval is unanswered"
+                                );
+                                continue;
+                            }
                             // idle/busy drive the shell-state machine; awaiting is
                             // ignored here (it's a separate field). The awaiting_input
                             // field is driven by Question/UserInput events instead.
@@ -2632,9 +2661,23 @@ impl ChunkProcessor {
             );
         }
         let rows = structured_rows.as_deref().unwrap_or(&changed_rows);
+        // Claude redraws earlier responses while submitting the next composer.
+        // Only suggestions below the latest submitted prompt belong to this
+        // turn. Exclude the live input box so an unsent draft is not a boundary.
+        let suggest_floor = if agent_type.as_deref() == Some("claude") && screen_present {
+            let refs: Vec<&str> = screen_buf.iter().map(String::as_str).collect();
+            let end = crate::chrome::find_agent_chrome_cutoff(&refs, Some("claude"))
+                .unwrap_or(refs.len());
+            refs[..end].iter().rposition(|row| {
+                row.strip_prefix('❯')
+                    .is_some_and(|draft| !draft.trim().is_empty())
+            })
+        } else {
+            None
+        };
         events.extend(
             self.parser
-                .parse_clean_lines(rows, agent_active_for_parse)
+                .parse_clean_lines_with_suggest_floor(rows, agent_active_for_parse, suggest_floor)
                 .into_iter()
                 .filter(|e| !suppress_heuristic_question(hook_instrumented, e)),
         );
@@ -2689,13 +2732,18 @@ impl ChunkProcessor {
             .slash_mode
             .get(session_id)
             .is_some_and(|v| v.load(std::sync::atomic::Ordering::Relaxed));
-        if slash_on && let Some(screen) = screen_cache {
-            // This runs in the per-PTY-chunk hot path. Do not log each parse:
-            // a stale slash-mode flag during sustained output previously sent
-            // thousands of identical records through the application logger,
-            // adding avoidable lock/contention pressure to terminal delivery.
-            if let Some(evt) = crate::output_parser::parse_slash_menu(screen) {
-                events.push(evt);
+        if let Some(screen) = screen_cache {
+            let menu = slash_on
+                .then(|| crate::output_parser::parse_slash_menu(screen))
+                .flatten();
+            if let Some(event) = menu {
+                self.slash_menu_visible = true;
+                events.push(event);
+            } else if self.slash_menu_visible {
+                // Exact commands and zero matches close completion without a
+                // submitted line. Retract once, not on every busy output chunk.
+                self.slash_menu_visible = false;
+                events.push(ParsedEvent::SlashMenu { items: Vec::new() });
             }
         }
 
@@ -2717,12 +2765,22 @@ impl ChunkProcessor {
                 crate::output_parser::parse_claude_ask_user_question(screen)
                     .or_else(|| crate::output_parser::parse_choice_prompt(screen))
             } else if agent_type.as_deref() == Some("ego") {
-                crate::output_parser::parse_ego_question(
-                    ego_question_rows.as_deref().unwrap_or(screen),
-                )
+                let rows = ego_question_rows.as_deref().unwrap_or(screen);
+                crate::output_parser::parse_ego_question(rows)
+                    .or_else(|| crate::output_parser::parse_ego_approval(rows))
+            } else if agent_type.as_deref() == Some("grok") {
+                crate::output_parser::parse_grok_question(screen)
+                    .or_else(|| crate::output_parser::parse_choice_prompt(screen))
             } else {
                 crate::output_parser::parse_choice_prompt(screen)
             };
+            // A native radio form can switch to free text without leaving the
+            // question. Retire old buttons before publishing the text-only wait.
+            if matches!(choice, Some(ParsedEvent::Question { .. }))
+                && self.last_choice_prompt_sig.take().is_some()
+            {
+                events.push(ParsedEvent::ChoiceCleared);
+            }
             match choice {
                 Some(evt) => events.push(evt),
                 // Dialog is no longer on screen — retire its dedup signature so the
@@ -2911,7 +2969,11 @@ impl ChunkProcessor {
             // soon as the prompt leaves the screen (see the screen-absence reset
             // above), so this guards one pending prompt, not the whole session.
             if let ParsedEvent::Question { prompt_text, .. } = event {
-                if self.last_question_text.as_deref() == Some(prompt_text.as_str()) {
+                // Native ego awaiting has an empty title, so text absence
+                // cannot retire it. Admit a fresh wait after busy cleared it.
+                if self.last_question_text.as_deref() == Some(prompt_text.as_str())
+                    && !(agent_type.as_deref() == Some("ego") && self.choice_prompt_needs_repaint)
+                {
                     continue;
                 }
                 self.last_question_text = Some(prompt_text.clone());
@@ -2955,8 +3017,26 @@ impl ChunkProcessor {
                                 || options.iter().any(|option| row.contains(&option.label))
                         })
                 });
+                // Ego emits awaiting for each native question. After busy has
+                // retired an answer, scrolling its retained rows is not a new
+                // wait. A fresh protocol question can still restore the same
+                // signature; other agents retain their screen-only recovery.
+                let repaint_can_rearm = agent_type.as_deref() != Some("ego")
+                    || events
+                        .iter()
+                        .rev()
+                        .find_map(|event| match event {
+                            ParsedEvent::Question { confident, .. } => Some(*confident),
+                            ParsedEvent::UserInput { .. } => Some(false),
+                            _ => None,
+                        })
+                        .unwrap_or_else(|| {
+                            silence.lock().awaiting_rank() == Some(EvidenceRank::Protocol)
+                        });
                 if self.last_choice_prompt_sig.as_deref() == Some(sig.as_str())
-                    && !(self.choice_prompt_needs_repaint && dialog_row_repainted)
+                    && !(self.choice_prompt_needs_repaint
+                        && dialog_row_repainted
+                        && repaint_can_rearm)
                 {
                     continue;
                 }
@@ -3309,7 +3389,7 @@ impl ChunkProcessor {
                         // finishes; Codex can start an internal continuation
                         // without a PTY submission. Current semantic movement is
                         // stronger than either stale boundary.
-                        sl.reset_suggest_memory();
+                        sl.reopen_suggest_completion();
                         reopened_completion = true;
                     }
                     sl.note_working_screen();
@@ -3906,6 +3986,13 @@ pub(crate) fn spawn_reader_thread(
     state: Arc<AppState>,
     tuic_session: Option<String>,
 ) {
+    // HTTP/MCP and generic shell spawns already bind the child's inherited
+    // TUIC_SESSION before starting this reader. Use that same live identity
+    // when the caller has no explicit one, including restored stable identities
+    // that differ from the PTY key. Native hook ownership stays fail-closed.
+    let tuic_session = tuic_session.or_else(|| {
+        crate::mcp_http::session::live_tuic_sessions_by_pty(&state).remove(&session_id)
+    });
     let silence = Arc::new(Mutex::new(SilenceState::new()));
     let running = Arc::new(AtomicBool::new(true));
 
@@ -4767,3 +4854,13 @@ where
 
 #[cfg(test)]
 mod tests;
+
+/// Read-only launch receipt evidence. Silence/output movement alone cannot prove
+/// a new agent has reached its native composer.
+pub(crate) fn managed_launch_screen_ready(state: &AppState, session_id: &str) -> bool {
+    state
+        .session_maps
+        .silence_states
+        .get(session_id)
+        .is_some_and(|silence| silence.lock().cached_screen_activity == AgentScreenActivity::Ready)
+}
