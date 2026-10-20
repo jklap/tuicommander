@@ -96,11 +96,11 @@ authors and communities behind each project.
 | tauri-plugin-deep-link | 2.6.1 | Apache-2.0 OR MIT |
 | tauri-plugin-dialog | 2.8.1 | Apache-2.0 OR MIT |
 | tauri-plugin-global-shortcut | 2.4.0 | Apache-2.0 OR MIT |
-| tauri-plugin-notification | 2.4.0 | Apache-2.0 OR MIT |
+| tauri-plugin-notification | 2.7.0 | Apache-2.0 OR MIT |
 | tauri-plugin-opener | 2.7.0 | Apache-2.0 OR MIT |
 | tauri-plugin-process | 2.4.0 | Apache-2.0 OR MIT |
 | tauri-plugin-single-instance | 2.5.2 | Apache-2.0 OR MIT |
-| tauri-plugin-updater | 2.11.0 | Apache-2.0 OR MIT |
+| tauri-plugin-updater | 2.14.0 | Apache-2.0 OR MIT |
 | tauri-plugin-window-state | 2.5.0 | Apache-2.0 OR MIT |
 | tempfile | 3.27.0 | MIT OR Apache-2.0 |
 | tokenizers | 0.22.2 | Apache-2.0 |
@@ -184,12 +184,12 @@ authors and communities behind each project.
 | @tauri-apps/api | 2.12.1 | Apache-2.0 OR MIT |
 | @tauri-apps/plugin-deep-link | 2.6.1 | MIT OR Apache-2.0 |
 | @tauri-apps/plugin-dialog | 2.8.1 | MIT OR Apache-2.0 |
-| @tauri-apps/plugin-notification | 2.4.0 | MIT OR Apache-2.0 |
+| @tauri-apps/plugin-notification | 2.7.0 | MIT OR Apache-2.0 |
 | @tauri-apps/plugin-opener | 2.7.0 | MIT OR Apache-2.0 |
 | @tauri-apps/plugin-process | 2.4.0 | MIT OR Apache-2.0 |
-| @tauri-apps/plugin-updater | 2.11.0 | MIT OR Apache-2.0 |
+| @tauri-apps/plugin-updater | 2.14.0 | MIT OR Apache-2.0 |
 | ansi-to-html | 0.7.2 | MIT |
-| dompurify | 3.4.16 | MPL-2.0 OR Apache-2.0 |
+| dompurify | 3.4.17 | MPL-2.0 OR Apache-2.0 |
 | marked | 18.0.12 | MIT |
 | mermaid | 12.1.0 | MIT |
 | qrcode | 1.5.4 | MIT |

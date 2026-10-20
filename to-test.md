@@ -1,3 +1,7 @@
+## Paired native plugin refresh (2039-428c) — rebuild required
+
+- [ ] After Boss manually restarts a rebuilt backend or installs a signed package, verify notification permission and delivery, then the updater check/download/install flow and deferred relaunch. Rust/npm notification 2.7.0 and updater 2.14.0 are paired; Linux default-feature compilation and targeted tests pass, but macOS/Windows packaging and real OS integration still need release validation. This peer did not restart or replace the running app.
+
 ## Audio dependency alignment (2036-f740) — Rust restart and hardware required
 
 - [ ] [HUMAN] After Boss manually restarts `make dev` or installs `make build`, record and transcribe speech with the default and a named microphone; check the meter and stop/drain behavior. Include an integer-only microphone if available. CPAL 0.18 prefers 48 kHz and may rank high-precision formats above I16; capture must continue using a supported F32/I16 configuration.
