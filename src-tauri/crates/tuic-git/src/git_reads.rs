@@ -1077,6 +1077,11 @@ impl GitReadsRouter {
 
 static ROUTER: OnceLock<GitReadsRouter> = OnceLock::new();
 
+/// Reuse the process-wide handle cache for monitoring and lifecycle reads too.
+pub(crate) fn cached_repo(repo: &Path) -> Result<gix::Repository, String> {
+    git_reads().gix.repo(repo)
+}
+
 /// Global read-ops router. All git read call sites go through this.
 pub fn git_reads() -> &'static GitReadsRouter {
     ROUTER.get_or_init(GitReadsRouter::new)

@@ -1249,39 +1249,34 @@ fn patches_integrated_in(repo: &Path, target: &str, tip: &str) -> Result<bool, S
     Ok(cherry.stdout.lines().all(|line| line.starts_with("- ")))
 }
 
-/// Build keys for one sidebar refresh. Callers share this batch across workspaces.
+/// Build one shared ref snapshot for a sidebar refresh. Local branch targets
+/// stay outside the common digest: a sibling commit must not expire every proof.
 pub fn monitoring_ref_keys(
     repo: &Path,
     branches: &[String],
 ) -> Result<HashMap<String, String>, String> {
-    branches
-        .iter()
-        .map(|branch| Ok((branch.clone(), monitoring_ref_key(repo, branch)?)))
-        .collect()
-}
-
-#[cfg(test)]
-thread_local! {
-    static MONITORING_COMMON_READS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
-}
-
-/// Ref state that decides one branch's classification, read without git
-/// subprocesses: the branch and all remote-tracking refs, the default-branch refs
-/// (origin/HEAD, its target, main, master), the main checkout's HEAD, config and
-/// the branch's own reflog. Other local branches never enter the key: a commit in one
-/// worktree must not re-run cherry/merge-tree for every sibling branch.
-pub fn monitoring_ref_key(repo: &Path, branch: &str) -> Result<String, String> {
     use gix::bstr::ByteSlice;
-    let grepo = gix::open(repo).map_err(|e| e.to_string())?;
-    let mut names = vec![
-        format!("refs/heads/{branch}"),
-        format!("refs/remotes/origin/{branch}"),
-        "refs/remotes/origin/HEAD".to_string(),
-        "refs/heads/main".to_string(),
-        "refs/heads/master".to_string(),
-        "refs/remotes/origin/main".to_string(),
-        "refs/remotes/origin/master".to_string(),
-    ];
+    if branches.is_empty() {
+        return Ok(HashMap::new());
+    }
+    let grepo = crate::git_reads::cached_repo(repo)?;
+    let mut targets = std::collections::BTreeMap::new();
+    let references = grepo.references().map_err(|e| e.to_string())?;
+    for reference in references.all().map_err(|e| e.to_string())? {
+        let reference = reference.map_err(|e| e.to_string())?;
+        targets.insert(
+            reference.name().as_bstr().to_str_lossy().into_owned(),
+            format!("{:?}", reference.target()),
+        );
+    }
+    let mut common = Sha256::new();
+    // Every remote can prove containment. Read them once for the repository,
+    // never once per workspace, including the symbolic origin/HEAD target.
+    for (name, target) in &targets {
+        if name.starts_with("refs/remotes/") {
+            common.update(format!("{name}={target}\0").as_bytes());
+        }
+    }
     let origin_default = grepo
         .try_find_reference("refs/remotes/origin/HEAD")
         .map_err(|e| e.to_string())?
@@ -1293,47 +1288,49 @@ pub fn monitoring_ref_key(repo: &Path, branch: &str) -> Result<String, String> {
                 .map(str::to_owned),
             gix::refs::TargetRef::Object(_) => None,
         });
-    if let Some(default) = origin_default {
-        names.push(format!("refs/remotes/origin/{default}"));
-        names.push(format!("refs/heads/{default}"));
+    let mut defaults = vec!["main".to_owned(), "master".to_owned()];
+    defaults.extend(origin_default);
+    defaults.sort();
+    defaults.dedup();
+    for branch in defaults {
+        let name = format!("refs/heads/{branch}");
+        common.update(format!("{name}={:?}\0", targets.get(&name)).as_bytes());
     }
-    let references = grepo.references().map_err(|e| e.to_string())?;
-    for reference in references
-        .prefixed("refs/remotes/")
-        .map_err(|e| e.to_string())?
-    {
-        let reference = reference.map_err(|e| e.to_string())?;
-        names.push(reference.name().as_bstr().to_str_lossy().into_owned());
-    }
-    names.sort();
-    names.dedup();
-    let mut digest = Sha256::new();
-    for name in names {
-        let target = grepo
-            .try_find_reference(name.as_str())
-            .map_err(|e| e.to_string())?
-            .map(|reference| format!("{:?}", reference.target()));
-        digest.update(format!("{name}={target:?}").as_bytes());
-        digest.update([0]);
-    }
-    // HEAD of the checkout whose ancestry the classifier consults.
     let head = grepo.rev_parse_single("HEAD").ok().map(|id| id.detach());
-    digest.update(format!("HEAD={head:?}").as_bytes());
-    digest.update([0]);
+    common.update(format!("HEAD={head:?}\0").as_bytes());
     for file in [
         grepo.git_dir().join("HEAD"),
         grepo.common_dir().join("config"),
     ] {
         #[cfg(test)]
         MONITORING_COMMON_READS.with(|reads| reads.set(reads.get() + 1));
-        digest.update(std::fs::read(file).map_err(|e| e.to_string())?);
-        digest.update([0]);
+        common.update(std::fs::read(file).map_err(|e| e.to_string())?);
+        common.update([0]);
     }
-    // The branch reflog distinguishes own commits from following the default.
-    if let Ok(log) = std::fs::read(grepo.common_dir().join("logs/refs/heads").join(branch)) {
-        digest.update(log);
+    let mut keys = HashMap::new();
+    for branch in branches {
+        let mut digest = common.clone();
+        let name = format!("refs/heads/{branch}");
+        digest.update(format!("{name}={:?}\0", targets.get(&name)).as_bytes());
+        // Own branch history distinguishes an untouched branch from a merge.
+        if let Ok(log) = std::fs::read(grepo.common_dir().join("logs/refs/heads").join(branch)) {
+            digest.update(log);
+        }
+        keys.insert(branch.clone(), hex::encode(digest.finalize()));
     }
-    Ok(hex::encode(digest.finalize()))
+    Ok(keys)
+}
+
+#[cfg(test)]
+thread_local! {
+    static MONITORING_COMMON_READS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// Standalone callers get the same dependency set as a batched sidebar refresh.
+pub fn monitoring_ref_key(repo: &Path, branch: &str) -> Result<String, String> {
+    monitoring_ref_keys(repo, &[branch.to_owned()])?
+        .remove(branch)
+        .ok_or_else(|| "missing monitoring ref key".to_string())
 }
 
 type MonitoringMerge = (WorkspaceCommitStatus, Option<String>);
@@ -9583,6 +9580,56 @@ branch refs/heads/feat
             reads <= 2,
             "shared HEAD/config file opens after one commit: {reads}; limit 2, independent of 8 worktrees"
         );
+    }
+
+    // Catches: batching misses packed refs, a moved remote, or the integration HEAD.
+    #[test]
+    fn monitoring_shared_snapshot_keeps_integration_dependencies_current() {
+        let (_temp, repo, _) = workspace_fixture();
+        let checkout = add_worktree(&repo, "snapshot-feature");
+        commit_file(&checkout, "feature.txt", "own work\n");
+        let branches = vec!["snapshot-feature".to_owned()];
+        let key = || {
+            monitoring_ref_keys(&repo, &branches)
+                .unwrap()
+                .remove(&branches[0])
+                .unwrap()
+        };
+        let initial = key();
+        git_cmd(&repo)
+            .args(["pack-refs", "--all", "--prune"])
+            .run()
+            .unwrap();
+        assert_eq!(
+            initial,
+            key(),
+            "packing unchanged refs must not change semantic keys"
+        );
+        git_cmd(&repo)
+            .args([
+                "update-ref",
+                "refs/remotes/other/topic",
+                "refs/heads/snapshot-feature",
+            ])
+            .run()
+            .unwrap();
+        let remote = key();
+        assert_ne!(
+            initial, remote,
+            "a remote containment proof must invalidate the key"
+        );
+        commit_file(&repo, "default.txt", "main moved\n");
+        let main = key();
+        assert_ne!(
+            remote, main,
+            "main checkout ancestry must invalidate the key"
+        );
+        git_cmd(&repo)
+            .args(["config", "tuic.test", "changed"])
+            .run()
+            .unwrap();
+        assert_ne!(main, key(), "configuration must invalidate the key");
+        assert!(monitoring_ref_keys(&repo, &[]).unwrap().is_empty());
     }
 
     // Catches: a transient PR proof-provider failure permanently poisons the merged badge.

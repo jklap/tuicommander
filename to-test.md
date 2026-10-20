@@ -1,3 +1,7 @@
+## Bounded repository file reads (2098-98b2) — Rust restart required
+
+- [ ] After Boss manually restarts a rebuilt backend, commit in one disposable linked worktree and check current dirty/integration badges and unchanged sibling rows. This Rust change does not hot-reload into the daily app. The peer must not restart that app; isolated counter evidence is recorded in the story.
+
 ## First narrow Codex /plan question (2094-da19) — Rust restart required
 
 - [ ] After Boss manually restarts a rebuilt backend, open the first Codex /plan question in a narrow terminal. Check Input in the mobile list and named answer controls in CLI and Chat. Answer once and check native completion. This Rust parser change does not hot-reload into the daily app; isolated worktree verification is recorded in the story.
