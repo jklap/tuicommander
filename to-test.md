@@ -1,3 +1,6 @@
+## Managed Claude default-No trust dialog (2097-5739) — Rust restart required
+
+- [ ] After Boss manually restarts a rebuilt `make dev` or installs `make build`, spawn a managed Claude child in a disposable untrusted folder. Check that the startup dialog selects Yes with Down then Enter once; an unmanaged terminal and trust opt-out must remain unanswered. The recorded 1987 capture is covered by automated replay; this Rust change does not hot-reload into the daily app. No daily app restart was performed.
 ## Covered agent-test presentation (2095-0106) — isolated native check verified
 
 - [x] The recovered native observer passed a 300-second covered-window run: document/native visibility stayed true, rAF advanced with a 319 ms maximum gap, no focus or activation, and stable compact geometry. Evidence: `reports/tuicommander/2095-covered-observation/`. The dedicated agent-test binary must be rebuilt to load this Rust policy; the daily app is unchanged and needs no restart for this fix. This peer did not restart or replace Boss's running app.
