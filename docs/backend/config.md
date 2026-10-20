@@ -1075,6 +1075,15 @@ This request does not save config or rewrite launch files.
 
 ### Claude Usage Cache (`claude-usage-cache.json`)
 
+One app-owned watcher marks changed top-level JSONL transcripts dirty. Warm
+refreshes enumerate membership but do not stat unchanged transcript history.
+Specific-project scope resolves that project directly. Refreshes share one scan
+gate; watcher errors and overflow force reconciliation. A full metadata check
+also runs after 30 minutes, or on every refresh if watching is unavailable.
+Watcher delivery is asynchronous, so edits become visible after their event
+arrives. The persisted parse-cache format does not change.
+
+
 **Module:** `src-tauri/src/claude_usage.rs`
 
 Persistent cache for incremental JSONL parsing of Claude session transcripts. Stored in the config directory. The cache maps `project_slug -> (filename -> CachedFileStats)` and tracks per-file byte offsets so only newly appended data is parsed on subsequent scans.
