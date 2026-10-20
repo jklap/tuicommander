@@ -1249,6 +1249,22 @@ fn patches_integrated_in(repo: &Path, target: &str, tip: &str) -> Result<bool, S
     Ok(cherry.stdout.lines().all(|line| line.starts_with("- ")))
 }
 
+/// Build keys for one sidebar refresh. Callers share this batch across workspaces.
+pub fn monitoring_ref_keys(
+    repo: &Path,
+    branches: &[String],
+) -> Result<HashMap<String, String>, String> {
+    branches
+        .iter()
+        .map(|branch| Ok((branch.clone(), monitoring_ref_key(repo, branch)?)))
+        .collect()
+}
+
+#[cfg(test)]
+thread_local! {
+    static MONITORING_COMMON_READS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 /// Ref state that decides one branch's classification, read without git
 /// subprocesses: the branch and all remote-tracking refs, the default-branch refs
 /// (origin/HEAD, its target, main, master), the main checkout's HEAD, config and
@@ -1308,6 +1324,8 @@ pub fn monitoring_ref_key(repo: &Path, branch: &str) -> Result<String, String> {
         grepo.git_dir().join("HEAD"),
         grepo.common_dir().join("config"),
     ] {
+        #[cfg(test)]
+        MONITORING_COMMON_READS.with(|reads| reads.set(reads.get() + 1));
         digest.update(std::fs::read(file).map_err(|e| e.to_string())?);
         digest.update([0]);
     }
@@ -1364,15 +1382,31 @@ pub fn inspect_workspace_monitoring_with_pr(
     workspace: &WorkspaceWorktree,
     pr_proves_tip: impl Fn(&Path, &str, &str) -> bool,
 ) -> WorkspaceLifecycleStatus {
+    let key = monitoring_ref_key(base_repo, &workspace.branch);
+    inspect_workspace_monitoring_with_key(
+        base_repo,
+        workspace,
+        key.as_deref().map_err(String::as_str),
+        pr_proves_tip,
+    )
+}
+
+/// Consume the shared snapshot instead of reopening its ref store per workspace.
+pub fn inspect_workspace_monitoring_with_key(
+    base_repo: &Path,
+    workspace: &WorkspaceWorktree,
+    ref_key: Result<&str, &str>,
+    pr_proves_tip: impl Fn(&Path, &str, &str) -> bool,
+) -> WorkspaceLifecycleStatus {
     let result = (|| -> Result<WorkspaceLifecycleStatus, String> {
         let path = Path::new(&workspace.path);
         let dirty_files = match crate::git_reads::GixGitReads::dirty_files(path) {
             Some(count) => count,
             None => dirty_files_at(path)?,
         };
-        let ref_key = monitoring_ref_key(base_repo, &workspace.branch)?;
+        let ref_key = ref_key.map_err(str::to_owned)?;
         let (commit_status, merge_proof) =
-            monitoring_branch_merge(base_repo, &workspace.branch, &ref_key, true, pr_proves_tip)?;
+            monitoring_branch_merge(base_repo, &workspace.branch, ref_key, true, pr_proves_tip)?;
         Ok(WorkspaceLifecycleStatus {
             dirty_files: Some(dirty_files),
             missing_checkout: false,
@@ -9525,6 +9559,30 @@ branch refs/heads/feat
         assert_eq!(status.commit_status, WorkspaceCommitStatus::InSync);
         assert_eq!(status.dirty_files, Some(0));
         assert_eq!(status.removal_safety, WorkspaceRemovalSafety::Safe);
+    }
+
+    // Catches: a shared HEAD/config read is repeated once per workspace on every refresh.
+    #[test]
+    fn monitoring_refresh_reads_shared_files_once_not_per_worktree() {
+        let (_temp, repo, _) = workspace_fixture();
+        let branches: Vec<_> = (0..8).map(|i| format!("bounded-{i}")).collect();
+        for branch in &branches {
+            add_worktree(&repo, branch);
+        }
+        let before = monitoring_ref_keys(&repo, &branches).unwrap();
+        let checkout = resolve_any_workspace(&repo, &branches[0]).unwrap();
+        commit_file(Path::new(&checkout.path), "bounded.txt", "one change\n");
+        MONITORING_COMMON_READS.with(|reads| reads.set(0));
+        let after = monitoring_ref_keys(&repo, &branches).unwrap();
+        let reads = MONITORING_COMMON_READS.with(std::cell::Cell::get);
+        assert_ne!(before[&branches[0]], after[&branches[0]]);
+        for branch in &branches[1..] {
+            assert_eq!(before[branch], after[branch]);
+        }
+        assert!(
+            reads <= 2,
+            "shared HEAD/config file opens after one commit: {reads}; limit 2, independent of 8 worktrees"
+        );
     }
 
     // Catches: a transient PR proof-provider failure permanently poisons the merged badge.

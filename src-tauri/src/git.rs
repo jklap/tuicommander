@@ -367,6 +367,8 @@ pub(crate) async fn get_repo_diff_stats_impl(
         move || {
             let mut diff_stats = HashMap::new();
             let mut workspace_statuses = HashMap::new();
+            let branches: Vec<_> = worktree_paths.values().map(|w| w.branch.clone()).collect();
+            let ref_keys = tuic_git::worktree::monitoring_ref_keys(Path::new(&path), &branches);
             for (id, workspace) in &worktree_paths {
                 diff_stats.insert(
                     workspace.path.clone(),
@@ -374,9 +376,14 @@ pub(crate) async fn get_repo_diff_stats_impl(
                 );
                 workspace_statuses.insert(
                     id.clone(),
-                    tuic_git::worktree::inspect_workspace_monitoring_with_pr(
+                    tuic_git::worktree::inspect_workspace_monitoring_with_key(
                         Path::new(&path),
                         workspace,
+                        ref_keys.as_ref().map_err(String::as_str).and_then(|keys| {
+                            keys.get(&workspace.branch)
+                                .map(String::as_str)
+                                .ok_or("missing monitoring ref key")
+                        }),
                         |repo, branch, tip| {
                             crate::worktree::merged_github_pr_proves_tip_monitoring(
                                 &proof_state,
