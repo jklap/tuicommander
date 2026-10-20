@@ -202,8 +202,68 @@
       "target_digest",
       "transport_error"
     ],
-    "permission_denial": "not observed; agent.inbox refusal is application/identity refusal, not client permission denial",
+    "permission_denial": "Observed native manual-mode Session Tool MCP confirmation, No selected through own instance socket; dialog departed and zero tools/call ingress rows. Not a server application refusal.",
     "voice_rendering": "NEEDS-BOSS; no dictation in agent-test",
     "correlation": "manually generated request UUIDs, not ego-selected-call evidence"
+  },
+  "client_permission_denial": {
+    "recorded_at_utc": "2026-10-20T08:20Z",
+    "client": "Claude Code 2.1.304",
+    "client_model": "Sonnet 5.5, medium effort",
+    "launch": {
+      "session_id": "1dabf91a-68ff-4912-b910-5c0737c6c9d7",
+      "permission_mode": "manual",
+      "existing_profile_auth": true,
+      "strict_mcp_server": "audit_test",
+      "hooks_disabled": true,
+      "no_bypass": true
+    },
+    "permission_dialog": {
+      "observed_lines": [
+        "list sessions. Use the audit_test MCP server; discover the session tool if needed. Do not use local",
+        "Calling audit_test\u2026 (ctrl+o to expand)",
+        "audit_test \u2014 Session Tool: (MCP)",
+        "About the audit_test \u2014 Session Tool:",
+        "Permission rule mcp__audit_test__* requires confirmation for this tool.",
+        "Do you want to proceed?",
+        "\u276f 1. Yes",
+        "2. Yes, and don't ask again for audit_test \u2014 Session commands in ~/Gits/.tmp/results/desk-2010-\u2026",
+        "3. No"
+      ],
+      "screen_sha256": "a2ee0a6f894be2eed75fbb0a4f667934ee9091bf64c7ba41ebe94e764de9099a",
+      "no_option": "3",
+      "no_label": "No"
+    },
+    "input": {
+      "transport": "own_instance_unix_socket",
+      "route": "POST /sessions/{session_id}/write",
+      "keys": "3 + Enter"
+    },
+    "after_input": {
+      "dialog_departed": true,
+      "client_visible_tool_status": "Called audit_test (ctrl+o to expand)",
+      "assistant_acknowledgement_not_asserted": true
+    },
+    "audit_before": {
+      "records": [],
+      "retained": 0,
+      "evicted": 0,
+      "capacity": 1024,
+      "limit": 100,
+      "scope": "runtime_mcp_tools_call_ingress",
+      "delivery_observed": false
+    },
+    "audit_after": {
+      "records": [],
+      "retained": 0,
+      "evicted": 0,
+      "capacity": 1024,
+      "limit": 100,
+      "scope": "runtime_mcp_tools_call_ingress",
+      "delivery_observed": false
+    },
+    "server_ingress_rows": 0,
+    "effect_record": null,
+    "interpretation": "Client permission denial occurred before tools/call ingress. There is no server audit row; no server effect or byte cost is invented."
   }
 }
