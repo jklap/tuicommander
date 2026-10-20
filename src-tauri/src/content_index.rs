@@ -1149,6 +1149,7 @@ pub fn spawn_content_index_updater(state: Arc<crate::state::AppState>) {
                 // rewrites indexable files wholesale, so narrowing this to
                 // working-tree would leave the index describing the old branch.
                 Ok(crate::state::AppEvent::RepoChanged { repo_path, .. }) => {
+                    crate::fs::invalidate_filename_inventory(&repo_path);
                     // The in-memory cache, NOT `load_app_config()`: that holds the
                     // config mutex and a cross-process *file* lock across the whole
                     // read, and this arm runs on every RepoChanged — hundreds an
@@ -1164,6 +1165,7 @@ pub fn spawn_content_index_updater(state: Arc<crate::state::AppState>) {
                     tracing::trace!(source = "content_index", ?other, "ignored event");
                 }
                 Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                    crate::fs::invalidate_all_filename_inventories();
                     tracing::warn!(source = "content_index", lagged = n, "event bus lagged");
                 }
                 Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
