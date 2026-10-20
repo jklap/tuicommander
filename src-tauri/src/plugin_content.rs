@@ -43,6 +43,11 @@ fn collect(root: &Path, prefix: &str, files: &mut Vec<String>) -> Result<(), Str
     Ok(())
 }
 
+#[cfg(test)]
+thread_local! {
+    static PAYLOAD_READS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 pub(crate) fn digest(root: &Path) -> Result<String, String> {
     let mut files = Vec::new();
     collect(root, "", &mut files)?;
@@ -50,6 +55,8 @@ pub(crate) fn digest(root: &Path) -> Result<String, String> {
     let mut tree = Sha256::new();
     let mut buffer = [0_u8; 65536];
     for path in files {
+        #[cfg(test)]
+        PAYLOAD_READS.with(|reads| reads.set(reads.get() + 1));
         let mut file = std::fs::File::open(root.join(&path)).map_err(|e| e.to_string())?;
         let mut hash = Sha256::new();
         loop {
@@ -101,6 +108,25 @@ mod tests {
             original,
             "relative file names are identity"
         );
+    }
+
+    /// Catches reload hashing every unchanged payload byte again even when
+    /// only one plugin file changed since the previous discovery.
+    #[test]
+    fn payload_digest_reads_only_changed_files() {
+        let dir = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+        std::fs::write(dir.path().join("main.js"), "original").unwrap();
+        std::fs::write(dir.path().join("stable.js"), "unchanged").unwrap();
+        PAYLOAD_READS.with(|reads| reads.set(0));
+        let first = digest(dir.path()).unwrap();
+        PAYLOAD_READS.with(|reads| assert_eq!(reads.get(), 2));
+        assert_eq!(digest(dir.path()).unwrap(), first);
+        PAYLOAD_READS
+            .with(|reads| assert_eq!(reads.get(), 2, "unchanged payloads must reuse file hashes"));
+        std::fs::write(dir.path().join("main.js"), "replacement payload").unwrap();
+        assert_ne!(digest(dir.path()).unwrap(), first);
+        PAYLOAD_READS
+            .with(|reads| assert_eq!(reads.get(), 3, "only the changed payload is reread"));
     }
 
     // Catches: discovery trusts a manifest digest or reuses identity after same-version edits.

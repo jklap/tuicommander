@@ -206,6 +206,16 @@ describe("loadUserPlugins", () => {
 		expect(invoke).toHaveBeenCalledWith("list_user_plugins");
 	});
 
+	it("discovers only once for a multi-plugin reload batch — catches repeated whole-store scans", async () => {
+		await loadUserPlugins(false);
+		const handler = (listen as Mock).mock.calls.find(([event]) => event === "plugin-changed")?.[1];
+		expect(handler).toBeTypeOf("function");
+		vi.clearAllMocks();
+		await handler({ payload: ["plugin-a", "plugin-b", "plugin-a"] });
+		expect(invoke).toHaveBeenCalledTimes(1);
+		expect(invoke).toHaveBeenCalledWith("list_user_plugins", { pluginIds: ["plugin-a", "plugin-b"] });
+	});
+
 	it("registers listen handler for plugin-changed events", async () => {
 		await loadUserPlugins();
 		expect(listen).toHaveBeenCalledWith("plugin-changed", expect.any(Function));
