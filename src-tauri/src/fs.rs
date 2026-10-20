@@ -1138,6 +1138,11 @@ fn grep_file_with_cancel(
     Ok(stopped_by_cancel)
 }
 
+#[cfg(test)]
+thread_local! {
+    static FILENAME_WALKS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 pub(crate) fn search_files_impl(
     repo_path: String,
     query: String,
@@ -1155,6 +1160,8 @@ pub(crate) fn search_files_impl(
 
     // Walk using the `ignore` crate: respects .gitignore, .git/info/exclude,
     // global gitignore — skips ignored directories entirely during traversal.
+    #[cfg(test)]
+    FILENAME_WALKS.with(|walks| walks.set(walks.get() + 1));
     let walker = ignore::WalkBuilder::new(&canonical_repo)
         .hidden(false) // show dotfiles (except .git which is always skipped)
         .git_ignore(true)
@@ -2982,6 +2989,32 @@ mod tests {
     }
 
     // --- search_files tests ---
+
+    /// Catches a fresh repository traversal for every selective/no-match query.
+    /// The second query must filter the inventory already collected by the first.
+    #[test]
+    fn test_search_files_reuses_inventory_for_no_match_queries() {
+        let dir = setup_test_repo();
+        let repo = dir.path().to_string_lossy().to_string();
+        FILENAME_WALKS.with(|walks| walks.set(0));
+        assert!(
+            search_files_impl(repo.clone(), "absent-needle-one".into(), None)
+                .unwrap()
+                .is_empty()
+        );
+        assert!(
+            search_files_impl(repo, "absent-needle-two".into(), None)
+                .unwrap()
+                .is_empty()
+        );
+        FILENAME_WALKS.with(|walks| {
+            assert_eq!(
+                walks.get(),
+                1,
+                "no-match queries must share one inventory walk"
+            )
+        });
+    }
 
     #[test]
     fn test_search_files_basic() {
