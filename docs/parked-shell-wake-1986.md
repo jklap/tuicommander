@@ -62,6 +62,26 @@ Evidence root: `~/Gits/.tmp/results/live-1986-run/`.
 
 Boss still needs the native desktop check after his chosen backend restart, including actual agent exit, and a check on his physical phone. The emulated mobile result is not silently substituted for either requirement. No story closure is justified by this run.
 
+## Native agent-test attempt — desktop peer
+
+A separate run on 2026-10-20 used runtime commit `4c4267606bfc608fa3faff8a7373ca31e283496c`, the authorized `make agent-test AGENT_TEST_INSTANCE=at-1986 AGENT_TEST_PORT=19877` target, and its worktree-local executable. The launcher built the embedded frontend and native binaries through build-slot and mbx. No installed binary or daily instance was changed. Evidence is under `~/Gits/.tmp/results/desk-1986-run/`.
+
+The TCP listener requires authentication. The test used the launcher's own Unix HTTP socket without reading any token store. Debug evaluation ran inside the native `tauri://localhost` WebView, not a browser page. One owned interactive bash PTY (`34880664-14c4-48f8-9508-3f33a13e8352`, PID/PGID `23368`, parent agent-test PID `16463`) ran a foreground `/bin/sh` child to exit. This was not an authenticated AI agent exit.
+
+To isolate raw-input wake from attachment wake, the harness marked this session desktop-hidden through native `set_session_visible(false)` while retaining the terminal input element. With the standby interval set to one minute, the production checker recorded SIGSTOP at **07:37:14.672787 UTC**. An OS sample at **07:37:15.145863 UTC** confirmed the exact shell group in `Ts+` state. The harness then dispatched one synthetic `Q` keydown to the terminal input at **07:37:15.346 UTC**. The native backend recorded SIGCONT for PGID `23368` at **07:37:15.349566 UTC**. The next OS sample found the shell runnable, and the output ring contained exactly one new `Q`. No visibility change, input resend or HTTP output read occurred between the stopped-state sample and this key event. The output read followed the observation window. This supports native raw-input recovery from actual standby; it is not a physical-keyboard or natural tab-focus scenario.
+
+**No valid keyboard-to-rendered-echo latency was obtained.** The WebView reported `document.visibilityState === "hidden"` and no focus, and all terminal canvas rectangles had zero area. Its native window reported visible. The synthetic event had `isTrusted:false`. A runtime IPC tracing attempt could not replace the non-writable, non-configurable `__TAURI_INTERNALS__.invoke` property, so it provided no IPC timing. The five-second canvas observer recorded no paint. Blank canvas exports were discarded rather than retained as screenshots or visual evidence. The roughly four-millisecond key-dispatch-to-SIGCONT timestamp difference is not an echo latency and must not be used as one.
+
+The attempt to show the owned test window through its WebView API failed with the exact permission error:
+
+```text
+window.show not allowed. Permissions associated with this command: core:window:allow-show
+```
+
+No alternative native input or window-control transport was used to bypass this refusal. A follow-up needs an approved way to present and focus only this test window, and trusted input confined to that window, before it can claim keyboard-to-visible-echo latency. AC4 stays unchecked, including its physical-phone portion. This run does not replace Boss's manual post-restart check.
+
+Retained evidence: `agent-test.log`, `arm-result.json`, `park-observation.json`, `native-key-latency.json` (an incomplete timing attempt, not a latency result), `after-key-ps.txt`, `after-key-output.json`, `window-state.json`, and cleanup receipts. The owned PTY was deleted and the final session list was empty. `make agent-test-stop` requested shutdown through this instance's supervisor FIFO. No Vite server or browser session was started for this attempt.
+
 ## Cleanup
 
 Both owned PTYs were deleted; the final session list was empty. The owned browser tab and named daemon were closed; shared Chrome was left running. Backend PID 65820 and Vite PID 65821 received SIGTERM, and the final `ps` check found neither process nor either owned shell. The temporary Vite configuration was removed. No capture corpus, dependencies, production code or application test suites changed or ran.
