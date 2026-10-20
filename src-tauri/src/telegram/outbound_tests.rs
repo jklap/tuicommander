@@ -132,7 +132,7 @@ pub(in crate::telegram) async fn runtime(
 ) -> crate::telegram::runtime::Runtime {
     use crate::mcp_http::mcp_transport::local_peer_call_with_message_id;
     let state = Arc::new(crate::state::tests_support::make_test_app_state());
-    state.config.write().disabled_native_tools.clear();
+    state.config.write().mcp_capabilities.denied.clear();
     for (sid, peer) in [
         ("adapter-mcp", "22222222-2222-4222-8222-222222222222"),
         ("target-mcp", PEER),

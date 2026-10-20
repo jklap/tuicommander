@@ -14,7 +14,6 @@ members = [
     "patches/bm25",
     "patches/vte",
 ]
-exclude = ["patches/wayland-scanner"]
 resolver = "2"
 
 [workspace.package]
@@ -150,6 +149,13 @@ name = "tuicommander_lib"
 crate-type = ["rlib"]
 
 [[bin]]
+name = "tuicommander-agent-test"
+path = "src/bin/agent_test.rs"
+required-features = ["desktop"]
+test = false
+bench = false
+
+[[bin]]
 name = "tuic-remote"
 path = "src/bin/tuic_remote.rs"
 
@@ -219,10 +225,10 @@ base32 = "0.5.1"
 zeroize = { version = "1", features = ["alloc"] }
 hex = "0.4"
 ring = "0.17"
-dirs = "6"
+dirs = "7"
 tauri-plugin-dialog = { version = "2.7", optional = true }
-# Keep the Rust/npm notification pair on the tested 2.4 line.
-tauri-plugin-notification = { version = "~2.4.0", optional = true }
+# Keep the Rust/npm notification pair on the same 2.7 release line.
+tauri-plugin-notification = { version = "~2.7.0", optional = true }
 # Direct, because the file pickers must run inside OUR main-thread closure — see
 # native_dialog.rs. Version and features are copied from tauri-plugin-dialog's own
 # rfd dependency on purpose: a mismatch forks the lockfile into two rfd builds.
@@ -230,7 +236,7 @@ rfd = { version = "0.16", default-features = false, features = [
     "common-controls-v6",
 ], optional = true }
 tauri-plugin-single-instance = { version = "2", optional = true }
-rodio = { version = "0.22.2", default-features = false, features = ["playback"], optional = true }
+rodio = { version = "0.23", default-features = false, features = ["playback"], optional = true }
 # gzip/brotli: the daemon compresses every response above 860 bytes
 # (`CompressionLayer` in mcp_http), but only for a client that advertises the
 # encoding. A browser does it unasked; reqwest does not, so without these two
@@ -259,8 +265,12 @@ notify = "8"
 # Stable identity for a transcript replaced at the same path, on all platforms.
 same-file = "1.0.6"
 keepawake = "0.6"
-# Keep the Rust/npm updater pair on the tested 2.11 line.
-tauri-plugin-updater = { version = "~2.11.0", optional = true }
+# Keep the Rust/npm updater pair on the same 2.14 release line.
+# DEFERRED (2026-10-19) — updater 2.14 still uses ZIP 4; its Windows ZIP extraction
+# can reach RUSTSEC-2026-0367/0368/0369. Accepted scope is in .cargo/audit.toml.
+# Dirs 7 follow-up from 2035-096f: this paired updater upgrade (2039-428c)
+# removes the last dirs 6 consumer.
+tauri-plugin-updater = { version = "~2.14.0", optional = true }
 tauri-plugin-process = { version = "2", optional = true }
 tauri-plugin-deep-link = { version = "2", optional = true }
 # Text only; preserve the plugin's native Wayland clipboard support.
@@ -268,7 +278,7 @@ arboard = { version = "3.6.1", default-features = false, features = ["wayland-da
 tauri-plugin-global-shortcut = { version = "2", optional = true }
 drag = { version = "2.1", features = ["serde"], optional = true }
 # DEFERRED (2026-10-09) — trimming ZIP codecs would reject previously supported plugin archives.
-zip = "8"
+zip = "9"
 # Microsoft ships onnxruntime as a .tgz everywhere except Windows, and the
 # speech downloader takes one shared library out of it (`dictation::speech::
 # assets`). Already in the tree transitively; named here because we read it.
@@ -307,7 +317,7 @@ chromey = { version = "2.58", default-features = false, features = ["bytes"], op
 sourcemap = { version = "9.3.2", optional = true }
 toml = "1"
 rusqlite = { version = "0.40", features = ["bundled"] }
-ssh2-config = "0.7"
+ssh2-config = "0.8"
 
 [features]
 default = ["desktop"]
@@ -420,11 +430,6 @@ vte = { path = "patches/vte" }
 #      targets force `--vsenv`; compile/install go through Meson so each
 #      subprocess activates the same Visual Studio environment.
 webrtc-audio-processing-sys = { path = "patches/webrtc-audio-processing-sys" }
-# crates.io 0.31.10 pins vulnerable quick-xml 0.39. Keep that release's code
-# compatible with wayland-client/backend 0.31/0.3, while applying upstream's
-# quick-xml 0.41 parser adaptation. Patching current Wayland master here would
-# generate interfaces for its unreleased backend ABI and break Linux builds.
-wayland-scanner = { path = "patches/wayland-scanner" }
 
 [dev-dependencies]
 # Migration guards use an independent ECDH and ECDSA implementation.

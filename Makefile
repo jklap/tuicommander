@@ -34,7 +34,7 @@ export MACOSX_DEPLOYMENT_TARGET ?= 10.15
 # Distribution output
 DIST_DIR=dist-release
 
-.PHONY: all clean dev test test-shell build build-dmg check check-desktop-embedding cov crap fmt sign verify-sign notarize release dist \
+.PHONY: all clean dev test agent-test agent-test-stop test-shell build build-dmg check check-desktop-embedding cov crap fmt sign verify-sign notarize release dist \
        nightly github-release preview bump release-notes hooks docs docs-serve \
        gh-debug-on gh-debug-off gh-debug-status gh-debug-logs gh-rate logs
 
@@ -109,6 +109,17 @@ test:
 	@cd src-tauri && cargo build -p tuic-bridge -p tuic-cli
 	@echo "Starting Tauri dev (isolated config instance: $(TUIC_APP_INSTANCE))..."
 	TAURI_CLI_WATCHER_IGNORE_FILENAME=.taurignore TUIC_APP_INSTANCE=$(TUIC_APP_INSTANCE) pnpm tauri dev
+
+# Agent desktop checks never use make dev/test or the daily executable.
+# Dedicated variables ignore inherited TUIC_* values; defaults cannot leak to dev.
+AGENT_TEST_INSTANCE?=agent-test
+AGENT_TEST_PORT?=19876
+AGENT_TEST_DRY_RUN?=0
+agent-test:
+	@python3 -B scripts/agent-test.py start --instance "$(AGENT_TEST_INSTANCE)" --port "$(AGENT_TEST_PORT)" $(if $(filter 1,$(AGENT_TEST_DRY_RUN)),--dry-run,)
+
+agent-test-stop:
+	@python3 -B scripts/agent-test.py stop --instance "$(AGENT_TEST_INSTANCE)" --port "$(AGENT_TEST_PORT)"
 
 # Build .app only (default, fast — skips DMG)
 build:

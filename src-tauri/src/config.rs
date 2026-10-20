@@ -1060,10 +1060,9 @@ pub(crate) struct AppConfig {
     #[serde(default)]
     #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates disabled mcp agents for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
     pub(crate) disabled_mcp_agents: Vec<String>,
-    /// Native MCP tool names disabled by the user (excluded from tools/list response)
-    #[serde(default = "default_disabled_native_tools")]
-    #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates disabled native tools for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
-    pub(crate) disabled_native_tools: Vec<String>,
+    /// MCP capability policy; the old field is accepted only for one-time migration.
+    #[serde(default, alias = "disabled_native_tools")]
+    pub(crate) mcp_capabilities: crate::mcp_capabilities::McpCapabilities,
     /// Host-only opt-in; legacy config enablement never grants settings authority.
     #[serde(default)]
     #[schemars(extend("x-not-setting" = "Host-issued MCP settings access policy; only trusted UI can enable it."))]
@@ -1223,12 +1222,6 @@ fn is_false(value: &bool) -> bool {
     !*value
 }
 
-/// `config` and `debug` stay off until the user enables them — for a fresh
-/// install and for a config.json written before the field existed.
-fn default_disabled_native_tools() -> Vec<String> {
-    vec!["settings".to_string(), "debug".to_string()]
-}
-
 fn default_update_channel() -> String {
     default_update_channel_for_version(env!("CARGO_PKG_VERSION")).to_string()
 }
@@ -1361,7 +1354,7 @@ impl Default for AppConfig {
             beta_channel_migrated: true,
             disabled_agents: Vec::new(),
             disabled_mcp_agents: Vec::new(),
-            disabled_native_tools: default_disabled_native_tools(),
+            mcp_capabilities: Default::default(),
             settings_mcp_enabled: false,
             intent_tab_title: true,
             suggest_followups: true,
@@ -3067,7 +3060,7 @@ fn commit_config_change_locked(
 
     let effects = ConfigSaveEffects {
         tools_changed: cached.settings_mcp_enabled != next.settings_mcp_enabled
-            || cached.disabled_native_tools != next.disabled_native_tools
+            || cached.mcp_capabilities != next.mcp_capabilities
             || cached.collapse_tools != next.collapse_tools,
         server_changed: server_settings_changed(&cached, &next),
     };
@@ -3270,6 +3263,7 @@ fn read_app_config_unlocked_for_version(
         }
     };
     migrate_flat_services(&mut val);
+    let migrated_capabilities = val.get("disabled_native_tools").is_some();
     match serde_json::from_value(val) {
         Ok(mut config) => {
             let migrated_secret = hydrate_app_config_secrets(&mut config);
@@ -3277,7 +3271,7 @@ fn read_app_config_unlocked_for_version(
             let migrated_channel = migrate_legacy_beta_channel(&mut config, version);
             Ok((
                 config,
-                migrated_secret || migrated_duration || migrated_channel,
+                migrated_secret || migrated_duration || migrated_channel || migrated_capabilities,
             ))
         }
         Err(e) => {
@@ -5567,7 +5561,9 @@ mod tests {
             beta_channel_migrated: true,
             disabled_agents: vec!["codex".to_string()],
             disabled_mcp_agents: vec!["windsurf".to_string()],
-            disabled_native_tools: vec!["plugin_dev_guide".to_string()],
+            mcp_capabilities: crate::mcp_capabilities::McpCapabilities::from_legacy(&[
+                "plugin_dev_guide".into(),
+            ]),
             settings_mcp_enabled: false,
             intent_tab_title: false,
             suggest_followups: false,
@@ -5639,8 +5635,8 @@ mod tests {
         assert!(loaded.services.server.ipv6_enabled);
         assert!(loaded.services.auth.lan_auth_bypass);
         assert_eq!(
-            loaded.disabled_native_tools,
-            vec!["plugin_dev_guide".to_string()]
+            loaded.mcp_capabilities.denied,
+            vec!["plugin_reference".to_string()]
         );
         assert!(!loaded.intent_tab_title);
         assert!(!loaded.suggest_followups);
@@ -5662,9 +5658,46 @@ mod tests {
         )
         .unwrap();
         assert_eq!(
-            loaded.disabled_native_tools,
-            vec!["settings".to_string(), "debug".to_string()]
+            loaded.mcp_capabilities.denied,
+            vec!["settings".to_string(), "diagnostics".to_string()]
         );
+    }
+
+    // Catches: startup accepts legacy denials but fails to persist the one-time migration.
+    #[test]
+    #[serial_test::serial]
+    fn mcp_capability_migration_persists_once_and_keeps_unknown_denials() {
+        crate::credentials::reset_test_faults();
+        let dir = TempDir::new().unwrap();
+        let _guard = set_config_dir_override(dir.path().to_path_buf());
+        let path = write_config_with_duration(dir.path(), None);
+        let mut doc: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+        doc.as_object_mut().unwrap().remove("mcp_capabilities");
+        doc["disabled_native_tools"] =
+            serde_json::json!(["task", "workflow_report", "unrecognized_tool"]);
+        fs::write(&path, doc.to_string()).unwrap();
+        let config = load_app_config_for_version("2.0.0");
+        assert_eq!(
+            config.mcp_capabilities.denied,
+            ["agent_tasks", "workflow.reports"]
+        );
+        assert_eq!(
+            config.mcp_capabilities.migration_unknown_tools,
+            ["unrecognized_tool"]
+        );
+        let saved = fs::read(&path).unwrap();
+        let migrated: serde_json::Value = serde_json::from_slice(&saved).unwrap();
+        assert!(migrated.get("disabled_native_tools").is_none());
+        assert_eq!(
+            migrated["mcp_capabilities"]["denied"],
+            serde_json::json!(["agent_tasks", "workflow.reports"])
+        );
+        assert_eq!(
+            load_app_config_for_version("2.0.0").mcp_capabilities,
+            config.mcp_capabilities
+        );
+        assert_eq!(fs::read(&path).unwrap(), saved);
     }
 
     // Catches: a fresh beta install silently defaults to stable and misses beta.2.

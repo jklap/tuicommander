@@ -72,6 +72,19 @@ nothing but discipline preventing a throwaway test repo from being persisted the
 (#763-d219). An invalid or already-selected id fails the process at startup rather
 than silently falling back to the default instance.
 
+`make agent-test` is the preset macOS agent verification target. It selects
+`instances/agent-test/` and loopback port 19876 with dedicated
+`AGENT_TEST_INSTANCE` / `AGENT_TEST_PORT` variables, and uses a distinct executable
+and Tauri identifier. It does not inherit the daily target's `TUIC_*` settings.
+Its dedicated entry point rejects default/empty instances, production port 9876,
+release builds and dictation-enabled builds before reading configuration.
+Runtime guards disable global input, Telegram, updater, global MCP writes and
+global CLI installation/update/removal. Hook enable/disable requests are rejected
+before saving instance flags or changing shared agent files. These are not merely
+editable configuration defaults. See
+[Development Setup](../guides/development-setup.md#isolated-agent-desktop-checks-macos)
+for the resource audit, dry-run and stop commands.
+
 Which target defaults to what is deliberate and guarded. `make test` is the
 throwaway verification launch and defaults to `instances/tuic-test/`; `make dev`
 is Boss's daily driver and carries **no** instance, because switching it looks
@@ -322,6 +335,7 @@ needs an app restart is what that costs.
 | `attachment_retention_days` | `u32` | `7` | Obsolete for uploads: attachment lifetime is now the session. This stored value has no effect on attachment cleanup. |
 | `mcp_server_enabled` | `bool` | `true` | Enable MCP HTTP server |
 | `mcp_port` | `u16` | `9876` | Fixed port for MCP server (0 = OS-assigned) |
+| `mcp_capabilities` | `object` | `{denied:["settings","diagnostics"],migration_unknown_tools:[]}` | Native capability denials. Old `disabled_native_tools` migrates once; unknown names remain visible. Parent denials cover grouped actions; member denials remain scoped. See MCP capability cutover documentation. |
 | `collapse_tools` | `bool` | `false` | Replace the full MCP tool list with 3 lazy-discovery meta-tools (`search_tools`, `get_tool_schema`, `call_tool`). Discovered native schemas are unchanged: managed commands still use one `call_tool` invocation of `session action=submit` and receive the bounded receipt in that response. Grok sessions use this surface automatically without changing the stored value — see [`mcp-http.md`](mcp-http.md#lazy-tool-discovery-collapse_tools). Size figures for both surfaces, and how to reproduce them, are in [Measuring the surfaces](mcp-http.md#measuring-the-surfaces) — the reduction is measured, never estimated |
 | `services` | `ServicesConfig` | `{}` | Nested remote-access config: `server`, `auth`, `tls`, `relay`, `push` (replaces the former flat `remote_access_*`/`push_enabled`/`relay_enabled` fields) |
 

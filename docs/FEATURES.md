@@ -120,7 +120,7 @@ The component is available for Tasks shell integration; it does not add a tab by
 | Project history | [Project Progress](user-guide/project-progress.md) |
 | Native plans and stories | [Native plans and stories](user-guide/native-stories.md) |
 
- Native plans and stories are available through `tuic story`, the `story` MCP tool, desktop IPC, and authenticated HTTP. They support criteria, dependencies, revision-checked transitions, and live-tab claims. WontFix closes cancelled scope but never satisfies a prerequisite; a human can remove a cancelled dependency from a Backlog story. In manual plans, approving a prerequisite immediately releases eligible dependents. Plans with a workflow run require current integration receipts before release. Story import/export is outside this release.
+ Native plans and stories are available through `tuic story`, the `workflow action=story` MCP entry, desktop IPC, and authenticated HTTP. They support criteria, dependencies, revision-checked transitions, and live-tab claims. WontFix closes cancelled scope but never satisfies a prerequisite; a human can remove a cancelled dependency from a Backlog story. In manual plans, approving a prerequisite immediately releases eligible dependents. Plans with a workflow run require current integration receipts before release. Story import/export is outside this release.
 
 The Plans and Stories dialog provides a manual project view on desktop and in the browser: choose a top-level Markdown plan from the project, add a path or link when needed, create stories, inspect criteria and dependency status, identify transitively abandoned prerequisites, remove a direct cancelled prerequisite, start work without a terminal, check criteria, submit reviews, approve, and block outcomes. It renders the service's cancellation count, all-cancelled flag, and plan state, including while a story is selected. A coordinator or independent reviewer may approve after checking the acceptance criteria; the session that claimed a story cannot approve it. Approval records the acting session or local API provenance.
 
@@ -146,11 +146,11 @@ per cell and the configured history limit still apply.
 
 ### 1.0 Design Mode for agent terminals
 
-Agents can use `ui action=design_start/stop/status/reload/navigate/screenshot/errors/eval` with the same armed-recipient ownership and extension host grants. Existing Design Mode denials remain effective. The separate `design_mode` tool stays until the explicit catalogue cutover in story 2068.
+Agents can use `ui action=design_start/stop/status/reload/navigate/screenshot/errors/eval` with the same armed-recipient ownership and extension host grants. Existing Design Mode denials remain effective. The separate `design_mode` tool is retired without an alias.
 
-The extension sends a heartbeat every five seconds. A stale mode stops after 60 seconds without a heartbeat, or ten minutes after Start if the extension has not connected. Agents can request a page reload with `design_mode action=reload repo_path=<repoPath>`; the worker reloads the reviewed tab once per new sequence.
+The extension sends a heartbeat every five seconds. A stale mode stops after 60 seconds without a heartbeat, or ten minutes after Start if the extension has not connected. Agents can request a page reload with `ui action=design_reload repo_path=<repoPath>`; the worker reloads the reviewed tab once per new sequence.
 
-Right-click an HTTP(S) terminal link (including localhost) and choose **Start in Design Mode**, then **Edge** or **Chrome**, to open that exact page with the terminal agent connected. Agent coordinators use `design_mode action=start session_id=<terminal> url=<page>` for layout work; stop uses the returned `repoPath`.
+Right-click an HTTP(S) terminal link (including localhost) and choose **Start in Design Mode**, then **Edge** or **Chrome**, to open that exact page with the terminal agent connected. Agent coordinators use `ui action=design_start session_id=<terminal> url=<page>` for layout work; stop uses the returned `repoPath`.
 
 - Start from an agent terminal’s context menu or the Command Palette. Choose Edge or Chrome; TUIC uses a dedicated profile per repository and browser. The launching terminal remains the default recipient and carries the armed D badge.
 - Design Mode loads the profile’s own extension automatically on a cold Edge launch. A single discovered dev server opens directly; otherwise, the page explains how to choose or start one. Running profiles must be closed before starting again; branded Chrome reports an unsupported-autoload error. The sidebar lists configured URLs and live servers attributed to this repository and its linked worktrees, with fresh PTY advertisements validated against listeners.
@@ -1136,7 +1136,7 @@ re-derived later.
 - Code: `src-tauri/src/ai_agent/{knowledge,tui_detect}.rs` — they kept the `ai_agent/` module path because `pty.rs` reads them there
 
 ### 6.16 ChoicePrompt Detection
-- Claude AskUserQuestion is parsed from its full-bleed Ink footer and numbered options, including rows with descriptions. Its `selection_mode: navigate-enter` tells mobile to move the highlight with arrows and submit with Enter; the mobile screen retains the whole open dialog
+- Claude AskUserQuestion is parsed from its full-bleed Ink footer and numbered options, including rows with descriptions and imperative titles without a question mark (`Pick a colour`). Its `selection_mode: navigate-enter` tells mobile to move the highlight with arrows and submit with Enter; the mobile screen retains the whole open dialog
 - New `ParsedEvent::ChoicePrompt { title, options, dismiss_key, amend_key }` recognises Claude-Code-style numbered confirmation menus (footer matches `Esc to cancel · Tab to amend`)
 - Options parsed by regex with optional cursor marker (`❯`, `›`, `>`). Title heuristics require `?` or a verb prefix (`proceed`, `confirm`, `do you want`, …) to avoid matching Markdown numbered lists. Minimum two options
 - Destructive labels (`no`, `cancel`, `reject`, `abort`, `deny`, `don't`) flagged for styling
@@ -1654,7 +1654,7 @@ The navigation groups the global pages by task. Each group is a static label row
 Three pages under **Integrations**. They were one "Services & MCP" tab; each page now mounts only its own content, and the MCP and Remote Access pages share one status poll.
 - **MCP** — HTTP API server: always active on IPC listener (Unix domain socket on macOS/Linux, named pipe `\\.\pipe\tuicommander-mcp` on Windows). TCP port only for remote access
 - **MCP** — MCP connection info: bridge sidecar auto-installs configs for supported agents (Claude Code, Cursor, etc.)
-- **MCP** — TUIC native tool toggles: enable/disable individual MCP tools (`session`, `agent`, `task`, `remote`, `repo`, `ui`, `plugin_dev_guide`, `config`, `debug`) to restrict what AI agents can access
+- **MCP** — TUIC capability switches: enable or deny capability domains and grouped actions to restrict what AI agents can access; additional restrictions preserve migrated member denials
 - **MCP** — Upstream MCP Servers: add/edit/remove upstream MCP servers (HTTP or stdio with optional `cwd`), per-upstream enable/disable, reconnect, Bearer/OAuth and multiple masked secret header rows backed by the OS credential vault, origin-bound credentials that fail closed on provider changes or unbound old entries, same-origin-only credential redirects, live status dots, tool count and metrics. Saved upstreams auto-connect on boot. The MCP popup's "Manage in Settings" opens this page at this section
 - MCP Per-Repo Scoping: each repo can define which upstream MCP servers are relevant via an allowlist in repo settings (3-layer: per-repo > `.tuic.json` > defaults). Null/empty allowlist = all servers. Quick toggle via **Cmd+Shift+M** popup
 - **Remote Access** — port, username, password (bcrypt hash), URL display, QR code, token duration, IPv6 dual-stack, Tailscale HTTPS, cloud relay. A discovery failure replaces only the address choices with an inline error and Retry; other settings remain available
@@ -2151,7 +2151,7 @@ path and opens the existing mobile Markdown viewer. Desktop opens and closes
 update the list through SSE; worktree files retain their original checkout.
 
 
-Waiting terminal ego questions show **Input**, including narrow terminals whose selector footer wraps mid-word. Tap the question icon in the session header to open or close the full question and its wrapping options. Single-choice submits one option; multiple-choice toggles options until **Submit answers**; free-text uses the composer. The card overlays the terminal without reserving rows. Prior suggested actions are hidden while a human answer is pending.
+Waiting terminal ego questions show **Input**, including narrow terminals whose selector footer wraps mid-word. Tap the question icon in the session header to open or close the full question and its wrapping options. Single-choice submits one option; multiple-choice toggles options until **Submit answers**; free-text uses the composer. The card overlays the terminal without reserving rows. Native choice dialogs hide suggested actions while their answer controls are open. Other waiting reports show their current suggested actions instead of generic Yes/No confirmations.
 
 Phone-optimized progressive web app for monitoring AI agents remotely. Separate SolidJS entry point (`src/mobile/`) served by the existing HTTP server at `/mobile`.
 
@@ -2220,7 +2220,7 @@ Unsupported actions are hidden. Menus close on outside tap or Escape and use
 - Suggest follow-up chips: horizontal scrollable pills from `suggested_actions`, tap to send
 - Slash menu overlay: the keybar `/` inserts at the composer selection through the same input path as typing; both sync to the PTY and show only detected agent menu entries with navigation. Surrounding draft text is preserved. Removed commands are hidden, and the close button dismisses the menu. Picking a command fills the input; submitting waits for the agent's Enter gap
 - Quick-action chips: Yes, No, y, n, Enter, Ctrl-C
-- **TerminalKeybar:** 44 px tall, horizontally scrollable row of `/`, Ctrl, Tab, Esc, arrow and Enter keys above the main input, with no visible scrollbar. Ctrl opens a menu for Ctrl+C, Ctrl+B, Ctrl+D and Ctrl+Enter; Ctrl+C and Ctrl+D are danger-coloured. A choice sends once and closes the menu; an outside tap or Escape dismisses without sending. Ctrl+Enter follows the agent registry: CSI-u submits in Claude Code and inserts a newline in OpenCode; LF supplies the newline fallback for Codex, Goose, Grok and pi, and submits in ego. Uninstalled agents use documented newline fallbacks or conservative CSI-u; see `docs/evidence/ctrl-menu-1660/README.md`. When the agent is awaiting input, it adds Yes/No quick-reply buttons. Tab and Up/Down still reach a waiting terminal picker when no parsed choices exist, without importing picker text into a local answer draft. The composer input and Send button also have 44 px touch targets. After the session ends, the keybar and composer are disabled and the stale status badge is hidden
+- **TerminalKeybar:** 44 px tall, horizontally scrollable row of `/`, Ctrl, Tab, Esc, arrow and Enter keys above the main input, with no visible scrollbar. Ctrl opens a menu for Ctrl+C, Ctrl+B, Ctrl+D and Ctrl+Enter; Ctrl+C and Ctrl+D are danger-coloured. A choice sends once and closes the menu; an outside tap or Escape dismisses without sending. Ctrl+Enter follows the agent registry: CSI-u submits in Claude Code and inserts a newline in OpenCode; LF supplies the newline fallback for Codex, Goose, Grok and pi, and submits in ego. Uninstalled agents use documented newline fallbacks or conservative CSI-u; see `docs/evidence/ctrl-menu-1660/README.md`. When the agent is awaiting input without native choices or suggested actions, it adds Yes/No quick-reply buttons. Current suggested actions take priority over these generic confirmations without clearing the Input state. Tab and Up/Down still reach a waiting terminal picker when no parsed choices exist, without importing picker text into a local answer draft. The composer input and Send button also have 44 px touch targets. After the session ends, the keybar and composer are disabled and the stale status badge is hidden
 - **CLI command widget:** agent-specific quick commands (e.g., `/compact` for Claude Code and `/status` for Codex) accessible via expandable button
 - Text command input with 16px font (prevents iOS auto-zoom), `inputmode="text"`
 - **Offline retry queue:** `write_pty` calls that fail due to network disconnection are queued and retried when connectivity resumes
@@ -2355,7 +2355,7 @@ TUICommander aggregates upstream MCP servers and exposes them through its own `/
 ### 19.1 Architecture
 - TUIC acts as both an MCP server (to downstream clients) and an MCP client (to upstream servers)
 - All upstream tools are exposed via the single `POST /mcp` Streamable HTTP endpoint
-- Native TUIC tools (`session`, `agent`, `task`, `remote`, `repo`, `ui`, `plugin_dev_guide`, `config`, `debug`) coexist with upstream tools
+- Native TUIC tools (`session`, `agent`, `repo`, `workflow`, `automations`, `remote`, `secret`, `progress`, `ui`, `plugin_dev_guide`, `voice`, `settings`, `debug`) coexist with upstream tools
 - Tool routing: names containing `__` are routed to the upstream registry; all others handled natively
 
 ### 19.1.1 Lazy Tool Discovery (`collapse_tools`)
@@ -2365,7 +2365,7 @@ TUICommander aggregates upstream MCP servers and exposes them through its own `/
 - Cuts MCP context from ~35k tokens to ~500 tokens per agent turn; agent fetches schemas on demand via BM25-ranked search
 - BM25 index backed by `AppState::tool_search_index` (rebuilds automatically when the tool set changes)
 - Settings native-tool switches and descriptions come from the backend MCP registry, including disabled tools; newly registered tools appear automatically. Every native tool can be disabled.
-- Safety filters (`disabled_native_tools`, upstream allow/deny) enforced at both discovery and dispatch time — agents cannot bypass filters by calling `call_tool` directly
+- Capability filters (`mcp_capabilities.denied`, upstream allow/deny) enforced at both discovery and dispatch time — agents cannot bypass filters by calling `call_tool` directly
 - Conditional tools share discovery and call gates: `remote` needs a connected remote server; `voice` needs enabled dictation and spoken replies; `telegram` needs enabled setup, a bot alias and its private token file. Owner changes notify clients to refresh the catalogue.
 - Toggling fires `notifications/tools/list_changed`; compatible connected clients refresh automatically, while clients that ignore the notification may require a reconnect
 
@@ -3174,13 +3174,13 @@ Hibernation requires an idle agent and a verified resume session in its saved pr
 
 The normal Rust suspension path persists `reason: "idle_hibernate"` before ending the PTY. Opening the tab, submitting input or sending peer mail uses the shared wake path. Storage or resume-verification failures leave the live session intact.
 
-Plugin HTTP requests accept AbortSignal cancellation through both desktop IPC and HTTP, including response body reads. Jira URL resolution forwards cancellation to every detail request.
-
-Jira and GitLab expose a default project in their schema-driven plugin settings page. Jira uses a project ID; GitLab accepts a project path or ID. A project saved for an account in Tasks setup takes precedence. The default applies after the plugin reloads; empty means no fallback project. Account bindings remain in `data/work-items.json`, while these defaults use the settings service in `data/config.json`.
-
 ## Settings transport cutover (#1787-4778)
 
 The generated settings contract replaces the legacy MCP config tool and also serves HTTP and IPC. Trusted UI opt-in is independent of legacy config enablement. The resolved inventory enables owner transactions and typed workflows, including connection credential reconciliation scoped to one runtime. The inventory gate remains enforced for future additions.
+
+Plugin HTTP requests accept AbortSignal cancellation through both desktop IPC and HTTP, including response body reads. Jira URL resolution forwards cancellation to every detail request.
+
+Jira and GitLab expose a default project in their schema-driven plugin settings page. Jira uses a project ID; GitLab accepts a project path or ID. A project saved for an account in Tasks setup takes precedence. The default applies after the plugin reloads; empty means no fallback project. Account bindings remain in `data/work-items.json`, while these defaults use the settings service in `data/config.json`.
 
 Mobile outage recovery: one connection banner offers immediate retry, automatic session recovery refreshes failed view loads, and retained mobile views preserve drafts without desktop restart advice (#1930-f4c2).
 
@@ -3295,3 +3295,11 @@ Existing explicit identity replacement and stranded-mail receipts remain intact.
 
 Plugin catalogue update detection compares equal-version payload identities as well
 as versions. Installed identity is computed by Rust and ignores mutable plugin data.
+
+MCP capability switches replace implementation-name switches. Saved denials migrate once, unknown names remain visible, and discovery and dispatch share the policy. Retired task/story/workflow-member/Design Mode names have no aliases; reconnect cached clients and review grouped allow rules (#2068-63b9).
+
+Mobile offers the **Chat** tab only when the host has a configured ego executable, using the same availability predicate as desktop. Host settings changes update the tab without reloading. Removing ego configuration returns an open Chat view to **Sessions**; unavailable saved Chat links also stay on **Sessions**.
+
+## Agent desktop verification
+
+`make agent-test` provides a preset isolated macOS desktop instance for authorized agent live checks. It uses a distinctly named binary and config namespace, loopback port 19876, disabled global input/microphone/Telegram/updater integrations, a side-effect-free dry-run and an instance-only stop target. See [Development Setup](guides/development-setup.md#isolated-agent-desktop-checks-macos).

@@ -1,3 +1,22 @@
+## Isolated agent desktop target (2086-269b) — operator live proof pending
+
+- [ ] After the coordinator reviews/builds this branch, checksum Boss's running binary and app bundle, launch `make agent-test` from the worktree, verify the daily port and agent-test loopback port both answer, and recheck identical checksums. Confirm the daily shortcut/microphone/Telegram ownership remains unchanged. Stop with `make agent-test-stop`, verify only its PID exits, and confirm the daily instance still responds. This peer is implementation-only: no desktop app was launched or restarted, and no live isolation/TCC claim is made. The launch-instruction and global CLI/hook refusal changes require a rebuilt backend and refreshed agent launch text; it does not hot-reload into Boss's running app.
+
+## Paired native plugin refresh (2039-428c) — rebuild required
+
+- [ ] After Boss manually restarts a rebuilt backend or installs a signed package, verify notification permission and delivery, then the updater check/download/install flow and deferred relaunch. Rust/npm notification 2.7.0 and updater 2.14.0 are paired; Linux default-feature compilation and targeted tests pass, but macOS/Windows packaging and real OS integration still need release validation. This peer did not restart or replace the running app.
+
+## Audio dependency alignment (2036-f740) — Rust restart and hardware required
+
+- [ ] [HUMAN] After Boss manually restarts `make dev` or installs `make build`, record and transcribe speech with the default and a named microphone; check the meter and stop/drain behavior. Include an integer-only microphone if available. CPAL 0.18 prefers 48 kHz and may rank high-precision formats above I16; capture must continue using a supported F32/I16 configuration.
+- [ ] [HUMAN] Play all notification tones at low and high volume on the default and a named output; confirm no end click and missing named output falls back. Play an Edge MP3 reply, pause/resume it, interrupt it and play the next reply. This peer did not restart or use Boss's desktop or claim real microphone/speaker validation.
+## Claude imperative question title (2074-b0dc) — Rust restart required
+
+- [x] Worktree verification: real Claude `Pick a colour` without a question mark exports the title and five ordered controls to REST, mobile and desktop PTY Chat. One Green click reaches Claude, clears awaiting and leaves another session unchanged. Mobile evidence: `fix-2074-live-10`; desktop-width Vite component evidence after merging 2079: `fix-2074-desktop-3`, both under `~/Gits/.tmp/results/`. The desktop check mounts the production component and lifecycle consumer, not the full desktop shell.
+- [ ] Boss must manually restart `make dev` or install `make build` to load the Rust change in the installed app. This peer did not restart or replace that backend.
+## Dirs dependency consolidation (2035-096f) — rebuild required
+
+- [ ] After Boss manually restarts a rebuilt `make dev` or installs `make build`, confirm the existing config, CLI/bridge connection and SSH aliases are unchanged. This dependency update does not load into the running backend; this peer did not restart or replace it. Targeted Linux tests cover config isolation, instance/socket paths, tilde expansion and SSH alias parsing.
 ## gix 0.89 migration (2038-b4c9) — Rust restart required
 
 - [ ] After Boss manually restarts `make dev` or installs `make build`, verify repository status counts, blame attribution and linked-worktree rows in an isolated repository. This dependency and Rust adapter change does not hot-reload; this peer did not restart or replace the running desktop.
@@ -2551,6 +2570,11 @@ Needs an iPhone (iOS 16.4+, 18.4+ preferred), the desktop TUICommander running a
 - [ ] Install an incompatible plugin in an isolated verification environment and check its refusal message. Catalogue/provider boundary checks passed 38/38 and loader minimum-version checks passed 3/3 (25 filtered) through build-slot on 2026-10-15; these are not native install E2E evidence.
 - [ ] Once GitHub Work loads with an authorized test account, invoke a read-only review action through core and verify it reaches the account-bound provider. No vendor writes are authorized.
 - [ ] Check same-version stale-copy detection in a supported isolated loaded-plugin runtime. _(Correction 2026-10-20: current main includes catalogue payload identity and installed hashing; version-only comparison is historical. The `tuic-remote` plus Vite path still skips user-plugin loading in `loadUserPlugins`, so it cannot supply this story's required loaded-plugin proof.)_
+- [ ] After landing the restored #1756 branch and its plugin commit, set and use the Jira default project ID and GitLab default project through their schema-driven plugin settings pages. Verify an account-specific Tasks project overrides the default. Module tests cover schema registration and persistence; live UI set/use remains unverified.
+- [ ] After landing the restored #1756 branch and restarting the backend, resolve a Jira URL and cancel its in-flight request. The restored provider/client/account adapter forwards the signal and the host cancels headers/body reads; confirm this through the loaded plugin, not only the module tests.
+- [ ] Install an incompatible plugin in an isolated verification environment and check its refusal message. Catalogue/provider boundary checks passed 38/38 and loader minimum-version checks passed 3/3 (25 filtered) through build-slot on 2026-10-15; these are not native install E2E evidence.
+- [ ] Once GitHub Work loads with an authorized test account, invoke a read-only review action through core and verify it reaches the account-bound provider. No vendor writes are authorized.
+- [ ] Verify same-version stale-copy detection with an isolated installed plugin and a catalogue payload digest. The host and catalogue now compare payload identities; mutable `data/` files are excluded. Module/package tests are not live installation E2E evidence.
 
 - [ ] #1756-4d42: after Boss restarts `make dev` (Rust does not hot-reload), resolve a Jira URL and cancel while headers/body are pending; confirm no late result and active requests stop. No live restart was performed by w-1756.
 
@@ -2662,3 +2686,14 @@ Needs an iPhone (iOS 16.4+, 18.4+ preferred), the desktop TUICommander running a
 ## Mobile Grok Chat (#2077-b132)
 
 - [ ] On a real phone, open a registry-bound Grok session and switch CLI → Chat → CLI. Confirm the existing question controls and composer remain touch-usable. Worktree browser evidence does not prove phone touch behavior.
+
+- [ ] After Boss restarts `make dev` or installs a rebuilt release, verify MCP capability switches, migrated denial diagnostics and client reconnect to the alias-free catalogue (#2068-63b9). Rust changes do not hot-reload.
+## ZIP 9 dependency migration (2037-6c5a) — backend rebuild required
+
+- [ ] After Boss rebuilds/restarts the app, install a disposable plugin ZIP with a root manifest and another with a single top-level directory; confirm their files load. On Windows, install the speech runtime from its ZIP and confirm the selected library loads. Automated extraction/name tests run on rb; this item records that the currently running backend cannot load the ZIP 9 migration without a rebuild. Do not restart the running app for this check.
+
+
+## 1638-c94c — generated workload WKWebView replay
+
+- [ ] After story 2086's isolated `make agent-test` harness lands, run the single-command `scripts/stall-workload/desktop-replay.mjs` procedure from its README against the generated recording in `~/Gits/.tmp/stall-1638/font-workload/frame-workload.json`. Verify named-instance/executable guards, collect native heartbeat-command round trips and independent backend timings, and retain the result. This is paint-only replay of generated output, not the original captured-real-stall RED. No Boss-app restart or second ordinary desktop instance is needed or authorized.
+- [x] Mobile AI Chat tab availability (#2087-07bf): isolated worktree Vite + headless backend at 390×844 shows four tabs without ego and five with ego; host config saves update the tab over SSE without page reload. _(verified: ~/Gits/.tmp/feat-2087-visual/transcript.txt and with-ego.png / without-ego.png)_

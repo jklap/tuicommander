@@ -70,6 +70,71 @@ The macOS application firewall uses code signing for initial and tracking decisi
 Vite excludes backend files and repository tooling output such as `.tmp/`, `target/`, `dist/`, coverage, reports, plans, stories, and docs from its watcher. Mutation testing keeps its disposable checkout under `.tmp/`; its HTML files must not reload the live WebView. Changes to this watch configuration require restarting the Vite dev server.
 The watch allowlist and Tauri version are resolved from the directory containing `vite.config.ts`, so starting Vite from another working directory still uses this checkout's inputs.
 
+### Isolated agent desktop checks (macOS)
+
+Use a linked worktree, not the daily checkout. Inspect the complete plan first:
+
+```bash
+make agent-test AGENT_TEST_DRY_RUN=1
+make agent-test
+# In another shell, stop only this supervised instance:
+make agent-test-stop
+```
+
+The dry run does not build, create runtime files, read application configuration,
+or start a desktop process. The launch runs in the foreground. It builds the
+frontend, then uses one Cargo build through the mbx shim for
+`tuicommander-agent-test`, `tuic-bridge` and `tuic`. The existing orchestrator
+build-slot wrapper serializes these builds when installed. `mbx doctor` must
+succeed. Do not set `CARGO_TARGET_DIR`. No Vite server, Tauri watcher, release
+bundle, signing operation or installed executable is involved. Embedded frontend
+assets use `tauri/custom-protocol` even though this is a debug build.
+
+Defaults are `AGENT_TEST_INSTANCE=agent-test` and `AGENT_TEST_PORT=19876`.
+Override with, for example, `make agent-test AGENT_TEST_INSTANCE=agent-check
+AGENT_TEST_PORT=19877` (on one line). Use the same instance on the stop target.
+These dedicated variables ignore inherited `TUIC_APP_INSTANCE`, `TUIC_PORT`,
+`TUIC_SOCKET` and `TUIC_DEV_BIN_DIR`. Empty/default instance IDs and port 9876
+are rejected, not interpreted as production defaults. The dedicated Rust entry
+point also validates instance and port before any config read, and refuses
+release, non-macOS or dictation-enabled builds.
+
+The compiled executable has a distinct Cargo target name and is copied to
+`<worktree>/.tmp/agent-test/<instance>/tuicommander-agent-test`. The running copy
+is not a symlink into mbx's target cache. The default instance stores app state
+in `~/Library/Application Support/com.tuic.commander/instances/agent-test/`.
+It never seeds from the daily config. Never copy daily tokens or config there.
+
+#### Shared-resource audit
+
+| Resource | Agent-test policy |
+| --- | --- |
+| Daily binary, dev-bin and installed app bundle | No writes. Only the worktree's distinctly named binary and adjacent sidecars are copied. A held supervisor lock prevents replacing the running test executable. |
+| Config, credential vault, databases and file locks | Existing named-instance namespace; debug credentials remain file-backed. The test never claims the global-input lock, even in its own namespace. |
+| HTTP and MCP | Explicit loopback-only `127.0.0.1:19876`; never port 9876 or automatic next-port fallback. Unix MCP socket uses the selected instance hash and the launch's short `TMPDIR` under `~/Gits/.tmp/tuic-at/`. Child CLI/bridge processes inherit the same namespace. |
+| Global window shortcut and Fn/Globe monitor | Input ownership refused and shortcut registration rejected at runtime, including later Settings changes. Local, focused-window keyboard handling remains available. |
+| Microphone and dictation | Not compiled into this binary. A dictation-enabled build refuses to start; no microphone permission request or capture path is available. Audio/voice hardware checks still belong to Boss. |
+| Telegram bot | Supervisor never starts, tool availability is false, and setup changes are rejected. A copied or previously saved bot configuration cannot start polling. |
+| Global CLI | Startup auto-update is skipped. Explicit installation, update and removal are rejected before sidecar resolution or filesystem changes, including elevated helper paths. |
+| Global agent hooks | Hook enable and disable requests are rejected over IPC and HTTP before saving the instance flag or changing shared Claude, Gemini, Grok, Codex or OpenCode files. Read-only hook status remains available. |
+| Global agent MCP configuration | Startup installation cannot claim ownership, even with an inherited owner override; explicit install/remove writes are rejected. |
+| Updater | No native updater plugin, no channel checks and automatic updates default off. The test cannot replace the daily bundle. |
+| Deep links, release single-instance lock and login items | Deep-link plugin is not installed. This debug-only binary never takes the release single-instance lock. Desktop startup has no login-item registration; remote service installation is an explicit operation, not part of this target. |
+| Relay, Tailscale and sleep inhibition | Relay supervisor and startup TLS provisioning are skipped; sleep inhibition is a no-op. No remote configuration is copied. |
+| WebView identity | `com.tuic.commander.agent-test`, titled **TUICommander Agent Test**, separate from the daily Tauri identity. |
+| Stop ownership | PID is informational. The stop target writes to the instance's FIFO; only the live supervisor signals its own `Popen` child. It never kills a PID read from disk. |
+
+The launch plan prints the exact binary, config directory, environment, socket,
+PID file and stop FIFO. A crash releases the advisory supervisor lock; the next
+start replaces stale runtime markers. Do not use `pkill`, `killall`, or the daily
+app's Quit/Restart action to stop a test.
+
+Desktop live proof is separate from a dry run or unit test. An authorized operator
+must checksum the running daily binary and app bundle before and after, start
+agent-test alongside it, verify both listeners without mutating the daily API,
+and stop only agent-test. Until that proof is recorded, do not claim macOS TCC,
+simultaneous listeners or global-input isolation have been verified live.
+
 ### Browser Mode
 
 When the MCP server is enabled in settings, the frontend can run standalone:

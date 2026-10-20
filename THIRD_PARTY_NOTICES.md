@@ -30,13 +30,13 @@ authors and communities behind each project.
 | chrono-tz | 0.10.4 | MIT OR Apache-2.0 |
 | clap | 4.6.3 | MIT OR Apache-2.0 |
 | console-subscriber | 0.5.0 | MIT |
-| cpal | 0.17.3 | Apache-2.0 |
+| cpal | 0.18.2 | Apache-2.0 |
 | croner | 4.0.1 | MIT |
 | ctor | 0.8.0 | Apache-2.0 OR MIT |
 | cursor-icon | 1.2.0 | MIT OR Apache-2.0 OR Zlib |
 | dashmap | 6.2.1 | MIT |
 | deunicode | 1.6.2 | BSD-3-Clause |
-| dirs | 6.0.0 | MIT OR Apache-2.0 |
+| dirs | 7.0.0 | MIT OR Apache-2.0 |
 | drag | 2.1.1 | Apache-2.0 OR MIT |
 | flate2 | 1.1.10 | MIT OR Apache-2.0 |
 | futures-util | 0.3.33 | MIT OR Apache-2.0 |
@@ -72,13 +72,13 @@ authors and communities behind each project.
 | rayon | 1.12.0 | MIT OR Apache-2.0 |
 | regex | 1.13.1 | MIT OR Apache-2.0 |
 | regex-automata | 0.4.16 | MIT OR Apache-2.0 |
-| reqwest | 0.13.4 | MIT OR Apache-2.0 |
+| reqwest | 0.13.5 | MIT OR Apache-2.0 |
 | rfd | 0.16.0 | MIT |
 | ring | 0.17.14 | Apache-2.0 AND ISC |
-| rodio | 0.22.2 | MIT OR Apache-2.0 |
-| rusqlite | 0.40.1 | MIT |
+| rodio | 0.23.0 | MIT OR Apache-2.0 |
+| rusqlite | 0.40.2 | MIT |
 | rust-stemmers | 1.2.0 | MIT OR BSD-3-Clause |
-| rustls | 0.23.45 | Apache-2.0 OR ISC OR MIT |
+| rustls | 0.23.46 | Apache-2.0 OR ISC OR MIT |
 | safetensors | 0.6.2 | Apache-2.0 |
 | same-file | 1.0.6 | Unlicense OR MIT |
 | schemars | 1.2.1 | MIT |
@@ -88,7 +88,7 @@ authors and communities behind each project.
 | serde_yaml | 0.9.34+deprecated | MIT OR Apache-2.0 |
 | sha2 | 0.11.0 | MIT OR Apache-2.0 |
 | sourcemap | 9.3.2 | BSD-3-Clause |
-| ssh2-config | 0.7.2 | MIT |
+| ssh2-config | 0.8.2 | MIT |
 | stop-words | 0.9.0 | MIT OR Apache-2.0 |
 | tar | 0.4.46 | MIT OR Apache-2.0 |
 | tauri | 2.12.1 | Apache-2.0 OR MIT |
@@ -96,11 +96,11 @@ authors and communities behind each project.
 | tauri-plugin-deep-link | 2.6.1 | Apache-2.0 OR MIT |
 | tauri-plugin-dialog | 2.8.1 | Apache-2.0 OR MIT |
 | tauri-plugin-global-shortcut | 2.4.0 | Apache-2.0 OR MIT |
-| tauri-plugin-notification | 2.4.0 | Apache-2.0 OR MIT |
+| tauri-plugin-notification | 2.7.0 | Apache-2.0 OR MIT |
 | tauri-plugin-opener | 2.7.0 | Apache-2.0 OR MIT |
 | tauri-plugin-process | 2.4.0 | Apache-2.0 OR MIT |
 | tauri-plugin-single-instance | 2.5.2 | Apache-2.0 OR MIT |
-| tauri-plugin-updater | 2.11.0 | Apache-2.0 OR MIT |
+| tauri-plugin-updater | 2.14.0 | Apache-2.0 OR MIT |
 | tauri-plugin-window-state | 2.5.0 | Apache-2.0 OR MIT |
 | tempfile | 3.27.0 | MIT OR Apache-2.0 |
 | tokenizers | 0.22.2 | Apache-2.0 |
@@ -122,7 +122,7 @@ authors and communities behind each project.
 | whichlang | 0.1.1 | MIT |
 | whisper-rs | 0.16.0 | Unlicense |
 | zeroize | 1.9.0 | Apache-2.0 OR MIT |
-| zip | 8.6.0 | MIT |
+| zip | 9.0.5 | MIT |
 <!-- END GENERATED:rust -->
 
 ### Rust Platform-Specific Dependencies
@@ -184,12 +184,12 @@ authors and communities behind each project.
 | @tauri-apps/api | 2.12.1 | Apache-2.0 OR MIT |
 | @tauri-apps/plugin-deep-link | 2.6.1 | MIT OR Apache-2.0 |
 | @tauri-apps/plugin-dialog | 2.8.1 | MIT OR Apache-2.0 |
-| @tauri-apps/plugin-notification | 2.4.0 | MIT OR Apache-2.0 |
+| @tauri-apps/plugin-notification | 2.7.0 | MIT OR Apache-2.0 |
 | @tauri-apps/plugin-opener | 2.7.0 | MIT OR Apache-2.0 |
 | @tauri-apps/plugin-process | 2.4.0 | MIT OR Apache-2.0 |
-| @tauri-apps/plugin-updater | 2.11.0 | MIT OR Apache-2.0 |
+| @tauri-apps/plugin-updater | 2.14.0 | MIT OR Apache-2.0 |
 | ansi-to-html | 0.7.2 | MIT |
-| dompurify | 3.4.16 | MPL-2.0 OR Apache-2.0 |
+| dompurify | 3.4.17 | MPL-2.0 OR Apache-2.0 |
 | marked | 18.0.12 | MIT |
 | mermaid | 12.1.0 | MIT |
 | qrcode | 1.5.4 | MIT |

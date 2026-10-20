@@ -2001,47 +2001,6 @@ export const settingsCatalogue = {
       ],
       "confirmationClass": "ordinary"
     },
-    "app.disabled_native_tools": {
-      "id": "app.disabled_native_tools",
-      "store": "app",
-      "owner": "machine",
-      "area": "app",
-      "group": "disabled_native_tools",
-      "order": 64,
-      "path": "/disabled_native_tools",
-      "labelKey": "settings.catalogue.app.disabled_native_tools.label",
-      "helpKey": "settings.catalogue.app.disabled_native_tools.help",
-      "label": "disabled native tools",
-      "schema": {
-        "description": "Native MCP tool names disabled by the user (excluded from tools/list response)",
-        "type": "array",
-        "items": {
-          "type": "string"
-        },
-        "default": [
-          "settings",
-          "debug"
-        ]
-      },
-      "nullable": false,
-      "default": [
-        "settings",
-        "debug"
-      ],
-      "availability": {
-        "status": "available"
-      },
-      "choices": null,
-      "sensitivity": "public",
-      "apply": "live",
-      "effect": "Updates disabled native tools for the current owner.",
-      "operations": [
-        "get",
-        "set",
-        "reset"
-      ],
-      "confirmationClass": "ordinary"
-    },
     "app.disabled_plugin_ids": {
       "id": "app.disabled_plugin_ids",
       "store": "app",
@@ -2643,6 +2602,42 @@ export const settingsCatalogue = {
       "sensitivity": "public",
       "apply": "live",
       "effect": "Updates max tab name length for the current owner.",
+      "operations": [
+        "get",
+        "set",
+        "reset"
+      ],
+      "confirmationClass": "ordinary"
+    },
+    "app.mcp_capabilities.denied": {
+      "id": "app.mcp_capabilities.denied",
+      "store": "app",
+      "owner": "machine",
+      "area": "app",
+      "group": "mcp_capabilities",
+      "order": 64,
+      "path": "/mcp_capabilities/denied",
+      "labelKey": "settings.catalogue.app.mcp_capabilities.denied.label",
+      "helpKey": "settings.catalogue.app.mcp_capabilities.denied.help",
+      "label": "denied",
+      "schema": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        }
+      },
+      "nullable": false,
+      "default": [
+        "settings",
+        "diagnostics"
+      ],
+      "availability": {
+        "status": "available"
+      },
+      "choices": null,
+      "sensitivity": "public",
+      "apply": "live",
+      "effect": "Updates MCP capability denials for the current owner.",
       "operations": [
         "get",
         "set",
@@ -11236,6 +11231,11 @@ export const settingsCatalogue = {
       "store": "app",
       "path": "/beta_channel_migrated",
       "reason": "Internal one-time beta update-channel migration marker"
+    },
+    {
+      "store": "app",
+      "path": "/mcp_capabilities/migration_unknown_tools",
+      "reason": "Unresolved legacy MCP policy migration diagnostics"
     },
     {
       "store": "app",

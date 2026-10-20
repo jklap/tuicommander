@@ -37,7 +37,7 @@ async fn settings_generated_mock_ipc_agrees_with_mcp_and_http() {
     let _guard = crate::config::set_config_dir_override(dir.path().to_path_buf());
     let state = test_state();
     state.config.write().settings_mcp_enabled = true;
-    state.config.write().disabled_native_tools.clear();
+    state.config.write().mcp_capabilities.denied.clear();
     let app = tauri::test::mock_builder()
         .manage(state.clone())
         .invoke_handler(tauri::generate_handler![
@@ -125,7 +125,7 @@ async fn settings_generated_mock_ipc_agrees_with_mcp_and_http() {
     // MCP opt-out is not native settings authority. Native UI still needs to
     // configure the opt-in while the MCP surface refuses access.
     state.config.write().settings_mcp_enabled = false;
-    state.config.write().disabled_native_tools = vec!["settings".into()];
+    state.config.write().mcp_capabilities.denied = vec!["settings".into()];
     let denied = handle_mcp_tool_call(
         &state,
         "127.0.0.1:12345".parse().unwrap(),

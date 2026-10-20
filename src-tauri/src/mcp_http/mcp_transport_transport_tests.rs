@@ -542,10 +542,11 @@ fn tool_call_text(body: &serde_json::Value) -> String {
 /// from errors), or documenting obsolete actor restrictions.
 #[test]
 fn story_tool_publishes_its_input_schema_and_tracking_only_actor_contract() {
-    let definition = native_tool_named("story");
+    let definition = native_tool_named("workflow");
     let input = &definition["inputSchema"]["properties"]["input"];
     assert!(
-        input["anyOf"].as_array().is_some_and(|v| v.len() > 10),
+        input.to_string().contains("create_story")
+            && input.to_string().contains("remove_dependency"),
         "the StoryAction variants must be published: {input}"
     );
     let description = definition["description"].as_str().unwrap_or_default();
@@ -2169,7 +2170,7 @@ async fn agent_task_cancel_does_not_kill_its_pty() {
 /// Catches: an existing task denial becomes bypassable through the new agent actions.
 #[tokio::test]
 async fn agent_task_actions_honor_existing_tool_denials() {
-    for disabled in ["task", "agent"] {
+    for disabled in ["agent_tasks", "agent"] {
         let state = test_state();
         let id = state.tasks.create(
             crate::tasks::TaskKind::AgentSpawn,
@@ -2179,7 +2180,8 @@ async fn agent_task_actions_honor_existing_tool_denials() {
         state
             .config
             .write()
-            .disabled_native_tools
+            .mcp_capabilities
+            .denied
             .push(disabled.into());
         for action in ["task_get", "task_cancel"] {
             let refused = handle_mcp_tool_call(
@@ -2878,8 +2880,8 @@ async fn mcp_run_history_matches_owner_event_cursor() {
         let actual = handle_mcp_tool_call(
             &state,
             loopback_addr(),
-            "workflow_run",
-            &serde_json::json!({"input":input}),
+            "workflow",
+            &serde_json::json!({"action":"run","input":input}),
             Some("run-mcp"),
         )
         .await;
@@ -2917,7 +2919,7 @@ async fn mcp_run_history_matches_owner_event_cursor() {
 #[test]
 fn workflow_run_schema_exposes_typed_starts_and_recovery_without_internal_receipts() {
     // Catches: schema-less starts/recovery, unresolved embedded refs, or internal commands advertised.
-    let definition = native_tool_named("workflow_run");
+    let definition = native_tool_named("workflow");
     let schema = &definition["inputSchema"]["properties"]["input"];
     let encoded = schema.to_string();
     for required in [
@@ -5318,61 +5320,34 @@ async fn background_mode_ui_requests_fail_immediately_when_webview_unloaded() {
     }
 }
 
-// Catches: shared meta discovery leaking an armed browser tool to unrelated MCP sessions.
-#[cfg(all(unix, feature = "desktop"))]
+// Catches: retired Design Mode schemas remain discoverable after the cutover.
 #[tokio::test]
-async fn design_mode_meta_discovery_is_scoped_to_the_armed_session() {
+async fn retired_design_mode_is_absent_from_meta_discovery() {
     let state = test_state();
-    insert_managed_test_session(&state, "owner", "/repo");
-    insert_managed_test_session(&state, "other", "/repo");
-    state
-        .mcp
-        .to_session
-        .insert("owner-mcp".into(), "owner".into());
-    state
-        .mcp
-        .to_session
-        .insert("other-mcp".into(), "other".into());
-    crate::mcp_http::mcp_transport_catalogue::rebuild_tool_search_index(&state);
-    let manager = crate::design_mode::manager(&state).await;
-    manager.arm_extension("/repo".into(), "owner".into()).await;
-    for (sid, expected) in [("owner-mcp", true), ("other-mcp", false)] {
-        let result = handle_mcp_tool_call(
-            &state,
-            loopback_addr(),
-            "search_tools",
-            &serde_json::json!({"query":"design_mode browser", "limit":100}),
-            Some(sid),
-        )
-        .await;
-        assert_eq!(
-            result["results"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .any(|r| r["name"] == "design_mode"),
-            expected
-        );
-        let schema = handle_mcp_tool_call(
-            &state,
-            loopback_addr(),
-            "get_tool_schema",
-            &serde_json::json!({"tool_name":"design_mode"}),
-            Some(sid),
-        )
-        .await;
-        assert_eq!(schema["name"] == "design_mode", expected);
-    }
-    manager.stop("/repo").await.unwrap();
     let schema = handle_mcp_tool_call(
         &state,
         loopback_addr(),
         "get_tool_schema",
         &serde_json::json!({"tool_name":"design_mode"}),
-        Some("owner-mcp"),
+        None,
     )
     .await;
-    assert_eq!(schema["error"], "Design Mode not armed for this session");
+    assert!(schema["error"].as_str().unwrap().contains("not found"));
+    let result = handle_mcp_tool_call(
+        &state,
+        loopback_addr(),
+        "search_tools",
+        &serde_json::json!({"query":"design browser", "limit":100}),
+        None,
+    )
+    .await;
+    assert!(
+        !result["results"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|entry| entry["name"] == "design_mode")
+    );
 }
 
 // Catches: generated settings requests cannot reach the published dispatcher.
@@ -5380,7 +5355,7 @@ async fn design_mode_meta_discovery_is_scoped_to_the_armed_session() {
 async fn published_request_executes() {
     let state = test_state();
     state.config.write().settings_mcp_enabled = true;
-    state.config.write().disabled_native_tools.clear();
+    state.config.write().mcp_capabilities.denied.clear();
     let reply = handle_mcp_tool_call(
         &state,
         "127.0.0.1:12345".parse().unwrap(),
@@ -5396,7 +5371,7 @@ async fn published_request_executes() {
 #[tokio::test]
 async fn disabled_meta_call_denied() {
     let state = test_state();
-    state.config.write().disabled_native_tools = vec!["settings".into()];
+    state.config.write().mcp_capabilities.denied = vec!["settings".into()];
     let reply = handle_mcp_tool_call(
         &state,
         "127.0.0.1:12345".parse().unwrap(),
@@ -5412,7 +5387,7 @@ async fn disabled_meta_call_denied() {
 #[tokio::test]
 async fn old_config_unknown() {
     let state = test_state();
-    state.config.write().disabled_native_tools.clear();
+    state.config.write().mcp_capabilities.denied.clear();
     let reply = handle_mcp_tool_call(
         &state,
         "127.0.0.1:12345".parse().unwrap(),
@@ -5525,7 +5500,7 @@ async fn settings_mcp_patch_http_and_native_read_agree() {
     let _guard = crate::config::set_config_dir_override(dir.path().to_path_buf());
     let state = test_state();
     state.config.write().settings_mcp_enabled = true;
-    state.config.write().disabled_native_tools.clear();
+    state.config.write().mcp_capabilities.denied.clear();
     let read = serde_json::json!({"action":"get","target":{"kind":"machine"},"store":"notifications","paths":["/volume"]});
     let before = crate::settings::api::execute(
         &state,
@@ -6080,8 +6055,8 @@ async fn ui_design_actions_preserve_caller_repository_and_saved_denials() {
     .await;
     assert_eq!(status[0]["repoPath"], "/repo", "{status}");
     assert_eq!(status[0]["sessionId"], "owner", "{status}");
-    for disabled in ["ui", "design_mode"] {
-        state.config.write().disabled_native_tools = vec![disabled.into()];
+    for disabled in ["ui", "design"] {
+        state.config.write().mcp_capabilities.denied = vec![disabled.into()];
         for action in [
             "design_start",
             "design_status",
@@ -6099,13 +6074,12 @@ async fn ui_design_actions_preserve_caller_repository_and_saved_denials() {
             )
             .await;
             assert_eq!(
-                reply["error"],
-                format!("Tool '{disabled}' is disabled by configuration"),
+                reply["error"], "Tool 'ui' is disabled by configuration",
                 "{reply}"
             );
         }
     }
-    state.config.write().disabled_native_tools.clear();
+    state.config.write().mcp_capabilities.denied.clear();
     let stopped = handle_mcp_tool_call(
         &state,
         loopback_addr(),
@@ -6166,5 +6140,112 @@ async fn ui_design_contract_is_discoverable_and_validates_before_dispatch() {
         let reply = handle_mcp_tool_call(&state, loopback_addr(), "ui", &args, None).await;
         assert_eq!(reply["code"], "invalid_arguments", "{args}: {reply}");
         assert_eq!(reply["effect"], "not_started", "{reply}");
+    }
+}
+
+// Catches: the breaking cutover leaves retired names advertised or callable.
+#[tokio::test]
+async fn capability_cutover_rejects_retired_names_and_measures_catalogue() {
+    let state = test_state();
+    state.config.write().mcp_capabilities.denied.clear();
+    state.config.write().settings_mcp_enabled = true;
+    state.config.write().collapse_tools = false;
+    let classic = merged_tool_definitions_for_mode(&state, None, false);
+    state.config.write().collapse_tools = true;
+    let collapsed = merged_tool_definitions_for_mode(&state, None, false);
+    println!(
+        "CAPABILITY_CATALOGUE_BYTES classic={} collapsed={} upstreams=0 settings=enabled optional_owners=unconfigured framing=compact_tools_array",
+        serde_json::to_vec(&classic).unwrap().len(),
+        serde_json::to_vec(&collapsed).unwrap().len()
+    );
+    for name in [
+        "task",
+        "story",
+        "workflow_run",
+        "workflow_launch",
+        "workflow_report",
+        "workflow_story_create",
+        "design_mode",
+    ] {
+        assert!(
+            !classic
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|tool| tool["name"] == name),
+            "retired name advertised: {name}"
+        );
+        let direct =
+            handle_mcp_tool_call(&state, loopback_addr(), name, &serde_json::json!({}), None).await;
+        assert_eq!(direct["error"], format!("Unknown tool '{name}'"));
+        let meta = handle_mcp_tool_call(
+            &state,
+            loopback_addr(),
+            "call_tool",
+            &serde_json::json!({"tool_name":name,"arguments":{}}),
+            None,
+        )
+        .await;
+        assert_eq!(meta["error"], format!("Unknown tool '{name}'"));
+    }
+}
+
+// Catches: a migrated member denial disappears in list/search/schema or a known-name meta call bypasses it.
+#[tokio::test]
+async fn migrated_capability_denials_filter_every_public_surface_without_index_refresh() {
+    let state = test_state();
+    for (old, tool, action, sibling) in [
+        ("task", "agent", "task_get", "list_peers"),
+        ("story", "workflow", "story", "run"),
+        ("workflow_run", "workflow", "run", "story"),
+        (
+            "workflow_story_create",
+            "workflow",
+            "proposal_create",
+            "run",
+        ),
+        ("workflow_report", "workflow", "report", "run"),
+        ("workflow_launch", "workflow", "launch", "run"),
+        ("design_mode", "ui", "design_status", "toast"),
+    ] {
+        state.config.write().mcp_capabilities =
+            crate::mcp_capabilities::McpCapabilities::from_legacy(&[old.into()]);
+        let schema = handle_get_tool_schema(&state, &serde_json::json!({"tool_name":tool}));
+        let actions = schema["inputSchema"]["properties"]["action"]["enum"]
+            .as_array()
+            .unwrap();
+        assert!(
+            !actions.iter().any(|value| value == action),
+            "{old}: {schema}"
+        );
+        assert!(
+            actions.iter().any(|value| value == sibling),
+            "{old}: {schema}"
+        );
+        for definition in filtered_native_tools(&state)
+            .iter()
+            .filter(|entry| entry["name"] == tool)
+        {
+            assert_eq!(definition, &schema);
+        }
+        let search = handle_search_tools(
+            &state,
+            &serde_json::json!({"query":match tool { "agent" => "Managed peers mail", "workflow" => "Durable project work", "ui" => "TUIC interaction", _ => unreachable!() }, "limit":1, "schema_byte_budget":65536}),
+        );
+        assert_eq!(search["top_schema"], schema, "{old}: {search}");
+        for (name, args) in [
+            (tool, serde_json::json!({"action":action})),
+            (
+                "call_tool",
+                serde_json::json!({"tool_name":tool,"arguments":{"action":action}}),
+            ),
+        ] {
+            let reply = handle_mcp_tool_call(&state, loopback_addr(), name, &args, None).await;
+            assert_eq!(
+                reply["error"],
+                format!("Tool '{tool}' is disabled by configuration"),
+                "{old}: {reply}"
+            );
+        }
     }
 }

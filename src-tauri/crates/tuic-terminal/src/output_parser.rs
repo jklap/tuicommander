@@ -2577,12 +2577,24 @@ pub fn parse_claude_ask_user_question(screen_rows: &[String]) -> Option<ParsedEv
         .iter()
         .rposition(|row| is_ink_dialog_footer_row(row))
         .or_else(|| submit_review_end(screen_rows))?;
-    let title = (0..footer)
-        .rev()
-        .find(|&idx| screen_rows[idx].trim_end().ends_with('?'))?;
     lazy_static::lazy_static! {
         static ref OPTION_RE: regex::Regex =
             regex::Regex::new(r"^\s*([❯›>]\s*)?(\d+)[.)]\s+(.+?)\s*$").unwrap();
+    }
+    // Native titles can be imperative ("Pick a colour"). Locate the title
+    // from the active numbered form, not punctuation in earlier output or in
+    // an option description. The column-zero footer/review remains the anchor.
+    let first_option = (0..footer).rev().find(|&idx| {
+        OPTION_RE
+            .captures(&screen_rows[idx])
+            .is_some_and(|caps| &caps[2] == "1")
+    })?;
+    let title = (0..first_option)
+        .rev()
+        .find(|&idx| !screen_rows[idx].trim().is_empty())?;
+    let title_text = screen_rows[title].trim();
+    if title_text.starts_with("──") || title_text.starts_with('←') {
+        return None;
     }
     let mut options = Vec::new();
     for row in &screen_rows[title + 1..footer] {

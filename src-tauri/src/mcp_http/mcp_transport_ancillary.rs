@@ -2048,12 +2048,11 @@ pub(super) async fn handle_confirm(
         let Some(connection) = mcp_session_id else {
             return serde_json::json!({"error": "settings confirmation requires a server-issued connection"});
         };
-        let enabled = !state
+        let enabled = state
             .config
             .read()
-            .disabled_native_tools
-            .iter()
-            .any(|tool| tool == "settings")
+            .mcp_capabilities
+            .allows("settings", None)
             && state.config.read().settings_mcp_enabled;
         let caller = crate::settings::policy::Caller::mcp(addr, connection.to_owned(), enabled);
         return super::confirm_settings(state, &caller, id, mcp_session_id).await;

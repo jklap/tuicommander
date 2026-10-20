@@ -6,6 +6,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+- Add `make agent-test` for isolated macOS desktop checks with a distinct binary, preset instance and loopback port, disabled machine-wide integrations (including global CLI and agent-hook writes), dry-run plan and instance-only stop target (#2086-269b).
+- Hide mobile AI Chat when ego is not configured on the host, refresh availability on settings changes, and return unavailable Chat views to Sessions (#2087-07bf).
+
+- **BREAKING:** replace native per-tool MCP switches with capability switches. Migrate saved denials without widening access and retain unknown-name diagnostics. Remove task, story, workflow_run/workflow_story_create/workflow_report/workflow_launch and design_mode aliases: use agent task_*, workflow actions and ui design_*. Reconnect cached clients and review external allow rules for the expanded groups (#2068-63b9).
+
+- Populate mobile New Session from installed registry agents, including ego; show detection failures and select the first installed agent (#2083-149c).
+
+- Export Claude native question titles without a question mark, including `Pick a colour`, with ordered desktop and mobile answer choices (#2074-b0dc).
+- Show mobile report suggestions instead of generic Yes/No confirmations while an agent is blocked; keep native dialog choices and the Input state (#2082-f782).
+
 - Keep unanswered Codex enforced command approvals and all three native answer controls active when a delayed idle hook arrives (#2075-aa2f).
 - Bind native Codex hooks for HTTP/MCP-spawned agents and generic HTTP terminals using their live inherited session identity; preserve exact owner validation and prevent bound-session listing deadlocks (#2081-ac1f).
 - Share browser event subscriptions across session, Chat, Markdown, dictation and speech consumers so two mobile tabs leave HTTP/1.1 capacity for state reads and permission answers (#2078-464b).

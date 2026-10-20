@@ -624,6 +624,7 @@ pub(super) async fn get_mcp_status_http(State(state): State<Arc<AppState>>) -> i
     let running = false;
     Json(serde_json::json!({
         "native_tools": super::mcp_transport::native_tool_catalog(),
+        "native_capabilities": crate::mcp_capabilities::catalog(),
         "enabled": true,
         "running": running,
         "active_sessions": state.session_maps.sessions.len(),

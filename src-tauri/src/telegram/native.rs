@@ -86,6 +86,9 @@ impl MailPort for NativeMail {
 
 /// Desktop and daemon share one supervisor; Inbound holds the sole polling lock.
 pub(crate) fn start(state: &Arc<AppState>) {
+    if crate::agent_test::active() {
+        return;
+    }
     let Ok(paths) = super::settings::paths() else {
         return;
     };

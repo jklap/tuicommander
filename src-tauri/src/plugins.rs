@@ -1170,7 +1170,10 @@ fn extract_zip_entries(
 fn find_manifest_in_zip(archive: &zip::ZipArchive<std::fs::File>) -> Result<String, String> {
     // Try root-level first
     for i in 0..archive.len() {
-        let name = archive.name_for_index(i).unwrap_or("");
+        let name = archive
+            .name_for_index(i)
+            .and_then(Result::ok)
+            .unwrap_or_default();
         if name == "manifest.json" {
             return Ok("manifest.json".to_string());
         }
@@ -1179,9 +1182,12 @@ fn find_manifest_in_zip(archive: &zip::ZipArchive<std::fs::File>) -> Result<Stri
     // Try single top-level dir: <dirname>/manifest.json
     let mut top_dirs = std::collections::HashSet::new();
     for i in 0..archive.len() {
-        let name = archive.name_for_index(i).unwrap_or("");
+        let name = archive
+            .name_for_index(i)
+            .and_then(Result::ok)
+            .unwrap_or_default();
         if let Some(slash) = name.find('/') {
-            top_dirs.insert(&name[..=slash]);
+            top_dirs.insert(name[..=slash].to_string());
         }
     }
 
@@ -1189,7 +1195,11 @@ fn find_manifest_in_zip(archive: &zip::ZipArchive<std::fs::File>) -> Result<Stri
         let dir = top_dirs.into_iter().next().unwrap();
         let candidate = format!("{dir}manifest.json");
         for i in 0..archive.len() {
-            if archive.name_for_index(i).unwrap_or("") == candidate {
+            if archive
+                .name_for_index(i)
+                .and_then(Result::ok)
+                .is_some_and(|name| name == candidate)
+            {
                 return Ok(candidate);
             }
         }
