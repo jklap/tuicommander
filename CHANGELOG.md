@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+- Reuse unchanged Claude subagent metadata across Progress Flow refreshes, with signature-based invalidation and idle eviction (#2099-8c87).
+
 - Re-arm the content-index cooldown after an unchanged validation so repeated repository events do not each start another full metadata walk (#2099-8c87).
 
 - Keep clipped Claude native questions answerable with explicit previous/next/select controls instead of generic Yes/No or guessed hidden choices (#2093-0be6).
