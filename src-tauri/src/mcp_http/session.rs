@@ -90,6 +90,31 @@ pub(crate) fn live_tuic_sessions_by_pty(
     by_pty
 }
 
+/// Publish PTY creation to the native frontend at the same boundary for
+/// generic HTTP sessions and HTTP/MCP agent spawns.
+#[cfg(feature = "desktop")]
+pub(super) fn emit_native_agent_session_created(
+    emit: impl FnOnce(&str, serde_json::Value),
+    state: &AppState,
+    session_id: &str,
+    cwd: Option<&str>,
+    agent_type: Option<&str>,
+    display_name: Option<&str>,
+    parent_session: Option<&str>,
+) {
+    emit(
+        "session-created",
+        serde_json::json!({
+            "session_id": session_id,
+            "tuic_session": live_tuic_sessions_by_pty(state).remove(session_id),
+            "cwd": cwd,
+            "agent_type": agent_type,
+            "display_name": display_name,
+            "parent_session": parent_session,
+        }),
+    );
+}
+
 /// Every PTY session this machine runs, as session-list rows.
 ///
 /// One builder for both transports: `GET /sessions` and the `list_active_sessions`
@@ -102,13 +127,16 @@ pub(crate) fn local_session_rows(state: &AppState) -> Vec<SessionInfo> {
         .session_maps
         .sessions
         .iter()
-        .map(|entry| {
-            let session_id = entry.key().clone();
+        .map(|entry| entry.key().clone())
+        .collect::<Vec<_>>()
+        .into_iter()
+        .filter_map(|session_id| {
+            let entry = state.session_maps.sessions.get(&session_id)?;
             let session = entry.value().lock();
             let declared = tuic_by_pty
                 .get(&session_id)
                 .and_then(|peer| super::session_placement::declared_worktree(&repositories, peer));
-            SessionInfo {
+            let mut row = SessionInfo {
                 cwd: session.cwd.clone(),
                 worktree_path: declared.as_ref().map(|(path, _)| path.clone()).or_else(|| {
                     session
@@ -140,10 +168,16 @@ pub(crate) fn local_session_rows(state: &AppState) -> Vec<SessionInfo> {
                     .get(&session_id)
                     .map(|value| value.value().clone())
                     .filter(|parent| !super::mcp_transport::is_pending_parent(parent)),
-                state: state.session_state_with_shell(&session_id),
+                state: None,
                 connection_id: None,
                 session_id,
-            }
+            };
+            // Native Codex validation probes the live PTY again. Release both
+            // the session mutex and map guard before taking that snapshot.
+            drop(session);
+            drop(entry);
+            row.state = state.session_state_with_shell(&row.session_id);
+            Some(row)
         })
         .collect()
 }
@@ -524,15 +558,17 @@ pub(super) async fn get_output(
     // Both local MCP and the remote proxy use the same serializer, including
     // cursor windows, secret redaction and retained output after PTY exit.
     if matches!(format, "mcp" | "mcp_raw") {
-        let result = super::mcp_transport::session_output(
-            &state,
-            &serde_json::json!({
-                "action": "output", "session_id": session_id,
-                "format": if format == "mcp_raw" { "raw" } else { "text" },
-                "limit": query.limit, "from_line": query.from_line,
-                "since_cursor": query.since_cursor, "from_byte": query.from_byte,
-            }),
-        );
+        let mut args = serde_json::json!({
+            "action": "output", "session_id": session_id,
+            "format": if format == "mcp_raw" { "raw" } else { "text" },
+            "limit": query.limit, "from_line": query.from_line,
+            "since_cursor": query.since_cursor, "from_byte": query.from_byte,
+            "byte_budget": query.byte_budget, "continuation": query.continuation,
+        });
+        args.as_object_mut()
+            .expect("output arguments")
+            .retain(|_, value| !value.is_null());
+        let result = super::mcp_transport::session_output(&state, &args);
         return (
             if result.get("error").is_some() {
                 StatusCode::NOT_FOUND
@@ -765,6 +801,16 @@ pub(crate) struct RequestedIdentity {
     pub agent_type: Option<String>,
 }
 
+struct PtyLaunch {
+    shell: String,
+    cwd: Option<String>,
+    rows: u16,
+    cols: u16,
+    worktree: Option<crate::state::WorktreeInfo>,
+    requested: RequestedIdentity,
+    direct: Option<portable_pty::CommandBuilder>,
+}
+
 pub(crate) fn spawn_pty_session(
     state: Arc<AppState>,
     shell: String,
@@ -774,6 +820,85 @@ pub(crate) fn spawn_pty_session(
     worktree: Option<crate::state::WorktreeInfo>,
     requested: RequestedIdentity,
 ) -> Result<String, (StatusCode, Json<serde_json::Value>)> {
+    spawn_pty_launch(
+        state,
+        PtyLaunch {
+            shell,
+            cwd,
+            rows,
+            cols,
+            worktree,
+            requested,
+            direct: None,
+        },
+    )
+}
+
+/// Configured owner processes use argv directly, never shell command text.
+pub(crate) fn spawn_pty_command(
+    state: Arc<AppState>,
+    program: &std::path::Path,
+    cwd: &std::path::Path,
+    args: &[String],
+) -> Result<String, (StatusCode, Json<serde_json::Value>)> {
+    if state.session_maps.sessions.len() >= MAX_CONCURRENT_SESSIONS {
+        return Err((
+            StatusCode::TOO_MANY_REQUESTS,
+            Json(serde_json::json!({"error":"Max concurrent sessions reached"})),
+        ));
+    }
+    let mut command = portable_pty::CommandBuilder::new(program.as_os_str());
+    crate::pty::sanitize_pty_parent_env(&mut command);
+    command.args(args);
+    command.cwd(cwd);
+    command.env("TERM", "xterm-256color");
+    command.env("COLORTERM", "truecolor");
+    spawn_pty_launch(
+        state,
+        PtyLaunch {
+            shell: program.to_string_lossy().into_owned(),
+            cwd: Some(cwd.to_string_lossy().into_owned()),
+            rows: 24,
+            cols: 80,
+            worktree: None,
+            requested: RequestedIdentity::default(),
+            direct: Some(command),
+        },
+    )
+}
+
+fn spawn_pty_launch(
+    state: Arc<AppState>,
+    launch: PtyLaunch,
+) -> Result<String, (StatusCode, Json<serde_json::Value>)> {
+    #[cfg(feature = "desktop")]
+    let app_handle = state.app_handle.read().clone();
+    spawn_pty_launch_with_emitter(
+        state,
+        launch,
+        #[cfg(feature = "desktop")]
+        |event, payload| {
+            if let Some(app) = app_handle {
+                let _ = app.emit(event, payload);
+            }
+        },
+    )
+}
+
+fn spawn_pty_launch_with_emitter(
+    state: Arc<AppState>,
+    launch: PtyLaunch,
+    #[cfg(feature = "desktop")] emit: impl FnOnce(&str, serde_json::Value),
+) -> Result<String, (StatusCode, Json<serde_json::Value>)> {
+    let PtyLaunch {
+        shell,
+        cwd,
+        rows,
+        cols,
+        worktree,
+        requested,
+        direct,
+    } = launch;
     // portable-pty can report a successful spawn even when the child fails to
     // enter its requested directory. Reject that request before registering a
     // session that would otherwise render as an empty terminal.
@@ -808,6 +933,11 @@ pub(crate) fn spawn_pty_session(
             pixel_height: 0,
         },
         || {
+            if let Some(mut command) = direct {
+                crate::pty::bind_pty_identity(&state, &mut command, &session_id, None);
+                crate::pty::apply_agent_screen_env(&mut command, &std::collections::HashMap::new());
+                return command;
+            }
             let mut cmd = build_shell_command(&shell);
             if let Some(ref dir) = cwd {
                 let dir = crate::cli::expand_tilde(dir);
@@ -917,17 +1047,15 @@ pub(crate) fn spawn_pty_session(
     spawn_reader_thread(reader, paused, session_id.clone(), state, None);
 
     #[cfg(feature = "desktop")]
-    if let Some(app) = state_ref.app_handle.read().as_ref() {
-        let _ = app.emit(
-            "session-created",
-            serde_json::json!({
-                "session_id": session_id,
-                "tuic_session": requested.tuic_session,
-                "cwd": cwd,
-                "display_name": null,
-            }),
-        );
-    }
+    emit_native_agent_session_created(
+        emit,
+        &state_ref,
+        &session_id,
+        cwd.as_deref(),
+        None,
+        None,
+        None,
+    );
 
     Ok(session_id)
 }
@@ -2076,6 +2204,24 @@ use crate::chrome::find_chrome_cutoff;
 /// Borrows: it reports a cutoff and reads nothing else, so taking the rows by
 /// value only forced every caller to clone a screen it already had in hand.
 fn trim_screen_chrome(rows: &[String]) -> TrimResult {
+    // A modal's selection marker and rules are content, not composer chrome.
+    // Its active interaction footer owns the bottom of the screen regardless
+    // of the dialog title. Only presentation uses this rule: parser cutoffs
+    // must still exclude the input zone. A later composer supersedes the footer.
+    let interaction_footer = rows
+        .iter()
+        .rev()
+        .find(|row| !row.trim().is_empty())
+        .map(|row| row.trim())
+        .is_some_and(|footer| {
+            (footer.contains("Esc to cancel") || footer.contains("Esc to clear"))
+                && (footer.starts_with("Enter to ")
+                    || footer.starts_with("Esc to ")
+                    || footer.contains(" · "))
+        });
+    if interaction_footer {
+        return TrimResult { cutoff: rows.len() };
+    }
     let refs: Vec<&str> = rows.iter().map(|s| s.as_str()).collect();
     let cutoff = find_chrome_cutoff(&refs).unwrap_or(rows.len());
     TrimResult { cutoff }
@@ -2535,6 +2681,82 @@ pub(super) async fn get_session_shell_family(
 
 #[cfg(test)]
 mod tests {
+    // Catches: POST /sessions binds the PTY key but publishes null to native
+    // tabs, so later worktree declarations cannot find the caller.
+    #[cfg(feature = "desktop")]
+    #[tokio::test]
+    async fn generic_post_sessions_created_event_retains_bound_identity() {
+        let state = super::super::tests::test_state();
+        let mut emitted = None;
+        let result = super::spawn_pty_launch_with_emitter(
+            state.clone(),
+            super::PtyLaunch {
+                shell: crate::test_support::host_shell().0.into(),
+                cwd: None,
+                rows: 24,
+                cols: 80,
+                worktree: None,
+                // Same absent caller identity as create_session (POST /sessions).
+                requested: super::RequestedIdentity::default(),
+                direct: None,
+            },
+            |event, payload| {
+                assert_eq!(event, "session-created");
+                emitted = Some(payload);
+            },
+        );
+        let session_id = result.expect("generic POST /sessions PTY must spawn");
+        let bound = super::live_tuic_sessions_by_pty(&state)
+            .remove(&session_id)
+            .expect("generic session must bind its identity");
+        crate::pty::close_pty_core(&state, &session_id, false);
+        let payload = emitted.expect("generic native creation must publish");
+        assert_eq!(bound, session_id);
+        assert_eq!(payload["session_id"], session_id);
+        assert_eq!(payload["tuic_session"], bound);
+    }
+
+    // Catches: native MCP/HTTP creation omits the live identity, so a new tab
+    // cannot match its caller's worktree declaration until reconnect.
+    #[cfg(feature = "desktop")]
+    #[test]
+    fn native_agent_created_event_retains_bound_identity() {
+        let state = crate::state::tests_support::make_test_app_state();
+        let mut command = portable_pty::CommandBuilder::new("unused");
+        crate::pty::bind_pty_identity(&state, &mut command, "pty-child", Some("stable-child"));
+        for expected in [Some("stable-child"), Some("pty-child"), None] {
+            match expected {
+                Some("pty-child") => {
+                    state.session_maps.live_pty_by_tuic_session.clear();
+                    crate::pty::bind_pty_identity(&state, &mut command, "pty-child", None);
+                }
+                None => state.session_maps.live_pty_by_tuic_session.clear(),
+                _ => {}
+            }
+            let mut emitted = None;
+            super::emit_native_agent_session_created(
+                |event, payload| {
+                    assert_eq!(event, "session-created");
+                    emitted = Some(payload);
+                },
+                &state,
+                "pty-child",
+                Some("/repo"),
+                Some("ego"),
+                Some("child"),
+                Some("parent"),
+            );
+            let payload = emitted.expect("native event must be emitted");
+            assert!(payload.get("tuic_session").is_some());
+            assert_eq!(payload["tuic_session"], serde_json::json!(expected));
+            assert_eq!(payload["session_id"], "pty-child");
+            assert_eq!(payload["cwd"], "/repo");
+            assert_eq!(payload["agent_type"], "ego");
+            assert_eq!(payload["display_name"], "child");
+            assert_eq!(payload["parent_session"], "parent");
+        }
+    }
+
     use super::*;
 
     /// Catches: HTTP detects a hand-launched agent but leaves the backend as a
@@ -3676,6 +3898,176 @@ mod tests {
                 "mobile screen lost {expected:?}: {visible:#?}"
             );
         }
+    }
+
+    // Catches: the resume search-box border or highlighted session is treated
+    // as composer chrome, removing session rows from HTTP and log-WS screens.
+    #[test]
+    fn captured_claude_mobile_resume_survives_screen_trim() {
+        let capture = crate::pty_capture::decode_capture(include_bytes!(
+            "../fixtures/agent_prompts/claude-mobile-resume-1971.tcap"
+        ))
+        .expect("real Claude resume capture");
+        let (rows, cols) = capture.geometry.expect("captured terminal geometry");
+        let mut grid = crate::state::VtLogBuffer::new(rows, cols, 2000);
+        let mut utf8 = crate::state::Utf8ReadBuffer::new();
+        let mut escape = crate::state::EscapeAwareBuffer::new();
+        let mut populated = false;
+        let mut searched = false;
+        let mut ready_rows = None;
+        let mut dialog_rows = None;
+        for record in capture.records {
+            if record.direction != crate::pty_capture::CaptureDirection::Output {
+                continue;
+            }
+            let data = utf8.push(&record.data);
+            let data = escape.push(&data);
+            let (clean, _) = crate::state::strip_kitty_sequences(&data);
+            grid.process(clean.as_bytes());
+            let rows = grid.screen_rows();
+            if rows.iter().any(|row| row.trim() == "❯") {
+                ready_rows = Some(rows.clone());
+            }
+            if !rows.iter().any(|row| row.trim() == "Resume session") {
+                continue;
+            }
+            let expected = if rows.iter().any(|row| row.contains("❯ Mobile resume seed"))
+                && rows.iter().any(|row| row.contains("Esc to cancel"))
+            {
+                populated = true;
+                [
+                    "Mobile resume seed",
+                    "Test color selection question",
+                    "Esc to cancel",
+                ]
+            } else if rows
+                .iter()
+                .any(|row| row.contains("No sessions match \"z\"."))
+                && rows.iter().any(|row| row.contains("Esc to clear"))
+            {
+                searched = true;
+                ["│ ⌕ z", "No sessions match \"z\".", "Esc to clear"]
+            } else {
+                continue;
+            };
+            let visible = &rows[..trim_screen_chrome(&rows).cutoff];
+            let streamed = poll_screen(&grid, 0).screen.expect("log-WS screen");
+            for expected in expected {
+                assert!(
+                    visible.iter().any(|row| row.contains(expected)),
+                    "HTTP screen lost {expected:?}: {visible:#?}"
+                );
+                assert!(
+                    streamed.iter().any(|row| row.text().contains(expected)),
+                    "log-WS screen lost {expected:?}"
+                );
+            }
+            // Rendering a modal is not permission to widen the parser's input.
+            let refs: Vec<_> = rows.iter().map(String::as_str).collect();
+            assert!(find_chrome_cutoff(&refs).is_some());
+            dialog_rows = Some(rows);
+        }
+        assert!(populated, "capture must contain the populated picker");
+        assert!(searched, "capture must contain the no-matches search state");
+        // A retained modal transcript above a ready composer is not an open
+        // picker: its old footer must not disable ordinary composer trimming.
+        let mut dismissed = dialog_rows.unwrap();
+        dismissed.extend(ready_rows.expect("captured ready composer"));
+        assert!(trim_screen_chrome(&dismissed).cutoff < dismissed.len());
+    }
+
+    // Catches: selection markers and modal rules mistaken for composer chrome,
+    // dropping the options from both mobile screen transports.
+    fn assert_captured_mobile_dialog(capture: &[u8], expected: &[&str]) {
+        let capture = crate::pty_capture::decode_capture(capture).expect("real Claude capture");
+        let (rows, cols) = capture.geometry.expect("captured geometry");
+        let mut grid = crate::state::VtLogBuffer::new(rows, cols, 2000);
+        let mut utf8 = crate::state::Utf8ReadBuffer::new();
+        let mut escape = crate::state::EscapeAwareBuffer::new();
+        let mut observed = false;
+        for record in capture.records {
+            if record.direction != crate::pty_capture::CaptureDirection::Output {
+                continue;
+            }
+            let data = utf8.push(&record.data);
+            let data = escape.push(&data);
+            let (clean, _) = crate::state::strip_kitty_sequences(&data);
+            grid.process(clean.as_bytes());
+            let rows = grid.screen_rows();
+            if !expected
+                .iter()
+                .all(|text| rows.iter().any(|row| row.contains(text)))
+            {
+                continue;
+            }
+            observed = true;
+            let visible = &rows[..trim_screen_chrome(&rows).cutoff];
+            let streamed = poll_screen(&grid, 0).screen.expect("log-WS screen");
+            for text in expected {
+                assert!(
+                    visible.iter().any(|row| row.contains(text)),
+                    "HTTP screen lost {text:?}: {visible:#?}"
+                );
+                assert!(
+                    streamed.iter().any(|row| row.text().contains(text)),
+                    "log-WS screen lost {text:?}"
+                );
+            }
+            // Old modal rows retained above a new composer must not bypass trim.
+            let mut dismissed = rows;
+            dismissed.extend([
+                "────────────────────".into(),
+                "❯ ".into(),
+                "────────────────────".into(),
+                "status".into(),
+            ]);
+            assert!(trim_screen_chrome(&dismissed).cutoff < dismissed.len());
+        }
+        assert!(
+            observed,
+            "capture must contain the complete dialog: {expected:?}"
+        );
+    }
+
+    #[test]
+    fn captured_mobile_trust_dialog_keeps_options() {
+        assert_captured_mobile_dialog(
+            include_bytes!("../fixtures/agent_prompts/claude-mobile-startup-1987.tcap"),
+            &[
+                "Security guide",
+                "No, exit",
+                "Yes, I trust this folder",
+                "Enter to confirm",
+            ],
+        );
+    }
+
+    #[test]
+    fn captured_mobile_imports_dialog_keeps_options() {
+        assert_captured_mobile_dialog(
+            include_bytes!("../fixtures/agent_prompts/claude-mobile-startup-1987.tcap"),
+            &[
+                "Allow external CLAUDE.md file imports?",
+                "No, disable external imports",
+                "Yes, allow external imports",
+                "Enter to confirm",
+            ],
+        );
+    }
+
+    #[test]
+    fn captured_mobile_permission_dialog_keeps_options() {
+        assert_captured_mobile_dialog(
+            include_bytes!("../fixtures/agent_prompts/claude-mobile-permission-1987.tcap"),
+            &[
+                "Do you want to proceed?",
+                "1. Yes",
+                "2. Yes, and always allow access to",
+                "3. Yes, and switch to auto mode",
+                "4. No",
+                "Esc to cancel · Tab to amend",
+            ],
+        );
     }
 
     // --- Log-WS screen polling (604-cb45 F14) ---

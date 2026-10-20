@@ -16,7 +16,7 @@ vi.mock("../../../transport", async (importOriginal) => ({
 
 vi.mock("../../../stores/settings", () => ({
 	settingsStore: {
-		state: { ide: "vscode", font: "JetBrains Mono", defaultFontSize: 12 },
+		state: { ide: "vscode", font: "JetBrains Mono", defaultFontSize: 12, customLaunchers: [] },
 		isAiChatEnabled: () => false,
 		isAcpConfigured: () => false,
 	},
@@ -117,6 +117,43 @@ describe("SettingsPanel — deep link to a section", () => {
 
 		expect(container.querySelector(".navItem.active")!.textContent).toBe("MCP");
 		expect(scrolled).toEqual([container.querySelector(`#${SETTINGS_SECTION_UPSTREAM_MCP}`)]);
+	});
+
+	// Catches: retired Services links select MCP but lose the upstream section anchor.
+	it("retains the section target when opening the retired Services tab", async () => {
+		const view = render(() => (
+			<SettingsPanel visible onClose={() => {}} initialTab="services" initialSection={SETTINGS_SECTION_UPSTREAM_MCP} />
+		));
+		await nextFrame();
+		expect(view.container.querySelector(".navItem.active")?.textContent).toBe("MCP");
+		expect(scrolled).toEqual([view.container.querySelector(`#${SETTINGS_SECTION_UPSTREAM_MCP}`)]);
+	});
+
+	// Catches: a scheduled deep-link scroll runs after Settings closes.
+	it("cancels the pending section scroll when Settings closes before the frame", async () => {
+		const [visible, setVisible] = createSignal(true);
+		render(() => (
+			<SettingsPanel
+				visible={visible()}
+				onClose={() => {}}
+				initialTab="mcp"
+				initialSection={SETTINGS_SECTION_UPSTREAM_MCP}
+			/>
+		));
+		setVisible(false);
+		await nextFrame();
+		expect(scrolled).toEqual([]);
+	});
+
+	// Catches: a removed or unsupported section scrolls to an unrelated control.
+	it("leaves the selected page usable when the requested section is absent", async () => {
+		const view = render(() => (
+			<SettingsPanel visible onClose={() => {}} initialTab="mcp" initialSection="missing-section" />
+		));
+		await nextFrame();
+		expect(scrolled).toEqual([]);
+		expect(view.container.querySelector(".navItem.active")?.textContent).toBe("MCP");
+		expect(view.getByRole("button", { name: "Done" })).toBeVisible();
 	});
 
 	it("gives MCP its own direct nav entry, findable without going through Services", () => {

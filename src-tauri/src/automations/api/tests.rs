@@ -281,3 +281,236 @@ fn canonical_run_lookup_survives_definition_deletion() {
 }
 
 mod templates;
+
+// Catches: relative requests requiring a caller-computed wall clock or rejecting in_secs.
+#[test]
+fn relative_create_uses_host_clock_not_caller_wall_time() {
+    let (_dir, definitions, owner) = setup();
+    let host_now: DateTime<Utc> = "2099-10-10T08:00:00Z".parse().unwrap();
+    let mut input = definition("relative");
+    input["cron"] = json!("");
+    input["in_secs"] = json!(3600);
+    let saved = execute_stored_as(
+        &definitions,
+        owner.store(),
+        parse(json!({"action":"create","definition":input})).unwrap(),
+        host_now,
+        Caller::Agent(Some("caller".into())),
+    )
+    .unwrap();
+    assert_eq!(saved["once_local"], "2099-10-10T09:00:00");
+    assert_eq!(
+        saved["next_run_ms"],
+        host_now.timestamp_millis() + 3_600_000
+    );
+}
+
+fn saved_profile_config() -> crate::config::AgentsConfig {
+    serde_json::from_value(json!({"agents": {
+        "claude": {"run_configs": [{"name":"Review profile", "command":"claude"}]},
+        "retired-harness": {"run_configs": [{"name":"Retired profile", "command":"retired"}]}
+    }}))
+    .unwrap()
+}
+
+// Catches: accepting create/update configurations that fail the runner's named-profile lookup.
+#[tokio::test]
+async fn automation_create_rejects_unresolvable_run_config() {
+    let dir = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+    let _guard = crate::config::set_config_dir_override(dir.path().to_owned());
+    std::fs::write(
+        dir.path().join("agents.json"),
+        serde_json::to_vec(&saved_profile_config()).unwrap(),
+    )
+    .unwrap();
+    let state = Arc::new(crate::state::tests_support::make_test_app_state_in(
+        dir.path(),
+    ));
+    for (index, profile) in ["claude", "missing", "Retired profile"]
+        .into_iter()
+        .enumerate()
+    {
+        let mut input = definition(&format!("invalid-{index}"));
+        input["run_config"] = json!(profile);
+        let result = execute(
+            json!({"action":"create", "definition":input}),
+            state.clone(),
+        )
+        .await;
+        let error = result.expect_err("create accepted a configuration the runner cannot resolve");
+        assert!(error.contains(profile), "{error}");
+        assert!(
+            error.contains("Review profile"),
+            "missing repair choices: {error}"
+        );
+    }
+    assert!(
+        DefinitionStore::new()
+            .load()
+            .unwrap()
+            .definitions
+            .is_empty()
+    );
+    let mut valid = definition("valid");
+    valid["run_config"] = json!("rEvIeW PrOfIlE");
+    execute(
+        json!({"action":"create", "definition":valid}),
+        state.clone(),
+    )
+    .await
+    .unwrap();
+    let before = std::fs::read(dir.path().join("automations.json")).unwrap();
+    valid["run_config"] = json!("claude");
+    assert!(
+        execute(json!({"action":"update", "definition":valid}), state)
+            .await
+            .is_err()
+    );
+    assert_eq!(
+        std::fs::read(dir.path().join("automations.json")).unwrap(),
+        before
+    );
+    // A removed profile cannot be re-enabled, but pausing remains a repair path.
+    std::fs::write(dir.path().join("agents.json"), b"{}").unwrap();
+    let state = Arc::new(crate::state::tests_support::make_test_app_state_in(
+        dir.path(),
+    ));
+    execute(json!({"action":"pause", "id":"valid"}), state.clone())
+        .await
+        .unwrap();
+    let error = execute(json!({"action":"resume", "id":"valid"}), state.clone())
+        .await
+        .unwrap_err();
+    assert!(error.contains("Save a run configuration"), "{error}");
+    assert!(
+        execute(
+            json!({"action":"update", "id":"valid", "enabled":true}),
+            state
+        )
+        .await
+        .is_err()
+    );
+    assert!(!DefinitionStore::new().get("valid").unwrap().enabled);
+}
+
+// Catches: list advertising an executable occurrence for a configuration rejected by launch.
+#[tokio::test]
+async fn automation_list_and_runner_resolve_run_configs_the_same_way() {
+    let dir = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+    let _guard = crate::config::set_config_dir_override(dir.path().to_owned());
+    std::fs::write(
+        dir.path().join("agents.json"),
+        serde_json::to_vec(&saved_profile_config()).unwrap(),
+    )
+    .unwrap();
+    let state = Arc::new(crate::state::tests_support::make_test_app_state_in(
+        dir.path(),
+    ));
+    for (id, profile) in [
+        ("valid", "review PROFILE"),
+        ("legacy", "claude"),
+        ("retired", "Retired profile"),
+    ] {
+        let mut input = definition(id);
+        input["run_config"] = json!(profile);
+        DefinitionStore::new()
+            .create(serde_json::from_value(input).unwrap())
+            .unwrap();
+    }
+    let listed = execute(json!({"action":"list"}), state.clone())
+        .await
+        .unwrap();
+    let rows = listed.as_array().unwrap();
+    let valid = rows
+        .iter()
+        .find(|row| row["definition"]["id"] == "valid")
+        .unwrap();
+    assert_eq!(valid["run_config_error"], Value::Null);
+    assert!(valid["next_run_ms"].is_number());
+    for (id, profile) in [("legacy", "claude"), ("retired", "Retired profile")] {
+        let error = crate::mcp_http::managed_launch::launch_named(
+            &state,
+            profile,
+            "unused",
+            "unused",
+            "/unused",
+            "unlaunched-profile-test",
+        )
+        .unwrap_err();
+        let row = rows
+            .iter()
+            .find(|row| row["definition"]["id"] == id)
+            .unwrap();
+        assert_eq!(
+            row["run_config_error"].as_str(),
+            Some(error.as_str()),
+            "list hid the runner refusal: {row}"
+        );
+        assert_eq!(row["next_run_ms"], Value::Null);
+        assert!(error.contains("Review profile"));
+    }
+}
+
+// Catches: validating a create before the store resolves omitted/empty host-local timezone.
+#[tokio::test]
+async fn create_cron_with_omitted_or_empty_timezone_keeps_host_default() {
+    let dir = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+    let _guard = crate::config::set_config_dir_override(dir.path().to_owned());
+    std::fs::write(
+        dir.path().join("agents.json"),
+        serde_json::to_vec(&saved_profile_config()).unwrap(),
+    )
+    .unwrap();
+    let state = Arc::new(crate::state::tests_support::make_test_app_state_in(
+        dir.path(),
+    ));
+    let host_zone = iana_time_zone::get_timezone()
+        .expect("host must expose an IANA timezone for the local-default contract");
+    for (index, (once, omitted)) in [(false, true), (false, false), (true, true), (true, false)]
+        .into_iter()
+        .enumerate()
+    {
+        let id = format!("local-zone-{index}");
+        let mut input = definition(&id);
+        input["run_config"] = json!("Review profile");
+        if omitted {
+            input.as_object_mut().unwrap().remove("timezone");
+        } else {
+            input["timezone"] = json!("");
+        }
+        if once {
+            input["cron"] = json!("");
+            input["once_local"] = json!("2099-06-15T12:00:00");
+        }
+        let saved = execute(
+            json!({"action":"create", "definition":input}),
+            state.clone(),
+        )
+        .await
+        .expect("create rejected the host-local timezone default before store resolution");
+        assert_eq!(saved["timezone"], host_zone);
+        assert_eq!(DefinitionStore::new().get(&id).unwrap().timezone, host_zone);
+    }
+    let mut explicit = definition("explicit-zone");
+    explicit["run_config"] = json!("Review profile");
+    explicit["timezone"] = json!("Pacific/Auckland");
+    let saved = execute(
+        json!({"action":"create", "definition":explicit}),
+        state.clone(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(saved["timezone"], "Pacific/Auckland");
+    let before = std::fs::read(dir.path().join("automations.json")).unwrap();
+    explicit["id"] = json!("invalid-zone");
+    explicit["timezone"] = json!("Not/AZone");
+    assert!(
+        execute(json!({"action":"create", "definition":explicit}), state)
+            .await
+            .is_err()
+    );
+    assert_eq!(
+        std::fs::read(dir.path().join("automations.json")).unwrap(),
+        before
+    );
+}

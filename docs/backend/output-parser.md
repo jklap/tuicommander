@@ -146,7 +146,7 @@ unambiguous permission or approval wording. Claude's generic `is waiting for
 your input` body also appears after a completed turn at the ready composer, so
 it cannot set awaiting by itself.
 
-The full-screen Ink-footer recovery also applies with hooks enabled. A later
+The full-screen Ink-footer recovery requires an active agent identity: retained dialog rows above a returned shell prompt do not establish a wait. Silence-timer chat-question heuristics enforce the same identity boundary, so a retained title cannot restore a low-confidence wait later. It also applies with hooks enabled. A later
 busy hook can clear awaiting while the dialog is still open. Before recovery,
 the reader evaluates the last pending Question/UserInput event in the current
 chunk: a Question followed by UserInput is a clear, not an existing question.
@@ -357,6 +357,23 @@ One bounded logical line may soft-wrap across terminal rows and may begin with a
 
 **Mobile wrapped-token masking:** both screen and scrollback log reads run `vt_log::strip_structural_blocks` before delivery. It uses `output_parser::suggest_tail_rows` to remove continuation rows only when a bracketed token closes within the parser's wrap bound; blank rows, nested brackets and new protocol tokens stop the scan. An unclosed token does not consume unrelated output. Suggestion chips share the Rust parser across desktop and mobile; desktop canvas masking remains in `suggestOverlay.ts`, separate from the mobile log filter (#1380-05d8).
 
+**Selection lifecycle:** mobile consumes the displayed chip list before starting
+its asynchronous PTY writes, matching desktop's immediate local dismissal.
+Snapshots that retain the same session and items cannot restore that picked
+list, even when unrelated parsed activity changes the activity timestamp. A
+removed or replaced backend list re-arms the chips; identical labels can appear
+again after the backend submission clear. Exhausted write retries use the
+existing mobile send-failure toast instead of silently hiding an unsent choice.
+Both clients retain the existing shared `record_submitted_line` →
+`note_submitted_input` backend path: Enter clears the known agent's suggestions
+and advances its turn epoch, so a subsequent poll reads the cleared state.
+No separate mobile backend clear endpoint is used. Claude suggestion parsing
+ignores markers above the latest submitted prompt in the current screen, not
+just markers inside the live input box. Full-screen history repaints cannot
+restore a consumed list after fresh working evidence re-arms parser dedup.
+When a repaint contains several complete markers, the lowest marker wins;
+bounded bracket dewrapping also targets that latest marker.
+
 ### UsageLimit
 
 Claude Code usage limit percentage:
@@ -442,7 +459,7 @@ Fired when the PTY emits either:
 
 ### ChoicePrompt
 
-Numbered confirmation / multiple-choice menu rendered by Claude Code (`Esc to cancel · Tab to amend`) or an opened Codex `request_user_input` panel (`enter submit   ctrl+] skip   ⌥+↓ main prompt`):
+Numbered confirmation / multiple-choice menu rendered by Claude Code (`Esc to cancel · Tab to amend`) or an opened Codex `request_user_input` panel (`enter submit   ⌃] skip   ⇧→ main prompt`):
 
 ```rust
 ParsedEvent::ChoicePrompt {
@@ -455,27 +472,48 @@ ParsedEvent::ChoicePrompt {
 
 **Detection:**
 - **Footer match** extracts `dismiss_key` / `amend_key` from `Esc to <word>` / `Tab to <word>` (or locale equivalents).
-- **Codex panel** requires its `Queued follow-up inputs` heading near the question. The numbered option key submits immediately; `Ctrl+]` skips and `Alt+Down` returns to the main prompt. The heading guard keeps a quoted menu from becoming an interactive choice.
+- **Codex enforced command approval** requires the exact `Press enter to confirm or esc to cancel` footer and `Would you like to run the following command?` title. Command metadata between title and options is not part of the question. Captured numeric refusal submits immediately, despite the footer wording; Escape cancels. An unanswered native approval with active controls rejects a delayed OSC 7770 idle completion while that exact dialog is still on screen. Real answer input retires the controls, so subsequent completion remains valid. The original 0.163.0 failure and its three-minute mobile subscription are recorded in `codex-enforced-hook-idle-2075.tcap`.
+- **Codex panel** requires its `Queued follow-up inputs` heading near the question. The numbered option key submits immediately; `Ctrl+]` skips and `Shift+Right` returns to the main prompt. The heading guard keeps a quoted menu from becoming an interactive choice. This supports the installed Codex 0.162.1 format, including imperative titles such as `Pick a color.`; the older footer is not supported.
 - **Option regex** `^\s*(?:[❯›>]\s*)?(\d+)[.)]\s+(.+?)\s*$` — numbered items, optional cursor marker (`❯`, `›`, `>`).
 - **Title heuristics** walk up past blank rows and require either a `?` suffix or a verb prefix (`do you want`, `proceed`, `continue`, `should i`, `confirm`, `apply`, `allow`) to avoid matching Markdown numbered lists.
 - **Minimum two options** required to reduce false positives.
 
 **Destructive flag:** labels matching `"no"`, `"cancel"`, `"reject"`, `"abort"`, `"deny"`, or the prefixes `"don't"` / `"do not"` are flagged so the PWA overlay and plugins can style them as destructive.
 
+**Claude native titles:** `parse_claude_ask_user_question` uses the nearest nonblank title row above option 1 of the active form, not a question-mark suffix. Imperative titles such as `Pick a colour` export the same ordered choices and `navigate-enter` contract as question-mark titles. The column-zero Ink footer remains mandatory outside the Submit review; indented quoted footers do not establish a form. The authentic `claude-imperative-title-2074.tcap` captures the title, option descriptions, native Green answer and return to the composer.
+
 **Claude multi-question forms:** every tab (`← ☒ Lista  ☐ Branch  ✔ Submit →`) parses as its own prompt. The closing Submit review has no `Enter to select` footer, so `parse_claude_ask_user_question` anchors on the column-zero tab bar and ends at the next separator row (`claude-askuser-multi-question-20261012.tcap`). The mobile choice buttons re-arm whenever the prompt title or labels change, not only when the prompt disappears.
 
 **Flow:** the payload is stored on `SessionState.choice_prompt` and dispatched via `pluginRegistry.dispatchStructuredEvent("choice-prompt", …)`. Animated status-line updates preserve the prompt and its `awaiting_input` lifecycle; resolution, disappearance, replacement, and PTY exit clear it. A disappearing or resolved dialog emits `choice-cleared` so frontend and plugin consumers do not retain stale state. Single-key replies should go through `sendPtyKey()` in `src/utils/sendCommand.ts`, never raw `text + \r`.
 
-The mobile session header opens a queued Codex question with `Alt+Up`. Before it opens, Codex exposes a waiting signal but not the option labels; after the panel renders, `ChoicePrompt` supplies the title and options to the session list and detail overlay. A free-form answer goes to the opened panel's PTY composer, not the atomic idle-agent submission route.
+The mobile session header opens a queued Codex question with `Shift+Left`. Before it opens, Codex exposes a waiting signal but not the option labels; after the panel renders, `ChoicePrompt` supplies the title and options to the session list and detail overlay. A free-form answer goes to the opened panel's PTY composer, not the atomic idle-agent submission route.
 
 Observed Codex prompt forms and evidence:
 
 | Form | Live evidence | TUIC path |
 |------|---------------|-----------|
-| `request_user_input` choices and `Other` | `codex-request-user-input-20260929.tcap`; `captured_codex_request_user_input_reaches_choice_prompt` replays its rendered screen | A queued waiting signal appears first. `Alt+Up` opens the panel; `parse_choice_prompt` recognizes its `Queued follow-up inputs` heading, title, numbered options, and `ctrl+]` footer. |
+| `request_user_input` choices and `Other` | `codex-native-question-2026.tcap`; `captured_codex_0162_question_reaches_answer_controls` replays input/output through the real accumulator | A queued waiting signal appears first. `Shift+Left` opens the panel; `parse_choice_prompt` recognizes its `Queued follow-up inputs` heading, title, numbered options, and `⌃]` / `⇧→` footer. |
 | Command approval | `codex-0.157.1-approval-cancel.tcap`; `codex_canceled_approval_capture_clears_the_waiting_badge` replays an `Action Required` approval and Esc cancellation | The approval title sets the waiting question; the current screen and cancellation logic in `pty.rs` clear it when Codex returns to its composer. This capture does not establish that the approval uses the queued follow-up panel. |
 
-A distinct plan-question screen has not been captured. If Codex displays one, verify its rendered rows and keys before treating it as either form above.
+The distinct `/plan` form uses `Question N/M (K unanswered)` above the title and
+`tab to add notes | enter to submit answer | esc to interrupt` below its options.
+Both anchors and contiguous keys starting at 1 are required. Descriptions in the
+second column become option hints, not answer labels. Numeric answers submit
+immediately; Tab opens notes and Escape interrupts. The retained real PTY bytes
+are in `codex-plan-question-20261019.json`; this retained snapshot has no original
+geometry/timing. A fresh isolated headless recording,
+`codex-plan-question-20261019-real.tcap`, preserves real 41×128 geometry and
+ordered input/output. Parser and shared-accumulator regressions replay the open
+question before its recorded Ctrl+C. Neither fixture proves authenticated mobile
+rendering. Codex 0.162.1 accepts `/plan <question prompt>` in one submission.
+
+### Grok native questions and enforced approvals
+
+Grok Build 1.0.62 Ask forms use framed radio rows such as `1 (○) Red`, with a `Waiting on answers for` header and a final `z` free-text option. Labels and aligned descriptions are exported separately. Numeric keys answer immediately, without Enter. Mobile sends only the selected native key, including `z`, so it does not submit the newly opened custom-answer composer. Selecting `z` retires the buttons and keeps a confident text-only question until the text is submitted.
+
+The default-mode enforced command approval is a different radio form: a framed `›` title, `│` command, narrow-scope/edit-pattern controls, and five numeric options. Its selected radio mark is preserved. The captured `4` refuses immediately without Enter; this is not a model permission question. Both forms must be the last content on screen, so answered history below a newer composer cannot restore controls. Existing `Action Required` title detection remains unchanged.
+
+Evidence: `grok-native-colour-2027.tcap`, `grok-native-permission-2027.tcap`, and `grok-enforced-approval-2027.tcap`, replayed through the real accumulator. The short approval capture contains its refusal and settlement; the longer Ask captures reached the tap cap after input because of repeated Kitty image-delete output, as documented in their provenance.
 
 ### SlashMenu
 
@@ -487,7 +525,7 @@ ParsedEvent::SlashMenu {
 }
 ```
 
-Detected by `parse_slash_menu()` when `slash_mode` is active — scans the bottom screen rows for 2+ consecutive `/command` patterns. The `❯` prefix marks the highlighted item.
+Detected by `parse_slash_menu()` only when the input FSM has `slash_mode` active. It scans the bottom screen rows for consecutive `/command` patterns, including a single filtered result. The `❯` prefix marks the highlighted item. When the current screen no longer contains a menu, the PTY processor emits one empty `SlashMenu` to retract the cached list. Exact ego commands close completion without submitting a line; they must not leave the previous list visible.
 
 ## VT100-Aware Parsing
 
@@ -499,7 +537,7 @@ Primary entry point for VT100-aware parsing. Accepts `ChangedRow` vectors from `
 
 ### `parse_slash_menu(screen_rows: &[String]) -> Option<ParsedEvent>`
 
-Scans screen bottom rows (from VtLogBuffer) for slash command menus. Only called when `slash_mode` is active (user typed `/`). Returns `SlashMenu` event with all detected commands.
+Scans screen bottom rows (from VtLogBuffer) for slash command menus. Only called when `slash_mode` is active (user typed `/`). Returns `SlashMenu` with all detected commands, including one result. `None` means no menu on the current screen; the caller retracts any previously published menu. The real `ego-slash-filter-2030.tcap` covers broad completion, `/go` → `/goal`, exact-command closure and unmatched input.
 
 ## Pattern Detection
 
@@ -554,7 +592,8 @@ explicit-state fields in `SilenceState` (`src-tauri/src/pty.rs`).
 Claude Stop hooks can block after Claude has already emitted a Stop/suggest
 marker. If the current screen still contains a semantic active phase (spinner
 prefix, active verb ending in an ellipsis, and parenthesized progress), the PTY
-lifecycle reopens the same turn and discards the premature suggestions. A plain
+lifecycle reopens the same turn. Undelivered choices survive until final readiness;
+already-published choices are discarded. A plain
 empty composer or completed-duration summary does not provide this evidence.
 
 Slash-menu parsing is gated by the input FSM's slash mode and intentionally
@@ -633,7 +672,15 @@ wake. Other agents retain their existing uncertain-write recovery contracts.
 
 ### ego terminal questions
 
-The terminal ego CLI reports human-question waits with OSC 7770 awaiting and resumes busy after settlement. TUIC also recognizes its single-choice selector only for ego sessions, anchored to `Up/Down or number selects; Enter answers; Esc cancels.` and a highlighted numbered option. Wrapped question and option rows are joined in Rust into `choice-prompt`, using `navigate-enter` selection. This creates authoritative awaiting state even for older ego builds without the native signal. Multiple-choice and free-text questions keep the native awaiting signal and terminal/composer controls; they are not misrepresented as single-choice dialogs.
+The terminal ego CLI reports human-question waits with OSC 7770 awaiting and resumes busy after settlement. TUIC recognizes ego selectors by their exact single-choice or multiple-choice footer and a highlighted numbered option. Footer matching ignores whitespace so a narrow terminal can wrap in the middle of a word. The complete footer must end the active surface: only blank rows may follow it. Answered selectors retained above newer output, a spinner or a composer do not establish a question. A real 12-row ego capture covers the answered selector and next ordinary submission. Single-choice uses `navigate-enter`; multiple-choice uses `toggle-enter`, preserves the visible `[ ]`/`[x]` marks, and submits only on explicit Enter. Changed checkbox labels update the existing choice state. After protocol busy clears an answered ego selector, repainting the same retained title and options cannot re-arm it without a fresh native wait. A different signature or disappearance followed by a new dialog remains detectable. During a confident ego wait, a free-text modal above an empty `>` row supplies the question text without creating numbered choices. An empty composer alone never establishes a question, and a busy spinner is rejected. Desktop and mobile read the same accumulated state; mobile opens the full question card on demand and uses the existing composer for free-text replies. The recorded 1973 captures cover each form at 120 and 44 columns. A fresh-session output-ring export also covers startup/help rows contiguous with the free-text modal. Free-text extraction stops at the nearest blank, separator, startup banner or shortcut-help row, preserving wrapped question rows below it. Opening the mobile card does not change the explicit human-reply transport or stream the draft into the PTY.
+
+Selector and free-text title extraction share boundaries at `εgo:` diagnostics, submitted composer rows and native working rows. Wrapped question text below the boundary remains intact. Default-mode CLI approvals use a separate strict surface: an `Allow …?` title, a `Risk:` row and the native `y/a/n/e/d` controls. Refusing with `n` replaces the buttons with the CLI explanation prompt; Enter then settles the wait. Real captures cover selector titles and the refusal path, not edit/details or persistent approval actions.
+
+Default-mode approval titles can contain explicit CRLF continuation rows. The parser joins the contiguous `Allow` title immediately before `Risk:` without crossing a question boundary, and still requires the exact native controls. Each empty-title ego OSC awaiting marker establishes a fresh wait; content dedup must not depend on whether an earlier approval produced a choice prompt or changed rows. The `ego-mcp-questions-2088-2089.tcap` recording covers three MCP approvals, including both bare-key and key-plus-Enter answers.
+
+Ego enforced-approval buttons also send only their native key. In particular, `n` opens the refusal explanation without an appended Enter that would immediately settle it.
+
+Selector and free-text title extraction share the same boundary rules. In addition to native diagnostics, working/composer and help rows, TUIC connection acknowledgements, column-zero `intent:` rows and ego finished-tool outcome rows (`✓` / `✗`) end preceding output. A contiguous receipt must not become part of the next question. The unchanged `ego-mcp-questions-2088-2089.tcap` records a successful MCP receipt directly above `Pick a colour?`; its accumulator replay checks both `choice_prompt.title` and `question_text`. Wrapped genuine question rows remain part of the title.
 
 ### ego terminal provider recovery (1902)
 
@@ -682,3 +729,34 @@ It is delivered in original OSC order, including clears in the same chunk.
 `SessionState.provider_recovery` is the durable per-session presentation value;
 repeat snapshots do not generate additional parent entry notices. The existing
 session-state stream carries updates to desktop and browser consumers.
+
+### Ego selector row boundaries
+
+Before parsing an ego question, the PTY reader concatenates rows linked by the grid WRAPLINE flag. It preserves original spaces and adds none inside words. Hard line breaks still separate the title, numbered options and footer. Footer recognition remains in the ego parser; it does not infer prose boundaries from row length.
+
+### Mobile intent presentation
+
+The log serializer keeps `intent:` text and its styled spans in history and screen output. Only `suggest:` source markers are stripped for the suggestion-chip UI. Mobile CLI rejoins the terminal soft-wrap boundaries and applies the desktop intent tint to the complete logical line. State/title parsing is unchanged.
+
+### PTY intent title closure
+
+The shared `intent_marker.json` grammar defines the intent anchor and title
+boundary for Rust capture and desktop/mobile tinting. The last complete, non-nested
+parenthesis group on the logical row is the title. Its closing parenthesis ends
+the intent even when ordinary prose follows without whitespace. Earlier
+parenthesis groups remain in the description. An unfinished later opening
+parenthesis keeps the title incomplete, so a repaint or hard-wrapped title is
+not replaced by an earlier aside. Desktop tinting resolves the complete
+soft-wrapped logical line before mapping the boundary back to physical cells.
+Title-less rows keep their existing hard-break completion behavior.
+
+Vite watches the shared grammar and its parent directories even though other
+Rust sources remain excluded from frontend hot reload. A grammar edit must
+invalidate its imported JSON module together with the frontend classifier;
+otherwise a cached grammar can omit new fields and abort viewport marker planning.
+
+The parser does not remove terminal bytes. Desktop tint stops at the closing
+cell, including when the title wraps; mobile keeps trailing spans and links outside
+the tint. The CONTEXT header receives only the parsed description. Source evidence
+for 2060-0ebe is the recorded ego assistant message in `ego-intent-2060.json`:
+the model itself emitted `)Criteri`, not two lines joined by the terminal renderer.

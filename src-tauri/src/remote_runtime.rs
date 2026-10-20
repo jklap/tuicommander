@@ -275,6 +275,13 @@ impl RemoteRuntime {
             .collect()
     }
 
+    /// Saved records, pending tunnels and unauthenticated probes do not count.
+    pub(crate) fn has_connected_server(&self) -> bool {
+        self.entries
+            .iter()
+            .any(|entry| entry.status == Some(RemoteStatus::Connected))
+    }
+
     /// Base URL for a connected connection, or `None`. The routing answer.
     pub(crate) fn base_url(&self, id: &str) -> Option<String> {
         self.entries.get(id).and_then(|e| e.snapshot(id).base_url)
@@ -422,6 +429,13 @@ fn update<F: FnOnce(&mut Entry)>(state: &Arc<AppState>, id: &str, mutate: F) {
     };
     if before.as_ref() == Some(&after) {
         return;
+    }
+    if before
+        .as_ref()
+        .is_some_and(|s| s.status == RemoteStatus::Connected)
+        != (after.status == RemoteStatus::Connected)
+    {
+        let _ = state.mcp.tools_changed.send(());
     }
     publish(state, &after);
 }
@@ -622,6 +636,17 @@ fn publish(state: &Arc<AppState>, status: &RemoteConnectionStatus) {
             payload: payload.clone(),
         });
     let _ = payload;
+}
+
+/// Reannounce this connected owner's stream epoch so consumers discard missed hints.
+/// Take the snapshot before publishing; no runtime map guard crosses the emit.
+pub(crate) fn resync_connected(state: &Arc<AppState>, id: &str) {
+    let status = state.remote.entries.get(id).map(|entry| entry.snapshot(id));
+    if let Some(status) = status
+        && status.status == RemoteStatus::Connected
+    {
+        publish(state, &status);
+    }
 }
 
 /// What the daemon says when the credential is wrong, in the one place both
@@ -1254,17 +1279,8 @@ async fn deploy_and_wait(
     else {
         unreachable!("ssh_profile only returns Some for SSH transports")
     };
-    let token = match crate::remote_connection::pairing_token(&connection.id)
-        .map_err(ConnectFailure::error)?
-    {
-        Some(token) => token,
-        None => {
-            let token = uuid::Uuid::new_v4().to_string();
-            crate::remote_connection::set_pairing_token(&connection.id, &token)
-                .map_err(ConnectFailure::error)?;
-            token
-        }
-    };
+    let token = crate::remote_connection::ensure_pairing_token(state, &connection.id)
+        .map_err(ConnectFailure::error)?;
 
     update(state, id, |entry| {
         entry.status = Some(RemoteStatus::Deploying {
@@ -1435,6 +1451,11 @@ async fn wait_for_tunnel(state: &Arc<AppState>, tunnel_id: &str) -> Result<(), S
 /// configured, and the reason `disconnect` on an unknown id used to conjure one
 /// and announce it.
 pub(crate) fn teardown(state: &Arc<AppState>, id: &str) {
+    retire_runtime(state, id);
+}
+
+/// Return the retirement generation so a credential reconnect cannot undo a later disconnect.
+fn retire_runtime(state: &Arc<AppState>, id: &str) -> (u64, bool) {
     // The bump and the removal are one critical section, under the same mutex
     // `claim_and_supervise` holds across its generation read and its insert.
     // Separately they interleave: a supervisor that read its generation before
@@ -1445,17 +1466,40 @@ pub(crate) fn teardown(state: &Arc<AppState>, id: &str) {
     // with no entry in the map yet, and retiring its generation is the only
     // thing that stops it. Bumping only when an entry exists would miss exactly
     // the task that is about to create one.
-    let removed = {
+    let (generation, removed) = {
         let _lifecycle = state.remote.lifecycle();
         state.remote.retire_generation(id);
-        state.remote.entries.remove(id)
+        (state.remote.generation(id), state.remote.entries.remove(id))
     };
     // Outside the lock: nothing in `dispose` decides whether an entry exists,
     // and it aborts tasks, stops a tunnel and publishes.
     let Some((_, entry)) = removed else {
-        return;
+        return (generation, false);
     };
     dispose(state, id, entry);
+    (generation, true)
+}
+
+/// Retire only the credential's runtime. Reconnect an active connection through
+/// the normal claimed attempt; a disconnected connection stays disconnected.
+/// Claim synchronously so a later Disconnect can retire the queued attempt.
+pub(crate) fn credentials_changed(state: &Arc<AppState>, id: &str) {
+    let (generation, active) = retire_runtime(state, id);
+    if !active {
+        return;
+    }
+    let Ok(connection) = load_connection(state, id) else {
+        return;
+    };
+    let Some(connecting) = claim_and_supervise(state, id, generation) else {
+        return;
+    };
+    let state = state.clone();
+    let id = id.to_owned();
+    tokio::spawn(async move {
+        // The attempt publishes its own safe status/error and obeys generation retirement.
+        let _ = attempt(&state, &id, connection, connecting, generation).await;
+    });
 }
 
 /// Delete-specific teardown: clear local runtime state immediately, then make
@@ -1522,6 +1566,9 @@ fn dispose(state: &Arc<AppState>, id: &str, mut entry: Entry) {
     crate::remote_mirror::drop_connection(state, id);
     if let Some(tunnel_id) = entry.tunnel_id.take() {
         state.tunnel_manager.stop_if_running(&tunnel_id);
+    }
+    if entry.status == Some(RemoteStatus::Connected) {
+        let _ = state.mcp.tools_changed.send(());
     }
     // The entry is gone, so there is nothing left for `update` to diff against:
     // the departure is announced by hand, and only when the connection was not
@@ -1866,6 +1913,51 @@ mod tests {
     use super::*;
     use axum::http::StatusCode;
     use std::future::Future;
+
+    // Catches: connection transitions change discovery without invalidating clients.
+    #[test]
+    fn conditional_remote_connected_set_changes_notify_tools() {
+        let state = std::sync::Arc::new(crate::state::tests_support::make_test_app_state());
+        let mut notices = state.mcp.tools_changed.subscribe();
+        update(&state, "one", |entry| {
+            entry.status = Some(RemoteStatus::Connecting)
+        });
+        assert!(notices.try_recv().is_err());
+        update(&state, "one", |entry| {
+            entry.status = Some(RemoteStatus::Connected)
+        });
+        assert!(notices.try_recv().is_ok());
+        update(&state, "one", |entry| entry.live_sessions = Some(4));
+        assert!(notices.try_recv().is_err());
+        update(&state, "two", |entry| {
+            entry.status = Some(RemoteStatus::Connected)
+        });
+        assert!(notices.try_recv().is_ok());
+        update(&state, "one", |entry| {
+            entry.status = Some(RemoteStatus::Unauthenticated)
+        });
+        assert!(notices.try_recv().is_ok());
+        assert!(state.remote.has_connected_server());
+        teardown(&state, "two");
+        assert!(notices.try_recv().is_ok());
+        assert!(!state.remote.has_connected_server());
+    }
+
+    // Catches: a queued credential reconnect undoing a later explicit Disconnect.
+    #[tokio::test]
+    async fn credential_reconnect_cannot_revive_retired_generation() {
+        let state = test_state();
+        state.remote.force_connected_for_test(
+            "fixture",
+            "http://not-contacted.invalid",
+            Some("old"),
+        );
+        let (generation, active) = retire_runtime(&state, "fixture");
+        assert!(active);
+        teardown(&state, "fixture");
+        assert!(claim_and_supervise(&state, "fixture", generation).is_none());
+        assert!(state.remote.snapshot().is_empty());
+    }
 
     // Catches: a chunk boundary inside the daemon's "Untrusted Host" response
     // misdirects the user to permissions instead of the rejected host name.

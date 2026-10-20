@@ -44,6 +44,8 @@ vi.mock("../../utils/clipboard", async (importOriginal) => ({
 }));
 
 import CanvasTerminal from "../../components/Terminal/CanvasTerminal";
+import { terminalsStore } from "../../stores/terminals";
+import { writeClipboard } from "../../utils/clipboard";
 
 const ROWS = 4;
 const COLS = 8;
@@ -158,6 +160,44 @@ describe("CanvasTerminal copy-on-select highlight", () => {
 			expect(fills.styles).toContain(SELECTION_FILL);
 		} finally {
 			view.unmount();
+		}
+	});
+	// Catches: copy writes the raw hidden answer prefix from grid cells.
+	it.each([
+		[
+			"1963 strips answer row and list prefixes",
+			"💬 First answer.\n- 💬 Second answer.",
+			"First answer.\n- Second answer.",
+		],
+		[
+			"1963 preserves content emoji while stripping prefixes",
+			"💬 Mention 💬 inside prose.\n- 💬 Keep the literal 💬 here.",
+			"Mention 💬 inside prose.\n- Keep the literal 💬 here.",
+		],
+	])("%s", async (_name, raw, expected) => {
+		invoke.mockImplementation(async (cmd: string) => (cmd === "terminal_get_selection_text" ? raw : undefined));
+		vi.mocked(writeClipboard).mockClear();
+		const terminalId = terminalsStore.add({
+			sessionId: "copy-1963",
+			name: "Copy regression",
+			cwd: null,
+			fontSize: 14,
+			awaitingInput: null,
+		});
+		const view = render(() => <CanvasTerminal sessionId="copy-1963" terminalId={terminalId} />);
+		try {
+			await waitFor(() => expect(frameSink.current).not.toBeNull());
+			frameSink.current?.(fullFrame());
+			const canvas = view.container.querySelector('canvas[tabindex="0"]')!;
+			canvas.dispatchEvent(new MouseEvent("mousedown", { clientX: 1, clientY: 1, bubbles: true }));
+			document.dispatchEvent(new MouseEvent("mousemove", { clientX: 40, clientY: 20, bubbles: true }));
+			await new Promise((resolve) => setTimeout(resolve, 50));
+			document.dispatchEvent(new MouseEvent("mouseup", { clientX: 40, clientY: 20, bubbles: true }));
+			await waitFor(() => expect(writeClipboard).toHaveBeenCalled());
+			expect(vi.mocked(writeClipboard).mock.calls.at(-1)![0]).toBe(expected);
+		} finally {
+			view.unmount();
+			terminalsStore.remove(terminalId);
 		}
 	});
 });

@@ -26,6 +26,7 @@ import type { AcpToolCall, AcpToolCallContent } from "../../types/acp";
 import { cx } from "../../utils";
 import { writeClipboard } from "../../utils/clipboard";
 import { handleOpenUrl } from "../../utils/openUrl";
+import { stripAnswerMarkers } from "../../utils/stripAnswerMarkers";
 import { TerminalUserText, terminalAnswerRows, terminalToolTitle } from "../Terminal/chatPresentation";
 import { filePathRegex, matchWebUrls } from "../Terminal/linkProvider";
 import { ANSWER_MARKER_RE, answerBlockRanges, type ChatBlock } from "../Terminal/suggestOverlay";
@@ -104,7 +105,7 @@ const ToolActivity: Component<{
 		return `${seconds.toFixed(1)}s`;
 	};
 	return (
-		<details class={s.toolActivity} open={status() === "Failed"}>
+		<details class={s.toolActivity}>
 			<summary class={s.toolActivitySummary}>
 				<span
 					class={cx(
@@ -143,7 +144,7 @@ const ToolActivity: Component<{
 			<div class={s.toolActivityCalls}>
 				<For each={props.calls()}>
 					{(call) => (
-						<details class={s.toolActivityCall} open={call.status === "failed"}>
+						<details class={s.toolActivityCall}>
 							<summary class={s.toolActivityCallSummary}>
 								{/* Keyed on status so a settled call gets a fresh element: WebKit does not
 								    restyle a closed <details>, so swapping the class there left the
@@ -157,6 +158,36 @@ const ToolActivity: Component<{
 									{call.status === "failed" ? "Failed" : call.status === "completed" ? "Completed" : "Running"}
 								</span>
 							</summary>
+							<For each={call.content}>
+								{(content) => (
+									<Show when={content.type === "diff" && content}>
+										{(diff) => (
+											<figure class={s.editDiff} aria-label={`Edit diff: ${diff().path}`}>
+												<figcaption>{diff().path}</figcaption>
+												<div
+													class={s.editDiffScroll}
+													role="region"
+													aria-label={`Scrollable edit: ${diff().path}`}
+													tabindex="0"
+												>
+													<div class={s.editDiffVersions}>
+														<Show when={diff().oldText != null}>
+															<div class={s.editDiffOld}>
+																<span>Old</span>
+																<pre aria-label="Old text">{diff().oldText}</pre>
+															</div>
+														</Show>
+														<div class={s.editDiffNew}>
+															<span>New</span>
+															<pre aria-label="New text">{diff().newText}</pre>
+														</div>
+													</div>
+												</div>
+											</figure>
+										)}
+									</Show>
+								)}
+							</For>
 							<Show when={toolCallDetail(call)}>
 								<div class={s.toolCallBody}>
 									{toolCallDetail(call)}
@@ -266,6 +297,9 @@ export interface TranscriptSearchRef {
 }
 
 export interface TranscriptProps {
+	/** Let a host expose the existing follow state and jump action outside the transcript. */
+	onAtBottomChange?: (atBottom: boolean) => void;
+	onRegisterScrollToBottom?: (jump: (() => void) | undefined) => void;
 	/** Terminal-only reading layout; the agent scopes Claude Bash descriptions. */
 	terminalAgent?: string;
 	/** Lets a containing terminal route its Find action to this transcript. */
@@ -295,12 +329,16 @@ export interface TranscriptProps {
 	children?: JSX.Element;
 }
 
-const CopyButton: Component<{ label: string; text: string }> = (props) => (
+const CopyButton: Component<{ label: string; text: string; answer?: boolean }> = (props) => (
 	<button
 		type="button"
 		class={s.copyAction}
 		aria-label={props.label}
-		onClick={() => void writeClipboard(props.text).catch((error) => appLogger.error("ai-chat", "Copy failed", error))}
+		onClick={() =>
+			void writeClipboard(props.answer ? stripAnswerMarkers(props.text) : props.text).catch((error) =>
+				appLogger.error("ai-chat", "Copy failed", error),
+			)
+		}
 	>
 		Copy
 	</button>
@@ -509,6 +547,7 @@ export const Transcript: Component<TranscriptProps> = (props) => {
 			if (container && stickToBottom && !touchActive) {
 				container.scrollTop = container.scrollHeight;
 				lastScrollTop = container.scrollTop;
+				props.onAtBottomChange?.(true);
 			}
 		});
 	});
@@ -518,8 +557,11 @@ export const Transcript: Component<TranscriptProps> = (props) => {
 		if (container) {
 			container.scrollTop = container.scrollHeight;
 			lastScrollTop = container.scrollTop;
+			props.onAtBottomChange?.(true);
 		}
 	};
+	props.onRegisterScrollToBottom?.(scrollToBottom);
+	onCleanup(() => props.onRegisterScrollToBottom?.(undefined));
 	const onTouchEnd = () => {
 		touchActive = false;
 		if (stickToBottom) scrollToBottom();
@@ -527,6 +569,7 @@ export const Transcript: Component<TranscriptProps> = (props) => {
 	const onScroll = () => {
 		if (!container) return;
 		const atBottom = container.scrollHeight - container.clientHeight - container.scrollTop <= 1;
+		props.onAtBottomChange?.(atBottom);
 		if (atBottom) stickToBottom = true;
 		else if (container.scrollTop < lastScrollTop) stickToBottom = false;
 		lastScrollTop = container.scrollTop;
@@ -681,7 +724,7 @@ export const Transcript: Component<TranscriptProps> = (props) => {
 		}
 	};
 	return (
-		<>
+		<div class={s.transcriptViewport}>
 			<div
 				class={cx(s.messageList, props.mobile && s.mobileTranscript)}
 				ref={container}
@@ -844,7 +887,7 @@ export const Transcript: Component<TranscriptProps> = (props) => {
 															/>
 														</Show>
 														<div class={s.replyActions}>
-															<CopyButton label="Copy assistant message" text={agent().text} />
+															<CopyButton label="Copy assistant message" text={agent().text} answer />
 															<Show when={props.canForkAtMessage?.() && agent().messageId}>
 																<button
 																	type="button"
@@ -888,7 +931,7 @@ export const Transcript: Component<TranscriptProps> = (props) => {
 												<div class={s.noticeTitle}>
 													{(notice().action && NOTICE_LABELS[notice().action!.kind].title) || "Notice"}
 												</div>
-												<div>{notice().text}</div>
+												<div class={s.noticeBody}>{notice().text}</div>
 												<Show when={notice().action}>
 													{(action) => (
 														<button type="button" class={s.noticeAction} onClick={() => runNoticeAction(action())}>
@@ -979,15 +1022,13 @@ export const Transcript: Component<TranscriptProps> = (props) => {
 				{props.children}
 			</div>
 			<Show when={newTextBelow() && transcriptPreferences.enabled()}>
-				<div class={s.newTextBar}>
-					<button type="button" class={s.newTextPill} onClick={scrollToBottom}>
-						<svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
-							<path d="M7 2h2v8.2l3.6-3.6L14 8l-6 6-6-6 1.4-1.4L7 10.2z" />
-						</svg>
-						New text below
-					</button>
-				</div>
+				<button type="button" class={s.newTextBadge} onClick={scrollToBottom}>
+					<svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+						<path d="M7 2h2v8.2l3.6-3.6L14 8l-6 6-6-6 1.4-1.4L7 10.2z" />
+					</svg>
+					New text below
+				</button>
 			</Show>
-		</>
+		</div>
 	);
 };

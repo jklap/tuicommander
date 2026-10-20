@@ -1,4 +1,5 @@
 import { createUniqueId, type JSX, Show } from "solid-js";
+import type { SettingId } from "../../services/settingsCatalogue";
 import { StatusBadge } from "../ui/StatusBadge";
 import { SettingField } from "./fields/SettingField";
 import { InfoBadge } from "./InfoBadge";
@@ -7,15 +8,15 @@ import s from "./SettingsPrimitives.module.css";
 
 export function SettingPageHeader(props: {
 	title: string;
-	description: string;
-	scope: string;
+	description?: string;
+	scope?: string;
 	source?: JSX.Element;
 	actions?: JSX.Element;
 	icon?: JSX.Element;
 	breadcrumb?: string;
 }) {
 	return (
-		<>
+		<div class={s.pageHeaderBlock} data-settings-page-header>
 			<Show when={props.breadcrumb}>
 				<div class={s.breadcrumb}>{props.breadcrumb}</div>
 			</Show>
@@ -25,30 +26,40 @@ export function SettingPageHeader(props: {
 						{props.icon}
 						{props.title}
 					</h2>
-					<p>{props.description}</p>
+					<Show when={props.description}>{(description) => <p>{description()}</p>}</Show>
 					<Show when={props.source}>
 						<p class={s.source}>{props.source}</p>
 					</Show>
 				</div>
-				<div class={s.actions}>
-					<StatusBadge label={props.scope} />
-					{props.actions}
-				</div>
+				<Show when={props.scope || props.actions}>
+					<div class={s.actions}>
+						<Show when={props.scope}>{(scope) => <StatusBadge label={scope()} title={scope()} />}</Show>
+						{props.actions}
+					</div>
+				</Show>
 			</header>
-		</>
+		</div>
 	);
 }
 
 export function SectionCard(props: {
 	title: string;
 	description?: string;
+	help?: JSX.Element;
+	headingActions?: JSX.Element;
 	actions?: JSX.Element;
 	children: JSX.Element;
 }) {
 	const id = createUniqueId();
 	return (
 		<section class={s.card} aria-labelledby={id}>
-			<h3 id={id}>{props.title}</h3>
+			<div class={s.cardHeading}>
+				<h3 id={id}>{props.title}</h3>
+				{props.help}
+				<Show when={props.headingActions}>
+					<div class={`${s.actions} ${s.headingActions}`}>{props.headingActions}</div>
+				</Show>
+			</div>
 			<Show when={props.description}>
 				<p class={s.description}>{props.description}</p>
 			</Show>
@@ -63,6 +74,7 @@ export function SectionCard(props: {
 /** SettingField remains the single owner of labels and descriptive IDs. */
 export function SettingRow(props: {
 	label: string;
+	settingId?: SettingId;
 	hint?: string;
 	error?: string;
 	help?: JSX.Element;
@@ -71,6 +83,7 @@ export function SettingRow(props: {
 }) {
 	return (
 		<SettingField
+			settingId={props.settingId}
 			label={props.label}
 			hint={props.hint}
 			error={props.error}
@@ -92,20 +105,29 @@ export function SettingRow(props: {
 export function StatusSummary(props: {
 	label: string;
 	tone?: "success" | "warning" | "error";
-	source: string;
+	source?: string;
 	freshness?: string;
+	details?: JSX.Element;
+	actions?: JSX.Element;
 	children?: JSX.Element;
 }) {
 	return (
 		<div class={s.status} role="status">
 			<div>
 				<StatusBadge label={props.label} variant={props.tone} />
-				<p class={s.source}>
-					{props.source}
-					<Show when={props.freshness}> · {props.freshness}</Show>
-				</p>
+				<Show when={props.source || props.freshness}>
+					<p class={s.source}>
+						{props.source}
+						<Show when={props.source && props.freshness}> · </Show>
+						{props.freshness}
+					</p>
+				</Show>
+				{props.details}
 			</div>
 			{props.children}
+			<Show when={props.actions}>
+				<div class={s.actions}>{props.actions}</div>
+			</Show>
 		</div>
 	);
 }

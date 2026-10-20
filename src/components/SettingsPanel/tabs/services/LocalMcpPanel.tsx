@@ -1,6 +1,7 @@
-import { type Component, createEffect, createSignal, For, onMount, Show } from "solid-js";
+import { type Component, createEffect, createSignal, For, onCleanup, Show } from "solid-js";
 import { createStore, reconcile } from "solid-js/store";
 import { t } from "../../../../i18n";
+import { settingsRefresh } from "../../../../services/settingsRefresh";
 import { appLogger } from "../../../../stores/appLogger";
 import { rpc } from "../../../../transport";
 import { writeClipboard } from "../../../../utils/clipboard";
@@ -10,61 +11,53 @@ import { ExpertSetting } from "../../ExpertSetting";
 import s from "../../Settings.module.css";
 import { SectionCard, SettingPageHeader, SettingRow } from "../../SettingsPrimitives";
 import layout from "./ServiceRestyle.module.css";
-import { type AppConfig, type NativeMcpTool, saveConfigField, useMcpStatusPoll } from "./servicesShared";
+import { type AppConfig, type McpCapability, saveConfigField, useMcpStatusPoll } from "./servicesShared";
 import { UpstreamMcpPanel } from "./UpstreamMcpPanel";
 
 /**
  * Local MCP page: HTTP/MCP server status, the manual bridge configuration
- * snippet, and native-tool visibility controls. Upstream (remote) MCP
+ * snippet, and capability controls. Upstream (remote) MCP
  * servers retain their own editor, mounted once inside Server connections.
  */
 export const LocalMcpPanel: Component = () => {
 	const { status } = useMcpStatusPoll();
-	const [nativeTools, setNativeTools] = createStore<NativeMcpTool[]>([]);
+	const [capabilities, setCapabilities] = createStore<McpCapability[]>([]);
 	// Poll snapshots contain fresh objects; registry names own the row identity.
-	createEffect(() => setNativeTools(reconcile(status()?.native_tools ?? [], { key: "name" })));
-	const [disabledNativeTools, setDisabledNativeTools] = createSignal<string[]>([]);
+	createEffect(() => setCapabilities(reconcile(status()?.native_capabilities ?? [], { key: "name" })));
+	const [deniedCapabilities, setDeniedCapabilities] = createSignal<string[]>([]);
 	// The toggles wait for the saved list: the `[]` placeholder would show every
 	// tool as enabled until `load_config` answers.
 	const [nativeToolsLoaded, setNativeToolsLoaded] = createSignal(false);
+	const [migrationUnknownTools, setMigrationUnknownTools] = createSignal<string[]>([]);
+	const [settingsEnabled, setSettingsEnabled] = createSignal(false);
 	const [collapseTools, setCollapseTools] = createSignal<boolean>(false);
 	const [bridgeInfo, setBridgeInfo] = createSignal<{ bridge_path: string; config_snippet: string } | null>(null);
 	const [bridgeInfoOpen, setBridgeInfoOpen] = createSignal(false);
 	const [snippetCopied, setSnippetCopied] = createSignal(false);
 
-	onMount(async () => {
-		try {
-			const config = await rpc<AppConfig>("load_config");
-			setDisabledNativeTools(config.disabled_native_tools ?? []);
-			setCollapseTools(config.collapse_tools ?? false);
-		} catch (e) {
-			appLogger.warn("config", "Failed to load native tool config, using defaults", e);
-		} finally {
-			setNativeToolsLoaded(true);
-		}
-	});
+	onCleanup(
+		settingsRefresh.register({
+			section: "app",
+			read: () =>
+				rpc<AppConfig>("load_config").catch((error) => {
+					appLogger.warn("config", "Failed to load native tool config, using defaults", error);
+					return undefined;
+				}),
+			apply: (config) => {
+				if (!config) return;
+				setDeniedCapabilities(config.mcp_capabilities.denied);
+				setMigrationUnknownTools(config.mcp_capabilities.migration_unknown_tools);
+				setSettingsEnabled(config.settings_mcp_enabled ?? false);
+				setCollapseTools(config.collapse_tools ?? false);
+				setNativeToolsLoaded(true);
+			},
+		}),
+	);
 
 	return (
 		<div class={`${s.section} ${layout.page}`}>
-			<SettingPageHeader
-				title="MCP"
-				description="Local MCP connection, tool visibility and upstream servers."
-				scope="This machine"
-				breadcrumb="Integrations / MCP"
-			/>
-			<SectionCard
-				title="Server connections"
-				description="Local HTTP API and upstream MCP servers share this machine’s integration settings."
-			>
-				<div class={s.group}>
-					<p class={s.hint}>
-						{t(
-							"services.hint.httpDescription",
-							"Serves the REST API and MCP protocol for AI agents and automation tools",
-						)}
-					</p>
-				</div>
-
+			<SettingPageHeader title="MCP" scope="This machine" breadcrumb="Integrations / MCP" />
+			<SectionCard title="Server connections">
 				<SettingRow label={t("services.label.serverStatus", "Server Status")}>
 					{() => (
 						<>
@@ -80,13 +73,7 @@ export const LocalMcpPanel: Component = () => {
 					)}
 				</SettingRow>
 
-				<SettingRow
-					label={t("services.label.mcpConnection", "MCP Connection")}
-					hint={t(
-						"services.hint.mcpConnection",
-						"AI agents connect via the tuic-bridge sidecar. MCP configs are auto-installed in supported agents (Claude Code, Cursor, etc.).",
-					)}
-				>
+				<SettingRow label={t("services.label.mcpConnection", "MCP Connection")}>
 					{() => <StatusBadge label="tuic-bridge" />}
 				</SettingRow>
 
@@ -95,11 +82,8 @@ export const LocalMcpPanel: Component = () => {
 			</SectionCard>
 			<SectionCard title="TUIC Tools">
 				<div class={s.group}>
-					<p class={s.hint}>Native tools exposed via MCP. Disable tools to restrict what AI agents can access.</p>
-				</div>
-
-				<div class={s.group}>
 					<button
+						data-non-setting="Show the bridge integration instructions; not a preference"
 						class={s.mcpDisclosure}
 						onClick={() => {
 							const opening = !bridgeInfoOpen();
@@ -126,6 +110,7 @@ export const LocalMcpPanel: Component = () => {
 							<div class={s.mcpSnippetWrap}>
 								<pre class={s.mcpSnippetPre}>{bridgeInfo()!.config_snippet}</pre>
 								<button
+									data-non-setting="Copy the existing MCP bridge integration snippet"
 									class={s.mcpSnippetCopy}
 									onClick={() => {
 										writeClipboard(bridgeInfo()!.config_snippet)
@@ -146,12 +131,10 @@ export const LocalMcpPanel: Component = () => {
 				</div>
 
 				<ExpertSetting configKey="app.collapse_tools" value={collapseTools()}>
-					<SettingRow
-						label="Collapse tools — Speakeasy MCP (reduces AI context ~98%)"
-						hint="Discover tools on demand through search_tools, get_tool_schema and call_tool."
-					>
+					<SettingRow label="Collapse tools — Speakeasy MCP (reduces AI context ~98%)">
 						{(id, descriptionId) => (
 							<input
+								data-setting-id="app.collapse_tools"
 								id={id}
 								aria-describedby={descriptionId()}
 								class={s.rowSwitch}
@@ -169,49 +152,73 @@ export const LocalMcpPanel: Component = () => {
 					</SettingRow>
 				</ExpertSetting>
 				<Show when={nativeToolsLoaded()}>
-					{/* Static, unlike the per-tool names: the one label search can index for this group. */}
 					<div class={s.group}>
 						<label>
-							Native tools <ContextualHelp label="Native tools" />
+							Capabilities <ContextualHelp label="Capabilities" />
 						</label>
-						<p class={s.hint}>
-							Choose which built-in tools MCP clients can call. Disabled tools are hidden from clients.
-						</p>
 					</div>
-					<For each={nativeTools}>
-						{(tool) => {
-							const disabled = () => disabledNativeTools().includes(tool.name);
+					<Show when={migrationUnknownTools().length}>
+						<p role="status" class={s.hint}>
+							Unknown legacy MCP denials need review: {migrationUnknownTools().join(", ")}. These names were retained,
+							not discarded.
+						</p>
+					</Show>
+					<For each={[true, false]}>
+						{(optional) => {
+							const rows = () => capabilities.filter((capability) => capability.optional === optional);
+							const controls = () => (
+								<For each={rows()}>
+									{(capability) => {
+										const disabled = () =>
+											deniedCapabilities().includes(capability.name) ||
+											(capability.name === "settings" && !settingsEnabled());
+										return (
+											<SettingRow label={capability.title} hint={capability.description}>
+												{(id, descriptionId) => (
+													<input
+														data-setting-id="app.mcp_capabilities.denied"
+														id={id}
+														aria-describedby={descriptionId()}
+														class={s.rowSwitch}
+														type="checkbox"
+														aria-label={capability.title}
+														checked={!disabled()}
+														onChange={(event) => {
+															const enabled = event.currentTarget.checked;
+															const updated = enabled
+																? deniedCapabilities().filter((name) => name !== capability.name)
+																: [...deniedCapabilities(), capability.name];
+															setDeniedCapabilities(updated);
+															saveConfigField((config) => {
+																config.mcp_capabilities.denied = updated;
+																if (capability.name === "settings") {
+																	config.settings_mcp_enabled = enabled;
+																	setSettingsEnabled(enabled);
+																}
+															});
+														}}
+													/>
+												)}
+											</SettingRow>
+										);
+									}}
+								</For>
+							);
 							return (
-								<SettingRow label={tool.name} hint={tool.summary} help={tool.description}>
-									{(id, descriptionId) => (
-										<input
-											id={id}
-											aria-describedby={descriptionId()}
-											class={s.rowSwitch}
-											type="checkbox"
-											aria-label={tool.name}
-											checked={!disabled()}
-											onChange={(e) => {
-												const enabled = e.currentTarget.checked;
-												const updated = enabled
-													? disabledNativeTools().filter((n) => n !== tool.name)
-													: [...disabledNativeTools(), tool.name];
-												setDisabledNativeTools(updated);
-												saveConfigField((c) => {
-													c.disabled_native_tools = updated;
-												});
-											}}
-										/>
+								<Show when={rows().length}>
+									{optional ? (
+										controls()
+									) : (
+										<details class={s.group}>
+											<summary>Additional restrictions</summary>
+											{controls()}
+										</details>
 									)}
-								</SettingRow>
+								</Show>
 							);
 						}}
 					</For>
 				</Show>
-
-				<p class={s.hint} style={{ "margin-top": "16px", color: "var(--text-dimmed)" }}>
-					{t("services.hint.autoSave", "Settings are saved automatically when changed")}
-				</p>
 			</SectionCard>
 		</div>
 	);

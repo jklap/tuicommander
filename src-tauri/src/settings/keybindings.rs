@@ -70,7 +70,6 @@ pub(super) fn register(cat: &mut Catalogue) -> Result<(), CatalogueError> {
         Some(&Bindings::default()),
         Availability::Available,
     )?;
-    // DEFERRED (2026-10-15) — frontend-registered plugin actions; bound in Step 9 UI parity.
     cat.fields
         .get_mut("keybindings.bindings.{action}.action")
         .expect("action descriptor")
@@ -78,7 +77,7 @@ pub(super) fn register(cat: &mut Catalogue) -> Result<(), CatalogueError> {
         resolver: "keybinding_actions".into(),
         values: None,
         availability: Availability::Unavailable {
-            reason: "frontend-registered plugin actions; bound in Step 9 UI parity".into(),
+            reason: "no frontend has published its registered plugin actions".into(),
         },
     });
     Ok(())

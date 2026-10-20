@@ -408,8 +408,10 @@ export interface AgentSettingsConfig {
 	skip_trust_dialog?: boolean;
 	ego_mode?: EgoPermissionMode;
 	ego_sandbox?: EgoSandbox;
-	/** Launch instructions for this agent; overrides the global text. Empty turns them off. */
+	/** User additions appended after generated modules and global additions. */
 	launch_instructions?: string;
+	launch_modules?: Record<string, boolean>;
+	launch_instructions_disabled?: boolean;
 }
 
 /** Install state of an agent's TUIC hooks (mirrors Rust `InstallState::as_str`). */
@@ -417,13 +419,16 @@ export type AgentHookState = "installed" | "outdated" | "notInstalled" | "unsupp
 
 /** Full agents config (matches Rust AgentsConfig) */
 export interface AgentsConfig {
+	launch_additions_migrated?: boolean;
 	hibernate_idle_minutes?: number;
 	hibernate_scope?: "background_only" | "always";
 	agents: Record<string, AgentSettingsConfig>;
 	/** Which agent CLI to use for headless prompt execution when no agent is in the active terminal */
 	headless_agent?: HeadlessAgentChoice;
-	/** Launch instructions for every agent; undefined = the shipped default. */
+	/** User additions appended after generated modules for every agent. */
 	launch_instructions?: string;
+	launch_modules?: Record<string, boolean>;
+	launch_instructions_disabled?: boolean;
 }
 
 /** A headless agent: a plain agent type, or `<agent>:<run config name>`
@@ -491,20 +496,20 @@ export const HOOK_SUPPORT: Record<AgentType, boolean> = {
 };
 
 /** Agent display info for UI */
-export const AGENT_DISPLAY: Record<AgentType, { icon: string; color: string }> = {
-	claude: { icon: "C", color: "#d97706" },
-	gemini: { icon: "G", color: "#4285f4" },
-	opencode: { icon: "O", color: "#10a37f" },
-	codex: { icon: "X", color: "#ffffff" },
-	amp: { icon: "A", color: "#ff5543" },
-	cursor: { icon: "C", color: "#000000" },
-	goose: { icon: "G", color: "#f59e0b" },
-	grok: { icon: "G", color: "#1a1a1a" },
-	droid: { icon: "D", color: "#f97316" },
-	pi: { icon: "π", color: "#c4a7e7" },
-	ego: { icon: "ɛ", color: "#38bdf8" },
-	git: { icon: "G", color: "#f05032" },
-	api: { icon: "⚡", color: "#06b6d4" },
+export const AGENT_DISPLAY: Record<AgentType, { icon: string; color: string; foreground: string }> = {
+	claude: { icon: "C", color: "#d97706", foreground: "var(--identity-on-light)" },
+	gemini: { icon: "G", color: "#4285f4", foreground: "var(--identity-on-light)" },
+	opencode: { icon: "O", color: "#10a37f", foreground: "var(--identity-on-light)" },
+	codex: { icon: "X", color: "#ffffff", foreground: "var(--identity-on-light)" },
+	amp: { icon: "A", color: "#ff5543", foreground: "var(--identity-on-light)" },
+	cursor: { icon: "C", color: "#000000", foreground: "var(--identity-on-dark)" },
+	goose: { icon: "G", color: "#f59e0b", foreground: "var(--identity-on-light)" },
+	grok: { icon: "G", color: "#1a1a1a", foreground: "var(--identity-on-dark)" },
+	droid: { icon: "D", color: "#f97316", foreground: "var(--identity-on-light)" },
+	pi: { icon: "π", color: "#c4a7e7", foreground: "var(--identity-on-light)" },
+	ego: { icon: "ɛ", color: "#38bdf8", foreground: "var(--identity-on-light)" },
+	git: { icon: "G", color: "#f05032", foreground: "var(--identity-on-light)" },
+	api: { icon: "⚡", color: "#06b6d4", foreground: "var(--identity-on-light)" },
 };
 
 /** Preserve the actual modified key for an unknown foreground program. Never

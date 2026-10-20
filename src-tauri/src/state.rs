@@ -362,6 +362,8 @@ pub enum AppEvent {
     /// every save — including the client that just wrote it.
     #[serde(rename = "repositories-changed")]
     RepositoriesChanged,
+    #[serde(rename = "settings-changed")]
+    SettingsChanged(crate::settings::changes::SettingsChanged),
     #[serde(rename = "open-markdown-tabs-changed")]
     OpenMarkdownTabsChanged,
     /// Directory contents changed (non-git filesystem watcher)
@@ -828,7 +830,7 @@ pub(crate) fn resolve_choice_prompt_input(state: &AppState, session_id: &str, da
             }
             || match prompt.amend_key.as_deref() {
                 Some("amend") => data == "\t",
-                Some("alt+down") => data == "\x1b[1;3B",
+                Some("shift+right") => data == "\x1b[1;2C",
                 _ => false,
             };
         if !resolves {
@@ -1685,6 +1687,8 @@ pub(crate) struct AgentDeliveryGate {
     orchestrator_wake_attempt: u64,
     orchestrator_wake_attempts_in_group: u8,
     inbox_revision: u64,
+    eviction_watermark: u64,
+    acknowledged_eviction_watermark: u64,
     inbox_events: tokio::sync::watch::Sender<u64>,
 }
 
@@ -1702,6 +1706,8 @@ impl Default for AgentDeliveryGate {
             orchestrator_wake_attempt: 0,
             orchestrator_wake_attempts_in_group: 0,
             inbox_revision: 0,
+            eviction_watermark: 0,
+            acknowledged_eviction_watermark: 0,
             inbox_events,
         }
     }
@@ -1800,6 +1806,8 @@ pub(crate) const MONITORING_GIT_CONCURRENCY: usize = 8;
 /// Every field is constructible without arguments, so the group carries its own
 /// `Default` and `AppState::new` names it once instead of seven times.
 pub(crate) struct GitHubState {
+    pub(crate) login_epoch: std::sync::atomic::AtomicU64,
+    pub(crate) login_commit: tokio::sync::Mutex<()>,
     /// GitHub API token — updated on fallback when a 401 triggers candidate rotation
     pub(crate) token: parking_lot::RwLock<Option<String>>,
     /// Where the current GitHub token came from (env, OAuth keyring, gh CLI)
@@ -1826,6 +1834,8 @@ pub(crate) struct GitHubState {
 impl Default for GitHubState {
     fn default() -> Self {
         Self {
+            login_epoch: std::sync::atomic::AtomicU64::new(0),
+            login_commit: tokio::sync::Mutex::new(()),
             token: parking_lot::RwLock::new(None),
             token_source: parking_lot::RwLock::new(Default::default()),
             disconnected: std::sync::atomic::AtomicBool::new(false),
@@ -1842,6 +1852,8 @@ impl Default for GitHubState {
 /// The MCP half of [`AppState`] (#678-9a75): Streamable-HTTP sessions, the
 /// upstream proxy registry, OAuth flows, and the tool-search index they feed.
 pub struct McpState {
+    pub(crate) call_audit: parking_lot::Mutex<crate::mcp_http::mcp_call_audit::Audit>,
+    pub(crate) response_pages: parking_lot::Mutex<crate::mcp_http::response_pages::ResponsePages>,
     /// Active MCP Streamable HTTP sessions (session_id -> metadata for TTL reaping + client identity)
     pub sessions: DashMap<String, McpSessionMeta>,
     /// Upstream MCP proxy registry — aggregates tools from all connected upstreams.
@@ -1872,6 +1884,8 @@ pub struct McpState {
 impl Default for McpState {
     fn default() -> Self {
         Self {
+            call_audit: parking_lot::Mutex::default(),
+            response_pages: parking_lot::Mutex::default(),
             sessions: DashMap::new(),
             upstream_registry: Arc::new(crate::mcp_proxy::registry::UpstreamRegistry::new()),
             oauth_flow_manager: Arc::new(crate::mcp_oauth::flow::OAuthFlowManager::new()),
@@ -2235,6 +2249,7 @@ pub struct AppState {
     /// Populated by the frontend via `register_loaded_plugin` on plugin load.
     /// Used by Rust plugin commands to enforce capability checks server-side.
     pub(crate) loaded_plugins: DashMap<String, Vec<String>>,
+    pub(crate) plugin_http_requests: crate::plugin_http::HttpRequests,
     pub(crate) plugin_settings: crate::settings::plugins::PluginSettings,
     /// Compiled plugin OutputWatcher patterns, one set per connected frontend,
     /// pushed via `set_plugin_output_watchers`. The PTY reader assembles lines
@@ -2272,6 +2287,7 @@ pub struct AppState {
     /// the position instead: an omitted `since` resumes from here, an explicit one
     /// overrides it, and `since=0` stays the deliberate replay escape hatch.
     pub(crate) agent_read_cursor: DashMap<String, u64>,
+    pub(crate) mail_subscriptions: crate::mail_subscriptions::MailSubscriptions,
     /// Server notices, initial prompts and Compose commands waiting for a
     /// recipient's next safe idle window. Entries share one typed FIFO so
     /// delivery order is global. Peer `send` payloads are never in here — see
@@ -2284,6 +2300,7 @@ pub struct AppState {
     /// leaves the prompt in place so a child that was blocked on a startup
     /// dialog still receives it when it becomes ready.
     pub(crate) pending_initial_prompts: DashMap<String, PendingInitialPrompt>,
+    pub(crate) launch_transaction_lock: tokio::sync::Mutex<()>,
     /// Claude MCP children allowed to answer their one startup trust dialog.
     pub(crate) managed_trust_dialogs: DashSet<String>,
     /// Per-peer atomic handoff between blocking waiters and terminal delivery.
@@ -2361,6 +2378,8 @@ pub struct AppState {
     /// able to unblock an agent that a native desktop dialog would have pinned to
     /// whoever is sitting at the machine.
     pub(crate) settings_policy: Arc<crate::settings::policy::Policy>,
+    pub(crate) settings_api: tokio::sync::OnceCell<crate::settings::api::Settings>,
+    pub(crate) plugin_keybinding_actions: Arc<parking_lot::RwLock<Option<Vec<String>>>>,
     pub(crate) confirm_responses: DashMap<String, tokio::sync::oneshot::Sender<bool>>,
     /// App-wide process-tree snapshot shared by agent lifecycle polling.
     pub(crate) process_snapshot_cache: crate::pty::ProcessSnapshotCache,
@@ -2659,11 +2678,14 @@ impl AppState {
                 })
             });
             let stored_timestamp = msg.timestamp;
+            self.mail_subscriptions
+                .append(&self.data_dir, recipient, &msg);
             inbox.push_back(msg);
             (evicted, stored_timestamp)
         };
         if let Some((evicted_id, evicted_through, missed)) = evicted {
             if missed {
+                gate.eviction_watermark = gate.eviction_watermark.saturating_add(1);
                 *self
                     .agent_inbox_evictions
                     .entry(recipient.to_string())
@@ -2677,6 +2699,31 @@ impl AppState {
         let revision = gate.inbox_revision;
         gate.inbox_events.send_replace(revision);
         stored_timestamp
+    }
+
+    pub(crate) fn add_inbox_evictions(&self, recipient: &str, count: u64) {
+        let entry = self
+            .active_agent_waiters
+            .entry(recipient.to_string())
+            .or_default();
+        let mut gate = entry.lock();
+        gate.eviction_watermark = gate.eviction_watermark.saturating_add(count);
+        let mut pending = self
+            .agent_inbox_evictions
+            .entry(recipient.to_string())
+            .or_default();
+        *pending = pending.saturating_add(count);
+    }
+
+    pub(crate) fn notify_mail_subscription_change(&self, recipient: &str) {
+        let entry = self
+            .active_agent_waiters
+            .entry(recipient.to_owned())
+            .or_default();
+        let mut gate = entry.lock();
+        gate.inbox_revision = gate.inbox_revision.wrapping_add(1);
+        let revision = gate.inbox_revision;
+        gate.inbox_events.send_replace(revision);
     }
 
     /// Hear every change to one peer's inbox without waiting on it.
@@ -3181,6 +3228,18 @@ impl AppState {
         since: u64,
         limit: usize,
     ) -> (Vec<AgentMessage>, bool, u64) {
+        let (messages, has_more, missed_count, _) =
+            self.read_agent_inbox(tuic_session, since, limit, true);
+        (messages, has_more, missed_count)
+    }
+
+    pub(crate) fn read_agent_inbox(
+        &self,
+        tuic_session: &str,
+        since: u64,
+        limit: usize,
+        acknowledge: bool,
+    ) -> (Vec<AgentMessage>, bool, u64, u64) {
         let gate_entry = self
             .active_agent_waiters
             .entry(tuic_session.to_string())
@@ -3202,30 +3261,132 @@ impl AppState {
         if has_more {
             messages.pop();
         }
+        if !acknowledge {
+            let missed_count = self
+                .agent_inbox_evictions
+                .get(tuic_session)
+                .map(|n| *n)
+                .unwrap_or(0);
+            return (messages, has_more, missed_count, gate.eviction_watermark);
+        }
         let missed_count = self
             .agent_inbox_evictions
             .remove(tuic_session)
             .map(|(_, count)| count)
             .unwrap_or(0);
+        gate.acknowledged_eviction_watermark = gate.eviction_watermark;
         let read_through = messages
             .iter()
             .map(|message| message.timestamp)
             .max()
             .unwrap_or(since);
+        let message_ids: Vec<_> = messages.iter().map(|message| message.id.clone()).collect();
+        self.acknowledge_agent_snapshot_locked(
+            tuic_session,
+            read_through,
+            &message_ids,
+            true,
+            &mut gate,
+        );
+        (messages, has_more, missed_count, gate.eviction_watermark)
+    }
+
+    /// Durable ACK and live delivery observation share the recipient gate used by
+    /// insertions and snapshot ACKs. Independent subscriptions never advance the
+    /// legacy read cursor or acknowledge its separate loss watermark.
+    pub(crate) fn apply_mail_subscription_action(
+        &self,
+        peer: &str,
+        args: &serde_json::Value,
+    ) -> serde_json::Value {
+        let entry = self
+            .active_agent_waiters
+            .entry(peer.to_owned())
+            .or_default();
+        let mut gate = entry.lock();
+        let (reply, observed) =
+            self.mail_subscriptions
+                .action_with_observation(&self.data_dir, peer, args);
+        if !observed.is_empty() {
+            self.acknowledge_agent_snapshot_locked(peer, 0, &observed, false, &mut gate);
+        }
+        reply
+    }
+
+    /// A byte-paged read acknowledges only the immutable snapshot, never newer mail.
+    pub(crate) fn acknowledge_agent_snapshot(
+        &self,
+        tuic_session: &str,
+        cursor: u64,
+        message_ids: &[String],
+        eviction_watermark: u64,
+    ) {
+        let entry = self
+            .active_agent_waiters
+            .entry(tuic_session.to_string())
+            .or_default();
+        let mut gate = entry.lock();
+        // Overlapping snapshots may acknowledge the same historical losses. Only
+        // the newly covered watermark range may clear the live pending counter.
+        let newly_acknowledged =
+            eviction_watermark.saturating_sub(gate.acknowledged_eviction_watermark);
+        if let Some(mut count) = self.agent_inbox_evictions.get_mut(tuic_session) {
+            *count = count.saturating_sub(newly_acknowledged);
+        }
+        gate.acknowledged_eviction_watermark =
+            gate.acknowledged_eviction_watermark.max(eviction_watermark);
+        self.acknowledge_agent_snapshot_locked(tuic_session, cursor, message_ids, true, &mut gate);
+    }
+
+    fn acknowledge_agent_snapshot_locked(
+        &self,
+        tuic_session: &str,
+        mut read_through: u64,
+        message_ids: &[String],
+        advance_legacy_cursor: bool,
+        gate: &mut AgentDeliveryGate,
+    ) {
         // Publish the read position while holding the delivery gate. A sender
         // cannot see a full inbox between this observation and cursor advancement.
-        let mut cursor = self
-            .agent_read_cursor
-            .entry(tuic_session.to_string())
-            .or_insert(0);
-        if read_through > *cursor {
-            *cursor = read_through;
+        if advance_legacy_cursor {
+            let mut cursor = self
+                .agent_read_cursor
+                .entry(tuic_session.to_string())
+                .or_insert(0);
+            if read_through > *cursor {
+                *cursor = read_through;
+            }
         }
         // Reading is delivery, even when a terminal wake was queued first or a
         // sender has buffered mail but has not yet assigned its wake owner.
-        for message in &messages {
-            gate.owners
-                .insert(message.id.clone(), AgentDeliveryOwner::WaiterObserved);
+        for id in message_ids {
+            if advance_legacy_cursor
+                || self
+                    .agent_inbox
+                    .get(tuic_session)
+                    .is_some_and(|inbox| inbox.iter().any(|message| message.id == *id))
+            {
+                gate.owners
+                    .insert(id.clone(), AgentDeliveryOwner::WaiterObserved);
+            }
+        }
+        if !advance_legacy_cursor {
+            // Filtered ACKs prove delivery only for their IDs. Advance the wake
+            // observation through the contiguous observed prefix, not past gaps.
+            read_through = self
+                .agent_inbox
+                .get(tuic_session)
+                .and_then(|inbox| {
+                    inbox
+                        .iter()
+                        .take_while(|message| {
+                            gate.owners.get(&message.id)
+                                == Some(&AgentDeliveryOwner::WaiterObserved)
+                        })
+                        .last()
+                        .map(|message| message.timestamp)
+                })
+                .unwrap_or(0);
         }
         gate.urgent_notices
             .retain(|_, notice| notice.through > read_through);
@@ -3243,14 +3404,14 @@ impl AppState {
             });
         }
         gate.orchestrator_observed_through = gate.orchestrator_observed_through.max(read_through);
-        if read_through == 0
+        if (advance_legacy_cursor && read_through == 0)
             || gate
                 .orchestrator_wake_pending_through
                 .is_some_and(|pending| read_through >= pending)
         {
             gate.orchestrator_wake_pending_through = None;
         }
-        if read_through == 0
+        if (advance_legacy_cursor && read_through == 0)
             || gate
                 .orchestrator_wake_needed_through
                 .is_some_and(|needed| read_through >= needed)
@@ -3258,7 +3419,6 @@ impl AppState {
             gate.orchestrator_wake_needed_through = None;
         }
         gate.reset_orchestrator_wake_budget_if_observed();
-        (messages, has_more, missed_count)
     }
 
     /// Record one marker emission or one submitted turn for `session_id`.
@@ -3543,7 +3703,7 @@ impl AppState {
             .expect("monitoring_git_sem is never closed")
     }
 
-    pub fn new(
+    pub(crate) fn new(
         data_dir: PathBuf,
         worktrees_dir: PathBuf,
         config: crate::config::AppConfig,
@@ -3616,6 +3776,7 @@ impl AppState {
             index_build_sem: Arc::new(tokio::sync::Semaphore::new(1)),
             monitoring_git_sem: Arc::new(tokio::sync::Semaphore::new(MONITORING_GIT_CONCURRENCY)),
             loaded_plugins: DashMap::new(),
+            plugin_http_requests: Default::default(),
             plugin_settings: Default::default(),
             plugin_output_watchers: parking_lot::RwLock::new(Default::default()),
             relay: RelayState::new(),
@@ -3625,9 +3786,11 @@ impl AppState {
             agent_inbox: DashMap::new(),
             agent_inbox_evictions: DashMap::new(),
             agent_read_cursor: DashMap::new(),
+            mail_subscriptions: Default::default(),
             pending_injections: DashMap::new(),
             recent_queue_keys: DashMap::new(),
             pending_initial_prompts: DashMap::new(),
+            launch_transaction_lock: tokio::sync::Mutex::new(()),
             managed_trust_dialogs: DashSet::new(),
             active_agent_waiters: DashMap::new(),
             orchestrator_peers: DashSet::new(),
@@ -3655,6 +3818,8 @@ impl AppState {
             suspend_lock: Mutex::new(()),
             hibernated_peers: dashmap::DashSet::new(),
             settings_policy: Arc::new(crate::settings::policy::Policy::default()),
+            settings_api: tokio::sync::OnceCell::new(),
+            plugin_keybinding_actions: Default::default(),
             confirm_responses: DashMap::new(),
             process_snapshot_cache: crate::pty::ProcessSnapshotCache::default(),
             hot_repo_paths: parking_lot::RwLock::new(std::collections::HashSet::new()),
@@ -3666,6 +3831,9 @@ impl AppState {
     /// Wire event bus and MCP registry after construction.
     /// Must be called after wrapping in `Arc`.
     pub fn wire_event_bus(self: &Arc<Self>) {
+        let settings_publisher = crate::settings::changes::Publisher::new(self);
+        *self.mcp.upstream_registry.settings_publisher.write() = settings_publisher.clone();
+        *self.mcp.oauth_flow_manager.settings_publisher.write() = settings_publisher;
         self.mcp
             .upstream_registry
             .set_event_bus(self.event_bus.clone());
@@ -4434,6 +4602,23 @@ impl AppState {
         }
     }
 
+    /// Dual-emit the same value-free payload; there is no bus-to-window forwarder.
+    pub(crate) fn publish_settings_changed(
+        &self,
+        notice: crate::settings::changes::SettingsChanged,
+    ) {
+        if matches!(notice.section.as_str(), "voice" | "telegram") {
+            let _ = self.mcp.tools_changed.send(());
+        }
+        let _ = self
+            .event_bus
+            .send(AppEvent::SettingsChanged(notice.clone()));
+        #[cfg(feature = "desktop")]
+        if let Some(app) = self.app_handle.read().as_ref() {
+            let _ = app.emit("settings-changed", &notice);
+        }
+    }
+
     /// Default rate limit expiry when no retry_after_ms is provided (120s).
     const RATE_LIMIT_DEFAULT_EXPIRY_MS: u64 = 120_000;
 
@@ -4491,7 +4676,14 @@ impl AppState {
                         silence.completion_declared_for_epoch(state.turn_epoch)
                     }
                 });
-        let background_work = state.has_pending_background_probe() || state.background_work;
+        // Ego reports turn boundaries through OSC 7770. Descendants (including
+        // pending background jobs) describe process ownership, not an active turn.
+        // Keep that metadata for suspend/standby safety, but never promote a
+        // confirmed idle ego turn back to working because of those processes.
+        let ego_turn_idle = state.agent_type.as_deref() == Some("ego")
+            && state.shell_state.as_deref() == Some("idle");
+        let background_work =
+            !ego_turn_idle && (state.has_pending_background_probe() || state.background_work);
         // A current-turn completion marker is stronger than a stale BUSY atom
         // (for example a completed Codex screen that still contains its last
         // Working row). Keep real background work authoritative, but normalize
@@ -4770,9 +4962,29 @@ impl AppState {
         });
     }
 
-    /// Send a push notification to all mobile subscribers, deep-linking a session.
-    fn send_mobile_push(state: &Arc<AppState>, session_id: &str, body: &str) {
-        Self::send_mobile_push_url(state, format!("/mobile/session/{session_id}"), body);
+    /// Send a push with a readable label while retaining the PTY navigation id.
+    fn send_mobile_push(state: &Arc<AppState>, session_id: &str, prompt: &str) {
+        let identity = state.session_maps.sessions.get(session_id).map(|session| {
+            let session = session.lock();
+            (
+                session.display_name.clone(),
+                session.initial_cwd.clone().or_else(|| session.cwd.clone()),
+            )
+        });
+        let agent_type = state
+            .session_maps
+            .session_states
+            .get(session_id)
+            .and_then(|session| session.agent_type.clone());
+        let (name, cwd) = identity.unwrap_or_default();
+        let (body, url) = crate::push::session_push_payload(
+            session_id,
+            name.as_deref(),
+            agent_type.as_deref(),
+            cwd.as_deref(),
+            prompt,
+        );
+        Self::send_mobile_push_url(state, url, &body);
     }
 
     /// Send a push notification to all mobile subscribers at an arbitrary deep link.
@@ -5260,17 +5472,7 @@ impl AppState {
 
                 // Spawn push notification outside the DashMap lock
                 if let Some((sid, prompt)) = push_data {
-                    let session_name = state
-                        .session_maps.sessions
-                        .get(&sid)
-                        .and_then(|s| s.value().lock().display_name.clone())
-                        .unwrap_or_else(|| sid.clone());
-                    let body = if prompt.is_empty() {
-                        format!("{session_name}: awaiting input")
-                    } else {
-                        format!("{session_name}: {prompt}")
-                    };
-                    Self::send_mobile_push(state, &sid, &body);
+                    Self::send_mobile_push(state, &sid, &prompt);
                 }
             }
             AppEvent::PtyExit { session_id } => {
@@ -5317,16 +5519,7 @@ impl AppState {
                     }
                 }
                 if should_push {
-                    let session_name = state
-                        .session_maps.sessions
-                        .get(session_id)
-                        .and_then(|s| s.value().lock().display_name.clone())
-                        .unwrap_or_else(|| session_id.clone());
-                    Self::send_mobile_push(
-                        state,
-                        session_id,
-                        &format!("{session_name}: completed"),
-                    );
+                    Self::send_mobile_push(state, session_id, "completed");
                 }
             }
             // Global events don't affect per-session state
@@ -5340,6 +5533,7 @@ impl AppState {
             | AppEvent::McpConfirm { .. }
             | AppEvent::McpConfirmResolved { .. }
             | AppEvent::OpenMarkdownTabsChanged
+            | AppEvent::SettingsChanged(_)
             | AppEvent::RepositoriesChanged
             | AppEvent::DirChanged { .. }
             | AppEvent::SessionWorktreeDeclared { .. }
@@ -10545,40 +10739,42 @@ mod tests {
 
     #[test]
     fn test_codex_choice_prompt_uses_its_own_exit_keys() {
-        let state = fresh_state();
-        apply(
-            &state,
-            &make_parsed(
-                "choice-prompt",
-                serde_json::json!({
-                    "title": "Boss, scegli rosso o blu?",
-                    "options": [{"key": "2", "label": "Blu", "highlighted": false, "destructive": false}],
-                    "dismiss_key": "ctrl+]",
-                    "amend_key": "alt+down"
-                }),
-            ),
-        );
-        assert!(!resolve_choice_prompt_input(&state, "s1", "\x1b"));
-        assert!(!resolve_choice_prompt_input(&state, "s1", "\t"));
-        assert!(
-            state
-                .session_maps
-                .session_states
-                .get("s1")
-                .unwrap()
-                .choice_prompt
-                .is_some()
-        );
-        assert!(resolve_choice_prompt_input(&state, "s1", "\x1d"));
-        assert!(
-            state
-                .session_maps
-                .session_states
-                .get("s1")
-                .unwrap()
-                .choice_prompt
-                .is_none()
-        );
+        for exit_key in ["\x1d", "\x1b[1;2C"] {
+            let state = fresh_state();
+            apply(
+                &state,
+                &make_parsed(
+                    "choice-prompt",
+                    serde_json::json!({
+                        "title": "Pick a color.",
+                        "options": [{"key": "2", "label": "Blue", "highlighted": false, "destructive": false}],
+                        "dismiss_key": "ctrl+]",
+                        "amend_key": "shift+right"
+                    }),
+                ),
+            );
+            assert!(!resolve_choice_prompt_input(&state, "s1", "\x1b"));
+            assert!(!resolve_choice_prompt_input(&state, "s1", "\t"));
+            assert!(
+                state
+                    .session_maps
+                    .session_states
+                    .get("s1")
+                    .unwrap()
+                    .choice_prompt
+                    .is_some()
+            );
+            assert!(resolve_choice_prompt_input(&state, "s1", exit_key));
+            assert!(
+                state
+                    .session_maps
+                    .session_states
+                    .get("s1")
+                    .unwrap()
+                    .choice_prompt
+                    .is_none()
+            );
+        }
     }
 
     #[test]
@@ -10721,6 +10917,63 @@ mod tests {
         let snapshot = state.session_state_with_shell("s1").unwrap();
         assert_eq!(snapshot.shell_state.as_deref(), Some("idle"));
         assert_eq!(snapshot.agent_state.as_deref(), Some("completed"));
+    }
+
+    #[test]
+    fn ego_idle_turn_is_not_latched_working_by_background_processes_2018() {
+        // Live fb2bdba2: ego-idle-background-2018.raw records state=idle and
+        // the ready composer; its shared snapshot still had background_work=true.
+        for pending_probe in [false, true] {
+            let state = fresh_state();
+            {
+                let mut session = state.session_maps.session_states.get_mut("s1").unwrap();
+                session.agent_type = Some("ego".into());
+                session.background_work = !pending_probe;
+                if pending_probe {
+                    session.background_probe_turn_epoch = Some(session.turn_epoch);
+                }
+            }
+            state.session_maps.shell_states.insert(
+                "s1".into(),
+                std::sync::atomic::AtomicU8::new(crate::pty::SHELL_IDLE),
+            );
+
+            let snapshot = state.session_state_with_shell("s1").unwrap();
+            assert_eq!(snapshot.agent_state.as_deref(), Some("idle"));
+            assert_eq!(snapshot.shell_state.as_deref(), Some("idle"));
+            // Background ownership still protects suspend/standby safety.
+            assert_eq!(snapshot.background_work, !pending_probe);
+            assert_eq!(snapshot.has_pending_background_probe(), pending_probe);
+        }
+    }
+
+    #[test]
+    fn ego_background_does_not_hide_active_turn_or_question_2018() {
+        for awaiting in [false, true] {
+            let state = fresh_state();
+            {
+                let mut session = state.session_maps.session_states.get_mut("s1").unwrap();
+                session.agent_type = Some("ego".into());
+                session.background_work = true;
+                session.awaiting_input = awaiting;
+            }
+            state.session_maps.shell_states.insert(
+                "s1".into(),
+                std::sync::atomic::AtomicU8::new(crate::pty::SHELL_BUSY),
+            );
+            assert_eq!(
+                state
+                    .session_state_with_shell("s1")
+                    .unwrap()
+                    .agent_state
+                    .as_deref(),
+                Some(if awaiting {
+                    "awaiting_input"
+                } else {
+                    "working"
+                }),
+            );
+        }
     }
 
     #[test]

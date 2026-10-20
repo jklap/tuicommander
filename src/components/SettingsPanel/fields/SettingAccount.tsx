@@ -51,6 +51,7 @@ export const SettingAccount: Component<SettingAccountProps> = (props) => {
 				<div class={s.list}>
 					<div class={s.row}>
 						<Select
+							data-setting-id={props.settingId ?? props["data-setting-id"]}
 							id={id}
 							value={selectedAccount()}
 							aria-describedby={hintId}

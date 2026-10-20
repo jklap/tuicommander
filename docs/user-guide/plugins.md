@@ -46,6 +46,35 @@ GitHub Work, Jira and GitLab use Tasks-owned `data/work-items.json` for provider
 If an older GitHub Work installation reports `Configurable plugin requires a settings schema`, first install the app and plugin versions that use `work-items.json`. With the app stopped, back up the old `data/config.json` and move it to `data/work-items.json` in that plugin's installed directory. Do not overwrite an existing destination or change the file contents. Restart the app and check that the plugin loads. This is a one-time operator action; the app does not read the old file as a fallback.
 
 
+### GitHub Work post-login verification
+
+The account HTTP port, runtime catalog and account-scoped B6/B7 ports are already integrated. A recorded-fixture pass is not proof of desktop loading or a successful account login.
+
+An operator can run a read-only check after login:
+
+1. Start a **separate desktop verification instance** with `TUIC_APP_INSTANCE=github-work-check`. Do this only when you can release the global dictation shortcut and microphone. An agent must not start a second desktop app. Do not use the production instance or its sessions.
+2. In that instance, install and enable GitHub Work. Complete GitHub device-flow login in Settings, with `repo read:project` consent. Configure the account and repository in Tasks. An old authorization without Projects access needs new consent.
+3. Select an accessible issue URL, PR URL and Projects v2 node ID (`PVT_...`). The project must have a single-select Status field. Confirm the verification instance's HTTP port; it must not be `9876`.
+4. Set these non-secret values once in your shell:
+
+   ```sh
+   export GH_WORK_CHECK_URL=http://127.0.0.1:9877
+   export GH_WORK_CHECK_ACCOUNT=github.com
+   export GH_WORK_CHECK_ISSUE=https://github.com/OWNER/REPO/issues/NUMBER
+   export GH_WORK_CHECK_PR=https://github.com/OWNER/REPO/pull/NUMBER
+   export GH_WORK_CHECK_PROJECT=PVT_REPLACE_WITH_PROJECT_NODE_ID
+   ```
+
+After login and setup, the check is one command from the checkout:
+
+```sh
+node scripts/github-work-live-check.mjs "$GH_WORK_CHECK_URL" "$GH_WORK_CHECK_ACCOUNT" "$GH_WORK_CHECK_ISSUE" "$GH_WORK_CHECK_PR" "$GH_WORK_CHECK_PROJECT" --isolated-desktop
+```
+
+The explicit flag confirms that the selected port belongs to the isolated desktop; the script cannot identify an instance from its port alone. The script refuses port `9876` and non-loopback URLs. It does not start an app, inspect credential stores, authenticate or change GitHub data. It checks the real desktop plugin loaded state, then imports a fresh installed module graph and uses temporary local registrations with the real Rust account ports. This is not a second activation of the installed plugin. It reads search, issue/PR detail, bounded comment pages, duplicate candidates, B6 threads, B7 action state and Projects board/roadmap data. It allows at most 24 port calls and waits at most 90 seconds for its result. The report contains check names and counts, not response bodies or credentials. Exit `0` means these reads passed; exit `1` identifies the failed stage; exit `2` means invalid arguments. A timeout does not cancel an in-flight backend read.
+
+This probe does **not** prove Tasks rendering, the actual Tasks registry's unload cleanup, start-work delivery or live mutations. Those remain separate checks. Shut down only the verification instance when finished. Until the operator runs it, the account/desktop integration criterion remains unchecked.
+
 ### Settings → Plugins → Installed
 
 The Installed tab lists all installed plugins:
@@ -167,3 +196,15 @@ Tasks small-list mode (#1851-7ade): when the provider reports at most 1,000 matc
 GitHub Tasks boards (#1846-55d7): the optional provider `listBoards(signal)` port discovers the current user Projects v2 when Board opens. The existing picker selects a project; paging preserves project identities. Missing `read:project` stays visible instead of claiming there are no boards. Providers without discovery retain their configured boards. Discovery does not persist selections or write to GitHub.
 
 Async plugin startup completes before the plugin is marked as loaded. Startup failures appear in the plugin error state and its log. Disabling or reloading a plugin cancels its startup lifetime and prevents late registrations from the old host.
+
+Cancelling Jira URL resolution stops its in-flight HTTP requests. Plugins can also cancel their own HTTP requests; unloading a plugin cancels its active requests.
+
+Jira and GitLab expose a default project in their schema-driven plugin settings page. Jira uses a project ID; GitLab accepts a project path or ID. A project saved for an account in Tasks setup takes precedence. The default applies after the plugin reloads; empty means no fallback project. Account bindings remain in `data/work-items.json`, while these defaults use the settings service in `data/config.json`.
+
+### Same-version updates
+
+An Update badge can also mean that installed payload files differ from the
+catalogue at the same version. User settings in `data/` do not cause this badge.
+The app computes installed identity when it discovers plugins; Refresh updates
+the catalogue. Older catalogue entries without a payload digest use version-only
+comparison. A newer locally installed version is not downgraded.

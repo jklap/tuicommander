@@ -11,7 +11,24 @@ Answers-only history includes a retained prompt-less prefix before the first tra
 
 Submitted prompts are not tinted in the terminal grid. Recorded `userPromptLines` still drive scrollbar ticks and answers-only turn grouping; Chat user messages retain the theme prompt tint and gutter.
 
-Adjacent `💬` answer paragraphs share one continuous tint and left bar, including blank rows between them. An unmarked prose paragraph after a blank row ends the answer; an uninterrupted indented continuation stays inside. Lists, tables, quotations and fenced code remain attached to the answer. A non-answer output row or prompt ends the region. The CLI blanks only the marker glyph cells; copy, selection and search keep the original text. Chat uses the same answer extent and strips every paragraph marker.
+Adjacent `💬` answer paragraphs share one continuous tint and left bar, including blank rows between them. An unmarked prose paragraph after a blank row ends the answer; an uninterrupted indented continuation stays inside. The CLI gutter joins separate marked answer sections across internal blank rows and indented section headings when a later marked answer closes the gap. Trailing unmarked prose, unmarked list siblings, tools, prompts and status rows stay outside that gutter; extracted Answers and Chat keep their semantic paragraph boundaries. Lists, tables, quotations and fenced code remain attached to the answer. A non-answer output row or prompt ends the region. The CLI blanks only the marker glyph cells; selection and search retain their grid coordinates. Clipboard copy removes answer-prefix markers through the same helper used by AI Chat answer buttons (including mobile) and selectable Answers text. Inline emoji and fenced examples stay literal. Chat uses the same answer extent and strips every paragraph marker. User prompt echoes do not open answer regions: indented quoted markers stay in the prompt until an agent output bullet or an unindented answer marker begins output.
+
+## Incremental base-grid painting
+
+Whole-row forward viewport movement can copy retained base-canvas pixels once.
+The renderer compares all retained cells before reusing them and repaints changed
+or newly exposed rows. Geometry, font, theme, explicit invalidation and hidden
+marker layouts disable the copy. Full wire frames replace decoded state without
+forcing a full canvas clear. Overlay painting remains independent. Workload
+recordings include the optional absolute viewport origin for the same replay path;
+older recordings remain readable without scroll reuse.
+
+Dirty rows are compared as cells, including colors, attributes and combining
+content. Unchanged rows do not paint. In-place changes repaint a clipped column
+span with neighboring glyphs for wide-cell and italic overlap. Changed row widths,
+marker ownership and combining sequences keep the whole-row fallback. Adjacent
+cells with the same resolved explicit background share one fill operation; default
+background gaps and resolved color changes split the runs.
 
 ## Architecture
 
@@ -325,6 +342,8 @@ Wheel, touch and scrollbar gestures send `terminal_scroll_to_anchor` with `histo
 
 ### Hidden agent marker rows
 
+Mobile CLI uses the log transport rather than the canvas. Its serializer preserves intent spans in both history and screen snapshots. OutputView rejoins soft wraps before classification and applies the shared intent anchor and 12% warning tint to the whole paragraph.
+
 The marker plan keeps intent text visible with a theme-aware warning tint, including column-zero ego rows and bullet-prefixed Claude/Codex rows. Intent continuation includes soft wraps and adjacent rows with at least two leading spaces (Codex/Ink cursor-move hard wraps). A blank row ends the walk. Complete suggest blocks are projected out of the displayed grid without changing stored backend coordinates. Paint and hit testing share the viewport projection. Copy classifies the same recorded rows and asks the backend for retained runs only, so omitted marker rows cannot leak through a selection spanning them. Backend selection reads still unwrap soft wraps and reject evicted rows. Off-screen selection classification reads styled rows with marker lookback. A blank row ends an indented marker tail. Unwrapped output, answer and prompt rows start separate blocks.
 
 Answer-rule overlay geometry is invalidated on cell-height and projected-row changes, even when the answer markers are unchanged. This keeps font-load and theme remeasurements aligned with the grid.
@@ -335,3 +354,59 @@ Native terminal ego provider recovery is carried in the backend session snapshot
 not inferred from canvas rows. Tab/status-bar presentation uses that snapshot;
 canvas rendering and input routing remain unchanged. Force retry uses the normal
 agent-aware command submission helper.
+
+### Soft-wrap text fidelity
+
+Backend selection and logical-row extraction retain real spaces at soft-wrap margins. Mobile CLI log rendering uses serialized `wrapped` boundaries rather than word-length guesses when metadata is present. Older daemon rows without this field retain the existing prose reflow fallback. This changes extracted text, not canvas layout or styling.
+
+### Opt-in workload evidence
+
+CanvasTerminal records raw arrivals before decode and immutable merged grid snapshots immediately before the base paint, plus visibility transitions. Capture requires both the explicit recorder flag and perfDebug. No render behavior changes. See [stall evidence](../backend/stall-journal.md) for caps, timing replay and limitations.
+
+### Prompt ownership after reflow (#1389-3a47)
+
+Accepting changed frame geometry invalidates cached prompt boundaries and rejects
+ownership reads started with old coordinates, even if an interim old-frame paint
+refilled the cache after the resize request. Prefix reads classify each 256-row
+chunk once and retain one preceding row for blank separation and wrap semantics;
+they do not rescan the accumulated prefix.
+
+
+### Incremental projected painting (#2003-f218)
+
+Hidden marker rows do not force a full canvas clear. Stable projections clear and
+paint only dirty display rows, using projected coordinates. A dirty hidden row
+does not clear the visible content that occupies its old backend coordinate.
+The renderer retains the backend owner and marker-span layout of each display
+slot. Projection changes invalidate only slots whose owner or marker span changed,
+including old bottom slots that must be cleared after rows move upward.
+Geometry, theme and other explicit full repaint requests still clear the canvas.
+
+### Viewport-bounded marker work (#2002-2239)
+
+CLI painting classifies the visible rows, one bottom overscan row and at most
+128 rows above the viewport. Unchanged row generations reuse the existing `rowTextLayout` text cache,
+marker snapshots and the marker plan. Replaced rows invalidate their own text and the dependent plan;
+a change to the preceding wrap flag invalidates the dependent snapshot too.
+History outside this window is classified when scrolling reaches it. An answer
+whose anchor is more than 128 rows above the viewport is not inferred from prose.
+
+A tracked prompt can start much earlier. Its ownership prefix is limited to 128
+rows synchronously and 128 rows per background read. Unresolved ownership stays
+fail-closed and resumes from the prior read boundary, including the preceding
+row to preserve blank separation. No background completion scans the accumulated
+prefix again, and intermediate chunks do not repaint the canvas. This bounds individual paint/read tasks, not the total work needed
+to resolve an arbitrarily long pasted prompt.
+
+| Consumer | Trigger | Text work before this fix | Text work after this fix |
+| --- | --- | --- | --- |
+| `planViewportMarkers` / `planMarkers` | Output frame, forced repaint | Viewport + 32 rows, but cold tracked prompt could synchronously walk retained history | Viewport + 128 rows; cold prefix at most 128; unchanged generations reuse text and plan |
+| `renderCachedBase` / `planMarkers` | Integer smooth-scroll paint | Same cold prompt exception | Same bounded planner; uncached history classified lazily |
+| `readMarkerPromptBoundary` / `readTurnRows` | Cold tracked prompt | One async operation fetched every prefix chunk | One operation reads at most 128 rows and retains its continuation position |
+| `planSuggestOverlay`, `answerExtent`, prompt echo and gutter gap walks | Called by marker plan | Caller range, except prompt prefix supplied by planner | Caller range is viewport + lookback; row dependencies cached |
+| `gridRenderer` / `ViewportProjection` | Paint and marker projection | Visible cells and marker sets, not history text classification | Unchanged; consumes bounded marker sets |
+| `readAnswersHistory` / `buildAnswersTurn` | Explicit Answers-only view; output refresh every 400 ms while open | Finished turns cached; running turn scanned in full, or last 5000 rows with no known prompts | Unchanged semantic full-history reader; not a canvas frame/scroll consumer |
+
+The explicit Answers-only view still reads full retained turns to preserve its
+copy/selectable history contract. Its running-turn refresh is not viewport-bound;
+this change does not claim to fix that separate full-history consumer.

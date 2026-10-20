@@ -1,3 +1,5 @@
+@import "../styles/chat-tokens.css";
+
 /* TUICommander PWA — Standalone global styles.
  * Isolated from the desktop global.css to allow independent evolution.
  */
@@ -41,7 +43,7 @@
   --radius-lg: 6px;
   --radius-xl: 8px;
   --radius-pill: 12px;
-  --radius-full: 50%;
+  --radius-full: 9999px;
 
   /* --- Elevation --- */
   --shadow-popup: 0 8px 32px rgba(0, 0, 0, 0.4);

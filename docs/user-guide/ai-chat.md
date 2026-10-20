@@ -42,7 +42,7 @@ with the error. The Copy action beside a user message stays on one line.
 
 The header contains the conversation title picker, **New**, **⋯**, and window controls. The tab strip appears only when two or more tabs are open. **⋯** contains labelled session settings, pause/resume, compact, fork, new-conversation options, and deletion actions. Capability and busy-state restrictions still apply.
 
-The model and repository share a small line below the input. Repository pinning stays on that line. Process titles and tool disclosures share one line; failed calls expand automatically. Suggested replies appear only under the latest answer. Loaded history does not show execution durations measured from the view mount.
+The model and repository share a small line below the input. Repository pinning stays on that line. Process titles and tool disclosures share one line; failed groups and calls stay collapsed until you open them, with a red dot and Failed label. Suggested replies appear only under the latest answer. Loaded history does not show execution durations measured from the view mount.
 
 ## Tables
 
@@ -58,6 +58,8 @@ and the main window shows the *Bring back* placeholder. Drag the left edge to
 resize — the width applies for the session and is not persisted.
 The conversation view loads when you first open it; terminal input is available
 while it loads.
+
+Mobile offers the **Chat** tab only when the host has a configured ego executable, using the same availability predicate as desktop. Host settings changes update the tab without reloading. Removing ego configuration returns an open Chat view to **Sessions**; unavailable saved Chat links also stay on **Sessions**.
 
 On the mobile PWA, **Chat** is the second tab, after the default **Sessions**
 tab, and opens without choosing a repository. It uses the same workspace root
@@ -298,7 +300,7 @@ Use **New conversation with options** beside the `+` button to override the ego 
 
 A custom conversation runs its own ego ACP process. Its mail identity is separate from daily chats, even when both use the same workspace.
 
-When you scroll up and more conversation content arrives, **New text below** appears above the composer. Select it to return to the bottom and resume following. Reaching the bottom by hand clears it too. Search jumps do not show the pill until later content arrives. Disable **New text indicator** in **Settings → Appearance → Chat**, or mobile Settings. This preference is saved on the current client and applies to terminal Chat too.
+When you scroll up and more conversation content arrives, **New text below** appears as a compact badge floating at the bottom-right of the transcript, above the composer, without reserving a row. Select it to return to the bottom and resume following. Reaching the bottom by hand clears it too. Search jumps do not show the badge until later content arrives. Disable **New text indicator** in **Settings → Appearance → Chat**, or mobile Settings. This preference is saved on the current client and applies to terminal Chat too.
 
 AI Chat replies use plain chat prose without the terminal answer rail. Literal Markdown blockquotes keep their normal quote style.
 
@@ -310,10 +312,15 @@ Repository names in linked worktree contexts use the registered parent repositor
 
 ## Telegram replies
 
-Ask ego to call `telegram register` from this conversation after Telegram is
-configured in Settings. Registration is voluntary and lasts only while its MCP
-identity remains live. No PTY is needed. Incoming allowlisted phone text arrives
-through the normal peer inbox and TUIC wakes an idle conversation.
+After Telegram is configured in Settings, allowlisted phone text reaches the
+latest-connected live AI Chat agent when no agent has explicitly registered.
+With several live chats, connection order determines the fallback, not the
+selected tab. An agent can call `telegram register` to take over the channel;
+that registration has priority until it ends or another agent replaces it.
+Registration lasts only while its MCP identity remains live. No PTY is needed.
+Incoming phone text arrives through the normal peer inbox and TUIC wakes an idle
+conversation. The no-agent reply appears only when neither a registered agent
+nor a live AI Chat agent is available.
 
 The phone shows a receipt reaction, then a working reaction once the mail is
 read and a new turn starts. Assistant message chunks stream into the ephemeral
@@ -327,3 +334,7 @@ peer-mail wake settles without finish, TUIC sends that turn's assistant text
 once. Turns started from an unrelated conversation prompt do not auto-publish.
 A failed turn sends one safe stopped notice. Stop on the phone targets only the
 captured turn; a queued Stop does not interrupt unrelated work.
+
+## Settings MCP startup boundary
+
+The Settings owner can read and edit the configured Ego model/perimeter and base provider-auth configuration, with owner revisions and next-session effects. The AI Chat Settings button still opens the human login workflow. A schema-only assistant can also request typed `begin_login` and `login_status` from the configured Ego owner; you complete the exchange in its terminal. Terminal exit is not success: the owner reads credential presence, then the assistant refreshes provider state. Missing binary/capability is not permission to use a different executable or PTY fallback for ACP. See [startup workflows](../backend/settings-startup.md#ego).

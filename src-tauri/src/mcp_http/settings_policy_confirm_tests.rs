@@ -14,8 +14,10 @@ async fn ui_settings_confirm_uses_backend_diff_and_real_response_channel() {
     state
         .config
         .write()
-        .disabled_native_tools
+        .mcp_capabilities
+        .denied
         .retain(|tool| tool != "settings");
+    state.config.write().settings_mcp_enabled = true;
     let service = Service::new(
         Arc::new(native_catalogue().unwrap()),
         Arc::new(crate::config::settings_app::AppSettingsStore::new(

@@ -3,7 +3,8 @@ import { uploadAttachment } from "../../services/uploadAttachment";
 import { appLogger } from "../../stores/appLogger";
 import { toastsStore } from "../../stores/toasts";
 import { HttpRpcError, rpc } from "../../transport";
-import { sendPtyKey, waitForAgentEnterGap } from "../../utils/sendCommand";
+import { waitForAgentEnterGap } from "../../utils/sendCommand";
+import { sendNativeChoice } from "../../utils/sendNativeChoice";
 import { useBrowserDictation } from "../useBrowserDictation";
 import { useKeyboardCorrection } from "../useKeyboardCorrection";
 import type { ChoicePrompt, SlashMenuItem } from "../useSessions";
@@ -30,7 +31,9 @@ interface CommandInputProps {
 	slashItems?: SlashMenuItem[];
 	/** Active numbered choice dialog parsed from agent output. */
 	choicePrompt?: ChoicePrompt;
-	/** The Codex question panel has been opened with Alt+Up in this view. */
+	/** Native free-text question, opened explicitly by the user. */
+	questionText?: string;
+	/** The Codex question panel has been opened with Shift+Left in this view. */
 	codexQuestionOpen?: boolean;
 	/** Managed agent waiting for a free-text answer. */
 	managedSession?: boolean;
@@ -71,6 +74,7 @@ export function CommandInput(props: CommandInputProps) {
 		const draft = textareaEl?.value ?? value();
 		const text = draft.trim();
 		if (!text || submitting() || uploading() || props.sessionExists === false) return;
+		const sessionId = props.sessionId;
 		cancelPress();
 		setQueueMenu(false);
 		browserDictation.cancel();
@@ -78,7 +82,7 @@ export function CommandInput(props: CommandInputProps) {
 		try {
 			await lastInputWrite;
 			const result = await rpc<{ accepted: boolean; typed: boolean }>("enqueue_agent_command", {
-				sessionId: props.sessionId,
+				sessionId,
 				text,
 				expectedDraft: draft,
 			});
@@ -221,6 +225,7 @@ export function CommandInput(props: CommandInputProps) {
 	}
 
 	const browserDictation = useBrowserDictation({
+		sessionId: () => props.sessionId,
 		blocked: () => submitting() || !!props.serverVoiceRecording || props.sessionExists === false,
 		getDraft: () => textareaEl?.value ?? value(),
 		setDraft: (text) => {
@@ -250,6 +255,8 @@ export function CommandInput(props: CommandInputProps) {
 		try {
 			const receipt = await uploadAttachment(file, { kind: "pty", id: props.sessionId });
 			if (receipt.notice) toastsStore.add("Attachment access", receipt.notice, "warn", true);
+			// DEFERRED (2026-10-19) — upload completion still edits the live draft;
+			// changing sessions during upload needs a separate draft-ownership contract.
 			const current = textareaEl?.value ?? value();
 			const next = `${current}${current && !/\s$/.test(current) ? " " : ""}@${receipt.path}`;
 			setValue(next);
@@ -296,15 +303,19 @@ export function CommandInput(props: CommandInputProps) {
 	});
 
 	function requestInputKey(key: ComposerInputKey) {
-		if (atomicReply() || props.sessionExists === false) return;
-		const request =
-			key === "Tab"
+		if (props.sessionExists === false) return;
+		const data = key === "Tab" ? "\t" : key === "ArrowUp" ? "\x1b[A" : "\x1b[B";
+		// A waiting agent can own a picker without a parsed choice_prompt. Keep
+		// navigation in the PTY, not in the free-text answer or shell history.
+		const request = atomicReply()
+			? null
+			: key === "Tab"
 				? (syncedText ?? restoredPartial).length > 0
 					? { kind: "completion" as const, armed: true }
 					: null
 				: { kind: "history" as const, armed: false };
 		inputRequest = request;
-		void writePty(key === "Tab" ? "\t" : key === "ArrowUp" ? "\x1b[A" : "\x1b[B").then(
+		void writePty(data).then(
 			() => {
 				if (request && inputRequest === request) {
 					// DEFERRED (2026-10-10): input_line has no causal request ID.
@@ -322,6 +333,8 @@ export function CommandInput(props: CommandInputProps) {
 	async function send() {
 		const text = (textareaEl?.value ?? value()).trim();
 		if (!text || props.sessionExists === false || submitting()) return;
+		const sessionId = props.sessionId;
+		const agentType = props.agentType;
 
 		browserDictation.cancel();
 
@@ -333,9 +346,15 @@ export function CommandInput(props: CommandInputProps) {
 					submitted: boolean;
 					acknowledged: boolean;
 					reason?: string;
-				}>("submit_agent_reply", { sessionId: props.sessionId, input: text });
+					detail?: string;
+				}>("submit_agent_reply", { sessionId, input: text });
 				if (!receipt.submitted) {
-					toastsStore.add("Reply not sent", receipt.reason ?? "The session is not ready for a reply", "error", true);
+					toastsStore.add(
+						"Reply not sent",
+						receipt.detail ?? receipt.reason ?? "The session is not ready for a reply",
+						"error",
+						true,
+					);
 					return;
 				}
 				if (!receipt.acknowledged) {
@@ -355,8 +374,14 @@ export function CommandInput(props: CommandInputProps) {
 						const result: unknown = JSON.parse(err.body);
 						const reason =
 							typeof result === "object" && result !== null && "reason" in result ? result.reason : undefined;
-						if (reason === "session_not_found") msg = "This session has ended";
-						else if (reason === "agent_not_ready") msg = "The agent is busy. Check the session before retrying.";
+						const detail =
+							typeof result === "object" && result !== null && "detail" in result ? result.detail : undefined;
+						if (typeof detail === "string" && detail.trim()) msg = detail;
+						else if (reason === "session_not_found") msg = "This session has ended";
+						else if (reason === "agent_not_ready")
+							msg = props.awaitingInput
+								? "The agent is waiting for input. Check its question before retrying."
+								: "The agent is busy. Check the session before retrying.";
 						else if (reason === "partial_composer")
 							msg = "The agent already has a draft. Check the session before retrying.";
 						else if (err.status === 409) msg = "The session is not ready. Check it before retrying.";
@@ -384,8 +409,8 @@ export function CommandInput(props: CommandInputProps) {
 			// Let the final live delta reach the PTY, then leave the agent's
 			// paste-burst window before pressing Enter.
 			await lastInputWrite;
-			await waitForAgentEnterGap(props.agentType);
-			await retryWrite(() => rpc("write_pty", { sessionId: props.sessionId, data: "\r" }));
+			await waitForAgentEnterGap(agentType);
+			await retryWrite(() => rpc("write_pty", { sessionId, data: "\r" }));
 			setCodexNotesMode(false);
 		} catch (err) {
 			const msg = err instanceof Error ? err.message : String(err);
@@ -432,33 +457,18 @@ export function CommandInput(props: CommandInputProps) {
 
 	async function handleChoiceSelect(key: string) {
 		if (choiceSending() || props.sessionExists === false) return;
+		// Acknowledgements can outlive the detail screen. Keep the whole answer
+		// bound to the session and dialog that owned the tap, not live props.
+		const sessionId = props.sessionId;
+		const prompt = props.choicePrompt;
+		const agentType = props.agentType;
 		setChoiceSending(true);
 		try {
-			const write = (data: string) => rpc<void>("write_pty", { sessionId: props.sessionId, data });
-			const options = props.choicePrompt?.options ?? [];
-			const selectedIndex = options.findIndex((option) => option.highlighted);
-			const choiceIndex = options.findIndex((option) => option.key === key);
-			const label = options[choiceIndex]?.label;
-			if (props.choicePrompt?.selection_mode === "navigate-enter") {
-				const steps = choiceIndex - Math.max(selectedIndex, 0);
-				const arrow = steps < 0 ? "\x1b[A" : "\x1b[B";
-				for (let i = 0; i < Math.abs(steps); i++) await sendPtyKey(write, arrow);
-				await sendPtyKey(write, "\r");
-				return;
-			}
-			if (props.agentType === "codex" && (label === "Other" || label === "None of the above")) {
-				const steps = (choiceIndex - Math.max(selectedIndex, 0) + options.length) % options.length;
-				for (let i = 0; i < steps; i++) await sendPtyKey(write, "\x1b[B");
-				await sendPtyKey(write, "\t");
+			const write = (data: string) => rpc<void>("write_pty", { sessionId, data });
+			await sendNativeChoice(write, prompt, agentType, key, () => {
 				setCodexNotesMode(true);
 				textareaEl?.focus();
-				return;
-			}
-			await sendPtyKey(write, key);
-			// Most raw-mode prompts submit on the numeric key.
-			if (!props.choicePrompt?.dismiss_key) {
-				await write("\r");
-			}
+			});
 		} catch (err) {
 			setChoiceSending(false);
 			appLogger.warn("terminal", "ChoicePrompt sendPtyKey failed", { error: err });
@@ -468,7 +478,7 @@ export function CommandInput(props: CommandInputProps) {
 	}
 
 	return (
-		<div class={styles.form} style={{ position: "relative" }}>
+		<div class={styles.form}>
 			<Show when={uploading()}>
 				{(name) => (
 					<div class={styles.uploading} role="status">
@@ -476,8 +486,13 @@ export function CommandInput(props: CommandInputProps) {
 					</div>
 				)}
 			</Show>
+			<Show when={props.questionText && !showChoicePrompt()}>
+				<div class={styles.question} role="status">
+					{props.questionText}
+				</div>
+			</Show>
 			<Show when={showChoicePrompt()}>
-				<ChoicePromptOverlay prompt={props.choicePrompt!} onSelect={handleChoiceSelect} />
+				<ChoicePromptOverlay prompt={props.choicePrompt!} disabled={choiceSending()} onSelect={handleChoiceSelect} />
 			</Show>
 			<Show when={showDropup() && !showChoicePrompt()}>
 				<SlashMenuOverlay

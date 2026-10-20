@@ -1,9 +1,11 @@
-import { createStore } from "solid-js/store";
+import { createStore, reconcile } from "solid-js/store";
 import { invoke, listen } from "../invoke";
+import { reportSettingsConflicts, settingsRefresh } from "../services/settingsRefresh";
 import { isTauri } from "../transport";
 import { type BrowserVoiceSession, connectBrowserVoice } from "../utils/browserVoice";
 import { browserVoiceMediaSession } from "../utils/browserVoiceMediaSession";
 import { type Earcon, playEarcon, primeEarcons } from "../utils/earcon";
+import { mergeSettingsSnapshot } from "../utils/mergeSettingsSnapshot";
 import { appLogger } from "./appLogger";
 import { toastsStore } from "./toasts";
 
@@ -642,35 +644,66 @@ function createDictationStore() {
 		setState("backendInfo", event.payload.backend);
 	});
 
+	let savedVoice: Partial<DictationStoreState> | undefined;
+	function renderConfig(config: DictationConfig): Partial<DictationStoreState> {
+		return {
+			enabled: config.enabled,
+			hotkey: config.hotkey,
+			language: config.language,
+			selectedModel: config.model ?? "large-v3-turbo",
+			selectedDevice: config.device ?? null,
+			longPressMs: config.long_press_ms ?? 400,
+			autoSend: config.auto_send ?? true,
+			notifyModelOnHandsFree: config.hands_free_notify_model ?? true,
+			handsFreeStartNotice: config.hands_free_start_notice ?? "",
+			handsFreeHoldBackMs: config.hands_free_hold_back_ms ?? DEFAULT_HOLD_BACK_MS,
+			handsFreeActivationPhrase: config.hands_free_activation_phrase ?? "",
+			handsFreeEarcons: config.hands_free_earcons ?? true,
+			handsFreeListening: config.hands_free_listening ?? true,
+			spokenReplies: config.hands_free_spoken_replies ?? true,
+			speechEngine: config.speech_engine || "edge",
+			speechCommand: config.speech_command ?? [],
+			speechEdgeVoice: config.speech_edge_voice ?? "",
+			speechVoice: config.speech_voice ?? "",
+			speechVolumeDb: config.speech_volume_db ?? DEFAULT_SPEECH_VOLUME_DB,
+			speechLevelling: config.speech_levelling ?? DEFAULT_SPEECH_LEVELLING,
+			rmsThreshold: config.rms_threshold ?? DEFAULT_RMS_THRESHOLD,
+			noSpeechThreshold: config.no_speech_threshold ?? DEFAULT_NO_SPEECH_THRESHOLD,
+		};
+	}
+	function applyRemoteConfig(config: DictationConfig, preserveDirty: boolean): void {
+		const incoming = renderConfig(config);
+		const local = Object.fromEntries(
+			Object.keys(incoming).map((key) => [key, state[key as keyof DictationStoreState]]),
+		);
+		const merged = mergeSettingsSnapshot(savedVoice ?? incoming, local, incoming);
+		savedVoice = incoming;
+		setState(preserveDirty ? merged.value : incoming);
+		if (preserveDirty) reportSettingsConflicts(merged.conflicts);
+	}
+
 	const actions = {
+		startRemoteSync(): () => void {
+			const stopVoice = settingsRefresh.register({
+				section: "voice",
+				read: () => invoke<DictationConfig>("get_dictation_config"),
+				apply: (config) => applyRemoteConfig(config, true),
+			});
+			const stopCorrections = settingsRefresh.register({
+				section: "corrections",
+				read: () => invoke<Record<string, string>>("get_correction_map"),
+				apply: (map) => setState("corrections", reconcile(map)),
+			});
+			return () => {
+				stopVoice();
+				stopCorrections();
+			};
+		},
 		/** Load config from Rust backend (file-based) */
 		async refreshConfig(): Promise<void> {
 			try {
 				const config = await invoke<DictationConfig>("get_dictation_config");
-				setState({
-					enabled: config.enabled,
-					hotkey: config.hotkey,
-					language: config.language,
-					selectedModel: config.model ?? "large-v3-turbo",
-					selectedDevice: config.device ?? null,
-					longPressMs: config.long_press_ms ?? 400,
-					autoSend: config.auto_send ?? true,
-					notifyModelOnHandsFree: config.hands_free_notify_model ?? true,
-					handsFreeStartNotice: config.hands_free_start_notice ?? "",
-					handsFreeHoldBackMs: config.hands_free_hold_back_ms ?? DEFAULT_HOLD_BACK_MS,
-					handsFreeActivationPhrase: config.hands_free_activation_phrase ?? "",
-					handsFreeEarcons: config.hands_free_earcons ?? true,
-					handsFreeListening: config.hands_free_listening ?? true,
-					spokenReplies: config.hands_free_spoken_replies ?? true,
-					speechEngine: config.speech_engine || "edge",
-					speechCommand: config.speech_command ?? [],
-					speechEdgeVoice: config.speech_edge_voice ?? "",
-					speechVoice: config.speech_voice ?? "",
-					speechVolumeDb: config.speech_volume_db ?? DEFAULT_SPEECH_VOLUME_DB,
-					speechLevelling: config.speech_levelling ?? DEFAULT_SPEECH_LEVELLING,
-					rmsThreshold: config.rms_threshold ?? DEFAULT_RMS_THRESHOLD,
-					noSpeechThreshold: config.no_speech_threshold ?? DEFAULT_NO_SPEECH_THRESHOLD,
-				});
+				applyRemoteConfig(config, false);
 				if (config.recovered_from_corruption) {
 					appLogger.warn("dictation", "Recovered valid dictation settings from malformed config fields");
 					toastsStore.add(
@@ -734,6 +767,7 @@ function createDictationStore() {
 				if (partial.rms_threshold !== undefined) storeUpdate.rmsThreshold = partial.rms_threshold;
 				if (partial.no_speech_threshold !== undefined) storeUpdate.noSpeechThreshold = partial.no_speech_threshold;
 				setState(storeUpdate);
+				savedVoice = { ...savedVoice, ...storeUpdate };
 			} catch (err) {
 				appLogger.error("dictation", "Failed to save dictation config", err);
 			}
@@ -891,7 +925,7 @@ function createDictationStore() {
 		async refreshCorrections(): Promise<void> {
 			try {
 				const map = await invoke<Record<string, string>>("get_correction_map");
-				setState("corrections", map);
+				setState("corrections", reconcile(map));
 			} catch (err) {
 				appLogger.error("dictation", "Failed to get correction map", err);
 			}
@@ -901,7 +935,7 @@ function createDictationStore() {
 		async saveCorrections(map: Record<string, string>): Promise<void> {
 			try {
 				await invoke("set_correction_map", { map });
-				setState("corrections", map);
+				setState("corrections", reconcile(map));
 			} catch (err) {
 				appLogger.error("dictation", "Failed to save corrections", err);
 			}

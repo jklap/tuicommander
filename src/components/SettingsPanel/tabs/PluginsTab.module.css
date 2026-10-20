@@ -16,7 +16,7 @@
 .docsLink {
   background: none;
   border: none;
-  color: var(--accent);
+  color: var(--link-foreground);
   font-size: var(--font-sm);
   cursor: pointer;
   padding: 0;
@@ -436,3 +436,14 @@
   .installSuggestion > div > div:last-child > div { align-items: flex-start; }
 }
 .docsLink { margin-bottom: 16px; }
+
+.installSuggestion > div { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: start; gap: 8px 16px; }
+.installSuggestion > div > div:last-child, .installSuggestion > div > div:last-child > div { display: contents; }
+.installSuggestion button { grid-column: 2; grid-row: 1; }
+.installSuggestion > div > div:last-child > div > span { grid-column: 1 / -1; }
+@media (max-width: 600px) {
+  .installSuggestion > div { grid-template-columns: minmax(0, 1fr); }
+  .installSuggestion button { grid-column: 1; grid-row: auto; }
+}
+
+.emptyState { padding: 16px 0; }

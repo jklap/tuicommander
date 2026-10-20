@@ -1,7 +1,9 @@
 import { createStore, produce } from "solid-js/store";
 import { invoke, listen } from "../invoke";
+import { reportSettingsConflicts, settingsRefresh } from "../services/settingsRefresh";
 import { rpc, type UpstreamMcpConfig, type UpstreamMcpServer } from "../transport";
 import { getRemoteBaseUrl } from "../transportRuntime";
+import { mergeSettingsSnapshot } from "../utils/mergeSettingsSnapshot";
 import { type RemoteEventPayload, remoteEventOrigin } from "../utils/remoteEventOrigin";
 import { appLogger } from "./appLogger";
 import { repoSettingsStore } from "./repoSettings";
@@ -76,6 +78,8 @@ function createMcpPopupStore() {
 		return effective?.mcpUpstreams ?? null;
 	}
 
+	let acknowledgedServers: UpstreamMcpServer[] = [];
+
 	/** Load full upstream config + live status snapshot + project allowlist */
 	async function loadConfig(): Promise<void> {
 		try {
@@ -83,6 +87,7 @@ function createMcpPopupStore() {
 				invoke<UpstreamMcpConfig>("load_mcp_upstreams"),
 				invoke<{ upstreams: UpstreamStatusEntry[] }>("get_mcp_upstream_status"),
 			]);
+			acknowledgedServers = cfg.servers ?? [];
 			setState("servers", cfg.servers ?? []);
 			setState("status", snap?.upstreams ?? []);
 			setState("projectAllowlist", resolveProjectAllowlist());
@@ -117,6 +122,7 @@ function createMcpPopupStore() {
 
 		try {
 			await invoke("save_mcp_upstreams", { base, config: { servers: updated } });
+			acknowledgedServers = updated;
 			// TUIC advertises tools.listChanged and the bridge forwards the standard
 			// notification. MCP does not expose whether a particular client version
 			// actually applies it, so report what TUIC knows without falsely requiring
@@ -140,6 +146,19 @@ function createMcpPopupStore() {
 
 	return {
 		state,
+		startRemoteSync(): () => void {
+			return settingsRefresh.register({
+				section: "upstreams",
+				read: () => invoke<UpstreamMcpConfig>("load_mcp_upstreams"),
+				apply: (config) => {
+					const incoming = config.servers ?? [];
+					const merged = mergeSettingsSnapshot(acknowledgedServers, state.servers, incoming);
+					acknowledgedServers = incoming;
+					setState("servers", merged.value);
+					reportSettingsConflicts(merged.conflicts);
+				},
+			});
+		},
 
 		open(): void {
 			setState("isOpen", true);

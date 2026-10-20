@@ -1,7 +1,8 @@
-import { type Component, createSignal, For, Match, onMount, Show, Switch } from "solid-js";
+import { type Component, createSignal, For, Match, onCleanup, onMount, Show, Switch } from "solid-js";
 import { t } from "../../../i18n";
 import { type EgoCliClient, egoCli } from "../../../services/egoCli";
 import { startEgoLogin } from "../../../services/egoLogin";
+import { settingsRefresh } from "../../../services/settingsRefresh";
 import { appLogger } from "../../../stores/appLogger";
 import { toastsStore } from "../../../stores/toasts";
 import type { EgoCliError, EgoCredential, EgoProviders } from "../../../types/ego";
@@ -74,6 +75,17 @@ export const AiChatTab: Component<{
 		}
 	};
 
+	onCleanup(
+		settingsRefresh.register({
+			section: "ego",
+			read: () => client().providers(false),
+			apply: (snapshot) => {
+				setData(snapshot);
+				setError(null);
+			},
+		}),
+	);
+
 	onMount(() => {
 		void attempt(() => client().providers(false));
 	});
@@ -106,27 +118,15 @@ export const AiChatTab: Component<{
 			<SettingPageHeader
 				title="AI Chat"
 				description="Agent defaults and access for new ego runs. Running conversations are unchanged."
-				scope="New ego runs"
 				breadcrumb="AI / AI Chat"
-				source="TUICommander owns the executable, profile and workspace in General. ego owns model and access defaults."
 			/>
 			<SectionCard title="Agent and model">
-				<p class={s.hint}>
-					{t(
-						"providers.hint.defaultModel",
-						"The model every new ego run starts from. It is stored by ego, not by TUICommander — changing it here is the same as running ego config set model.",
-					)}
-				</p>
-
 				<Switch>
 					{/* No ego binary is named at all. The fix is on another page, so say
 					    which one rather than leaving an empty list on screen. */}
 					<Match when={error()?.code === "notConfigured"}>
 						<p class={s.warning}>
-							{t(
-								"providers.unconfigured",
-								"ego is not configured. Name the ego binary in Settings → General, then come back — TUICommander launches that one binary and nothing else.",
-							)}
+							{t("providers.unconfigured", "ego is not configured. Set the ego executable in Settings → General.")}
 						</p>
 					</Match>
 
@@ -176,16 +176,11 @@ export const AiChatTab: Component<{
 
 					<Match when={data()}>
 						{(loaded) => (
-							<SettingRow
-								label={t("providers.label.defaultModel", "Default model")}
-								hint={t(
-									"providers.hint.refresh",
-									"Refresh asks ego to re-enumerate its sources, which is the only call here that reaches a provider over the network. TUICommander never makes one.",
-								)}
-							>
+							<SettingRow label={t("providers.label.defaultModel", "Default model")}>
 								{(id, descriptionId) => (
 									<div class={layout.modelControls}>
 										<Select
+											data-setting-id="ego.model"
 											id={id}
 											aria-describedby={descriptionId()}
 											disabled={busy()}
@@ -213,6 +208,7 @@ export const AiChatTab: Component<{
 											</For>
 										</Select>
 										<button
+											data-non-setting="Explicit configured-Ego provider discovery; never runs during describe"
 											class={s.testBtn}
 											disabled={busy()}
 											onClick={() => void attempt(() => client().providers(true))}
@@ -227,15 +223,14 @@ export const AiChatTab: Component<{
 				</Switch>
 
 				<Show when={!!error() || !data() || empty()}>
-					<SettingRow
-						label="Provider catalogue"
-						hint={t(
-							"providers.hint.refresh",
-							"Refresh asks ego to re-enumerate its sources, which is the only call here that reaches a provider over the network. TUICommander never makes one.",
-						)}
-					>
+					<SettingRow label="Provider catalogue">
 						{() => (
-							<button class={s.testBtn} disabled={busy()} onClick={() => void attempt(() => client().providers(true))}>
+							<button
+								data-non-setting="Explicit configured-Ego provider discovery; never runs during describe"
+								class={s.testBtn}
+								disabled={busy()}
+								onClick={() => void attempt(() => client().providers(true))}
+							>
 								{t("providers.refresh", "Refresh from providers")}
 							</button>
 						)}
@@ -244,12 +239,6 @@ export const AiChatTab: Component<{
 				<Show when={(data()?.providers.length ?? 0) > 0}>
 					<details>
 						<summary>Other providers and available models</summary>
-						<p class={s.hint}>
-							{t(
-								"providers.hint.credentials",
-								"Credential state comes from ego doctor. No key is ever read into TUICommander or stored in its keyring.",
-							)}
-						</p>
 						<Show when={loginError()}>{(message) => <p class={s.warning}>{message()}</p>}</Show>
 						<For each={data()?.providers}>
 							{(provider) => (
@@ -259,6 +248,7 @@ export const AiChatTab: Component<{
 										badges={<CredentialBadge credential={provider.credential} />}
 										actions={
 											<button
+												data-non-setting="Open the configured Ego interactive login; the human handles authentication"
 												class={s.testBtn}
 												aria-label={`${t("providers.login", "Login")} to ${provider.name}`}
 												onClick={() => login(provider.name)}

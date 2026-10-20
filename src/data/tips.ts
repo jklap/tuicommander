@@ -10,6 +10,36 @@ const mod = isMacOS() ? "Cmd" : "Ctrl";
 
 export const TIPS: Tip[] = [
 	{
+		feature: "Mobile font sizes",
+		description:
+			"Use the Terminal and Chat controls in mobile Settings → Appearance to set each reading size independently. The choices stay on this device; composers and UI controls do not change.",
+		shortcut: null,
+	},
+	{
+		feature: "Launch playbook modules",
+		description:
+			"In Settings > Agents, select launch modules and add global or per-agent instructions without copying generated rules. Changes apply to new launches.",
+		shortcut: null,
+	},
+	{
+		feature: "All settings inspector",
+		description:
+			"Open Settings → All settings (Expert) for typed catalogue fields without a dedicated page. Select the owner and existing record key, then read before saving. Credentials stay in their domain workflows.",
+		shortcut: null,
+	},
+	{
+		feature: "ego terminal Chat view",
+		description:
+			"Switch an ego terminal from CLI to Chat to read completed replies and folded tool calls. Configure an ego executable with local transcript v1 support first; use CLI for interactive prompts.",
+		shortcut: null,
+	},
+	{
+		feature: "Mobile latest output",
+		description:
+			"When you scroll back in mobile CLI or Chat output, tap the down-arrow above Send to return to the latest output without sending a terminal key.",
+		shortcut: null,
+	},
+	{
 		feature: "AI Chat table actions",
 		description:
 			"Use Markdown to inspect a table's exact source, Copy as Markdown to copy it, or Open as document to read it outside the conversation.",
@@ -345,7 +375,7 @@ export const TIPS: Tip[] = [
 	{
 		feature: "Plugin File Previews",
 		description:
-			"Install preview plugins from Settings > Plugins > Browse to open DOCX and XLSX files or inspect, filter, explain, and edit SQLite databases directly from the File Browser.",
+			"Install preview plugins from Settings > Manage plugins > Browse to open DOCX and XLSX files or inspect, filter, explain, and edit SQLite databases directly from the File Browser.",
 		shortcut: null,
 	},
 	{
@@ -357,7 +387,7 @@ export const TIPS: Tip[] = [
 	{
 		feature: "Prompts",
 		description:
-			"Press Cmd+Shift+K to open the Prompts dropdown — 24 built-in context-aware prompts for git, review, PR, and more.",
+			"Open the Prompts dropdown and search Configure for guided issue-to-draft-PR, incoming PR review and authorized bounded-fix setup. The guides verify prerequisites before configuration.",
 		shortcut: `${mod}+Shift+K`,
 	},
 	{

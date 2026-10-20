@@ -126,14 +126,25 @@ been. Where the deadline is not the subject, pass an explicit bound instead
 do so. When a timing assertion does fire, its message must name what actually broke —
 otherwise the next reader spends a day re-diagnosing the wrong subsystem.
 
+## Agent desktop verification
+
+Use `make agent-test` from a linked worktree for authorized macOS desktop live
+checks, never `make dev`, `make test` or the daily executable. Start with
+`make agent-test AGENT_TEST_DRY_RUN=1`; stop with `make agent-test-stop`.
+See [Development Setup](docs/guides/development-setup.md#isolated-agent-desktop-checks-macos)
+for the preset namespace, port, distinct binary and shared-resource audit.
+This target disables global shortcuts, microphone/dictation, Telegram and updater.
+It does not authorize restarting Boss's app or substituting a desktop launch when
+the active assignment permits implementation-only work.
+
 ## Test instance vs orchestrator instance — READ BEFORE TESTING
 
 There are TWO running TUICommander instances; do not confuse them:
 
 - **Orchestrator instance** — the one this agent is embedded in. The `tuicommander` MCP tools and `debug invoke_js` target THIS instance (Mission Control on `:14319`, app logs on `:9876`). It does **NOT** run your worktree build, so testing it proves nothing about your changes.
-- **Test instance** — the worktree dev build you start with `make dev`. Test your changes against it **only via its HTTP API on `http://127.0.0.1:9877`**. MCP/`invoke_js` cannot reach it.
+- **Test instance** — the isolated worktree build started with `make agent-test` when desktop execution is authorized. Test it **only via its own HTTP API, default `http://127.0.0.1:19876`**. MCP/`invoke_js` cannot reach it. Implementation-only assignments must not launch it.
 
-9877 endpoints (see `src-tauri/src/mcp_http/mod.rs`): `GET/POST /sessions`, `DELETE /sessions/{id}`, `POST /sessions/{id}/write`, `GET /sessions/{id}/output`, and terminal grid ops (all session-scoped) `POST /sessions/{id}/terminal/scroll {delta}`, `POST /sessions/{id}/terminal/scroll-to {line}` (absolute; `line`=top row, 0=oldest), `POST /sessions/{id}/terminal/scroll-to-offset {offset}` (coalesced display-offset jump; powers wheel + scrollbar-drag in browser mode), `GET /sessions/{id}/terminal/scroll-info`, `GET /sessions/{id}/terminal/lines?start&end`, `GET /sessions/{id}/terminal/row-text?row`, `POST /sessions/{id}/terminal/search-buffer {query}`. Create a throwaway session, exercise it, then `DELETE` it — never test against Boss's live sessions.
+Test-instance endpoints (see `src-tauri/src/mcp_http/mod.rs`): `GET/POST /sessions`, `DELETE /sessions/{id}`, `POST /sessions/{id}/write`, `GET /sessions/{id}/output`, and terminal grid ops (all session-scoped) `POST /sessions/{id}/terminal/scroll {delta}`, `POST /sessions/{id}/terminal/scroll-to {line}` (absolute; `line`=top row, 0=oldest), `POST /sessions/{id}/terminal/scroll-to-offset {offset}` (coalesced display-offset jump; powers wheel + scrollbar-drag in browser mode), `GET /sessions/{id}/terminal/scroll-info`, `GET /sessions/{id}/terminal/lines?start&end`, `GET /sessions/{id}/terminal/row-text?row`, `POST /sessions/{id}/terminal/search-buffer {query}`. Create a throwaway session, exercise it, then `DELETE` it — never test against Boss's live sessions.
 
 Canvas rendering (selection highlight, smooth-scroll visuals, cursor) is **not observable over HTTP** — those still need a visual check with Boss.
 
@@ -141,9 +152,9 @@ Canvas rendering (selection highlight, smooth-scroll visuals, cursor) is **not o
 
 You can exercise features through the **web UI** instead of the Tauri desktop app — every instance serves the full frontend at `http://localhost:<port>/` (`static_files.rs` `FRONTEND_DIST`). Loading it in a real browser is **browser mode** (`isTauri() === false`), the exact web/PWA path a remote client sees.
 
-- **Port:** the primary/only instance serves on **:9876**; if that's free (no conflict), point the browser there. If the orchestrator already holds 9876, bring up a **second debug instance** — it auto-retries to **:9877** (the single-instance lock is `#[cfg(not(debug_assertions))]`, so a *debug* build can run a 2nd copy alongside the orchestrator). Note: `TUIC_PORT` is honored ONLY by the headless `tuic-remote` binary — the desktop `make dev` build **ignores** it and relies on the `9876→9877→9878` retry. So: use :9876 when unconflicted, else :9877.
+- **Port:** authorized agent desktop checks use `make agent-test`, preset to `http://127.0.0.1:19876/`. Do not launch another desktop through `make dev` or use the orchestrator's :9876 for change verification. The agent-test port is explicit and has no next-port fallback; see the development guide for overrides.
 - **Drive it with `agent-browser`**, always via the stealth wrapper (see global rules). `@ref` CDP clicks are trusted and work (open modals/panels/tabs); **JS-dispatched keydown is `isTrusted:false`** so app keyboard shortcuts (Cmd+P, etc.) are ignored — click UI, never synthesize keys. Use a persistent `--session <name>`, restart the browser periodically (snapshots/clicks degrade after many calls), and wrap each call in a `perl alarm` timeout (macOS has no `timeout`/`gtimeout`).
-- **Isolation caveat:** a 2nd debug instance has isolated backend/sessions (its own PTY/agent state), but by default there is no config-dir split — debug and release builds read and write the exact same config directory and the same `config.json`/`repositories.json` (see `docs/backend/config.md`), protected by a cross-process file lock so concurrent saves don't clobber each other. A toggle flipped in the dev build IS visible to the installed app and vice versa. It still **shares the filesystem** with the orchestrator — never run repo-mutating tests against Boss's repos, and expect possible SQLite contention on `tunnel_audit.db` (same shared dir, not covered by the config lock). **Launch a verification/test instance with `TUIC_APP_INSTANCE=<id>`** (any lowercase DNS label) to get a real, code-enforced isolated config directory instead — `instances/<id>/`, entirely separate from Boss's production files (#763-d219; see `docs/backend/config.md`). Prefer this over the shared default whenever a test is going to add or remove repositories.
+- **Isolation:** `make agent-test` selects `TUIC_APP_INSTANCE=agent-test` with a distinct binary, app identity and socket. It does not copy the daily config and disables global input, microphone, Telegram and updater. Ordinary default-instance debug/release launches still share config, so do not use them as substitutes. Filesystem access remains shared: use throwaway repositories, never Boss's repositories, for repo-mutating checks.
 - **The Command Palette DOES render in web mode.** `App.tsx:984` mounts it unconditionally as `<CommandPalette actions={actionEntries()} browserMode={!isTauri()} />`; `browserMode` filters the action list down to the HTTP-safe subset in `BROWSER_ACTION_IDS`/`BROWSER_ACTION_PREFIXES` (`CommandPalette.tsx:27-103`), which **includes** `search-files` and `search-file-contents`. Only the *opening shortcut* is unavailable to `agent-browser`: a JS-dispatched Cmd+P is `isTrusted:false`, so click the UI instead — that is a test-harness limit, not a missing feature.
 - **Desktop-only features do NOT render in web mode** — IdeLauncher, Dictation, Global Hotkey, detach-panel windows, updater, native file drop, user-plugin install, MCP/hooks config. Built-in plugins DO load. See mdkb `web-mode-verification-2026-07-02` for the verified inventory before reporting a feature "missing".
 
@@ -464,6 +475,16 @@ fail closed. The foreground probe still gates idle; recovery never requeues the
 uncertain payload, but normal idle flush can deliver the next queued BG wake.
 The adapter shapes are recorded in `ego-composer-1957*.tcap`.
 
+Ego selector recovery accepts both single-answer and checkbox footers, including mid-word terminal wrapping. The complete footer must be the last nonblank content: answered selector history above newer output or a composer must never re-arm awaiting. Checkbox state uses `toggle-enter` and changes only on a toggle; Enter or Escape settles the dialog. Free-text modal text enriches an existing confident ego wait, never a ready composer. The mobile header question action supports all three forms.
+
+Ego empty-title native awaiting markers are lifecycle events, not screen text: never deduplicate them through selector repaint state. MCP approval titles can contain explicit CRLF continuation rows before `Risk:`; preserve the complete contiguous `Allow …?` title and the exact native controls.
+
+Ego selector and free-text titles share diagnostic, working-row and submitted-composer boundaries. Default-mode approvals require the native Allow/Risk/y-a-n-e-d shape; n replaces choices with the refusal explanation prompt, and Enter settles it.
+
+Codex native question parsing targets installed 0.162.1: `⌃]` / `⇧→` footer, Shift+Left to open, immediate numeric answers. The queued-panel heading is required; imperative titles are accepted only behind that exact panel shape. Enforced command approvals instead require their exact confirm/cancel footer and command question title; numeric refusal submits immediately. While that exact dialog and its unanswered controls remain active, a delayed idle hook cannot retract the approval. Answer input or a departed dialog permits normal completion. The distinct `/plan` question requires its Question counter and exact tab/enter/esc footer; second-column descriptions become hints, not answer labels.
+
+Grok native radio forms require a strict framed Ask or enforced-approval shape. Ask ends with z and a waiting header; enforced approvals carry title, command and scope controls. Numeric keys answer immediately. Selecting z retires choice buttons before publishing a text-only wait.
+
 **Every signal that sets awaiting needs a path that clears it.** The badge is
 `SessionState.awaiting_input`, not an event, and it is sticky by construction —
 whatever sets it owns nothing until something retracts it. These paths clear it:
@@ -480,6 +501,8 @@ whatever sets it owns nothing until something retracts it. These paths clear it:
 `question-cleared` is the backstop that catches the rest. It never touches a
 confident question: grok repaints while it waits, so "not on screen this tick"
 is not proof of an answer.
+
+**Dialog recovery requires an active agent identity.** After foreground observation returns to the shell, a retained Ink footer or question title above its prompt is history, not a live dialog. Both full-screen recovery and silence-timer chat heuristics require that identity. Never re-arm awaiting from shell output just because that footer remains visible (`claude-question-exit-2091.tcap`).
 
 **The mirror failure is a SET that never comes back.** A multi-question
 `AskUserQuestion` answers one sub-question at a time; each repaints its title and
@@ -603,3 +626,7 @@ We maintain a patched `alacritty_terminal` at `src-tauri/patches/alacritty_termi
 When using Codex, follow the Wiz Codex instructions in `.wiz/wiz-codex.md` for this repository, subject to the global instruction hierarchy.
 Those instructions are maintained by the Wiz SessionStart hook and complement this `AGENTS.md` file.
 <!-- wiz-codex:end -->
+
+## Opt-in frame workload evidence
+
+`window.__TUIC__.frameWorkload.enable(true)` requires perfDebug and retains sensitive terminal text in bounded memory; default off. `debug action=frame_workload_dump` saves rotated instance-local captures after frontend JS responds. See docs/backend/stall-journal.md for limits, privacy and replay. The synthetic smoke fixture does not satisfy the real-stall RED.

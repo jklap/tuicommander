@@ -13,9 +13,10 @@ export const TerminalChatTranscript: Component<{
 	sessionId: string;
 	terminalAgent?: AgentType;
 	mobile?: boolean;
-	hint: string;
 	subscribeWake?: ChatViewWake;
 	onUnavailable: (reason: string) => void;
+	onAtBottomChange?: (atBottom: boolean) => void;
+	onRegisterScrollToBottom?: (jump: (() => void) | undefined) => void;
 	onSearchRef?: (ref: TranscriptSearchRef | undefined) => void;
 	onOpenFile?: (href: string) => void | Promise<boolean | undefined> | Promise<void>;
 }> = (props) => {
@@ -61,6 +62,8 @@ export const TerminalChatTranscript: Component<{
 			<Transcript
 				terminalAgent={props.terminalAgent}
 				mobile={props.mobile}
+				onAtBottomChange={props.onAtBottomChange}
+				onRegisterScrollToBottom={props.onRegisterScrollToBottom}
 				onSearchRef={props.onSearchRef}
 				onOpenFile={props.onOpenFile}
 				entries={() => acpTranscript.entries(chatViewKey(props.sessionId))}
@@ -69,7 +72,6 @@ export const TerminalChatTranscript: Component<{
 				muteIntermediate={settingsStore.state.chatMuteIntermediateText}
 				emptyMessage="No messages in this conversation yet."
 			/>
-			<div class={s.hint}>{props.hint}</div>
 		</div>
 	);
 };

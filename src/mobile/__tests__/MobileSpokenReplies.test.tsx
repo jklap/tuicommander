@@ -79,8 +79,8 @@ it("persists the mobile Settings mute checkbox without ending the armed conversa
 			onOpenFiles={() => {}}
 		/>
 	));
-	fireEvent.click(await screen.findByRole("button", { name: "Start voice conversation" }));
-	await screen.findByRole("button", { name: "Stop voice conversation" });
+	fireEvent.click(await screen.findByRole("button", { name: "Start voice call" }));
+	await screen.findByRole("button", { name: "Stop voice call" });
 	render(() => <SettingsScreen isConnected={true} />);
 	const checkbox = (await screen.findByRole("checkbox", { name: "Spoken replies" })) as HTMLInputElement;
 	expect(checkbox.checked).toBe(true);
@@ -90,7 +90,7 @@ it("persists the mobile Settings mute checkbox without ending the armed conversa
 	expect(config.language).toBe("it");
 	expect(dictationStore.state.handsFree?.armed).toBe(true);
 	expect(status.armed).toBe(true);
-	expect(screen.getByRole("button", { name: "Stop voice conversation" })).toBeTruthy();
+	expect(screen.getByRole("button", { name: "Stop voice call" })).toBeTruthy();
 	await dictationStore.refreshConfig();
 	expect(checkbox.checked).toBe(false);
 });

@@ -2,6 +2,10 @@
 /// Compiled as a const so it's zero-cost at runtime.
 pub const PLUGIN_DOCS: &str = r###"# TUICommander Plugin Development Reference
 
+## Settings startup authority
+
+Plugin-scoped settings do not confer host account, executable or provider-login authority. Runtime shortcut-ID publication is metadata, not permission to invoke authentication or arbitrary commands. The host startup contract documents typed GitHub enumeration and Ego human-login owner workflows; these do not grant plugins host authentication authority (docs/backend/settings-startup.md).
+
 ## Installation
 
 Create directory `{id}/` containing `manifest.json` + `main.js` under the platform plugins path:
@@ -322,7 +326,7 @@ PanelHandle: `{ tabId, update(html), close(), send(data, transfer?) }` — HTML 
 
 `registerDashboard({ label?, icon?, open })`: Register a one-click entry point shown as a **Dashboard** button in *Settings → Plugins*. The host closes the Settings panel automatically before calling `open()`. A plugin may only register one dashboard; second calls replace the first. Pair this with the `.dashboard` style guide above.
 
-`registerCommand({ id, title, defaultShortcut?, run })`: Register a user-rebindable command. Appears in *Settings → Keyboard Shortcuts* under "Plugin Commands". Action name is auto-namespaced as `plugin:<pluginId>:<id>`. `defaultShortcut` is optional ("Cmd+Shift+K" etc.); on conflict the command is registered but left unbound with a warning.
+`registerCommand({ id, title, defaultShortcut?, run })`: Register a user-rebindable command. Appears in *Settings → Keyboard Shortcuts* under "Plugin Commands". Action name is auto-namespaced as `plugin:<pluginId>:<id>`. The active frontend publishes these IDs to the Rust keybinding choices owner; unload removes them from later refreshes. This runtime publication never saves shortcut overrides. `defaultShortcut` is optional ("Cmd+Shift+K" etc.); on conflict the command is registered but left unbound with a warning.
 `startWork(request)`: Create a worktree and a new `branch` (from `baseRef`, default the repo's default branch) in `repoPath`, then open an agent in it. The agent is `agentType` or, when omitted, the first enabled agent with a run config on the repo's machine; its run config supplies the command and env. `prompt` is never a shell argument: the host waits until the agent shows its composer and types the prompt there, inside an `<untrusted-content>` block with control bytes removed and a 12000-character cap. `delivery: "draft"` (default) leaves Enter to the user; `"submit"` sends it. `link: { reference, key, title, url, state }` links the item to the new worktree. Resolves to `{ repoPath, workspaceId, branch, worktreePath }`; rejects when the repo is already creating a worktree, the agent is unknown or disabled, or worktree creation fails.
 
 `registerUrlResolver(resolve)`: Claim URLs pasted in the command palette. `resolve(url, signal)` returns `null` for a URL that is not yours, or `{ link, startWork? }` where `startWork` is a `startWork` request without `repoPath`/`link` (`repoPath` optional, default the active repo). Resolvers run in registration order and the first non-null result wins; a resolver that throws is skipped. When a worktree is already linked to `link.reference` the palette offers to open it; otherwise it offers start work with your request.
@@ -351,6 +355,10 @@ merge queue policy and shared request budgets apply unchanged. The desktop comma
 `{account, reference, request}` payloads (IPC also supplies `pluginId`).
 The GitHub Work runtime binds both ports when it registers each configured account.
 No live write or desktop-load verification is implied by recorded-fixture tests.
+
+`httpFetch(url, { signal })` accepts a host-local `AbortSignal`. A pre-aborted signal starts no request; abort cancels the Rust request while waiting for headers or collecting the body and rejects with `AbortError`. Unloading the plugin also cancels its active HTTP requests. Signals never cross IPC/HTTP: the host sends a generated UUID and a plugin-scoped cancel command. Requests without a signal keep the same response contract.
+
+Jira and GitLab expose a default project in their schema-driven plugin settings page. Jira uses a project ID; GitLab accepts a project path or ID. A project saved for an account in Tasks setup takes precedence. The default applies after the plugin reloads; empty means no fallback project. Account bindings remain in `data/work-items.json`, while these defaults use the settings service in `data/config.json`.
 
 **httpFetch notes:** Localhost blocked unless declared in `allowedUrls`. Max 5 redirects. 30s timeout, 10 MB limit. An empty `allowedUrls` list grants no HTTP access.
 
@@ -458,7 +466,7 @@ await host.invoke("delete_plugin_data", {
 Core renders the following Solid components. Plugins supply manifest metadata and host registrations; they do not import or mount these components.
 
 ### Manifest UX field inventory
-`agentTypes`, `allowedUrls`, `author`, `binaries`, `capabilities`, `description`, `id`, `main`, `minAppVersion`, `name`, `providers`, `settings`, `version`.
+`agentTypes`, `allowedUrls`, `author`, `binaries`, `capabilities`, `contentSha256`, `description`, `id`, `main`, `minAppVersion`, `name`, `providers`, `settings`, `version`.
 
 ### Core UX component inventory
 `BrowseRow`, `PluginLogViewer`, `PluginRow`, `PluginsTab`.
@@ -477,7 +485,7 @@ The expanded Logs view shows the plugin ring buffer's timestamp, level and messa
 
 #### BrowseRow
 
-The Browse row shows registry name, version, description, author, tags and minimum app version. It offers Install for an absent package, Update when a newer version is available, or Installed for the current version. Registry metadata is separate from the installed manifest.
+The Browse row shows registry name, version, description, author, tags and minimum app version. It offers Install for an absent package, Update when a newer version is available or same-version payload identities differ, or Installed otherwise. Registry metadata is separate from the installed manifest. `contentSha256` is derived by Rust from installed payload files, not accepted from manifest input. Mutable data and packaging files are excluded. Unknown identities retain version-only comparison, and newer installed versions are never downgraded.
 
 ### Settings schema and Tasks views
 

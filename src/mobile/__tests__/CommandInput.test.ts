@@ -226,10 +226,6 @@ describe("CommandInput code structure", () => {
 		expect(tsx).toContain('"Tab"');
 		expect(tsx).toContain("\\t");
 	});
-
-	it("legacy choice prompts retain immediate numeric submission behavior", () => {
-		expect(tsx).toContain("!props.choicePrompt?.dismiss_key");
-	});
 });
 
 describe("isPostSendGuardActive", () => {
@@ -274,4 +270,9 @@ describe("CommandInput iOS auto-zoom prevention", () => {
 	it('input element has inputmode="text"', () => {
 		expect(tsx).toContain('inputmode="text"');
 	});
+});
+
+// Catches: the output scroll control returning to the composer beside Send.
+it("keeps the jump control out of the command composer", () => {
+	expect(tsx).not.toContain('aria-label="Scroll to bottom"');
 });

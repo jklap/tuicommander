@@ -7,15 +7,6 @@
   background: var(--bg-primary);
 }
 
-.hint {
-  flex-shrink: 0;
-  padding: 4px 16px;
-  border-top: 1px solid var(--border);
-  background: var(--bg-secondary);
-  color: var(--fg-muted);
-  font-size: var(--font-xs);
-}
-
 .toggle {
   position: absolute;
   top: 6px;
@@ -26,6 +17,14 @@
   border-radius: var(--radius-sm);
   background: var(--bg-secondary);
   overflow: hidden;
+}
+
+/* Chat content starts below its controls, even without a LastPromptBar. */
+.toggle[data-mode="chat"] {
+  position: static;
+  align-self: flex-end;
+  flex-shrink: 0;
+  margin: 6px 20px 4px;
 }
 
 .toggleButton {
@@ -59,4 +58,10 @@
   background: var(--bg-tertiary);
   color: var(--fg-secondary);
   font-size: var(--font-xs);
+}
+
+.nativeQuestion {
+  flex-shrink: 0;
+  max-height: 40vh;
+  overflow-y: auto;
 }

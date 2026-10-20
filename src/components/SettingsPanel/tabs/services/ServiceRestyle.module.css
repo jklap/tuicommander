@@ -3,6 +3,11 @@
 .page pre { white-space: pre-wrap; overflow-wrap: anywhere; }
 @media (max-width: 800px) { .page input, .page select { max-width: 100%; } }
 
-.upstreams > section { position: relative; }
-.cardActions { position: absolute; right: 16px; top: 12px; }
-.upstreams h3 { padding-right: 44px; }
+.upstreams { margin-top: 16px; }
+
+.page > [data-settings-page-header] { margin-bottom: 8px; }
+
+.discoveryError { color: var(--error); overflow-wrap: anywhere; min-width: 0; }
+
+.nativeToolGroup { border-top: 1px solid var(--border); padding-top: 12px; }
+.nativeToolGroup h4 { margin: 0; color: var(--settings-foreground); font-size: var(--font-md); font-weight: 600; }

@@ -70,6 +70,140 @@ The macOS application firewall uses code signing for initial and tracking decisi
 Vite excludes backend files and repository tooling output such as `.tmp/`, `target/`, `dist/`, coverage, reports, plans, stories, and docs from its watcher. Mutation testing keeps its disposable checkout under `.tmp/`; its HTML files must not reload the live WebView. Changes to this watch configuration require restarting the Vite dev server.
 The watch allowlist and Tauri version are resolved from the directory containing `vite.config.ts`, so starting Vite from another working directory still uses this checkout's inputs.
 
+### Isolated agent desktop checks (macOS)
+
+Use a linked worktree, not the daily checkout. Inspect the complete plan first:
+
+```bash
+make agent-test AGENT_TEST_DRY_RUN=1
+make agent-test
+# In another shell, stop only this supervised instance:
+make agent-test-stop
+```
+
+The dry run does not build, create runtime files, read application configuration,
+or start a desktop process. The launch runs in the foreground. It builds the
+frontend, then uses one Cargo build through the mbx shim for
+`tuicommander-agent-test`, `tuic-bridge` and `tuic`. The existing orchestrator
+build-slot wrapper serializes these builds when installed. `mbx doctor` must
+succeed. Do not set `CARGO_TARGET_DIR`. No Vite server, Tauri watcher, release
+bundle, signing operation or installed executable is involved. Embedded frontend
+assets use `tauri/custom-protocol` even though this is a debug build.
+
+Defaults are `AGENT_TEST_INSTANCE=agent-test` and `AGENT_TEST_PORT=19876`.
+Override with, for example, `make agent-test AGENT_TEST_INSTANCE=agent-check
+AGENT_TEST_PORT=19877` (on one line). Use the same instance on the stop target.
+Agents must connect through the instance's Unix socket, printed as `socket` and
+as a ready-to-run `connect` command in the launch JSON:
+
+```bash
+curl --unix-socket '<socket from launch JSON>' http://localhost/health
+```
+
+Replace `/health` with the endpoint needed for the check. The socket does not
+require HTTP authentication. TCP requests to `127.0.0.1:<port>` require Basic
+auth (or another configured authenticated session); an unauthenticated request
+can return 401. A ready TCP listener does not mean an agent can use its API
+without credentials. Do not read or copy the daily instance's credentials.
+
+These dedicated variables ignore inherited `TUIC_APP_INSTANCE`, `TUIC_PORT`,
+`TUIC_SOCKET` and `TUIC_DEV_BIN_DIR`. Empty/default instance IDs and port 9876
+are rejected, not interpreted as production defaults. The dedicated Rust entry
+point also validates instance and port before any config read, and refuses
+release, non-macOS or dictation-enabled builds.
+
+The compiled executable has a distinct Cargo target name and is copied to
+`<worktree>/.tmp/agent-test/<instance>/tuicommander-agent-test`. The running copy
+is not a symlink into mbx's target cache. The default instance stores app state
+in `~/Library/Application Support/com.tuic.commander/instances/agent-test/`.
+It never seeds from the daily config. Never copy daily tokens or config there.
+
+The test window is 640×420 logical pixels, with matching minimum dimensions,
+at the bottom-right of the primary screen work area (16 logical pixels inset).
+It is always on top so macOS does not fully
+occlude its WebView behind the active application. It cannot become key or take
+keyboard focus. Background throttling is disabled (supported on macOS 14+), and
+initial application activation is disabled only for the agent-test runtime.
+It starts hidden: Tao 0.37.1 `app_state.rs::window_activation_hack` otherwise
+orders every visible window key even when `focus=false`. At Tauri Ready, after
+that sweep, the agent-test path calls native `NSWindow.orderFront` without
+becoming key. Saved-window restoration is disabled for this profile because
+the window-state plugin calls `show` and `set_focus` during restoration.
+Do not call `window.show()` or `setFocus()` to present it: the pinned Tao backend
+uses `makeKeyAndOrderFront` for those APIs. The agent-test capability override
+denies `show` and `set-focus`; it adds no presentation permission. The daily
+capability file is unchanged. Stop the instance when the check ends to remove
+the floating window. The daily window configuration remains unchanged.
+
+#### Native visibility regression (authorized macOS runs only)
+
+The unattended `scripts/agent-test-tests.py` checks launcher/configuration and
+source-wiring contracts. It does **not** observe a rendered window. The separate
+native regression launches this worktree's `make agent-test`, observes the real
+WebView through its Unix socket, and stops the supervised instance in cleanup:
+
+```bash
+python3 -B scripts/agent-test-visible.py --instance at-2090 --port 19883 \
+  --evidence-dir "$HOME/Gits/.tmp/results/agent-test-visible-$(date +%s)"
+```
+
+Add `--duration 300` to observe presentation for five minutes. The observer records
+visibility changes, animation-frame progress and gaps, native window-server layers,
+application-hidden state, foreground identity, and compact-window geometry in
+`presentation.json`. It fails if presentation or animation frames stop, focus moves
+to the test instance, the foreground application changes, or window geometry changes.
+The window-server query is read-only and does not activate or move other windows.
+These observations do not identify `NSWindow.occlusionState` or prove App Nap activity.
+
+This needs explicit desktop-execution authorization, macOS, a linked worktree
+with build inputs, an unused named instance/port, and an unrelated foreground
+application. Keep that foreground application unchanged during the build and
+check. Do not use an existing instance with sessions. The evidence directory
+must be new and under `~/Gits`.
+
+`agent_test_window_renders_visible_without_focus` checks document/native
+visibility, positive terminal canvas area, actual `fillText` paint, no native or
+document focus, and the same unrelated frontmost PID before launch, at readiness
+and after painting. It also verifies the compact viewport and corner geometry.
+It retains JSON receipts, the native build log and canvas-only PNGs, deletes
+only sessions created by the check, calls `make agent-test-stop`, and checks
+`ps` for this worktree's executable. It never captures the desktop or drives
+the daily instance. A failure exits nonzero after cleanup. Commenting out the
+native `orderFront` presentation must make this observer fail; source contracts
+alone are not behavioral RED evidence. This native check is intentionally not
+part of the unattended shell/Rust/JS suites.
+
+#### Shared-resource audit
+
+| Resource | Agent-test policy |
+| --- | --- |
+| Daily binary, dev-bin and installed app bundle | No writes. Only the worktree's distinctly named binary and adjacent sidecars are copied. A held supervisor lock prevents replacing the running test executable. |
+| Config, credential vault, databases and file locks | Existing named-instance namespace; debug credentials remain file-backed. The test never claims the global-input lock, even in its own namespace. |
+| HTTP and MCP | Explicit loopback-only `127.0.0.1:19876`; never port 9876 or automatic next-port fallback. Unix MCP socket uses the selected instance hash and the launch's short `TMPDIR` under `~/Gits/.tmp/tuic-at/`. Child CLI/bridge processes inherit the same namespace. |
+| Global window shortcut and Fn/Globe monitor | Input ownership refused and shortcut registration rejected at runtime, including later Settings changes. The verification window is non-focusable; drive its own HTTP/socket API. |
+| Microphone and dictation | Not compiled into this binary. A dictation-enabled build refuses to start; no microphone permission request or capture path is available. Audio/voice hardware checks still belong to Boss. |
+| Telegram bot | Supervisor never starts, tool availability is false, and setup changes are rejected. A copied or previously saved bot configuration cannot start polling. |
+| Global CLI | Startup auto-update is skipped. Explicit installation, update and removal are rejected before sidecar resolution or filesystem changes, including elevated helper paths. |
+| Global agent hooks | Hook enable and disable requests are rejected over IPC and HTTP before saving the instance flag or changing shared Claude, Gemini, Grok, Codex or OpenCode files. Read-only hook status remains available. |
+| Global agent MCP configuration | Startup installation cannot claim ownership, even with an inherited owner override; explicit install/remove writes are rejected. |
+| Updater | No native updater plugin, no channel checks and automatic updates default off. The test cannot replace the daily bundle. |
+| Deep links, release single-instance lock and login items | Deep-link plugin is not installed. This debug-only binary never takes the release single-instance lock. Desktop startup has no login-item registration; remote service installation is an explicit operation, not part of this target. |
+| Relay, Tailscale and sleep inhibition | Relay supervisor and startup TLS provisioning are skipped; sleep inhibition is a no-op. No remote configuration is copied. |
+| Daily window-state repair | Skipped: the legacy repair scans daily config paths, not the test namespace. |
+| WebView identity | `com.tuic.commander.agent-test`, titled **TUICommander Agent Test**, separate from the daily Tauri identity. |
+| Stop ownership | PID is informational. The stop target writes to the instance's FIFO; only the live supervisor signals its own `Popen` child. It never kills a PID read from disk. |
+
+The launch plan prints the exact binary, config directory, environment, socket,
+PID file and stop FIFO. A crash releases the advisory supervisor lock; the next
+start replaces stale runtime markers. Do not use `pkill`, `killall`, or the daily
+app's Quit/Restart action to stop a test.
+
+Desktop live proof is separate from a dry run or unit test. An authorized operator
+must checksum the running daily binary and app bundle before and after, start
+agent-test alongside it, verify both listeners without mutating the daily API,
+and stop only agent-test. Until that proof is recorded, do not claim macOS TCC,
+simultaneous listeners or global-input isolation have been verified live.
+
 ### Browser Mode
 
 When the MCP server is enabled in settings, the frontend can run standalone:
@@ -165,6 +299,20 @@ the `tuic-dictation` crate explicitly, and therefore compile its native stack.
 
 TLS uses the existing ring provider. Provider-free reqwest/axum-server features
 avoid compiling AWS-LC while retaining HTTPS and WSS.
+
+### Desktop frontend embedding gate
+
+The desktop binary constructs the Tauri context and passes it to the library.
+Library unit tests do not expand `generate_context!` or embed the ignored Vite
+bundle. HTTP static-file tests use checked-in transport fixtures, including the
+desktop and mobile HTML shells, instead of a worktree-specific `dist/`.
+
+Run `make check-desktop-embedding` after `pnpm build` to compile the real desktop
+entry point with `tauri/custom-protocol`. This gate fails if the frontend bundle
+is missing. It does not launch or restart the application. `make check` and
+desktop CI run this separate gate, so unit-test isolation does not hide desktop
+startup or embedding errors. CI uses minimal HTML stubs; the release build still
+embeds the real frontend bundle.
 
 ### Rust tests in linked worktrees
 

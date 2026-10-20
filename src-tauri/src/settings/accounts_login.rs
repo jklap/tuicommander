@@ -20,6 +20,7 @@ pub(super) struct Logins {
 
 struct Flow {
     code: String,
+    epoch: u64,
     additional: bool,
     expires: Instant,
     next_poll: Instant,
@@ -41,13 +42,22 @@ impl Logins {
                 return Err(Error::new(ID, "out_of_range"));
             }
         }
+        let epoch = state
+            .github
+            .login_epoch
+            .load(std::sync::atomic::Ordering::SeqCst);
         let response = crate::github_auth::start_device_flow(&state.http_client)
             .await
             .map_err(|_| Error::new(ID, "unavailable"))?;
-        self.insert(response, additional)
+        self.insert(response, additional, epoch)
     }
 
-    fn insert(&self, response: DeviceCodeResponse, additional: bool) -> Result<Value, Failure> {
+    fn insert(
+        &self,
+        response: DeviceCodeResponse,
+        additional: bool,
+        epoch: u64,
+    ) -> Result<Value, Failure> {
         // Bounds keep Instant arithmetic finite; device_code is never returned.
         if response.expires_in == 0
             || response.expires_in > 3600
@@ -68,6 +78,7 @@ impl Logins {
             id.clone(),
             Arc::new(tokio::sync::Mutex::new(Flow {
                 code: response.device_code,
+                epoch,
                 additional,
                 expires: now + Duration::from_secs(response.expires_in),
                 next_poll: now + interval,
@@ -106,6 +117,15 @@ impl Logins {
             return Ok(json!({"status":"busy"}));
         };
         let now = Instant::now();
+        if flow.epoch
+            != state
+                .github
+                .login_epoch
+                .load(std::sync::atomic::Ordering::SeqCst)
+        {
+            flow.status = "expired";
+            flow.code.clear();
+        }
         if flow.expires <= now && flow.status == "pending" {
             flow.status = "expired";
             flow.code.clear();
@@ -119,9 +139,19 @@ impl Logins {
         // Consume one poll interval even on a provider failure. No token/result body is serialized.
         flow.next_poll = now + flow.interval;
         let result = if flow.additional {
-            crate::github_auth::github_poll_add_account_impl(state, flow.code.clone()).await
+            crate::github_auth::github_poll_add_account_impl_at_epoch(
+                state,
+                flow.code.clone(),
+                flow.epoch,
+            )
+            .await
         } else {
-            crate::github_auth::github_poll_login_impl(state, flow.code.clone()).await
+            crate::github_auth::github_poll_login_impl_at_epoch(
+                state,
+                flow.code.clone(),
+                flow.epoch,
+            )
+            .await
         }
         .map_err(|_| Error::new(ID, "unavailable"))?;
         match result {
@@ -168,6 +198,89 @@ mod tests {
         );
     }
 
+    // Catches: a flow issued before disconnect can still complete after logout.
+    #[tokio::test]
+    async fn device_login_started_before_disconnect_cannot_complete() {
+        let logins = Logins::default();
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+        let now = Instant::now();
+        logins.flows.lock().insert(
+            "before".into(),
+            Arc::new(tokio::sync::Mutex::new(Flow {
+                code: "private-device-canary".into(),
+                epoch: 0,
+                additional: false,
+                expires: now + Duration::from_secs(60),
+                next_poll: now + Duration::from_secs(60),
+                interval: Duration::from_secs(5),
+                status: "pending",
+            })),
+        );
+        crate::github_auth::github_disconnect_impl(&state)
+            .await
+            .unwrap();
+        let reply = logins.complete(&state, "before").await.unwrap();
+        assert_eq!(reply["status"], "expired");
+        assert_eq!(reply["persisted"], false);
+    }
+
+    // Catches: an expired device authorization being polled/persisted as a new login,
+    // or terminal retries retaining the private device credential.
+    #[tokio::test]
+    async fn provider_authorization_deadline_cannot_authenticate_or_persist() {
+        use super::super::{GithubAction, GithubSettings};
+        let (_dir, _guard, state) = crate::settings::accounts_tests::isolated();
+        let owner = GithubSettings::new(state.clone());
+        let before = owner.read().await.unwrap();
+        let token = state.github.token.read().clone();
+        let mut events = state.event_bus.subscribe();
+        for status_first in [false, true] {
+            let id = if status_first {
+                "status-first"
+            } else {
+                "complete-first"
+            };
+            let now = Instant::now();
+            // TUIC-owned deadline state, not a fabricated provider HTTP response.
+            // Both polling and authorization have reached their deadline: expiry must win.
+            owner.login.flows.lock().insert(
+                id.into(),
+                Arc::new(tokio::sync::Mutex::new(Flow {
+                    code: "expired-device-private-canary".into(),
+                    epoch: state
+                        .github
+                        .login_epoch
+                        .load(std::sync::atomic::Ordering::SeqCst),
+                    additional: false,
+                    expires: now,
+                    next_poll: now,
+                    interval: Duration::from_secs(5),
+                    status: "pending",
+                })),
+            );
+            if status_first {
+                let status = owner
+                    .perform(GithubAction::CloudLoginStatus { flow_id: id.into() })
+                    .await
+                    .unwrap();
+                assert_eq!(status["status"], "expired");
+            }
+            for _ in 0..2 {
+                let reply = owner
+                    .perform(GithubAction::CompleteCloudLogin { flow_id: id.into() })
+                    .await
+                    .unwrap();
+                assert_eq!(reply["status"], "expired", "{reply}");
+                assert_eq!(reply["persisted"], false);
+                assert!(!reply.to_string().contains("expired-device-private-canary"));
+            }
+            assert!(owner.login.flow(id).unwrap().lock().await.code.is_empty());
+        }
+        assert_eq!(owner.read().await.unwrap(), before);
+        assert_eq!(*state.github.token.read(), token);
+        assert!(events.try_recv().is_err());
+    }
+
     // Catches: polling expired or completed flows again, or ignoring the owner's poll interval.
     #[tokio::test]
     async fn terminal_flows_and_poll_interval_do_not_exchange_device_credentials() {
@@ -185,6 +298,7 @@ mod tests {
                 id.into(),
                 Arc::new(tokio::sync::Mutex::new(Flow {
                     code: "private-device-canary".into(),
+                    epoch: 0,
                     additional: false,
                     expires: if expired {
                         now

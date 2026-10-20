@@ -20,7 +20,7 @@ describe("AnswersPanel", () => {
 			/>
 		));
 		const panel = panelOf(container);
-		expect(panel.textContent).toBe("❯ q1💬 one💬 two❯ q2💬 three");
+		expect(panel.textContent).toBe("❯ q1onetwo❯ q2three");
 		expect(Array.from(container.querySelectorAll("[data-prompt]")).map((n) => n.textContent)).toEqual(["❯ q1", "❯ q2"]);
 		// catches: the layer blocking selection/copy, or being unable to scroll a long history
 		expect(panel.style.userSelect).toBe("text");
@@ -40,7 +40,7 @@ describe("AnswersPanel", () => {
 				fontSize={13}
 			/>
 		));
-		expect(panelOf(container).textContent).toBe("❯ answered💬 yes");
+		expect(panelOf(container).textContent).toBe("❯ answeredyes");
 		expect(container.querySelectorAll("[data-turn]")).toHaveLength(1);
 	});
 
@@ -56,7 +56,7 @@ describe("AnswersPanel", () => {
 		expect(container.querySelectorAll("[data-turn]")).toHaveLength(0);
 		setView([{ prompt: "❯ pending", answers: ["💬 ready"] }]);
 		expect(container.querySelector('[role="status"]')).toBeNull();
-		expect(container.querySelector("[data-answer]")?.textContent).toBe("💬 ready");
+		expect(container.querySelector("[data-answer]")?.textContent).toBe("ready");
 	});
 
 	it("renders a 300-character multi-line prompt in full", () => {

@@ -19,7 +19,11 @@ function settingsPageLabels(): Set<string> {
 /** Every "Settings → Page" / "Settings > Page" a tip names, with its page. */
 function settingsPaths(): { feature: string; page: string }[] {
 	return TIPS.flatMap((tip) =>
-		[...tip.description.matchAll(/Settings\s*(?:→|>)\s*([A-Z][\w&]*(?:\s(?:&\s)?[A-Z][\w&]*)*)/g)].map((m) => ({
+		[
+			...tip.description.matchAll(
+				/Settings\s*(?:→|>)\s*([A-Z][\w&]*(?:\s(?:&\s)?(?:[A-Z][\w&]*|settings|plugins))*(?:\s\(Expert\))?)/g,
+			),
+		].map((m) => ({
 			feature: tip.feature,
 			page: m[1],
 		})),

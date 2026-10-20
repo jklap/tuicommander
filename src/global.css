@@ -1,3 +1,5 @@
+@import "./styles/chat-tokens.css";
+
 /* TUICommander — Global Styles */
 
 /*
@@ -200,14 +202,15 @@
   --bg-highlight: #37373d;
   --fg-primary: #cccccc;
   --fg-secondary: #a0a0a0;
+  /* Settings copy must remain readable on elevated and highlighted surfaces. */
+  --success-marker: var(--success);
+  --identity-on-light: #000000;
+  --identity-on-dark: #ffffff;
+  --settings-foreground: color-mix(in srgb, var(--fg-primary) 30%, var(--fg-secondary));
+  --link-foreground: color-mix(in srgb, var(--accent) 85%, var(--fg-primary));
   --fg-muted: #9aa1a9;
   --accent: #59a8dd;
   --accent-hover: #7abde5;
-  /* The user's question in the terminal grid and the chat view; the answer keeps its green. */
-  --prompt-tint: color-mix(in srgb, var(--accent) 16%, transparent);
-  --prompt-bar: var(--accent);
-  /* Shared answer indicator: preserve the dark rule; Paper uses its darker success green. */
-  --answer-rule: rgba(94,190,140,0.9);
   --activity: #59a8dd;  /* semantic: always blue, not overridden by themes */
   --border: #3e3e42;
   --success: #4ade80;
@@ -216,7 +219,8 @@
   --error: #ef4444;
   --changes: #d29922;
   --urgent: #ffd700;
-  --merged: #a371f7;
+  --merged: #ae83ff;
+  --text-on-merged: #000000;
   --unseen: #c084fc;
   /* Deleted-line counts. Lighter than --error so a negative diff does not read
      as an alarm, and legible at 10px (#ef4444 on --bg-tertiary is 3.65:1). */
@@ -227,7 +231,6 @@
   --search-match: #ffff0040;
   --search-match-active: #ff8c00b0;
   --search-match-border: #ff8c00;
-  --tweak-highlight: #f5a623;
 
   /* Tab-type colors (shared between TabBar and PaneTree) */
   --tab-diff-rgb: 239, 68, 68;       /* red */
@@ -244,19 +247,7 @@
   --radius-lg: 6px;
   --radius-xl: 8px;
   --radius-pill: 12px;
-  --radius-full: 50%;
-
-  /* Font size scale */
-  --font-3xs: 8px;
-  --font-2xs: 10px;
-  --font-xs: 11px;
-  --font-sm: 12px;
-  --font-md: 13px;
-  --font-base: 14px;
-  --font-lg: 15px;
-  --font-xl: 17px;
-  --font-2xl: 20px;
-  --font-3xl: 24px;
+  --radius-full: 9999px;
 
   /* List-row rhythm — shared by every tree/list panel (sidebar branches, file
      browser, …). These panels sit side by side and previously each invented its
@@ -332,7 +323,12 @@ html {
    colors are picked against a dark UI; shade them for repo names on white
    (getRepoTextColor). */
 [data-theme="vscode-light"] {
-  --answer-rule: var(--success);
+  /* These semantic tokens also label branch/PR markers, not just swatches. */
+  --success-marker: #176f30;
+  --attention: #895003;
+  --changes: #805900;
+  --merged: #7540b0;
+  --text-on-merged: #ffffff;
   --diff-del: var(--error);
   --repo-text-shade: 40%;
 }
@@ -347,6 +343,11 @@ html, body {
   /* Dark app: make native controls (number-input spinners, selects, pickers)
      render their affordances light instead of the default black-on-dark. */
   color-scheme: dark;
+}
+
+html[data-theme="vscode-light"],
+html[data-theme="vscode-light"] body {
+  color-scheme: light;
 }
 
 #app {

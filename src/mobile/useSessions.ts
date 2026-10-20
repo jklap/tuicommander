@@ -2,6 +2,7 @@ import { createSignal, onCleanup } from "solid-js";
 import { appLogger } from "../stores/appLogger";
 import type { ChatViewWake } from "../stores/chatView";
 import { rpc, subscribeEvents } from "../transport";
+import { isAcpConfigured } from "../utils/acpAvailability";
 import { createVisibilityInterval } from "./utils/visibilityInterval";
 
 /** Server-side accumulated state for a session (matches Rust SessionState) */
@@ -42,7 +43,7 @@ export interface ChoicePrompt {
 	dismiss_key?: string;
 	amend_key?: string;
 	/** How this agent's dialog accepts a selected option. */
-	selection_mode?: "navigate-enter";
+	selection_mode?: "navigate-enter" | "toggle-enter";
 }
 
 /** Single option in a ChoicePrompt. Matches Rust output_parser::ChoiceOption. */
@@ -123,6 +124,23 @@ export function reconcileSessions(prev: SessionInfo[], next: SessionInfo[]): Ses
  * Returns reactive signals for the session list, loading state, and error.
  */
 export function useSessions(onRecovered?: () => void) {
+	const [aiChatAvailable, setAiChatAvailable] = createSignal(false);
+	let availabilityRevision = 0;
+	async function refreshAiChatAvailability() {
+		const revision = ++availabilityRevision;
+		try {
+			const config = await rpc<{ ego_executable?: string }>("load_config");
+			if (revision === availabilityRevision) setAiChatAvailable(isAcpConfigured(config.ego_executable));
+		} catch (err) {
+			if (revision === availabilityRevision) setAiChatAvailable(false);
+			appLogger.warn("network", "Could not load AI Chat availability", err);
+		}
+	}
+	onCleanup(() => {
+		availabilityRevision++;
+	});
+	void refreshAiChatAvailability();
+
 	const [sessions, setSessions] = createSignal<SessionInfo[]>([]);
 	const [loading, setLoading] = createSignal(true);
 	const [refreshing, setRefreshing] = createSignal(false);
@@ -158,7 +176,10 @@ export function useSessions(onRecovered?: () => void) {
 			setError(null);
 			setAuthError(false);
 			failures = 0;
-			if (recovered || retryViews) onRecovered?.();
+			if (recovered || retryViews) {
+				void refreshAiChatAvailability();
+				onRecovered?.();
+			}
 		} catch (err) {
 			const msg = err instanceof Error ? err.message : String(err);
 			setError(isAuthError(err) ? "Sign in again to reconnect." : "Could not connect to the server.");
@@ -183,34 +204,39 @@ export function useSessions(onRecovered?: () => void) {
 	window.addEventListener("online", onOnline);
 	onCleanup(() => window.removeEventListener("online", onOnline));
 
-	// One SSE subscription for the three event kinds this hook reacts to:
-	// create/close trigger an immediate refetch so the UI beats the poll
-	// interval, and shell-state updates a session in-place with no refetch at all.
+	// One shared SSE subscription: create/close refresh sessions, parsed state
+	// updates rows, and app settings changes refresh AI Chat availability.
 	//
 	// `subscribeEvents` turns these handler keys into the `?types=` query the
 	// /events endpoint filters on. Without it the client is sent — and has to
 	// JSON-parse — every event kind the backend publishes, the large majority of
 	// which the mobile UI has no handler for.
-	const unsubscribe = subscribeEvents({
-		"chat-view-changed": (payload) => {
-			const { session_id } = payload as { session_id: string };
-			for (const wake of chatWakes.get(session_id) ?? []) wake();
+	const unsubscribe = subscribeEvents(
+		{
+			"settings-changed": (payload) => {
+				if ((payload as { section: string }).section === "app") void refreshAiChatAvailability();
+			},
+			"chat-view-changed": (payload) => {
+				const { session_id } = payload as { session_id: string };
+				for (const wake of chatWakes.get(session_id) ?? []) wake();
+			},
+			"session-created": () => void fetchSessions(),
+			"session-closed": () => void fetchSessions(),
+			"pty-parsed": (payload) => {
+				const { session_id, parsed } = payload as {
+					session_id: string;
+					parsed: { type: string; state?: string };
+				};
+				if (parsed.type !== "shell-state" || !parsed.state) return;
+				setSessions((prev) =>
+					prev.map((s) =>
+						s.session_id === session_id && s.state ? { ...s, state: { ...s.state, shell_state: parsed.state } } : s,
+					),
+				);
+			},
 		},
-		"session-created": () => void fetchSessions(),
-		"session-closed": () => void fetchSessions(),
-		"pty-parsed": (payload) => {
-			const { session_id, parsed } = payload as {
-				session_id: string;
-				parsed: { type: string; state?: string };
-			};
-			if (parsed.type !== "shell-state" || !parsed.state) return;
-			setSessions((prev) =>
-				prev.map((s) =>
-					s.session_id === session_id && s.state ? { ...s, state: { ...s.state, shell_state: parsed.state } } : s,
-				),
-			);
-		},
-	});
+		{ onResync: () => void refreshAiChatAvailability() },
+	);
 
 	onCleanup(() => {
 		unsubscribe.then((fn) => fn()).catch(() => {});
@@ -234,10 +260,5 @@ export function useSessions(onRecovered?: () => void) {
 		});
 	}
 
-	/** Count of sessions with pending questions */
-	function questionCount(): number {
-		return sessions().filter((s) => s.state?.awaiting_input).length;
-	}
-
-	return { sessions, loading, refreshing, error, authError, refresh, questionCount, markSeen, subscribeChatWake };
+	return { aiChatAvailable, sessions, loading, refreshing, error, authError, refresh, markSeen, subscribeChatWake };
 }

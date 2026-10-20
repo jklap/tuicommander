@@ -87,6 +87,16 @@ fn native_inventory_preserves_optional_dynamic_and_unavailable_fields() {
     );
     assert!(catalogue.fields.contains_key("prompts.prompts.{id}.text"));
     assert!(catalogue.fields.contains_key("voice.device"));
+    assert!(
+        catalogue
+            .fields
+            .contains_key("corrections.replacements.{from}.to")
+    );
+    #[cfg(not(feature = "dictation"))]
+    assert!(matches!(
+        catalogue.fields["corrections.replacements.{from}.to"].availability,
+        Availability::Unavailable { .. }
+    ));
     #[cfg(not(feature = "dictation"))]
     assert!(matches!(
         catalogue.fields["voice.device"].availability,
@@ -104,6 +114,13 @@ fn native_inventory_preserves_optional_dynamic_and_unavailable_fields() {
 #[test]
 fn inventory_gap_without_owner_fails_and_cutover_refuses_open_gaps() {
     let mut catalogue = native_catalogue().unwrap();
+    catalogue.require_complete_inventory().unwrap();
+    catalogue.gaps.push(InventoryGap {
+        store: "fixture".into(),
+        path: "/missing_owner".into(),
+        owner_step: "fixture owner".into(),
+        reason: "Fixture proves the cutover refuses an unresolved owner".into(),
+    });
     assert!(catalogue.require_complete_inventory().is_err());
     let gap = InventoryGap {
         store: "plugin.example".into(),

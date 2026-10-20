@@ -199,3 +199,68 @@ fn queued_human_image_prompt_is_not_silently_dropped() {
     assert_eq!(updates[0]["sessionUpdate"], "user_message_chunk");
     assert_eq!(updates[0]["content"]["text"], "xxxxxxxxxx\n[image]");
 }
+
+// Catches: edit inputs are only capped raw JSON, and completion replaces the diff.
+#[test]
+fn edit_diff_survives_tool_completion_with_tabs_and_empty_replacement() {
+    let call = json!({"type":"assistant","message":{"id":"m","content":[{
+        "type":"tool_use","id":"edit","name":"Edit","input":{
+            "file_path":"table.tsv","old_string":"key\told\nsecond\tbefore","new_string":""
+        }
+    }]}});
+    let mut adapter = ClaudeAdapter::default();
+    let updates = adapter.absorb(&call.to_string());
+    let diff = &updates[0]["content"][0];
+    assert_eq!(diff["type"], "diff");
+    assert_eq!(diff["path"], "table.tsv");
+    assert_eq!(diff["oldText"], "key\told\nsecond\tbefore");
+    assert_eq!(diff["newText"], "");
+    let result = json!({"type":"user","message":{"content":[{
+        "type":"tool_result","tool_use_id":"edit","content":"Edited successfully"
+    }]}});
+    let completed = adapter.absorb(&result.to_string());
+    assert_eq!(&completed[0]["content"][0], diff);
+    assert_eq!(
+        completed[0]["content"][1]["content"]["text"],
+        "Edited successfully"
+    );
+    assert!(adapter.known_tools.is_empty());
+}
+
+// Catches: a tool with edit-like arguments is mislabelled, or malformed input invents a diff.
+#[test]
+fn only_complete_edit_inputs_become_diff_content() {
+    for (name, input) in [
+        (
+            "Bash",
+            json!({"file_path":"a","old_string":"a","new_string":"b"}),
+        ),
+        ("Edit", json!({"file_path":"a","old_string":"a"})),
+        (
+            "Edit",
+            json!({"file_path":"a","old_string":null,"new_string":"b"}),
+        ),
+    ] {
+        let call = json!({"type":"assistant","message":{"content":[{
+            "type":"tool_use","id":"tool","name":name,"input":input
+        }]}});
+        let (updates, _) = run(&call.to_string());
+        assert!(updates[0].get("content").is_none(), "{name}: {input}");
+    }
+}
+
+// Catches: using the raw-input 1000-char cap loses a long edit, or unbounded edit text bypasses log limits.
+#[test]
+fn edit_diff_uses_the_bounded_text_budget_not_the_raw_input_budget() {
+    let text = "x".repeat(MAX_TEXT_CHARS + 10);
+    let call = json!({"type":"assistant","message":{"content":[{
+        "type":"tool_use","id":"edit","name":"Edit","input":{
+            "file_path":"table.tsv","old_string":"","new_string":text
+        }
+    }]}});
+    let (updates, _) = run(&call.to_string());
+    let content = updates[0]["content"][0]["newText"].as_str().unwrap();
+    assert_eq!(content.chars().count(), MAX_TEXT_CHARS);
+    assert!(content.ends_with('…'));
+    assert_eq!(updates[0]["content"][0]["oldText"], "");
+}

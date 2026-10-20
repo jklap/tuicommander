@@ -1,6 +1,8 @@
 import { createEffect, createSignal, Show } from "solid-js";
+import type { AgentType } from "../../agents";
 import { TerminalChatTranscript } from "../../components/Terminal/TerminalChatTranscript";
-import { type ChatViewWake, chatViewStore } from "../../stores/chatView";
+import { type ChatViewWake, chatViewStore, supportsTerminalChatView } from "../../stores/chatView";
+import { mobileChatReadingStyle } from "../mobileFontSize";
 import styles from "./SessionChatView.module.css";
 
 /** Mode belongs to a PTY, not to its polled SessionInfo object. */
@@ -11,13 +13,16 @@ export function useSessionChatView(props: {
 	sessionExists: () => boolean;
 	subscribeWake: ChatViewWake;
 }) {
+	const [atBottom, setAtBottom] = createSignal(true);
+	let jump: (() => void) | undefined;
 	const [mode, setMode] = createSignal<"cli" | "chat">(modes.get(props.sessionId()) ?? "cli");
 	createEffect(() => setMode(modes.get(props.sessionId()) ?? "cli"));
 	const select = (next: "cli" | "chat") => {
 		modes.set(props.sessionId(), next);
 		setMode(next);
 	};
-	const available = () => props.agentType() === "claude" && props.sessionExists();
+	// SessionInfo has no transcript binding: chat_view_snapshot remains the authority.
+	const available = () => supportsTerminalChatView(props.agentType()) && props.sessionExists();
 	createEffect(() => {
 		if (mode() === "chat" && !available()) {
 			chatViewStore.markUnavailable(props.sessionId(), "No agent is running in this terminal");
@@ -25,20 +30,17 @@ export function useSessionChatView(props: {
 		}
 	});
 	const active = () => mode() === "chat" && available();
+	const openChat = () => {
+		chatViewStore.clearUnavailable(props.sessionId());
+		select("chat");
+	};
 	const Toggle = () => (
 		<Show when={available()}>
 			<div class={styles.toggle} role="group" aria-label="Terminal view">
 				<button type="button" aria-pressed={!active()} onClick={() => select("cli")}>
 					CLI
 				</button>
-				<button
-					type="button"
-					aria-pressed={active()}
-					onClick={() => {
-						chatViewStore.clearUnavailable(props.sessionId());
-						select("chat");
-					}}
-				>
+				<button type="button" aria-pressed={active()} onClick={openChat}>
 					Chat
 				</button>
 			</div>
@@ -55,17 +57,23 @@ export function useSessionChatView(props: {
 			</Show>
 			<Show when={active() && props.sessionId()} keyed>
 				{(sessionId) => (
-					<TerminalChatTranscript
-						sessionId={sessionId}
-						terminalAgent="claude"
-						mobile
-						subscribeWake={props.subscribeWake}
-						onUnavailable={() => select("cli")}
-						hint="Reply below. Switch to CLI for permission prompts or questions missing here."
-					/>
+					<div class={styles.reading} data-mobile-reading style={mobileChatReadingStyle()}>
+						<TerminalChatTranscript
+							sessionId={sessionId}
+							terminalAgent={props.agentType() as AgentType}
+							mobile
+							onAtBottomChange={setAtBottom}
+							onRegisterScrollToBottom={(fn) => {
+								jump = fn;
+								setAtBottom(true);
+							}}
+							subscribeWake={props.subscribeWake}
+							onUnavailable={() => select("cli")}
+						/>
+					</div>
 				)}
 			</Show>
 		</>
 	);
-	return { active, Toggle, View };
+	return { active, available, openChat, Toggle, View, atBottom, scrollToBottom: () => jump?.() };
 }

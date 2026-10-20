@@ -1,6 +1,7 @@
 import { batch } from "solid-js";
 import { createStore, produce } from "solid-js/store";
 import { invoke } from "../invoke";
+import { settingsRefresh } from "../services/settingsRefresh";
 import { appLogger } from "./appLogger";
 
 // ---------------------------------------------------------------------------
@@ -79,6 +80,13 @@ function createTunnelsStore() {
 	});
 
 	const actions = {
+		startRemoteSync(): () => void {
+			return settingsRefresh.register({
+				section: "tunnels",
+				read: () => invoke<TunnelProfile[]>("list_tunnel_profiles"),
+				apply: (profiles) => setState("profiles", profiles ?? []),
+			});
+		},
 		/** Load profiles and active tunnels from backend */
 		async hydrate(): Promise<void> {
 			if (hydrated) return;

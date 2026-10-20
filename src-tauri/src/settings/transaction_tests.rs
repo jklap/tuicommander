@@ -158,7 +158,7 @@ async fn patch_typo_rejected() {
     crate::credentials::reset_test_faults();
     let dir = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
     let _guard = config::set_config_dir_override(dir.path().to_path_buf());
-    let (_, service) = service();
+    let (_state, service) = service();
     let snapshot = read(&service).await;
     let error = service
         .patch(
@@ -298,7 +298,7 @@ async fn wrong_owner_malformed_paths_and_secret_objects_never_commit() {
     crate::credentials::reset_test_faults();
     let dir = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
     let _guard = config::set_config_dir_override(dir.path().to_path_buf());
-    let (_, service) = service();
+    let (_state, service) = service();
     let revision = read(&service).await.revision;
     let error = service
         .patch(

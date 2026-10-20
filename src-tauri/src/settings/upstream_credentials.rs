@@ -41,10 +41,6 @@ pub struct UpstreamCredentials {
     state: Arc<AppState>,
 }
 impl UpstreamCredentials {
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "constructed by settings transport wiring")
-    )]
     pub(crate) fn new(state: Arc<AppState>) -> Self {
         Self { state }
     }
@@ -66,6 +62,14 @@ impl UpstreamCredentials {
     }
     pub async fn perform(&self, action: CredentialAction) -> Result<Value, Failure> {
         if let CredentialAction::BeginLogin { id } = action {
+            // OAuth needs the desktop browser and its local callback listener.
+            #[cfg(feature = "desktop")]
+            let desktop_available = self.state.app_handle.read().is_some();
+            #[cfg(not(feature = "desktop"))]
+            let desktop_available = false;
+            if !desktop_available {
+                return Err(Error::new(ID, "unavailable"));
+            }
             let name = ConfigFile::<UpstreamMcpConfig>::new(UPSTREAMS_FILE)
                 .update_with_strict(|config| {
                     Ok((

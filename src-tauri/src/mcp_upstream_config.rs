@@ -562,11 +562,28 @@ fn persist_upstream_delta(
     persist_upstream_delta_with_credentials(base, desired, self_port, Vec::new())
 }
 
+#[cfg(test)]
 fn persist_upstream_delta_with_credentials(
     base: &UpstreamMcpConfig,
     desired: &UpstreamMcpConfig,
     self_port: u16,
     credentials: Vec<UpstreamCredentialWrite>,
+) -> Result<(UpstreamMcpConfig, UpstreamMcpConfig), String> {
+    persist_upstream_delta_with_credential_phase(
+        base,
+        desired,
+        self_port,
+        credentials,
+        &std::sync::atomic::AtomicBool::new(false),
+    )
+}
+
+fn persist_upstream_delta_with_credential_phase(
+    base: &UpstreamMcpConfig,
+    desired: &UpstreamMcpConfig,
+    self_port: u16,
+    credentials: Vec<UpstreamCredentialWrite>,
+    persisted: &std::sync::atomic::AtomicBool,
 ) -> Result<(UpstreamMcpConfig, UpstreamMcpConfig), String> {
     let delta = derive_upstream_delta(base, desired)?;
     let added_ids: HashSet<_> = delta.added.iter().map(|s| s.id.clone()).collect();
@@ -612,6 +629,7 @@ fn persist_upstream_delta_with_credentials(
                     // vault entry under its name is an orphan; replace it.
                     true,
                 )?;
+                persisted.store(true, std::sync::atomic::Ordering::Release);
                 created.0.push(key);
             }
             let new = latest.clone();
@@ -651,15 +669,25 @@ pub(crate) async fn save_mcp_upstreams_with_credentials_inner(
     state: &crate::state::AppState,
 ) -> Result<(), String> {
     let self_port = state.config.read().services.server.port;
-    persist_and_apply_upstream_delta_with_credentials(
+    let persisted = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    if let Err(error) = persist_and_apply_upstream_delta_with_credential_phase(
         base,
         config,
         credentials,
         self_port,
         &state.mcp.upstream_registry,
         || std::future::ready(()),
+        persisted.clone(),
     )
     .await
+    {
+        if persisted.load(std::sync::atomic::Ordering::Acquire) {
+            crate::settings::api::publish_change(state, "upstreams", false);
+        }
+        return Err(error);
+    }
+    crate::settings::api::publish_change(state, "upstreams", true);
+    Ok(())
 }
 
 #[cfg(test)]
@@ -685,6 +713,7 @@ where
     .await
 }
 
+#[cfg(test)]
 async fn persist_and_apply_upstream_delta_with_credentials<F, Fut>(
     base: UpstreamMcpConfig,
     config: UpstreamMcpConfig,
@@ -697,9 +726,40 @@ where
     F: FnOnce() -> Fut,
     Fut: std::future::Future<Output = ()>,
 {
+    persist_and_apply_upstream_delta_with_credential_phase(
+        base,
+        config,
+        credentials,
+        self_port,
+        registry,
+        before_apply,
+        std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+    )
+    .await
+}
+
+async fn persist_and_apply_upstream_delta_with_credential_phase<F, Fut>(
+    base: UpstreamMcpConfig,
+    config: UpstreamMcpConfig,
+    credentials: Vec<UpstreamCredentialWrite>,
+    self_port: u16,
+    registry: &crate::mcp_proxy::registry::UpstreamRegistry,
+    before_apply: F,
+    persisted: std::sync::Arc<std::sync::atomic::AtomicBool>,
+) -> Result<(), String>
+where
+    F: FnOnce() -> Fut,
+    Fut: std::future::Future<Output = ()>,
+{
     let _sequence = UPSTREAM_SAVE_SEQUENCE.lock().await;
     let (old_config, config) = tokio::task::spawn_blocking(move || {
-        persist_upstream_delta_with_credentials(&base, &config, self_port, credentials)
+        persist_upstream_delta_with_credential_phase(
+            &base,
+            &config,
+            self_port,
+            credentials,
+            &persisted,
+        )
     })
     .await
     .map_err(|e| format!("Upstream config save task failed: {e}"))??;
@@ -726,6 +786,7 @@ pub(crate) fn update_upstream_auth(name: &str, auth: UpstreamAuth) -> Result<(),
 }
 
 fn set_upstream_auth(name: &str, auth: Option<UpstreamAuth>) -> Result<(), String> {
+    // The DCR transport publishes after this strict owner write succeeds.
     let found =
         ConfigFile::<UpstreamMcpConfig>::new(UPSTREAMS_FILE).update_with_strict(|config| {
             match config.servers.iter_mut().find(|s| s.name == name) {

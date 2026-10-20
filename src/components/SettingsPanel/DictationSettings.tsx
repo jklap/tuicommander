@@ -72,13 +72,19 @@ const ModelRow: Component<{ model: ModelInfo }> = (props) => {
 				actions={
 					<>
 						<Show when={props.model.downloaded && !isSelected()}>
-							<button title="Use model" class={s.testBtn} onClick={() => dictationStore.setModel(props.model.name)}>
+							<button
+								data-setting-id="voice.model"
+								title="Use model"
+								class={s.testBtn}
+								onClick={() => dictationStore.setModel(props.model.name)}
+							>
 								{t("dictation.use", "Use")}
 							</button>
 						</Show>
 
 						<Show when={!props.model.downloaded && !isDownloading()}>
 							<button
+								data-non-setting="Voice asset install, removal or download workflow; not an editable preference"
 								title="Download model"
 								class={s.testBtn}
 								onClick={() => dictationStore.downloadModel(props.model.name)}
@@ -99,6 +105,7 @@ const ModelRow: Component<{ model: ModelInfo }> = (props) => {
 						</Show>
 						<Show when={props.model.downloaded}>
 							<button
+								data-non-setting="Voice asset install, removal or download workflow; not an editable preference"
 								class={s.testBtn}
 								onClick={() => dictationStore.deleteModel(props.model.name)}
 								title={t("dictation.deleteModel", "Delete model")}
@@ -194,12 +201,7 @@ export const DictationSettings: Component = () => {
 	// h3 heading — see `SpeechRecognition` for why that matters.
 	return (
 		<div class={s.section}>
-			<SettingPageHeader
-				title="Voice"
-				description="Dictation, speech recognition and spoken conversations on this machine."
-				scope="This machine"
-				breadcrumb="AI / Voice"
-			/>
+			<SettingPageHeader title="Voice" scope="This machine" breadcrumb="AI / Voice" />
 			<SectionCard title={t("dictation.heading.dictation", "Dictation")}>
 				<Show when={dictationStore.state.ownedElsewhere}>
 					<p class={s.hint}>
@@ -211,6 +213,7 @@ export const DictationSettings: Component = () => {
 				</Show>
 
 				<SettingToggle
+					settingId="voice.enabled"
 					row
 					label={t("dictation.enableLabel", "Enable Dictation")}
 					hint={t("dictation.enableHint", "Enable voice-to-text dictation")}
@@ -232,6 +235,7 @@ export const DictationSettings: Component = () => {
 							<>
 								<div class={d.hotkeyRow}>
 									<KeyComboCapture
+										settingId="voice.hotkey"
 										value={dictationStore.state.hotkey}
 										onChange={(combo) => dictationStore.setHotkey(combo)}
 										placeholder={t("dictation.hotkeyPlaceholder", "Press a key combination...")}
@@ -244,6 +248,7 @@ export const DictationSettings: Component = () => {
 
 					<ExpertSetting configKey="dictation.long_press_ms" value={dictationStore.state.longPressMs}>
 						<SettingSlider
+							settingId="voice.long_press_ms"
 							row
 							label={t("dictation.longPressLabel", "Long-press threshold")}
 							value={dictationStore.state.longPressMs}
@@ -262,6 +267,7 @@ export const DictationSettings: Component = () => {
 
 				<ExpertSetting configKey="dictation.auto_send" value={dictationStore.state.autoSend}>
 					<SettingToggle
+						settingId="voice.auto_send"
 						row
 						label={t("dictation.autoSendLabel", "Auto-send")}
 						hint={t("dictation.autoSendHint", "Automatically press Enter after inserting transcribed text")}
@@ -280,10 +286,18 @@ export const DictationSettings: Component = () => {
 				)}
 				actions={
 					<>
-						<button class={s.testBtn} onClick={handleImportCorrections}>
+						<button
+							data-setting-id="corrections.replacements.{from}.to"
+							class={s.testBtn}
+							onClick={handleImportCorrections}
+						>
 							{t("dictation.import", "Import")}
 						</button>
-						<button class={s.testBtn} onClick={handleExportCorrections}>
+						<button
+							data-non-setting="Export the correction map without changing owner configuration"
+							class={s.testBtn}
+							onClick={handleExportCorrections}
+						>
 							{t("dictation.export", "Export")}
 						</button>
 					</>
@@ -300,6 +314,7 @@ export const DictationSettings: Component = () => {
 							name={`${from} → ${to}`}
 							actions={
 								<button
+									data-setting-id="corrections.replacements.{from}.to"
 									class={s.testBtn}
 									onClick={() => handleRemoveCorrection(from)}
 									title={t("dictation.removeCorrection", "Remove correction")}
@@ -318,6 +333,7 @@ export const DictationSettings: Component = () => {
 								aria-describedby={descriptionId()}
 								type="text"
 								placeholder={t("dictation.correctionFromPlaceholder", "Heard text...")}
+								data-setting-id="corrections.replacements.{from}.from"
 								value={newFrom()}
 								onInput={(e) => setNewFrom(e.currentTarget.value)}
 								onKeyDown={(e) => e.key === "Enter" && handleAddCorrection()}
@@ -326,11 +342,17 @@ export const DictationSettings: Component = () => {
 								aria-label={t("dictation.correctionsTo", "To")}
 								type="text"
 								placeholder={t("dictation.correctionToPlaceholder", "Replace with...")}
+								data-setting-id="corrections.replacements.{from}.to"
 								value={newTo()}
 								onInput={(e) => setNewTo(e.currentTarget.value)}
 								onKeyDown={(e) => e.key === "Enter" && handleAddCorrection()}
 							/>
-							<button class={s.testBtn} onClick={handleAddCorrection} disabled={!newFrom().trim() || !newTo().trim()}>
+							<button
+								data-setting-id="corrections.replacements.{from}.to"
+								class={s.testBtn}
+								onClick={handleAddCorrection}
+								disabled={!newFrom().trim() || !newTo().trim()}
+							>
 								{t("dictation.addCorrection", "Add")}
 							</button>
 						</div>
@@ -419,13 +441,18 @@ const SpeechRecognition: Component = () => {
 										when={dictationStore.state.devices.length > 0}
 										fallback={
 											<div>
-												<button class={s.testBtn} onClick={() => dictationStore.refreshDevices()}>
+												<button
+													data-non-setting="Explicit device discovery; does not select a device"
+													class={s.testBtn}
+													onClick={() => dictationStore.refreshDevices()}
+												>
 													{t("dictation.detectMicrophones", "Detect Microphones")}
 												</button>
 											</div>
 										}
 									>
 										<Select
+											data-setting-id="voice.device"
 											id={id}
 											aria-describedby={descriptionId()}
 											value={dictationStore.state.selectedDevice ?? ""}
@@ -446,13 +473,11 @@ const SpeechRecognition: Component = () => {
 					</ExpertSetting>
 				</Show>
 
-				<SettingRow
-					label={t("dictation.languageLabel", "Language")}
-					hint={t("dictation.languageHint", "Auto-detect works well for most languages.")}
-				>
+				<SettingRow label={t("dictation.languageLabel", "Language")}>
 					{(id, descriptionId) => (
 						<>
 							<Select
+								data-setting-id="voice.language"
 								id={id}
 								aria-describedby={descriptionId()}
 								value={dictationStore.state.language}
@@ -486,6 +511,7 @@ const SpeechRecognition: Component = () => {
 
 				<ExpertSetting configKey="dictation.rms_threshold" value={dictationStore.state.rmsThreshold}>
 					<SettingSlider
+						settingId="voice.rms_threshold"
 						row
 						label={t("dictation.rmsLabel", "Level gate")}
 						value={Math.round(thresholdPercent())}
@@ -494,15 +520,13 @@ const SpeechRecognition: Component = () => {
 						max={50}
 						step={1}
 						formatValue={(v) => `${v}%`}
-						hint={t(
-							"dictation.rmsHint",
-							"Audio quieter than this never reaches Whisper. Raise it until room noise stays below the marker; lower it if quiet speech is rejected.",
-						)}
+						hint={t("dictation.rmsHint", "Audio below this level is ignored.")}
 					/>
 				</ExpertSetting>
 
 				<ExpertSetting configKey="dictation.no_speech_threshold" value={dictationStore.state.noSpeechThreshold}>
 					<SettingSlider
+						settingId="voice.no_speech_threshold"
 						row
 						label={t("dictation.noSpeechLabel", "Speech confidence gate")}
 						value={Math.round(dictationStore.state.noSpeechThreshold * 100)}
@@ -561,7 +585,12 @@ const SpeechRecognition: Component = () => {
 									</div>
 								</div>
 								<div class={d.controlRow}>
-									<button class={s.testBtn} onClick={toggleTest} disabled={dictationStore.state.processing}>
+									<button
+										data-non-setting="Preview audio or test recording without changing the stored preference"
+										class={s.testBtn}
+										onClick={toggleTest}
+										disabled={dictationStore.state.processing}
+									>
 										{recording()
 											? t("dictation.tuningStop", "Stop test")
 											: t("dictation.tuningStart", "Start test recording")}
@@ -744,6 +773,7 @@ const SpeechSetup: Component = () => {
 					{(id, descriptionId) => (
 						<>
 							<Select
+								data-setting-id="voice.speech_engine"
 								id={id}
 								aria-describedby={descriptionId()}
 								value={engine()}
@@ -764,6 +794,7 @@ const SpeechSetup: Component = () => {
 						<label>{t("dictation.speechCommandLabel", "Speech command")}</label>
 						<ContextualHelp label={t("dictation.speechCommandLabel", "Speech command")} />
 						<Textarea
+							data-setting-id="voice.speech_command"
 							rows={4}
 							value={dictationStore.state.speechCommand.join("\n")}
 							onChange={(e) =>
@@ -800,6 +831,7 @@ const SpeechSetup: Component = () => {
 									when={isEdge()}
 									fallback={
 										<Select
+											data-setting-id="voice.speech_voice"
 											id={id}
 											aria-describedby={descriptionId()}
 											value={dictationStore.state.speechVoice}
@@ -817,6 +849,7 @@ const SpeechSetup: Component = () => {
 									}
 								>
 									<Select
+										data-setting-id="voice.speech_edge_voice"
 										value={dictationStore.state.speechEdgeVoice}
 										onChange={(e) => dictationStore.setSpeechEdgeVoice(e.currentTarget.value)}
 									>
@@ -826,7 +859,11 @@ const SpeechSetup: Component = () => {
 										</For>
 									</Select>
 								</Show>
-								<button class={d.modelDownload} onClick={listen}>
+								<button
+									data-non-setting="Preview audio or test recording without changing the stored preference"
+									class={d.modelDownload}
+									onClick={listen}
+								>
 									{t("dictation.listen", "Listen")}
 								</button>
 							</div>
@@ -848,6 +885,7 @@ const SpeechSetup: Component = () => {
 
 			<ExpertSetting configKey="dictation.speech_volume_db" value={dictationStore.state.speechVolumeDb}>
 				<SettingSlider
+					settingId="voice.speech_volume_db"
 					row
 					label={t("dictation.voiceVolumeLabel", "Voice volume")}
 					value={volumeDrag() ?? dictationStore.state.speechVolumeDb}
@@ -869,6 +907,7 @@ const SpeechSetup: Component = () => {
 
 			<ExpertSetting configKey="dictation.speech_levelling" value={dictationStore.state.speechLevelling}>
 				<SettingSlider
+					settingId="voice.speech_levelling"
 					row
 					label={t("dictation.levellingLabel", "Levelling")}
 					value={levellingDrag() ?? Math.round(dictationStore.state.speechLevelling * 100)}
@@ -953,6 +992,7 @@ const VoiceLibrary: Component<{ language: string }> = (props) => {
 									</div>
 									<div class={d.modelActions}>
 										<button
+											data-non-setting="Voice asset install, removal or download workflow; not an editable preference"
 											class={d.modelDelete}
 											onClick={() => dictationStore.deleteSpeechVoice(props.language, voice.id)}
 											title={t("dictation.voiceDeleteUser", "Delete this voice file")}
@@ -966,10 +1006,15 @@ const VoiceLibrary: Component<{ language: string }> = (props) => {
 					</div>
 				</Show>
 				<div class={d.controlRow}>
-					<button class={d.modelDownload} onClick={() => fileInput?.click()}>
+					<button
+						data-non-setting="Voice asset install, removal or download workflow; not an editable preference"
+						class={d.modelDownload}
+						onClick={() => fileInput?.click()}
+					>
 						{t("dictation.addVoiceFile", "Add voice file…")}
 					</button>
 					<input
+						data-non-setting="Speech asset file import, not persisted configuration"
 						ref={fileInput}
 						type="file"
 						accept=".safetensors"
@@ -1027,6 +1072,7 @@ const SpeechAssetRow: Component<{ asset: SpeechAsset }> = (props) => {
 						<span class={d.progressText}>{percent() ?? 0}%</span>
 					</div>
 					<button
+						data-non-setting="Voice asset install, removal or download workflow; not an editable preference"
 						class={d.modelDelete}
 						onClick={() => dictationStore.cancelSpeechDownload(props.asset.id)}
 						title={t("dictation.cancel", "Cancel")}
@@ -1038,7 +1084,11 @@ const SpeechAssetRow: Component<{ asset: SpeechAsset }> = (props) => {
 					<span class={d.modelActiveLabel}>{t("dictation.active", "Active")}</span>
 				</Show>
 				<Show when={!downloading() && props.asset.state !== "ready"}>
-					<button class={d.modelDownload} onClick={() => dictationStore.downloadSpeechAsset(props.asset.id)}>
+					<button
+						data-non-setting="Voice asset install, removal or download workflow; not an editable preference"
+						class={d.modelDownload}
+						onClick={() => dictationStore.downloadSpeechAsset(props.asset.id)}
+					>
 						{props.asset.state === "incomplete"
 							? t("dictation.speechRepair", "Repair")
 							: t("dictation.download", "Download")}
@@ -1046,6 +1096,7 @@ const SpeechAssetRow: Component<{ asset: SpeechAsset }> = (props) => {
 				</Show>
 				<Show when={!downloading() && props.asset.state !== "absent"}>
 					<button
+						data-non-setting="Voice asset install, removal or download workflow; not an editable preference"
 						class={d.modelDelete}
 						onClick={() => dictationStore.deleteSpeechAsset(props.asset.id)}
 						title={t("dictation.speechDelete", "Delete this download")}
@@ -1151,6 +1202,7 @@ const HandsFreeControls: Component = () => {
 								fallback={
 									<div class={s.passwordRow}>
 										<Select
+											data-non-setting="Current hands-free terminal session, not persisted configuration"
 											id={id}
 											aria-describedby={descriptionId()}
 											value={target()}
@@ -1159,13 +1211,22 @@ const HandsFreeControls: Component = () => {
 											<option value="">{t("dictation.handsFreeNoTarget", "Choose a terminal…")}</option>
 											<For each={targets()}>{(term) => <option value={term.sessionId ?? ""}>{term.name}</option>}</For>
 										</Select>
-										<button class={cx(s.testBtn, d.startConversation)} onClick={start} disabled={!target()}>
+										<button
+											data-non-setting="Start or stop the current hands-free runtime conversation"
+											class={cx(s.testBtn, d.startConversation)}
+											onClick={start}
+											disabled={!target()}
+										>
 											{t("dictation.handsFreeStart", "Start conversation")}
 										</button>
 									</div>
 								}
 							>
-								<button class={cx(s.testBtn, d.stopConversation)} onClick={() => dictationStore.disarmHandsFree()}>
+								<button
+									data-non-setting="Start or stop the current hands-free runtime conversation"
+									class={cx(s.testBtn, d.stopConversation)}
+									onClick={() => dictationStore.disarmHandsFree()}
+								>
 									{t("dictation.handsFreeStop", "Stop conversation")}
 								</button>
 							</Show>
@@ -1232,6 +1293,7 @@ const HandsFreeControls: Component = () => {
 				{(id, descriptionId) => (
 					<>
 						<Input
+							data-setting-id="voice.hands_free_activation_phrase"
 							id={id}
 							aria-describedby={descriptionId()}
 							type="text"
@@ -1245,6 +1307,7 @@ const HandsFreeControls: Component = () => {
 
 			<ExpertSetting configKey="dictation.hands_free_hold_back_ms" value={dictationStore.state.handsFreeHoldBackMs}>
 				<SettingSlider
+					settingId="voice.hands_free_hold_back_ms"
 					row
 					label={t("dictation.holdBackLabel", "Hold-back before sending")}
 					value={dictationStore.state.handsFreeHoldBackMs}
@@ -1261,6 +1324,7 @@ const HandsFreeControls: Component = () => {
 			</ExpertSetting>
 
 			<SettingToggle
+				settingId="voice.hands_free_listening"
 				row
 				label={t("dictation.handsFreeListeningLabel", "Hands-free listening")}
 				hint={t(
@@ -1272,6 +1336,7 @@ const HandsFreeControls: Component = () => {
 			/>
 
 			<SettingToggle
+				settingId="voice.hands_free_spoken_replies"
 				row
 				label={t("dictation.spokenRepliesLabel", "Spoken replies")}
 				hint={t(
@@ -1283,6 +1348,7 @@ const HandsFreeControls: Component = () => {
 			/>
 
 			<SettingToggle
+				settingId="voice.hands_free_earcons"
 				row
 				label={t("dictation.earconsLabel", "Earcons")}
 				hint={t(
@@ -1295,6 +1361,7 @@ const HandsFreeControls: Component = () => {
 
 			<ExpertSetting configKey="dictation.hands_free_notify_model" value={dictationStore.state.notifyModelOnHandsFree}>
 				<SettingToggle
+					settingId="voice.hands_free_notify_model"
 					row
 					label={t("dictation.notifyModelLabel", "Notify model when hands-free changes")}
 					hint={t(
@@ -1319,6 +1386,7 @@ const HandsFreeControls: Component = () => {
 						{(id, descriptionId) => (
 							<div>
 								<Textarea
+									data-setting-id="voice.hands_free_start_notice"
 									id={id}
 									aria-describedby={descriptionId()}
 									value={dictationStore.state.handsFreeStartNotice}
@@ -1327,6 +1395,7 @@ const HandsFreeControls: Component = () => {
 								/>
 								<div class={d.controlRow}>
 									<button
+										data-setting-id="voice.hands_free_start_notice"
 										class={s.testBtn}
 										onClick={() => {
 											// A click is not an input/change event: pin here so the reset does not hide the control.

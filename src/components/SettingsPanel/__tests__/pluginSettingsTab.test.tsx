@@ -95,6 +95,39 @@ it("plugin_tab_is_searchable — catches search index built only from static tab
 	expect(view.container.querySelector("nav button.active")?.textContent).toContain("Fixture integration");
 });
 
+// Catches: Settings search reads plugin values before the user selects a loaded catalogue result.
+it("plugin search remains catalogue-only until the result opens its scoped editor", async () => {
+	const view = render(() => <SettingsPanel visible onClose={() => {}} />);
+	await waitFor(() => expect(view.container.textContent).toContain("Fixture integration"));
+	fireEvent.input(view.container.querySelector("nav input")!, { target: { value: "Server endpoint" } });
+	const result = await view.findByRole("button", { name: /Server endpoint.*Fixture integration/ });
+	expect(mockInvoke.mock.calls.some(([, args]) => args?.action?.action === "get")).toBe(false);
+	fireEvent.click(result);
+	await view.findByDisplayValue("https://example.test");
+	expect(mockInvoke.mock.calls.filter(([, args]) => args?.action?.action === "get").map(([, args]) => args)).toEqual([
+		{ pluginId: "fixture", action: { action: "get", paths: ["/endpoint"] } },
+	]);
+	expect(mockInvoke.mock.calls.some(([, args]) => ["set", "reset"].includes(args?.action?.action))).toBe(false);
+});
+
+// Catches: an empty plugin catalogue creates a blank page and searchable phantom fields.
+it("an empty described catalogue offers no plugin page or search result", async () => {
+	mockInvoke.mockImplementation(async (command) =>
+		command === "plugin_settings_action" ? { fields: {}, collections: [], gaps: [], exclusions: [] } : undefined,
+	);
+	const view = render(() => <SettingsPanel visible onClose={() => {}} />);
+	await waitFor(() =>
+		expect(mockInvoke).toHaveBeenCalledWith("plugin_settings_action", {
+			pluginId: "fixture",
+			action: { action: "describe" },
+		}),
+	);
+	expect(view.queryByRole("button", { name: "Fixture integration Plugin" })).toBeNull();
+	fireEvent.input(view.container.querySelector("nav input")!, { target: { value: "Server endpoint" } });
+	expect(view.getByText("No settings match your search.")).toBeVisible();
+	expect(view.getByRole("heading", { name: "Settings" })).toBeVisible();
+});
+
 it("plugin_tab_write_goes_through_settings_service — catches a second settings path", async () => {
 	const view = render(() => <SettingsPanel visible onClose={() => {}} initialTab="plugin:fixture" />);
 	await waitFor(() =>
@@ -103,6 +136,8 @@ it("plugin_tab_write_goes_through_settings_service — catches a second settings
 		),
 	);
 	const input = view.container.querySelector("[data-settings-content] input[type=text]")!;
+	// Catches a runtime descriptor rendered under a different identity than its write path.
+	expect(input.getAttribute("data-setting-id")).toBe(field.id);
 	fireEvent.input(input, { target: { value: "https://changed.test" } });
 	fireEvent.blur(input);
 	await waitFor(() =>
@@ -443,4 +478,28 @@ it("unload during a pending get removes the editor — catches a late value revi
 	await waitFor(() => expect(view.queryByDisplayValue("late")).toBeNull());
 	expect(view.getByRole("heading", { name: "Settings" })).toBeVisible();
 	expect(view.container.textContent).not.toContain("Fixture integration");
+});
+
+it("no-op blur releases the draft — catches a phantom dirty edit overwriting a peer MCP value", async () => {
+	const { settingsRefresh } = await import("../../../services/settingsRefresh");
+	const { toastsStore } = await import("../../../stores/toasts");
+	vi.spyOn(toastsStore, "add").mockReturnValue(0);
+	let refresh: ((snapshot: unknown) => void) | undefined;
+	vi.spyOn(settingsRefresh, "register").mockImplementation((reader) => {
+		if (reader.section === "plugins.fixture") refresh = reader.apply;
+		return () => {};
+	});
+	try {
+		const view = render(() => <SettingsPanel visible onClose={() => {}} initialTab="plugin:fixture" />);
+		const input = await view.findByDisplayValue("https://example.test");
+		fireEvent.input(input, { target: { value: "https://draft.test" } });
+		fireEvent.input(input, { target: { value: "https://example.test" } });
+		fireEvent.blur(input);
+		refresh!({ revision: "peer", values: { "/endpoint": { effective: "https://peer.test" } } });
+		await waitFor(() => expect((input as HTMLInputElement).value).toBe("https://peer.test"));
+		fireEvent.blur(input);
+		expect(mockInvoke.mock.calls.some(([, args]) => args?.action?.action === "set")).toBe(false);
+	} finally {
+		vi.restoreAllMocks();
+	}
 });

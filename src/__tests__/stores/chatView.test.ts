@@ -30,6 +30,19 @@ beforeEach(() => {
 });
 
 describe("chatViewAvailability", () => {
+	// Catches: ego's exact discovered binding being rejected despite an installed adapter.
+	it("offers ego Chat only after session discovery and reports unbound/remote reasons", () => {
+		const ego = { agentType: "ego", agentSessionId: "ego-session", sessionId: "terminal", isRemote: false } as const;
+		expect(chatViewAvailability(ego)).toEqual({ available: true });
+		for (const term of [
+			{ ...ego, agentSessionId: null },
+			{ ...ego, isRemote: true },
+		]) {
+			const result = chatViewAvailability(term);
+			expect(result.available).toBe(false);
+			expect("reason" in result && result.reason.length).toBeGreaterThan(0);
+		}
+	});
 	const bound = { agentType: "claude", agentSessionId: "uuid", sessionId: "s", isRemote: false } as const;
 
 	it("is available for a Claude agent bound to a session", () => {

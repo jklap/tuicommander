@@ -1003,6 +1003,18 @@ pub(crate) struct AppConfig {
     #[serde(default = "default_true")]
     #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates auto show pr popover for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
     pub(crate) auto_show_pr_popover: bool,
+    /// Hide draft pull requests by default; repositories may override this.
+    #[serde(default)]
+    #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates draft PR visibility.","operations":["get","set"],"confirmationClass":"ordinary"}))]
+    pub(crate) pr_hide_drafts: bool,
+    /// Hide conflicting pull requests by default; repositories may override this.
+    #[serde(default)]
+    #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates conflicting PR visibility.","operations":["get","set"],"confirmationClass":"ordinary"}))]
+    pub(crate) pr_hide_conflicting: bool,
+    /// Hide CI-failing pull requests by default; repositories may override this.
+    #[serde(default)]
+    #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates CI-failing PR visibility.","operations":["get","set"],"confirmationClass":"ordinary"}))]
+    pub(crate) pr_hide_ci_failing: bool,
     /// Prevent system sleep while any terminal session is busy
     #[serde(default)]
     #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates prevent sleep when busy for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
@@ -1048,10 +1060,13 @@ pub(crate) struct AppConfig {
     #[serde(default)]
     #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates disabled mcp agents for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
     pub(crate) disabled_mcp_agents: Vec<String>,
-    /// Native MCP tool names disabled by the user (excluded from tools/list response)
-    #[serde(default = "default_disabled_native_tools")]
-    #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates disabled native tools for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
-    pub(crate) disabled_native_tools: Vec<String>,
+    /// MCP capability policy; the old field is accepted only for one-time migration.
+    #[serde(default, alias = "disabled_native_tools")]
+    pub(crate) mcp_capabilities: crate::mcp_capabilities::McpCapabilities,
+    /// Host-only opt-in; legacy config enablement never grants settings authority.
+    #[serde(default)]
+    #[schemars(extend("x-not-setting" = "Host-issued MCP settings access policy; only trusted UI can enable it."))]
+    pub(crate) settings_mcp_enabled: bool,
     /// Collapse all MCP tools into 3 meta-tools (search_tools, get_tool_schema, call_tool).
     /// Reduces AI context from ~35k to ~500 tokens. Default: false (individual tools exposed).
     #[serde(default)]
@@ -1142,10 +1157,10 @@ pub(crate) struct AppConfig {
     #[serde(default = "default_true")]
     #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates block folding enabled for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
     pub(crate) block_folding_enabled: bool,
-    /// Content index pre-warm strategy: "active_and_switch" (default), "active_only", "all_sequential"
+    /// Content index pre-warm strategy; "disabled" suppresses background rebuilds.
     #[serde(default = "default_index_strategy")]
     #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates index strategy for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
-    #[schemars(extend("enum" = ["active_and_switch","active_only","all_sequential"]))]
+    #[schemars(extend("enum" = ["active_and_switch","active_only","all_sequential","disabled"]))]
     pub(crate) index_strategy: String,
     /// Total heap the BM25 content indices may hold, in MB, before the least
     /// recently used are dropped (`content_index::enforce_memory_budget`).
@@ -1205,12 +1220,6 @@ fn default_vapid_subject() -> String {
 
 fn is_false(value: &bool) -> bool {
     !*value
-}
-
-/// `config` and `debug` stay off until the user enables them — for a fresh
-/// install and for a config.json written before the field existed.
-fn default_disabled_native_tools() -> Vec<String> {
-    vec!["config".to_string(), "debug".to_string()]
 }
 
 fn default_update_channel() -> String {
@@ -1331,6 +1340,9 @@ impl Default for AppConfig {
             tab_tree_enabled: false,
             chat_mute_intermediate_text: true,
             auto_show_pr_popover: true,
+            pr_hide_drafts: false,
+            pr_hide_conflicting: false,
+            pr_hide_ci_failing: false,
             prevent_sleep_when_busy: false,
             auto_update_enabled: true,
             auto_update_plugins_enabled: true,
@@ -1342,7 +1354,8 @@ impl Default for AppConfig {
             beta_channel_migrated: true,
             disabled_agents: Vec::new(),
             disabled_mcp_agents: Vec::new(),
-            disabled_native_tools: default_disabled_native_tools(),
+            mcp_capabilities: Default::default(),
+            settings_mcp_enabled: false,
             intent_tab_title: true,
             suggest_followups: true,
             progress_tracking: true,
@@ -1775,6 +1788,18 @@ pub(crate) struct RepoSettingsEntry {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates mcp upstreams for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
     pub(crate) mcp_upstreams: Option<Vec<String>>,
+    /// None inherits global draft PR visibility; false explicitly shows them.
+    #[serde(default)]
+    #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates repository draft PR visibility.","operations":["get","set"],"confirmationClass":"ordinary"}))]
+    pub(crate) pr_hide_drafts: Option<bool>,
+    /// None inherits global conflicting PR visibility; false explicitly shows them.
+    #[serde(default)]
+    #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates repository conflicting PR visibility.","operations":["get","set"],"confirmationClass":"ordinary"}))]
+    pub(crate) pr_hide_conflicting: Option<bool>,
+    /// None inherits global CI-failing PR visibility; false explicitly shows them.
+    #[serde(default)]
+    #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates repository CI-failing PR visibility.","operations":["get","set"],"confirmationClass":"ordinary"}))]
+    pub(crate) pr_hide_ci_failing: Option<bool>,
     /// Human-readable labels for branches/worktrees, keyed by branch name
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates branch labels for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
@@ -1810,6 +1835,9 @@ impl RepoSettingsEntry {
             || self.after_merge.is_some()
             || self.auto_fetch_interval_minutes.is_some()
             || self.auto_delete_on_pr_close.is_some()
+            || self.pr_hide_drafts.is_some()
+            || self.pr_hide_conflicting.is_some()
+            || self.pr_hide_ci_failing.is_some()
             || self.mcp_upstreams.is_some()
             || !self.branch_labels.is_empty()
             || self.auto_consolidate_worktrees
@@ -2090,10 +2118,18 @@ pub(crate) struct AgentSettings {
     )]
     #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"next_session","effect":"Used when the next session or process starts; existing sessions retain their launch configuration.","operations":["get","set"],"confirmationClass":"ordinary"}))]
     pub(crate) ego_sandbox: Option<EgoSandbox>,
-    /// Per-agent launch instructions. Overrides the global text; empty turns injection off.
+    /// User additions appended after generated modules and global additions.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"next_session","effect":"Used when the next session or process starts; existing sessions retain their launch configuration.","operations":["get","set"],"confirmationClass":"ordinary"}))]
     pub(crate) launch_instructions: Option<String>,
+    /// Disabled modules; missing entries inherit enabled defaults.
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"next_session","effect":"Selects generated launch modules for new sessions.","operations":["get","set"],"confirmationClass":"ordinary"}))]
+    pub(crate) launch_modules: HashMap<String, bool>,
+    /// Explicitly disable the entire launch playbook, including additions.
+    #[serde(default)]
+    #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"next_session","effect":"Disables all launch instructions for new sessions.","operations":["get","set"],"confirmationClass":"ordinary"}))]
+    pub(crate) launch_instructions_disabled: bool,
 }
 
 impl Default for AgentSettings {
@@ -2115,6 +2151,8 @@ impl Default for AgentSettings {
             ego_mode: None,
             ego_sandbox: None,
             launch_instructions: None,
+            launch_modules: HashMap::new(),
+            launch_instructions_disabled: false,
         }
     }
 }
@@ -2132,6 +2170,10 @@ pub(crate) enum HibernateScope {
 
 #[derive(Clone, Serialize, Deserialize, schemars::JsonSchema)]
 pub(crate) struct AgentsConfig {
+    /// Old replacement prompts have been converted to additions.
+    #[serde(default)]
+    #[schemars(extend("x-not-setting" = "One-time launch additions migration marker."))]
+    pub(crate) launch_additions_migrated: bool,
     #[serde(default = "default_hibernate_minutes")]
     #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Hibernates unattended resumable agents after awake idle minutes; zero disables.","operations":["get","set"],"confirmationClass":"ordinary"}))]
     pub(crate) hibernate_idle_minutes: u32,
@@ -2146,19 +2188,72 @@ pub(crate) struct AgentsConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates headless agent for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
     pub(crate) headless_agent: Option<String>,
-    /// Launch instructions for every agent TUIC starts. None = the shipped default
-    /// (`launch_instructions::default_text`); empty turns injection off.
+    /// User additions appended after generated modules for every agent.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"next_session","effect":"Used when the next session or process starts; existing sessions retain their launch configuration.","operations":["get","set"],"confirmationClass":"ordinary"}))]
     pub(crate) launch_instructions: Option<String>,
+    /// Disabled modules; missing entries inherit enabled defaults.
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"next_session","effect":"Selects generated launch modules for new sessions.","operations":["get","set"],"confirmationClass":"ordinary"}))]
+    pub(crate) launch_modules: HashMap<String, bool>,
+    /// Explicitly disable the entire launch playbook, including additions.
+    #[serde(default)]
+    #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"next_session","effect":"Disables all launch instructions for new sessions.","operations":["get","set"],"confirmationClass":"ordinary"}))]
+    pub(crate) launch_instructions_disabled: bool,
+}
+
+impl AgentsConfig {
+    /// Saved profile identity, without the literal-agent fallback used by interactive spawn.
+    pub(crate) fn named_run_config(&self, name: &str) -> Option<(&str, &AgentRunConfig)> {
+        self.agents.iter().find_map(|(agent, settings)| {
+            if !crate::agent::is_known_agent_type(agent) {
+                return None;
+            }
+            settings
+                .run_configs
+                .iter()
+                .find(|profile| profile.name.eq_ignore_ascii_case(name))
+                .map(|profile| (agent.as_str(), profile))
+        })
+    }
+
+    pub(crate) fn require_named_run_config(
+        &self,
+        name: &str,
+    ) -> Result<(&str, &AgentRunConfig), String> {
+        self.named_run_config(name).ok_or_else(|| {
+            let mut names: Vec<&str> = self
+                .agents
+                .iter()
+                .filter(|(agent, _)| crate::agent::is_known_agent_type(agent))
+                .flat_map(|(_, settings)| {
+                    settings
+                        .run_configs
+                        .iter()
+                        .map(|profile| profile.name.as_str())
+                })
+                .collect();
+            names.sort_unstable();
+            names.dedup();
+            let hint = if names.is_empty() {
+                "Save a run configuration in Settings > Agents first".into()
+            } else {
+                format!("Choose a saved run configuration: {}", names.join(", "))
+            };
+            format!("Automation run configuration '{name}' not found. {hint}")
+        })
+    }
 }
 
 impl Default for AgentsConfig {
     fn default() -> Self {
         Self {
+            launch_additions_migrated: false,
             agents: HashMap::new(),
             headless_agent: None,
             launch_instructions: None,
+            launch_modules: HashMap::new(),
+            launch_instructions_disabled: false,
             hibernate_idle_minutes: default_hibernate_minutes(),
             hibernate_scope: HibernateScope::default(),
         }
@@ -2639,12 +2734,12 @@ fn app_config_delta(base: &AppConfig, desired: &AppConfig) -> Result<serde_json:
 /// The remote-access settings whose change requires an HTTP server restart.
 /// Shared by every config writer (IPC `save_config`, `PUT /config`, MCP
 /// `config` save) so the transports cannot drift on when to rebind.
+/// Auth username/password changes are live: middleware and login read the current
+/// config per request, and the credential digest invalidates cached failures.
 pub(crate) fn server_settings_changed(old: &AppConfig, new: &AppConfig) -> bool {
     old.services.server.enabled != new.services.server.enabled
         || old.services.server.port != new.services.server.port
         || old.services.server.ipv6_enabled != new.services.server.ipv6_enabled
-        || old.services.auth.username != new.services.auth.username
-        || old.services.auth.password_hash != new.services.auth.password_hash
 }
 
 /// Serializes every read-modify-write-persist of the app config.
@@ -2955,14 +3050,17 @@ fn commit_config_change_locked(
     // There is no competing persisted document in that case, so use the cache as
     // the base rather than dropping those values back to AppConfig::default().
     let latest = if file_exists { latest } else { cached.clone() };
-    let mut next_json = serde_json::to_value(&latest)
+    let previous_json = serde_json::to_value(&latest)
         .map_err(|e| format!("Could not serialize current config: {e}"))?;
+    let mut next_json = previous_json.clone();
     apply_json_merge_delta(&mut next_json, &delta);
+    let settings_changed = next_json != previous_json;
     let next: AppConfig =
         serde_json::from_value(next_json).map_err(|e| format!("Invalid config: {e}"))?;
 
     let effects = ConfigSaveEffects {
-        tools_changed: cached.disabled_native_tools != next.disabled_native_tools
+        tools_changed: cached.settings_mcp_enabled != next.settings_mcp_enabled
+            || cached.mcp_capabilities != next.mcp_capabilities
             || cached.collapse_tools != next.collapse_tools,
         server_changed: server_settings_changed(&cached, &next),
     };
@@ -2984,6 +3082,9 @@ fn commit_config_change_locked(
     // remember to — and the relay toggle silently needing an app restart is
     // exactly what that costs.
     crate::relay_client::notify_config_changed(state);
+    if settings_changed {
+        crate::settings::api::publish_change(state, "app", !effects.server_changed);
+    }
     #[cfg(feature = "desktop")]
     if let Some(app) = state.app_handle.read().as_ref() {
         crate::background_mode::tray::desktop::schedule_sync(app);
@@ -3162,6 +3263,7 @@ fn read_app_config_unlocked_for_version(
         }
     };
     migrate_flat_services(&mut val);
+    let migrated_capabilities = val.get("disabled_native_tools").is_some();
     match serde_json::from_value(val) {
         Ok(mut config) => {
             let migrated_secret = hydrate_app_config_secrets(&mut config);
@@ -3169,7 +3271,7 @@ fn read_app_config_unlocked_for_version(
             let migrated_channel = migrate_legacy_beta_channel(&mut config, version);
             Ok((
                 config,
-                migrated_secret || migrated_duration || migrated_channel,
+                migrated_secret || migrated_duration || migrated_channel || migrated_capabilities,
             ))
         }
         Err(e) => {
@@ -3351,7 +3453,6 @@ pub(crate) fn load_notification_config() -> NotificationConfig {
     load_json_config(NOTIFICATION_CONFIG_FILE)
 }
 
-#[cfg_attr(feature = "desktop", tauri::command)]
 pub(crate) fn save_notification_config(
     base: NotificationConfig,
     config: NotificationConfig,
@@ -3366,7 +3467,6 @@ pub(crate) fn load_ui_prefs() -> UIPrefsConfig {
     load_json_config(UI_PREFS_FILE)
 }
 
-#[cfg_attr(feature = "desktop", tauri::command)]
 pub(crate) fn save_ui_prefs(base: UIPrefsConfig, config: UIPrefsConfig) -> Result<(), String> {
     let file: ConfigFile<UIPrefsConfig> = ConfigFile::new(UI_PREFS_FILE);
     file.save_delta(&base, &config)
@@ -3378,7 +3478,6 @@ pub(crate) fn load_repo_settings() -> RepoSettingsMap {
     load_json_config(REPO_SETTINGS_FILE)
 }
 
-#[cfg_attr(feature = "desktop", tauri::command)]
 pub(crate) fn save_repo_settings(
     base: RepoSettingsMap,
     config: RepoSettingsMap,
@@ -3580,7 +3679,6 @@ pub(crate) fn load_repo_defaults() -> RepoDefaultsConfig {
     load_json_config(REPO_DEFAULTS_FILE)
 }
 
-#[cfg_attr(feature = "desktop", tauri::command)]
 pub(crate) fn save_repo_defaults(
     base: RepoDefaultsConfig,
     config: RepoDefaultsConfig,
@@ -4128,6 +4226,7 @@ pub(crate) fn save_repositories(
     let changed = save_repositories_request(config).map_err(|error| error.to_string())?;
     if changed {
         state.notify_repositories_changed();
+        crate::settings::api::publish_change(&state, "repositories_registration", true);
     }
     Ok(())
 }
@@ -4477,7 +4576,6 @@ pub(crate) fn load_pane_layout() -> serde_json::Value {
     load_json_config(PANE_LAYOUT_FILE)
 }
 
-#[cfg_attr(feature = "desktop", tauri::command)]
 pub(crate) fn save_pane_layout(
     base: serde_json::Value,
     layout: serde_json::Value,
@@ -4491,7 +4589,6 @@ pub(crate) fn load_prompt_library() -> PromptLibraryConfig {
     load_json_config(PROMPT_LIBRARY_FILE)
 }
 
-#[cfg_attr(feature = "desktop", tauri::command)]
 pub(crate) fn save_prompt_library(
     base: PromptLibraryConfig,
     config: PromptLibraryConfig,
@@ -4537,7 +4634,6 @@ pub(crate) fn load_keybindings() -> serde_json::Value {
     load_json_config(KEYBINDINGS_FILE)
 }
 
-#[cfg_attr(feature = "desktop", tauri::command)]
 pub(crate) fn save_keybindings(
     base: serde_json::Value,
     config: serde_json::Value,
@@ -4550,6 +4646,7 @@ pub(crate) fn save_keybindings(
 pub(crate) fn load_agents_config() -> AgentsConfig {
     let file: ConfigFile<AgentsConfig> = ConfigFile::new(AGENTS_CONFIG_FILE);
     match file.update_with_strict(|config| {
+        let launch_changed = crate::launch_instructions::migrate_additions(config);
         // Older typed agents.json writers discard unknown fields. Keep the
         // durable migration bit outside their document, under the existing lock.
         let stamp = config_dir().join("codex-bypass-migrated");
@@ -4557,9 +4654,9 @@ pub(crate) fn load_agents_config() -> AgentsConfig {
             let settings = config.agents.entry("codex".into()).or_default();
             let changed = !settings.codex_bypass_migrated;
             settings.codex_bypass_migrated = true;
-            return Ok((config.clone(), changed));
+            return Ok((config.clone(), changed || launch_changed));
         }
-        let changed = migrate_codex_bypass(config);
+        let changed = migrate_codex_bypass(config) || launch_changed;
         persist_atomic(&stamp, b"1")?;
         Ok((config.clone(), changed))
     }) {
@@ -4613,7 +4710,6 @@ fn migrate_codex_bypass(config: &mut AgentsConfig) -> bool {
     true
 }
 
-#[cfg_attr(feature = "desktop", tauri::command)]
 pub(crate) fn save_agents_config(base: AgentsConfig, config: AgentsConfig) -> Result<(), String> {
     let file: ConfigFile<AgentsConfig> = ConfigFile::new(AGENTS_CONFIG_FILE);
     file.save_delta(&base, &config)?;
@@ -4662,7 +4758,7 @@ pub(crate) struct ConfigDefaults {
     /// route is never registered there either (see `build_remote_router`).
     #[cfg(feature = "dictation")]
     pub(crate) dictation: DictationConfig,
-    /// The shipped launch-instruction text (`{VER}` unexpanded) and the marker
+    /// The resolved launch-instruction previews and the marker
     /// tokens the Settings editor warns about when an edit drops one.
     pub(crate) launch_instructions: LaunchInstructionsDefaults,
 }
@@ -4671,12 +4767,16 @@ pub(crate) struct ConfigDefaults {
 pub(crate) struct LaunchInstructionsDefaults {
     pub(crate) default_text: String,
     pub(crate) required_markers: Vec<&'static str>,
+    pub(crate) effective_text: std::collections::HashMap<String, String>,
 }
 
 #[cfg_attr(feature = "desktop", tauri::command)]
-pub(crate) fn get_config_defaults() -> ConfigDefaults {
+pub(crate) fn get_config_defaults(
+    preview: Option<crate::settings::agents::LaunchPreview>,
+) -> ConfigDefaults {
     let mut agents = AgentsConfig::default();
     migrate_codex_bypass(&mut agents);
+    crate::launch_instructions::migrate_additions(&mut agents);
     ConfigDefaults {
         app: AppConfig::default(),
         notifications: NotificationConfig::default(),
@@ -4692,10 +4792,7 @@ pub(crate) fn get_config_defaults() -> ConfigDefaults {
             speech_engine: "edge".to_string(),
             ..DictationConfig::default()
         },
-        launch_instructions: LaunchInstructionsDefaults {
-            default_text: crate::launch_instructions::default_text(true, true),
-            required_markers: crate::launch_instructions::REQUIRED_MARKERS.to_vec(),
-        },
+        launch_instructions: crate::settings::agents::launch_instruction_defaults(preview),
     }
 }
 
@@ -5453,6 +5550,9 @@ mod tests {
             tab_tree_enabled: true,
             chat_mute_intermediate_text: false,
             auto_show_pr_popover: true,
+            pr_hide_drafts: false,
+            pr_hide_conflicting: false,
+            pr_hide_ci_failing: false,
             prevent_sleep_when_busy: true,
             auto_update_enabled: false,
             language: "it".to_string(),
@@ -5461,7 +5561,10 @@ mod tests {
             beta_channel_migrated: true,
             disabled_agents: vec!["codex".to_string()],
             disabled_mcp_agents: vec!["windsurf".to_string()],
-            disabled_native_tools: vec!["plugin_dev_guide".to_string()],
+            mcp_capabilities: crate::mcp_capabilities::McpCapabilities::from_legacy(&[
+                "plugin_dev_guide".into(),
+            ]),
+            settings_mcp_enabled: false,
             intent_tab_title: false,
             suggest_followups: false,
             global_hotkey: Some("CommandOrControl+Shift+T".to_string()),
@@ -5532,8 +5635,8 @@ mod tests {
         assert!(loaded.services.server.ipv6_enabled);
         assert!(loaded.services.auth.lan_auth_bypass);
         assert_eq!(
-            loaded.disabled_native_tools,
-            vec!["plugin_dev_guide".to_string()]
+            loaded.mcp_capabilities.denied,
+            vec!["plugin_reference".to_string()]
         );
         assert!(!loaded.intent_tab_title);
         assert!(!loaded.suggest_followups);
@@ -5547,7 +5650,7 @@ mod tests {
     }
 
     #[test]
-    fn old_config_without_disabled_native_tools_keeps_config_and_debug_disabled() {
+    fn old_config_without_disabled_native_tools_keeps_settings_and_debug_disabled() {
         // A config.json written before the field existed must not expose the
         // `config` and `debug` MCP tools that a fresh install keeps disabled.
         let loaded: AppConfig = serde_json::from_str(
@@ -5555,9 +5658,46 @@ mod tests {
         )
         .unwrap();
         assert_eq!(
-            loaded.disabled_native_tools,
-            vec!["config".to_string(), "debug".to_string()]
+            loaded.mcp_capabilities.denied,
+            vec!["settings".to_string(), "diagnostics".to_string()]
         );
+    }
+
+    // Catches: startup accepts legacy denials but fails to persist the one-time migration.
+    #[test]
+    #[serial_test::serial]
+    fn mcp_capability_migration_persists_once_and_keeps_unknown_denials() {
+        crate::credentials::reset_test_faults();
+        let dir = TempDir::new().unwrap();
+        let _guard = set_config_dir_override(dir.path().to_path_buf());
+        let path = write_config_with_duration(dir.path(), None);
+        let mut doc: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+        doc.as_object_mut().unwrap().remove("mcp_capabilities");
+        doc["disabled_native_tools"] =
+            serde_json::json!(["task", "workflow_report", "unrecognized_tool"]);
+        fs::write(&path, doc.to_string()).unwrap();
+        let config = load_app_config_for_version("2.0.0");
+        assert_eq!(
+            config.mcp_capabilities.denied,
+            ["agent_tasks", "workflow.reports"]
+        );
+        assert_eq!(
+            config.mcp_capabilities.migration_unknown_tools,
+            ["unrecognized_tool"]
+        );
+        let saved = fs::read(&path).unwrap();
+        let migrated: serde_json::Value = serde_json::from_slice(&saved).unwrap();
+        assert!(migrated.get("disabled_native_tools").is_none());
+        assert_eq!(
+            migrated["mcp_capabilities"]["denied"],
+            serde_json::json!(["agent_tasks", "workflow.reports"])
+        );
+        assert_eq!(
+            load_app_config_for_version("2.0.0").mcp_capabilities,
+            config.mcp_capabilities
+        );
+        assert_eq!(fs::read(&path).unwrap(), saved);
     }
 
     // Catches: a fresh beta install silently defaults to stable and misses beta.2.
@@ -5835,8 +5975,6 @@ mod tests {
             (|c: &mut AppConfig| c.services.server.enabled = true) as fn(&mut AppConfig),
             |c: &mut AppConfig| c.services.server.port = 1234,
             |c: &mut AppConfig| c.services.server.ipv6_enabled = true,
-            |c: &mut AppConfig| c.services.auth.username = "admin".to_string(),
-            |c: &mut AppConfig| c.services.auth.password_hash = "hash".to_string(),
         ] {
             let mut changed = base.clone();
             mutate(&mut changed);
@@ -5844,6 +5982,26 @@ mod tests {
                 server_settings_changed(&base, &changed),
                 "every listener-affecting field must trigger a rebind"
             );
+        }
+    }
+
+    // Catches: live credential edits are misclassified as unsupported headless rebinds.
+    #[test]
+    fn live_auth_changes_do_not_require_listener_rebind() {
+        let base = AppConfig::default();
+        for mutate in [
+            (|c: &mut AppConfig| c.services.auth.username = "admin".into()) as fn(&mut AppConfig),
+            |c: &mut AppConfig| c.services.auth.password_hash = "hash".into(),
+            |c: &mut AppConfig| {
+                c.services.auth.username = "admin".into();
+                c.services.auth.password_hash = "hash".into();
+            },
+        ] {
+            let mut changed = base.clone();
+            mutate(&mut changed);
+            assert!(!server_settings_changed(&base, &changed));
+            changed.services.server.port = 1234;
+            assert!(server_settings_changed(&base, &changed));
         }
     }
 
@@ -6275,6 +6433,9 @@ mod tests {
                 auto_fetch_interval_minutes: None,
                 auto_delete_on_pr_close: None,
                 mcp_upstreams: None,
+                pr_hide_drafts: None,
+                pr_hide_conflicting: None,
+                pr_hide_ci_failing: None,
                 branch_labels: HashMap::new(),
             },
         );
@@ -6669,6 +6830,8 @@ mod tests {
             "claude".to_string(),
             AgentSettings {
                 launch_instructions: None,
+                launch_modules: HashMap::new(),
+                launch_instructions_disabled: false,
                 run_configs: vec![
                     AgentRunConfig {
                         name: "Default".to_string(),
@@ -9922,7 +10085,7 @@ mod tests {
     /// out of sync with it silently.
     #[test]
     fn get_config_defaults_returns_each_domains_own_default() {
-        let defaults = get_config_defaults();
+        let defaults = get_config_defaults(None);
         assert_eq!(
             serde_json::to_value(&defaults.app).unwrap(),
             serde_json::to_value(AppConfig::default()).unwrap()
@@ -9940,6 +10103,7 @@ mod tests {
             serde_json::to_value(RepoDefaultsConfig::default()).unwrap()
         );
         let mut expected = serde_json::to_value(AgentsConfig::default()).unwrap();
+        expected["launch_additions_migrated"] = serde_json::json!(true);
         expected["agents"]["codex"] = serde_json::to_value(AgentSettings::default()).unwrap();
         expected["agents"]["codex"]["codex_bypass_migrated"] = serde_json::json!(true);
         expected["agents"]["codex"]["run_configs"] = serde_json::json!([{
@@ -9952,7 +10116,7 @@ mod tests {
         assert_eq!(
             serde_json::to_value(&defaults.agents).unwrap(),
             expected,
-            "the settings baseline includes the same persisted Codex launch migration"
+            "the settings baseline includes the persisted Codex bypass and launch additions migrations"
         );
         assert_eq!(
             serde_json::to_value(&defaults.github_accounts).unwrap(),
@@ -9977,7 +10141,7 @@ mod tests {
     /// key would keep the entry point visible for everyone.
     #[test]
     fn get_config_defaults_carries_no_additional_github_accounts() {
-        let payload = serde_json::to_value(get_config_defaults()).unwrap();
+        let payload = serde_json::to_value(get_config_defaults(None)).unwrap();
         assert_eq!(
             payload["github_accounts"]["accounts"],
             serde_json::json!([])
@@ -10006,7 +10170,7 @@ mod tests {
         let dir = TempDir::new().expect("temp dir");
         let _guard = set_config_dir_override(dir.path().to_path_buf());
 
-        let defaults = get_config_defaults();
+        let defaults = get_config_defaults(None);
 
         assert_eq!(
             serde_json::to_value(&defaults.app).unwrap(),
@@ -10126,5 +10290,44 @@ mod tests {
         save_keybindings(serde_json::Value::Null, desired.clone()).unwrap();
         assert_eq!(load_keybindings(), desired);
         assert!(dir.path().join(KEYBINDINGS_FILE).is_file());
+    }
+}
+
+#[cfg(test)]
+mod refresh_review_tests {
+    use super::*;
+
+    // Catches: a no-op config commit publishing an app generation and causing needless peer reloads.
+    #[test]
+    fn unchanged_app_commit_does_not_publish_settings_change() {
+        let dir = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+        let _guard = set_config_dir_override(dir.path().to_path_buf());
+        let state = crate::state::tests_support::make_test_app_state();
+        let base = state.config.read().clone();
+        save_app_config(base.clone()).unwrap();
+        let mut events = state.event_bus.subscribe();
+        commit_config_save(&state, base.clone(), base).unwrap();
+        assert!(
+            events.try_recv().is_err(),
+            "no-op commit published a generation"
+        );
+    }
+    // Catches: suppressing app publications entirely while filtering out no-op saves.
+    #[test]
+    fn changed_app_commit_publishes_after_persistence() {
+        let dir = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+        let _guard = set_config_dir_override(dir.path().to_path_buf());
+        let state = crate::state::tests_support::make_test_app_state();
+        let base = state.config.read().clone();
+        let mut desired = base.clone();
+        desired.theme = "light".into();
+        let mut events = state.event_bus.subscribe();
+        commit_config_save(&state, base, desired).unwrap();
+        assert_eq!(load_app_config().theme, "light");
+        let event = events.try_recv().expect("changed app save must publish");
+        assert!(
+            matches!(event, crate::state::AppEvent::SettingsChanged(ref change) if change.section == "app" && change.persisted && change.applied)
+        );
+        assert!(events.try_recv().is_err());
     }
 }

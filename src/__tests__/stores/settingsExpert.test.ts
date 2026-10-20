@@ -1,4 +1,7 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+afterEach(() => vi.restoreAllMocks());
+
 import { appLogger } from "../../stores/appLogger";
 import { mockInvoke } from "../mocks/tauri";
 
@@ -89,7 +92,7 @@ describe("settingsExpertStore visibility within one Settings open", () => {
 
 	it("logs a defaults-load failure and keeps expert controls visible", async () => {
 		const failure = new Error("defaults unavailable");
-		const warn = vi.spyOn(appLogger, "warn");
+		const warn = vi.spyOn(appLogger, "warn").mockImplementation(() => {});
 		mockInvoke.mockImplementation((cmd: string) =>
 			cmd === "get_config_defaults" ? Promise.reject(failure) : Promise.resolve(undefined),
 		);
@@ -131,7 +134,7 @@ describe("settingsExpertStore default lookup", () => {
 
 	it("treats a key serde omitted from a present domain as a null default", () => {
 		// `audio_device: None` is skipped on serialize, so it never reaches the payload.
-		const warn = vi.spyOn(appLogger, "warn");
+		const warn = vi.spyOn(appLogger, "warn").mockImplementation(() => {});
 		expect(settingsExpertStore.isAtDefault("notifications.audio_device", null)).toBe(true);
 		expect(settingsExpertStore.isAtDefault("notifications.audio_device", "Speakers")).toBe(false);
 		expect(warn).not.toHaveBeenCalled();
@@ -149,8 +152,13 @@ describe("settingsExpertStore default lookup", () => {
 	});
 
 	it("still counts an absent domain and a missing parent object as not at default", () => {
+		const warn = vi.spyOn(appLogger, "warn").mockImplementation(() => {});
 		// Only a leaf inside a present object can be an omitted None.
 		expect(settingsExpertStore.isAtDefault("dictation.enabled", null)).toBe(false);
 		expect(settingsExpertStore.isAtDefault("app.services.missing.port", null)).toBe(false);
+		expect(warn).toHaveBeenCalledExactlyOnceWith(
+			"config",
+			'Expert setting "app.services.missing.port" has no config default',
+		);
 	});
 });

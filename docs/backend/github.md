@@ -520,3 +520,20 @@ merge queue policy and shared request budgets apply unchanged. The desktop comma
 `{account, reference, request}` payloads (IPC also supplies `pluginId`).
 The GitHub Work runtime binds both ports when it registers each configured account.
 No live write or desktop-load verification is implied by recorded-fixture tests.
+
+## Device-login invalidation (#1787-4778)
+
+Logout and disconnect advance the GitHub login generation. Settings device flows retain their creation generation; an older flow expires instead of completing. Credential activation and logout share an async serialization lock, so a token response racing logout cannot restore credentials after logout completes.
+
+## Settings startup workflows
+
+The Settings facade delegates device flow, Enterprise verification, account cleanup and registered-repository bindings to the GitHub owners. [Startup workflows](settings-startup.md#github) records poll/status semantics, binding revisions, write-only credentials and typed `list_accounts` discovery of account metadata/presence. An adapter-level owner snapshot alone does not prove the same information is reachable through the published Settings schema.
+
+## Persistent PR visibility filters
+
+Global `pr_hide_drafts`, `pr_hide_conflicting` and `pr_hide_ci_failing` values
+persist in `config.json` and default to false (show all). Each repository stores
+nullable overrides in `repo-settings.json`: null inherits the current global
+value, true hides the matching PRs, and false explicitly shows them. Settings
+owner transactions preserve unrelated fields, and settings refresh adopts owner
+readback without saving it again. The Rust settings catalogue describes both scopes.

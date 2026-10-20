@@ -18,6 +18,10 @@ export class ViewportProjection {
 		}
 		this.key = `${this.removed.join(",")};${[...this.markers].map(([row, span]) => `${row}:${span}`).join(";")}`;
 	}
+	/** Layout identity for one backend row, independent of its text generation. */
+	rowLayoutKey(row: number): string {
+		return `${this.displayRow(row)};${this.markers.get(row)?.join(":") ?? ""}`;
+	}
 	displayRow(row: number): number | null {
 		if (this.hidden.has(row)) return null;
 		return row >= 0

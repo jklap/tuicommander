@@ -37,7 +37,7 @@ pub(super) struct Button {
 }
 
 pub(crate) fn definition() -> Value {
-    json!({"name":"telegram","description":"Call register to opt your own MCP-bound TUIC agent into Telegram; it replaces the previous agent and sends it one TUIC notice. unregister releases your registration. Registration ends on agent exit, PTY close, MCP session end or daemon restart. Only the registered agent may begin/activity/finish/send. With no registered agent, allowed inbound text is dropped after the bot replies No agent is listening. Ask an agent in TUICommander to register for Telegram.. TUIC acknowledges Telegram mail and opens its status draft automatically. begin is optional and idempotent for the current request, for PTY agents and AI Chat without a PTY. activity sends concise safe unapproved preview text. finish is authoritative: it sends the complete exact reply even after the draft or turn ended, and deduplicates completed requests. AI Chat streams only assistant message text; a Telegram-mail-woken turn settles to its own final text unless finish already replied. send uses the single allowlisted outbound destination with optional rows of {label,data} opaque buttons. Buttons return structured peer mail and confer no publish approval. No raw terminal output or hidden reasoning is streamed.","inputSchema":{"type":"object","properties":{
+    json!({"name":"telegram","description":"Call register to opt your own MCP-bound TUIC agent into Telegram; it replaces the previous agent and sends it one TUIC notice. unregister releases your registration. Registration ends on agent exit, PTY close, MCP session end or daemon restart. Request-specific begin/activity/finish stay bound to the peer that received the request, even if another AI Chat connects. Explicit registration takeover revokes pending requests. Only the registered agent or, without one, the selected live AI Chat agent may send unsolicited messages. With no registered agent, allowed inbound text goes to the latest-connected live AI Chat agent. Only when neither exists is text dropped after the bot replies No agent is listening. Ask an agent in TUICommander to register for Telegram.. TUIC acknowledges Telegram mail and opens its status draft automatically. begin is optional and idempotent for the current request, for PTY agents and AI Chat without a PTY. activity sends concise safe unapproved preview text. finish is authoritative: it sends the complete exact reply even after the draft or turn ended, and deduplicates completed requests. AI Chat streams only assistant message text; a Telegram-mail-woken turn settles to its own final text unless finish already replied. send uses the single allowlisted outbound destination with optional rows of {label,data} opaque buttons. Buttons return structured peer mail and confer no publish approval. No raw terminal output or hidden reasoning is streamed.","inputSchema":{"type":"object","properties":{
         "action":{"type":"string","enum":["register","unregister","begin","activity","finish","send"]},
         "request_id":{"type":"string"},"text":{"type":"string"},
         "buttons":{"type":"array","items":{"type":"array","items":{"type":"object","properties":{"label":{"type":"string"},"data":{"type":"string"}},"required":["label","data"],"additionalProperties":false}}}
@@ -82,7 +82,12 @@ mod tests {
     async fn tool_rejects_forged_authority_and_malformed_button_fields() {
         use crate::telegram::tests::{FakeServer, setup};
         use axum::http::StatusCode;
-        let (_dir, paths) = setup();
+        let config_dir = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+        let _guard = crate::config::set_config_dir_override(config_dir.path().to_path_buf());
+        let (setup_dir, _) = setup();
+        // Dispatch availability and the runtime must read the same private setup.
+        std::fs::rename(setup_dir.path(), config_dir.path().join("telegram")).unwrap();
+        let paths = crate::telegram::settings::paths().unwrap();
         let server = FakeServer::start(vec![(
             StatusCode::OK,
             json!({"ok":true,"result":{"message_id":7}}),
@@ -132,7 +137,16 @@ mod tests {
             json!({"action":"send","text":"hello","buttons":[[{"label":"ok","data":"x","approved":true}]]}),
             json!({"action":"send","text":"hello","chat_id":"1111111"}),
         ] {
-            assert_eq!(invoke(value).await["error"], "telegram_invalid_config");
+            let path = if value.get("buttons").is_some() {
+                "/buttons/0/0"
+            } else {
+                ""
+            };
+            let result = invoke(value).await;
+            assert_eq!(
+                crate::test_support::mcp_argument_constraint(&result, path, "additionalProperties"),
+                &json!(false)
+            );
         }
         assert_eq!(server.requests().len(), 1);
         let inbox = crate::mcp_http::mcp_transport::local_peer_call_with_message_id(

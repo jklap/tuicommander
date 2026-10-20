@@ -27,14 +27,17 @@ pub(crate) mod background_mode;
 #[cfg(test)]
 mod background_mode_tests;
 pub(crate) mod launch_instructions;
+pub(crate) mod mail_subscriptions;
 pub(crate) mod prompt_receipt;
 pub(crate) mod session_resume;
 pub(crate) mod session_wake;
 pub(crate) mod suspended_sessions;
 pub mod work_items;
 pub use tuic_core::app_instance;
+mod agent_test;
 pub(crate) mod app_logger;
 pub(crate) mod changelog;
+mod frame_workload;
 mod stall_journal;
 pub(crate) use tuic_terminal::chrome;
 pub(crate) mod circleci;
@@ -50,6 +53,7 @@ pub(crate) mod codex_usage;
 pub(crate) mod config;
 pub(crate) mod conflict_assist;
 pub(crate) mod content_index;
+pub(crate) mod mcp_capabilities;
 mod open_markdown_tabs;
 pub mod settings;
 pub(crate) use tuic_git::cow;
@@ -135,6 +139,7 @@ pub(crate) use tuic_terminal::output_parser;
 pub(crate) use tuic_terminal::output_watchers;
 #[cfg(feature = "desktop")]
 mod panel_window;
+mod plugin_content;
 pub(crate) mod plugin_credentials;
 pub(crate) mod plugin_exec;
 pub(crate) mod plugin_fs;
@@ -1115,6 +1120,7 @@ async fn get_mcp_status(state: State<'_, Arc<AppState>>) -> Result<serde_json::V
 
     Ok(serde_json::json!({
         "native_tools": mcp_http::mcp_transport::native_tool_catalog(),
+        "native_capabilities": mcp_capabilities::catalog(),
         "enabled": true,
         "running": running,
         "remote_port": if remote_enabled { Some(remote_port) } else { None },
@@ -1557,9 +1563,26 @@ fn release_webview_document_resources(state: &AppState, webview_label: &str) {
         .remove_webview(webview_label);
 }
 
+/// Isolated desktop entry point. Normal launches cannot enable this policy by env.
+#[cfg(feature = "desktop")]
+pub fn run_agent_test(mut context: tauri::Context<tauri::Wry>) {
+    // DEFERRED (2026-10-20) — coordinator owns simultaneous desktop/TCC proof;
+    // the implementation-only peer must not launch another desktop instance.
+    if let Err(error) = agent_test::enable() {
+        eprintln!("agent-test: {error}");
+        std::process::exit(1);
+    }
+    context.config_mut().identifier = "com.tuic.commander.agent-test".into();
+    context.config_mut().product_name = Some("TUICommander Agent Test".into());
+    for window in &mut context.config_mut().app.windows {
+        window.title = "TUICommander Agent Test".into();
+    }
+    run(context);
+}
+
 #[cfg(feature = "desktop")]
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
-pub fn run() {
+pub fn run(mut context: tauri::Context<tauri::Wry>) {
     // Must run before the first `config::config_dir()` read (below) — see
     // `app_instance::select_app_instance_from_env` for why this exists: a
     // debug/test build launched with `TUIC_APP_INSTANCE=<id>` gets its own
@@ -1597,6 +1620,9 @@ pub fn run() {
     let worktrees_dir = config::config_dir().join("worktrees");
 
     let mut config = config::load_app_config();
+    if let Some(port) = agent_test::port() {
+        agent_test::apply_config(&mut config, port);
+    }
 
     // Auto-generate VAPID keys and session token on first run
     let mut config_dirty = false;
@@ -1659,10 +1685,12 @@ pub fn run() {
                 spawn_background_tasks(&server_state);
                 telegram::start(&server_state);
 
-                tokio::spawn(relay_client::supervise(server_state.clone(), relay_rx));
+                if !agent_test::active() {
+                    tokio::spawn(relay_client::supervise(server_state.clone(), relay_rx));
+                }
 
                 // Detect Tailscale and provision TLS cert (async, doesn't block window render)
-                let tls_config = if remote_enabled {
+                let tls_config = if remote_enabled && !agent_test::active() {
                     let ts_state = detect_tailscale_bounded(async {
                         tokio::task::spawn_blocking(tailscale::detect)
                             .await
@@ -1735,7 +1763,9 @@ pub fn run() {
     // Skips agents the user explicitly disabled via Settings > Agents.
     agent_mcp::ensure_mcp_configs(&config.disabled_mcp_agents);
 
-    sanitize_window_state();
+    if !agent_test::active() {
+        sanitize_window_state();
+    }
 
     let themes_dir = config::config_dir().join("themes");
     if let Err(e) = themes::seed_builtin_themes(&themes_dir) {
@@ -1743,7 +1773,6 @@ pub fn run() {
     }
     let startup_background =
         themes::window_background::resolve(&themes::load_themes(&themes_dir), &config.theme);
-    let mut context = tauri::generate_context!();
     for window in &mut context.config_mut().app.windows {
         window.background_color = Some(tauri::window::Color(
             startup_background[0],
@@ -1754,6 +1783,8 @@ pub fn run() {
     }
     let index_strategy = config.index_strategy.clone();
     let builder = tauri::Builder::default();
+    #[cfg(target_os = "macos")]
+    let builder = builder.activate_ignoring_other_apps(!agent_test::active());
     let builder = plugins::register_plugin_protocol(builder);
     let builder = builder
         .plugin(tauri_plugin_opener::init())
@@ -1815,6 +1846,7 @@ pub fn run() {
         .plugin(tauri_plugin_process::init())
         .plugin(
             tauri_plugin_window_state::Builder::new()
+                .with_filter(|_| !agent_test::active())
                 .with_state_flags(
                     // Exclude SIZE to prevent progressive shrinking with titleBarStyle Overlay
                     tauri_plugin_window_state::StateFlags::POSITION
@@ -1854,8 +1886,12 @@ pub fn run() {
                 release_webview_document_resources(state.inner(), window.label());
             }
         })
-        .plugin(tauri_plugin_deep_link::init())
         .manage(native_clipboard::NativeClipboard::default());
+    let builder = if agent_test::active() {
+        builder
+    } else {
+        builder.plugin(tauri_plugin_deep_link::init())
+    };
 
     #[cfg(feature = "desktop")]
     let builder = builder.manage(sleep_prevention::SleepBlocker::new());
@@ -1873,8 +1909,10 @@ pub fn run() {
     builder
         .setup(move |app| {
             #[cfg(desktop)]
-            app.handle()
-                .plugin(tauri_plugin_updater::Builder::new().build())?;
+            if !agent_test::active() {
+                app.handle()
+                    .plugin(tauri_plugin_updater::Builder::new().build())?;
+            }
 
             #[cfg(feature = "desktop")]
             {
@@ -1894,7 +1932,7 @@ pub fn run() {
                 });
             }
 
-            {
+            if !agent_test::active() {
                 use tauri_plugin_deep_link::DeepLinkExt;
                 let handle = app.handle().clone();
                 app.deep_link().on_open_url(move |_| background_mode::desktop::leave_background(&handle));
@@ -2132,6 +2170,7 @@ pub fn run() {
             pty::terminal_request_frame,
             pty::ack_terminal_frame,
             frontend_liveness::frontend_heartbeat,
+            frame_workload::save_frame_workload,
             pty::terminal_exit_alt_screen,
             pty::terminal_scroll,
             pty::terminal_scroll_to_offset,
@@ -2177,6 +2216,7 @@ pub fn run() {
             agent_hook_launch::prepare_agent_launch_args,
             agent::detect_all_agent_binaries,
             agent::spawn_agent,
+            mcp_http::launch_transaction::managed_agent_launch,
             agent_session::discover_agent_session,
             agent_session::verify_agent_session,
             agent_session::claude_project_dir,
@@ -2386,11 +2426,11 @@ pub fn run() {
             config::load_app_config,
             save_app_config,
             boot_commands::load_notification_config_async,
-            config::save_notification_config,
+            settings::legacy::save_notification_config,
             boot_commands::load_ui_prefs_async,
-            config::save_ui_prefs,
+            settings::legacy::save_ui_prefs,
             boot_commands::load_repo_settings_async,
-            config::save_repo_settings,
+            settings::legacy::save_repo_settings,
             config::set_branch_label,
             config::load_repo_local_config,
             config::save_repo_local_config,
@@ -2400,21 +2440,21 @@ pub fn run() {
             mcp_upstream_config::reconnect_mcp_upstream,
             mcp_upstream_config::get_mcp_upstream_status,
             mcp_upstream_credentials::commands::save_mcp_upstream_credential,
-            mcp_upstream_credentials::delete_mcp_upstream_credential,
+            mcp_upstream_credentials::commands::delete_mcp_upstream_credential,
             mcp_oauth::commands::start_mcp_upstream_oauth,
             mcp_oauth::commands::mcp_oauth_callback,
             mcp_oauth::commands::cancel_mcp_upstream_oauth,
             config::check_has_custom_settings,
             boot_commands::load_repo_defaults_async,
-            config::save_repo_defaults,
+            settings::legacy::save_repo_defaults,
             boot_commands::load_repositories_async,
             config::save_repositories,
             config::list_stale_temp_repository_candidates,
             config::repair_stale_temp_repositories,
             config::load_pane_layout,
-            config::save_pane_layout,
+            settings::legacy::save_pane_layout,
             boot_commands::load_prompt_library_async,
-            config::save_prompt_library,
+            settings::legacy::save_prompt_library,
             boot_commands::load_notes_async,
             config::save_notes,
             config::save_note_image,
@@ -2424,9 +2464,9 @@ pub fn run() {
             boot_commands::load_activity_async,
             config::save_activity,
             boot_commands::load_keybindings_async,
-            config::save_keybindings,
+            settings::legacy::save_keybindings,
             boot_commands::load_agents_config_async,
-            config::save_agents_config,
+            settings::legacy::save_agents_config,
             config::get_config_defaults,
             agent_hook_commands::set_agent_hook_instrumentation,
             agent_hook_commands::get_agent_hook_state,
@@ -2489,6 +2529,7 @@ pub fn run() {
             plugins::uninstall_plugin,
             plugins::register_loaded_plugin,
             plugin_settings::plugin_settings_action,
+            settings::api::settings_action,
             plugins::unregister_loaded_plugin,
             plugins::set_plugin_output_watchers,
             plugin_fs::plugin_read_file,
@@ -2505,6 +2546,7 @@ pub fn run() {
             plugin_fs::delete_build_artifact,
             plugin_fs::trim_build_artifact,
             plugin_http::plugin_http_fetch,
+            plugin_http::plugin_http_cancel,
             plugin_github::plugin_github_action,
             plugin_pty::plugin_read_session_output,
             plugin_exec::plugin_exec_cli,
@@ -2601,7 +2643,14 @@ pub fn run() {
                 // not in setup() which fires before the plugin applies its state.
                 tauri::RunEvent::Ready => {
                     if let Some(window) = app_handle.get_webview_window("main") {
-                        ensure_window_visible(&window);
+                        if agent_test::active() {
+                            #[cfg(target_os = "macos")]
+                            if let Err(error) = agent_test::present_without_focus(&window) {
+                                tracing::warn!(%error, "Failed to present agent-test window");
+                            }
+                        } else {
+                            ensure_window_visible(&window);
+                        }
                     }
                 }
                 // Dock-icon click (applicationShouldHandleReopen). macOS suppresses
@@ -3716,7 +3765,7 @@ mod tests {
     fn boot_takes_only_the_env_github_token_and_defers_the_rest() {
         let source = include_str!("lib.rs");
         let desktop_run = source
-            .split("pub fn run()")
+            .split("pub fn run(")
             .nth(1)
             .expect("desktop run function")
             .split("fn build_connect_url")
@@ -3763,7 +3812,7 @@ mod tests {
     #[test]
     fn every_boot_path_writes_the_launch_assets_through_the_shared_helper() {
         let source = include_str!("lib.rs");
-        for entry in ["pub fn run()", "pub async fn run_remote("] {
+        for entry in ["pub fn run(", "pub async fn run_remote("] {
             let body = source
                 .split(entry)
                 .nth(1)
@@ -3782,7 +3831,7 @@ mod tests {
     fn desktop_setup_reuses_the_config_loaded_at_process_start() {
         let source = include_str!("lib.rs");
         let desktop_run = source
-            .split("pub fn run()")
+            .split("pub fn run(")
             .nth(1)
             .expect("desktop run function")
             .split("fn build_connect_url")
