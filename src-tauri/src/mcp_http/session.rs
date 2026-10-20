@@ -316,6 +316,7 @@ pub(crate) fn write_pty_input_parts(
     let transaction = state.input_transaction(session_id);
     let _input = transaction.lock();
     let byte_parts: Vec<&[u8]> = parts.iter().map(|part| part.as_bytes()).collect();
+    crate::pty::stamp_input_ms(state, session_id);
     state.write_pty_parts(session_id, &byte_parts)?;
 
     for part in parts {
@@ -354,6 +355,7 @@ pub(crate) fn write_pty_input_pair(
         .ok_or_else(|| "Session not found".to_string())?;
     let mut writer = writer.lock();
     state.retire_turn_interrupt(session_id);
+    crate::pty::stamp_input_ms(state, session_id);
     writer
         .write_all(text.as_bytes())
         .map_err(|error| format!("Write failed: {error}"))?;
@@ -361,6 +363,7 @@ pub(crate) fn write_pty_input_pair(
         .flush()
         .map_err(|error| format!("Flush failed: {error}"))?;
     crate::pty::sleep_agent_enter_gap(agent_type);
+    crate::pty::stamp_input_ms(state, session_id);
     writer
         .write_all(key.as_bytes())
         .map_err(|error| format!("Write failed: {error}"))?;
@@ -383,6 +386,7 @@ fn write_pty_input_bytes(
     crate::background_mode::hidden::record_remote_activity(state, session_id);
     let transaction = state.input_transaction(session_id);
     let _input = transaction.lock();
+    crate::pty::stamp_input_ms(state, session_id);
     state.write_pty_parts(session_id, &[data])?;
     crate::pty_capture::record_input(session_id, data);
     if let Ok(text) = std::str::from_utf8(data) {
@@ -398,7 +402,7 @@ fn write_pty_input_bytes(
 pub(crate) fn apply_input_bookkeeping(state: &Arc<AppState>, session_id: &str, data: &str) {
     // Stamp last-input time (same as desktop write_pty) so the grid ticker
     // throttles frames for remote/PWA typing under CPU saturation too.
-    crate::pty::stamp_input_ms(state, session_id);
+    crate::pty::record_input_ms(state, session_id);
     crate::state::resolve_choice_prompt_input(state, session_id, data);
 
     // Feed input through InputLineBuffer FSM to track slash_mode accurately.
