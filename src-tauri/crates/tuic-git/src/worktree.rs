@@ -8940,6 +8940,110 @@ branch refs/heads/feat
         );
     }
 
+    // Catches: missing-checkout cleanup treats a submodule admin name as its checkout path.
+    #[test]
+    fn missing_checkout_preserves_named_submodule_before_pruning() {
+        let (_temp, repo, _workspaces) = workspace_fixture();
+        let source = repo.parent().unwrap().join("named-missing-module-source");
+        fs::create_dir(&source).unwrap();
+        git_cmd(&source).args(["init"]).run().unwrap();
+        git_cmd(&source)
+            .args(["config", "user.email", "test@test.com"])
+            .run()
+            .unwrap();
+        git_cmd(&source)
+            .args(["config", "user.name", "Test"])
+            .run()
+            .unwrap();
+        commit_file(&source, "module.txt", "base commit\n");
+        git_cmd(&repo)
+            .args([
+                "-c",
+                "protocol.file.allow=always",
+                "submodule",
+                "add",
+                "--name",
+                "git-module-name",
+                &source.to_string_lossy(),
+                "modules/checkout-path",
+            ])
+            .run()
+            .unwrap();
+        git_cmd(&repo).args(["add", "."]).run().unwrap();
+        git_cmd(&repo)
+            .args(["commit", "-m", "add named submodule"])
+            .run()
+            .unwrap();
+        let path = add_worktree(&repo, "missing-named-module");
+        git_cmd(&path)
+            .args([
+                "-c",
+                "protocol.file.allow=always",
+                "submodule",
+                "update",
+                "--init",
+            ])
+            .run()
+            .unwrap();
+        let module = path.join("modules/checkout-path");
+        git_cmd(&module)
+            .args(["config", "user.email", "test@test.com"])
+            .run()
+            .unwrap();
+        git_cmd(&module)
+            .args(["config", "user.name", "Test"])
+            .run()
+            .unwrap();
+        commit_file(&module, "local-only.txt", "worktree-only commit\n");
+        let local_oid = rev_at(&module, "HEAD").unwrap();
+        let module_gitdir = PathBuf::from(rev_at(&module, "--absolute-git-dir").unwrap());
+        assert_eq!(module_gitdir.file_name().unwrap(), "git-module-name");
+        let destination = repo.join("modules/checkout-path");
+        assert!(initialized_main_submodule(&repo, &destination));
+        assert!(!repo.join("git-module-name").exists());
+        assert!(
+            git_cmd(&destination)
+                .args(["cat-file", "-e", &local_oid])
+                .run()
+                .is_err()
+        );
+        let worktree = WorktreeInfo {
+            name: "missing-named-module".into(),
+            path: path.clone(),
+            branch: Some("missing-named-module".into()),
+            base_repo: repo.clone(),
+        };
+        let admin = registered_worktree_admin_dir(&repo, &path)
+            .unwrap()
+            .unwrap();
+        fs::remove_dir_all(&path).unwrap();
+        assert!(module_gitdir.is_dir());
+        remove_worktree_internal(&worktree, true)
+            .expect("initialized named destination must receive the missing checkout's objects");
+        assert!(
+            !admin.exists(),
+            "successful preservation permits registration pruning"
+        );
+        git_cmd(&destination)
+            .args(["cat-file", "-e", &local_oid])
+            .run()
+            .unwrap();
+        let refs = git_cmd(&destination)
+            .args([
+                "for-each-ref",
+                "--format=%(refname)",
+                "--points-at",
+                &local_oid,
+                "refs/tuic/preserved",
+            ])
+            .run()
+            .unwrap();
+        assert!(
+            !refs.stdout.trim().is_empty(),
+            "the local-only commit needs a durable ref"
+        );
+    }
+
     #[test]
     fn missing_worktree_directory_preserves_its_submodule_refs_before_pruning() {
         let (_temp, repo, _workspaces) = workspace_fixture();
