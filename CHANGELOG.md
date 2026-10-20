@@ -8,6 +8,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - Keep connection, intent and finished tool rows out of ego selector titles shared by desktop and mobile (#2088-98ea).
 
+- Add `make agent-test` for isolated macOS desktop checks with a distinct binary, preset instance and loopback port, disabled machine-wide integrations (including global CLI and agent-hook writes), dry-run plan and instance-only stop target (#2086-269b).
 - Hide mobile AI Chat when ego is not configured on the host, refresh availability on settings changes, and return unavailable Chat views to Sessions (#2087-07bf).
 
 - **BREAKING:** replace native per-tool MCP switches with capability switches. Migrate saved denials without widening access and retain unknown-name diagnostics. Remove task, story, workflow_run/workflow_story_create/workflow_report/workflow_launch and design_mode aliases: use agent task_*, workflow actions and ui design_*. Reconnect cached clients and review external allow rules for the expanded groups (#2068-63b9).

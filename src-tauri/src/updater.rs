@@ -161,6 +161,9 @@ async fn fetch_update_channel(
 /// URLs are hardcoded — no user-supplied URLs accepted (SSRF prevention).
 #[tauri::command]
 pub async fn check_update_channel(channel: String) -> Result<UpdateCheckResult, String> {
+    if crate::agent_test::active() {
+        return Err("Updater is disabled in agent-test".into());
+    }
     let config = get_channel_config(&channel)?;
     fetch_update_channel(&channel, config.manifest_url).await
 }
