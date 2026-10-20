@@ -1,0 +1,209 @@
+{
+  "source_commit": "f736a3b52f21c896bb30634109007cfb5d16e1c5",
+  "transport": "authorized_agent_test_unix_socket",
+  "instance": "at-2010",
+  "port": 19881,
+  "server_version": {
+    "version": "2.0.0",
+    "git_hash": "f736a3b52f"
+  },
+  "client_observations": {
+    "parent_operation_id": "80144009-3ad5-4ffd-9b71-209a6639a558",
+    "calls": [
+      {
+        "client_call_id": "32b6063b-012c-4a53-a6f0-e22b91c5c19b",
+        "name": "session",
+        "action": "list",
+        "target_digest": null,
+        "curl_exit": 0,
+        "http_status": 200,
+        "isError": false,
+        "response_text_bytes": 2,
+        "explicit_effect": null
+      },
+      {
+        "client_call_id": "8ebafcbd-0982-4f4f-9708-5ab08c5ba8b2",
+        "name": "session",
+        "action": "status",
+        "target_digest": "0fa826d55e6bbe0429ab1176cf8ca6d29c01057c6a301269aaa3f1445f7da4f4",
+        "curl_exit": 0,
+        "http_status": 200,
+        "isError": true,
+        "response_text_bytes": 51,
+        "explicit_effect": null
+      },
+      {
+        "client_call_id": "012b9d27-dbd5-4140-b05d-8c8589282fc5",
+        "name": "session",
+        "action": "status",
+        "target_digest": "f59da7cfe0d3616c6852c3b95f92108a740d4d7b872727c4f86e82530e7a399e",
+        "curl_exit": 0,
+        "http_status": 200,
+        "isError": true,
+        "response_text_bytes": 51,
+        "explicit_effect": null
+      },
+      {
+        "client_call_id": "3c8c82bd-31fa-4650-96d4-d0f59417aec4",
+        "name": "session",
+        "action": "invalid-audit-probe",
+        "target_digest": null,
+        "curl_exit": 0,
+        "http_status": 200,
+        "isError": true,
+        "response_text_bytes": 558,
+        "explicit_effect": "not_started"
+      },
+      {
+        "client_call_id": "540595e0-cd64-4c15-b4ec-de1ab9930548",
+        "name": "agent",
+        "action": "inbox",
+        "target_digest": null,
+        "curl_exit": 0,
+        "http_status": 200,
+        "isError": true,
+        "response_text_bytes": 565,
+        "explicit_effect": "not_started"
+      },
+      {
+        "client_call_id": "961d0cef-afb9-4006-85a5-fb74a0d30d58",
+        "name": "voice",
+        "action": "status",
+        "target_digest": null,
+        "curl_exit": 0,
+        "http_status": 200,
+        "isError": true,
+        "response_text_bytes": 64,
+        "explicit_effect": null
+      },
+      {
+        "client_call_id": "a139d347-6da5-47cb-a186-eb15e8cfc7d5",
+        "name": "ui",
+        "action": "confirm",
+        "target_digest": null,
+        "curl_exit": 28,
+        "http_status": 0,
+        "isError": null,
+        "response_text_bytes": null,
+        "explicit_effect": null
+      }
+    ]
+  },
+  "audit": {
+    "records": [
+      {
+        "call_id": "bec59c23-f280-4007-ad29-491635d1c304",
+        "client_call_id": "a139d347-6da5-47cb-a186-eb15e8cfc7d5",
+        "parent_operation_id": "80144009-3ad5-4ffd-9b71-209a6639a558",
+        "operation": "ui.confirm",
+        "target_digest": null,
+        "started_ms": 1792483119802,
+        "response_text_bytes": null,
+        "application_error": null,
+        "transport_error": "cancelled_before_reply",
+        "effect": "unknown"
+      },
+      {
+        "call_id": "74e29260-d6af-45ea-93ba-cf844186e336",
+        "client_call_id": "961d0cef-afb9-4006-85a5-fb74a0d30d58",
+        "parent_operation_id": "80144009-3ad5-4ffd-9b71-209a6639a558",
+        "operation": "voice.status",
+        "target_digest": null,
+        "started_ms": 1792483119791,
+        "response_text_bytes": 64,
+        "application_error": true,
+        "transport_error": "unobserved_after_reply_construction",
+        "effect": "unknown"
+      },
+      {
+        "call_id": "b87a2187-b8ff-42d8-90e6-d92bd5949810",
+        "client_call_id": "540595e0-cd64-4c15-b4ec-de1ab9930548",
+        "parent_operation_id": "80144009-3ad5-4ffd-9b71-209a6639a558",
+        "operation": "agent.inbox",
+        "target_digest": null,
+        "started_ms": 1792483119779,
+        "response_text_bytes": 565,
+        "application_error": true,
+        "transport_error": "unobserved_after_reply_construction",
+        "effect": "not_started"
+      },
+      {
+        "call_id": "ea5b5281-0baa-48b1-b144-d1aebf9df253",
+        "client_call_id": "3c8c82bd-31fa-4650-96d4-d0f59417aec4",
+        "parent_operation_id": "80144009-3ad5-4ffd-9b71-209a6639a558",
+        "operation": "session",
+        "target_digest": null,
+        "started_ms": 1792483119766,
+        "response_text_bytes": 558,
+        "application_error": true,
+        "transport_error": "unobserved_after_reply_construction",
+        "effect": "not_started"
+      },
+      {
+        "call_id": "2f9b0223-e17f-4002-a48b-1afcafa04ddd",
+        "client_call_id": "012b9d27-dbd5-4140-b05d-8c8589282fc5",
+        "parent_operation_id": "80144009-3ad5-4ffd-9b71-209a6639a558",
+        "operation": "session.status",
+        "target_digest": "f59da7cfe0d3616c6852c3b95f92108a740d4d7b872727c4f86e82530e7a399e",
+        "started_ms": 1792483119754,
+        "response_text_bytes": 51,
+        "application_error": true,
+        "transport_error": "unobserved_after_reply_construction",
+        "effect": "unknown"
+      },
+      {
+        "call_id": "b2595c05-abd1-40b4-a66a-141bc7df86fe",
+        "client_call_id": "8ebafcbd-0982-4f4f-9708-5ab08c5ba8b2",
+        "parent_operation_id": "80144009-3ad5-4ffd-9b71-209a6639a558",
+        "operation": "session.status",
+        "target_digest": "0fa826d55e6bbe0429ab1176cf8ca6d29c01057c6a301269aaa3f1445f7da4f4",
+        "started_ms": 1792483119741,
+        "response_text_bytes": 51,
+        "application_error": true,
+        "transport_error": "unobserved_after_reply_construction",
+        "effect": "unknown"
+      },
+      {
+        "call_id": "281240e6-0ce1-4b06-824b-c96f30b089d7",
+        "client_call_id": "32b6063b-012c-4a53-a6f0-e22b91c5c19b",
+        "parent_operation_id": "80144009-3ad5-4ffd-9b71-209a6639a558",
+        "operation": "session.list",
+        "target_digest": null,
+        "started_ms": 1792483119723,
+        "response_text_bytes": 2,
+        "application_error": false,
+        "transport_error": "unobserved_after_reply_construction",
+        "effect": "unknown"
+      }
+    ],
+    "retained": 7,
+    "evicted": 0,
+    "capacity": 1024,
+    "limit": 100,
+    "scope": "runtime_mcp_tools_call_ingress",
+    "delivery_observed": false
+  },
+  "assertions": {
+    "passed": true,
+    "runtime_calls": 7,
+    "client_disconnect_observed": true,
+    "server_cancelled_before_reply": true,
+    "unknown_effect_preserved": true,
+    "utf8_costs_match_received_text": true,
+    "body_free_exact_field_allowlist": [
+      "application_error",
+      "call_id",
+      "client_call_id",
+      "effect",
+      "operation",
+      "parent_operation_id",
+      "response_text_bytes",
+      "started_ms",
+      "target_digest",
+      "transport_error"
+    ],
+    "permission_denial": "not observed; agent.inbox refusal is application/identity refusal, not client permission denial",
+    "voice_rendering": "NEEDS-BOSS; no dictation in agent-test",
+    "correlation": "manually generated request UUIDs, not ego-selected-call evidence"
+  }
+}
