@@ -16127,3 +16127,81 @@ async fn ego_recorded_joined_intent_ends_at_title_closure_2060() {
         );
     }
 }
+
+// Catches: a clipped native AskUserQuestion exporting no controls and falling back to binary Yes/No.
+#[tokio::test(flavor = "current_thread")]
+async fn captured_claude_narrow_question_remains_answerable() {
+    let capture =
+        crate::pty_capture::decode_capture(&agent_prompt_fixture("claude-narrow-2093.tcap"))
+            .expect("authentic narrow Claude capture");
+    assert_eq!(capture.geometry, Some((14, 37)));
+    assert!(
+        capture
+            .records
+            .iter()
+            .any(|r| r.direction == crate::pty_capture::CaptureDirection::Input)
+    );
+    let sid = "claude-narrow-2093";
+    let (state, silence) = chunk_trace_state(sid);
+    state
+        .session_maps
+        .session_states
+        .get_mut(sid)
+        .unwrap()
+        .agent_type = Some("claude".into());
+    state
+        .grid
+        .vt_log_buffers
+        .insert(sid.into(), Mutex::new(VtLogBuffer::new(14, 37, 2000)));
+    crate::state::AppState::spawn_session_state_accumulator(state.clone());
+    let mut processor = ChunkProcessor::new(None, None);
+    let mut utf8 = Utf8ReadBuffer::new();
+    let mut escape = EscapeAwareBuffer::new();
+    for record in capture.records {
+        if record.direction == crate::pty_capture::CaptureDirection::Output {
+            let data = utf8.push(&record.data);
+            let data = escape.push(&data);
+            let (clean, _) = crate::state::strip_kitty_sequences(&data);
+            processor.process_chunk(&clean, &silence, sid, &state);
+        }
+    }
+    assert!(
+        await_session(&state, sid, |s| {
+            s.awaiting_input
+                && s.question_text.as_deref() == Some("Pick a colour?")
+                && s.choice_prompt.as_ref().is_some_and(|p| {
+                    serde_json::to_value(p).unwrap()["selection_mode"] == "navigate-only"
+                        && p.options.iter().map(|o| o.key.as_str()).collect::<Vec<_>>()
+                            == ["↑", "↓", "↵"]
+                        && p.options
+                            .iter()
+                            .map(|o| o.label.as_str())
+                            .collect::<Vec<_>>()
+                            == [
+                                "Previous option",
+                                "Next option",
+                                "Select highlighted option",
+                            ]
+                })
+        })
+        .await,
+        "clipped choices need explicit native navigation, never an invented complete list or binary fallback"
+    );
+    assert!(!crate::state::resolve_choice_prompt_input(
+        &state, sid, "\x1b[B"
+    ));
+    assert!(
+        state
+            .session_maps
+            .session_states
+            .get(sid)
+            .unwrap()
+            .awaiting_input
+    );
+    assert!(crate::state::resolve_choice_prompt_input(&state, sid, "\r"));
+    assert!(
+        await_session(&state, sid, |s| !s.awaiting_input
+            && s.choice_prompt.is_none())
+        .await
+    );
+}

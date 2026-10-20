@@ -7,6 +7,7 @@
 {"fixture":"src-tauri/src/fixtures/agent_prompts/claude-mobile-permission-1987.tcap","events":72}
 {"fixture":"src-tauri/src/fixtures/agent_prompts/claude-mobile-resume-1971.tcap","events":114}
 {"fixture":"src-tauri/src/fixtures/agent_prompts/claude-mobile-startup-1987.tcap","events":33}
+{"fixture":"src-tauri/src/fixtures/agent_prompts/claude-narrow-2093.tcap","events":107}
 {"fixture":"src-tauri/src/fixtures/agent_prompts/claude-question-exit-2091.tcap","events":191}
 {"fixture":"src-tauri/src/fixtures/agent_prompts/claude-quoted-ink-footer.tcap","events":127}
 {"fixture":"src-tauri/src/fixtures/agent_prompts/claude-ready-idle-notify-statement.tcap","events":24}
