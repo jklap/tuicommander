@@ -147,6 +147,10 @@ pub(super) fn private_open(path: &Path, create: bool) -> Result<File, Error> {
         use std::os::windows::fs::OpenOptionsExt;
         options.custom_flags(0x00200000); // FILE_FLAG_OPEN_REPARSE_POINT
     }
+    #[cfg(test)]
+    {
+        *PRIVATE_FILE_OPENS.entry(path.to_path_buf()).or_default() += 1;
+    }
     let file = options.open(path).map_err(|_| Error::PrivateFile)?;
     let meta = file.metadata().map_err(|_| Error::PrivateFile)?;
     if !meta.is_file() {
@@ -181,4 +185,48 @@ pub(super) fn private_text(path: &Path) -> Result<Zeroizing<String>, Error> {
         return Err(Error::PrivateFile);
     }
     Ok(text)
+}
+
+#[cfg(test)]
+static PRIVATE_FILE_OPENS: std::sync::LazyLock<dashmap::DashMap<PathBuf, usize>> =
+    std::sync::LazyLock::new(dashmap::DashMap::new);
+
+#[cfg(test)]
+mod file_read_tests {
+    use super::*;
+
+    // Catches: every bus event and one-second tick reopens unchanged config and allowlist.
+    #[test]
+    fn telegram_idle_enabled_checks_do_not_reopen_unchanged_files() {
+        let (_dir, paths) = crate::telegram::tests::setup();
+        let config = Config::load(&paths).unwrap().unwrap();
+        let runtime = crate::telegram::runtime::Runtime::new(
+            std::sync::Arc::new(crate::state::tests_support::make_test_app_state()),
+            config,
+            paths.clone(),
+            "bounded-telegram".into(),
+        )
+        .unwrap();
+        assert!(runtime.enabled());
+        let opens = || {
+            ["config.json", "allowed_chat_ids"]
+                .iter()
+                .map(|name| {
+                    PRIVATE_FILE_OPENS
+                        .get(&paths.file(name))
+                        .map(|n| *n)
+                        .unwrap_or(0)
+                })
+                .sum::<usize>()
+        };
+        let before = opens();
+        for _ in 0..100 {
+            assert!(runtime.enabled());
+        }
+        assert_eq!(
+            opens() - before,
+            0,
+            "idle enabled checks must use the watched snapshot"
+        );
+    }
 }
