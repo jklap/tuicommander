@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+- Re-arm the content-index cooldown after an unchanged validation so repeated repository events do not each start another full metadata walk (#2099-8c87).
+
 - Keep clipped Claude native questions answerable with explicit previous/next/select controls instead of generic Yes/No or guessed hidden choices (#2093-0be6).
 - Export the first Codex /plan question in narrow terminals, including the split footer and independently wrapped answer labels and descriptions; keep its controls active through a delayed idle hook (#2094-da19).
 - Give reader-applied terminal input output bounded priority over animation frame floors on desktop and HTTP/PWA, using the existing gated serializer (#2040-16b2).

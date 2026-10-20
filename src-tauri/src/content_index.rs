@@ -170,6 +170,8 @@ pub struct ContentIndex {
     ready: bool,
     /// When the last successful build completed.
     built_at: std::time::Instant,
+    /// Last completed no-change validation; independent of corpus rebuilds.
+    validated_at: Option<std::time::Instant>,
     /// Files confirmed binary (rel_path → stamp). Carried across rebuilds
     /// so we skip the 8KB read probe for files whose stamp hasn't changed.
     known_binaries: HashMap<String, FileStamp>,
@@ -347,6 +349,7 @@ impl ContentIndex {
             repo_root,
             ready: false,
             built_at: std::time::Instant::now(),
+            validated_at: None,
             known_binaries: HashMap::new(),
             engine_bytes: 0,
             last_used: AtomicU64::new(next_access_tick()),
@@ -470,6 +473,7 @@ impl ContentIndex {
             repo_root: canonical,
             ready: true,
             built_at: std::time::Instant::now(),
+            validated_at: None,
             known_binaries,
             engine_bytes,
             last_used: AtomicU64::new(next_access_tick()),
@@ -1028,7 +1032,12 @@ pub fn rebuild_index(state: &Arc<crate::state::AppState>, repo_path: &str) {
 
     {
         let idx = index.read();
-        if idx.ready && idx.built_at.elapsed() < REBUILD_COOLDOWN {
+        if idx.ready
+            && (idx.built_at.elapsed() < REBUILD_COOLDOWN
+                || idx
+                    .validated_at
+                    .is_some_and(|at| at.elapsed() < REBUILD_COOLDOWN))
+        {
             tracing::trace!(repo = %repo_path, "content index rebuild skipped (cooldown)");
             return;
         }
@@ -1102,6 +1111,10 @@ fn rebuild_in_place(
     let (plan, prior_binaries) = {
         let idx = index.read();
         if idx.is_current() {
+            drop(idx);
+            // A completed no-op walk costs the same metadata I/O as any other
+            // validation. Re-arm admission without pretending the corpus changed.
+            index.write().validated_at = Some(std::time::Instant::now());
             tracing::debug!(repo = %repo, "content index rebuild skipped (no indexable change)");
             return;
         }
@@ -1387,6 +1400,7 @@ impl ContentIndex {
             repo_root,
             ready: true,
             built_at: std::time::Instant::now(),
+            validated_at: None,
             known_binaries,
             engine_bytes,
             last_used: AtomicU64::new(next_access_tick()),
@@ -1813,6 +1827,12 @@ mod tests {
             !state.index_in_flight.contains(&repo_path),
             "an unchanged validation must suppress the next RepoChanged before scheduling any walk"
         );
+
+        // Expiry must still admit a later event; no-op suppression is not a
+        // permanent exemption from checking working-tree content.
+        index.write().validated_at = Some(std::time::Instant::now() - REBUILD_COOLDOWN);
+        rebuild_index(&state, &repo_path);
+        assert!(state.index_in_flight.contains(&repo_path));
     }
 
     #[test]
