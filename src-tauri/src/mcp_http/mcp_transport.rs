@@ -184,7 +184,6 @@ use super::mcp_transport_session_agent::handle_session;
 pub(super) use super::mcp_transport_session_agent::handle_session_submit;
 use super::mcp_transport_session_agent::handle_session_suspend;
 use super::mcp_transport_session_agent::handle_session_wait;
-use super::mcp_transport_session_agent::handle_task;
 #[cfg(test)]
 use super::mcp_transport_session_agent::is_direct_codex_executable;
 #[cfg(test)]
@@ -1603,7 +1602,15 @@ mod critic_story_tool_text {
             .expect("workflow tool")
             .clone();
         let description = definition["description"].as_str().unwrap_or_default();
-        let variants = crate::stories::story_action_schema();
+        let workflow_schema = super::super::mcp_transport_ancillary::workflow_action_schema();
+        let workflow_variants = workflow_schema["oneOf"]
+            .as_array()
+            .expect("workflow actions");
+        let story = workflow_variants
+            .iter()
+            .find(|variant| variant["properties"]["action"]["const"] == "story")
+            .expect("story action is published");
+        let variants = &story["properties"]["input"];
         let variants = variants["oneOf"]
             .as_array()
             .or_else(|| variants["anyOf"].as_array())

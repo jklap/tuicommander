@@ -1208,7 +1208,12 @@ fn task_call(
     args: serde_json::Value,
     mcp_sid: Option<&str>,
 ) -> serde_json::Value {
-    handle_task(state, addr.parse().unwrap(), &args, mcp_sid)
+    super::super::mcp_transport_session_agent::handle_task(
+        state,
+        addr.parse().unwrap(),
+        &args,
+        mcp_sid,
+    )
 }
 
 // ── blocking wait tests (Step 3) ────────────────────────────────

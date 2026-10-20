@@ -74,21 +74,6 @@ pub enum StoryAction {
     },
 }
 
-/// JSON Schema of [`StoryAction`], generated from the type so the published tool input cannot
-/// drift from what the handler deserializes. Sub-schemas are inlined: the schema is embedded
-/// under `input`, where a root-relative `$ref` would not resolve.
-pub fn story_action_schema() -> serde_json::Value {
-    let generator = schemars::generate::SchemaSettings::draft2020_12()
-        .with(|settings| settings.inline_subschemas = true)
-        .into_generator();
-    let mut schema =
-        serde_json::to_value(generator.into_root_schema_for::<StoryAction>()).unwrap_or_default();
-    if let Some(object) = schema.as_object_mut() {
-        object.remove("$schema");
-    }
-    schema
-}
-
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(tag = "type", content = "value", rename_all = "snake_case")]
 pub enum StoryReply {
@@ -582,7 +567,11 @@ mod tests {
     /// and root-relative `$ref`s that no longer resolve once the schema is nested under `input`.
     #[test]
     fn published_schema_describes_create_story_without_references() {
-        let schema = story_action_schema();
+        let generator = schemars::generate::SchemaSettings::draft2020_12()
+            .with(|settings| settings.inline_subschemas = true)
+            .into_generator();
+        let schema = serde_json::to_value(generator.into_root_schema_for::<StoryAction>())
+            .expect("story action schema");
         let text = schema.to_string();
         assert!(
             !text.contains("$ref"),
