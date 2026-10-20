@@ -165,3 +165,46 @@ The six requested story IDs are absent from the current main story store. Each w
  | tuicommander | tuic-backlog 993-d404 (long soft-wrapped intents) | fix/993-long-soft-wrapped-intents 8479cbe9f..0919b48ba; T2 src/pty.rs; T1 tuic-terminal/terminal_grid.rs | T2 | pending | mutate the 2048-char soft-wrap budget, chrome cutoff and capped-scroll anchor; commit used TUIC_SKIP_FIXTURE_GATE=1 |
  | tuicommander | tuic-backlog 986-4a6b (timed-out --help probes cached unsupported; probe owns its process group / Job Object) | fix/986-screen-probe-timeout 84a8339aa..f2ca02b21; T2 src/agent.rs; T1 Cargo.toml | T2 | pending | mutate the timeout-vs-inconclusive cache split and the group kill; Windows compile/runtime unverified (to-test.md) |
 ```
+
+## Survivor follow-up contract
+
+Consumer: forced removal of a missing registered checkout preserves its submodule-only commit in the initialized main submodule, then prunes the registration. Real state: Git creates a named submodule whose configured name differs from its checkout path, and the test removes only the linked checkout directory. No mocked Git output, custom stderr or timing assumption is used. The main checkout, initialized destination module, admin store and local-only object are checked before removal. Suspected defect: the missing-module traversal uses Git admin names as checkout paths and refuses a valid preservation destination. This is within the nested traversal survivor scope. If the test fails on unchanged source, stop and report under the coordinator's real-defect rule.
+
+### Real defect reproduced: missing checkout with a named submodule
+
+The follow-up stops under the coordinator's rule 3. No production change was made and the mutation rerun is not valid while this source-level regression fails.
+
+Reproduction uses real local Git repositories:
+
+1. Add a submodule with `--name git-module-name` at `modules/checkout-path` and commit the gitlink.
+2. Create a linked checkout and initialize that submodule.
+3. Commit a local-only object in the linked checkout's submodule; verify that the main submodule does not yet hold it.
+4. Check that the main destination at `modules/checkout-path` is initialized and that the module admin directory ends with `git-module-name`.
+5. Delete only the linked checkout directory, leaving its Git registration and module store.
+6. Call `remove_worktree_internal(&worktree, true)`.
+
+Expected: transfer the local-only object into the initialized main submodule under a durable preservation ref, then prune the missing registration. Observed: error `Cannot preserve missing worktree submodule git-module-name: main module is not initialized`.
+
+Proven layer: `preserve_missing_worktree_modules::visit`, `worktree.rs:2094-2097` and the admin-name accumulation at `2212-2215`. The traversal joins admin-name components to the main checkout instead of resolving their configured checkout paths. This is a failure to clean up, not demonstrated data loss: it refuses before the removal command. The ordinary same-name module case passed in the original 254-test baseline. The named-module discovery used for live/deinitialized checkouts does not correct this missing-checkout traversal.
+
+Regression test: `worktree::tests::missing_checkout_preserves_named_submodule_before_pruning`. The new test is intentionally left uncommitted while the coordinator decides how to track the defect. It fails on unchanged production source at HEAD `c88f5ff9429ffb8a43768d906b5515f1607c302d`, which adds only the original gate report to tested source `a778245a8`.
+
+RED command: `build-slot.sh --remote cargo nextest run --manifest-path src-tauri/Cargo.toml -p tuic-git --lib -E 'test(missing_checkout_preserves_named_submodule_before_pruning)'`, with the repository-local test TMPDIR. Result: exit 100, 1 test failed in 0.157 s, 613 filtered out; build 47.32 s. No mock stderr, fake Git process or generated external-system fixture was used.
+
+Evidence: `/Users/stefano.straus/Gits/.tmp/gate-tuic-wt/named-module-red.log`; rb artifacts `/Users/stefano.straus/Gits/.tmp/rb/20261020T123125Z-74627`. rb reports no source dirtiness. No survivor was reclassified as equivalent and no claim is made that any of the original 28 survivors has been killed.
+
+### Story 2096-1d25 resumed after restart
+
+The RED test was committed as `7f19e987ac`. Fix `d752fa4bf` resolves each module admin name through its owning main module's `.gitmodules` declaration, validates a unique relative path, and recurses only through each module's nested `modules` admin store. Missing or malformed mappings refuse before pruning. Added real-Git boundary tests cover nested named modules and missing/empty/parent/absolute mappings; the original named-module regression remains unchanged apart from formatting. Documentation and restart checks are synchronized.
+
+Worst-case traversal: each retained module repository incurs one mapping lookup before preservation; a hierarchy of N initialized modules visits each once, using one owning declaration per level. A bad nested declaration can leave already-copied preservation refs, but removal has not run and the source admin store remains registered. No atomic rollback of copied refs is required by this change.
+
+The authorized GREEN command was launched through `tuic-bg.sh` and `build-slot.sh --remote` with `TMPDIR` under Gits:
+
+```sh
+cargo nextest run --manifest-path src-tauri/Cargo.toml -p tuic-git --lib -E 'test(worktree)'
+```
+
+It exited 69 before the remote command started: `ssh: connect to host 34.253.255.16 port 22: Operation timed out`; `rb: box unreachable or runner deployment failed; no local fallback; remote command was not started`. Evidence: `~/Gits/.tmp/gate-tuic-wt/named-module-green.log`. No GREEN result, native Mac test/build, or new mutation outcome is claimed. The 28-survivor follow-up remains blocked on rb availability. The exit-78 native fallback authorization does not cover this failure.
+
+Static checks on the worktree pass: `fmt-changed.sh "$PWD" main...HEAD`, `git diff --check`, and `python3 ~/Gits/.agent-tools/check-instruction-links.py` (two valid instruction pairs). Story criterion 1 is checked from retained RED evidence; criteria 2–4 await execution. Risk remains high because this is destructive Git cleanup with object preservation. Coordinator critic is pending. No desktop, Vite, browser or headless backend process was launched.
