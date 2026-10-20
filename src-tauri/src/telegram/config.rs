@@ -63,7 +63,7 @@ impl Paths {
     }
 }
 
-#[derive(Deserialize, Serialize, schemars::JsonSchema)]
+#[derive(Clone, Deserialize, Serialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct Config {
     #[serde(default)]
@@ -96,6 +96,66 @@ impl Config {
         }
         paths.allowlist_entries()?;
         Ok(Some(config))
+    }
+}
+
+/// The runtime's opt-in snapshot changes only after a configuration event.
+/// Authorization at actual send/delivery boundaries still reads the allowlist.
+pub(super) struct WatchedConfig {
+    current: std::sync::Arc<std::sync::Mutex<Result<Option<Config>, Error>>>,
+    _watcher: notify::RecommendedWatcher,
+}
+
+impl WatchedConfig {
+    pub(super) fn new(paths: Paths) -> Result<Self, Error> {
+        use notify::Watcher;
+        let current = std::sync::Arc::new(std::sync::Mutex::new(Ok(None)));
+        let target = current.clone();
+        let watched_paths = paths.clone();
+        let mut watcher =
+            notify::recommended_watcher(move |event: notify::Result<notify::Event>| {
+                let relevant = match &event {
+                    Ok(event) if matches!(event.kind, notify::EventKind::Access(_)) => false,
+                    Ok(event) => event.paths.iter().any(|path| {
+                        path == &watched_paths.directory
+                            || path.file_name().is_some_and(|name| {
+                                name == "config.json" || name == "allowed_chat_ids"
+                            })
+                    }),
+                    Err(_) => true,
+                };
+                if relevant {
+                    let mut current = target.lock().unwrap_or_else(|e| e.into_inner());
+                    *current = match event {
+                        Ok(_) => Config::load(&watched_paths),
+                        Err(_) => Err(Error::PrivateFile),
+                    };
+                }
+            })
+            .map_err(|_| Error::PrivateFile)?;
+        watcher
+            .watch(&paths.directory, notify::RecursiveMode::NonRecursive)
+            .map_err(|_| Error::PrivateFile)?;
+        // Watch before reading, and serialize with the callback so an edit that
+        // races startup cannot be overwritten by an older startup snapshot.
+        {
+            let mut snapshot = current.lock().unwrap_or_else(|e| e.into_inner());
+            *snapshot = Config::load(&paths);
+        }
+        Ok(Self {
+            current,
+            _watcher: watcher,
+        })
+    }
+
+    pub(super) fn enabled(&self, alias: &str) -> bool {
+        self.current
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .as_ref()
+            .ok()
+            .and_then(Option::as_ref)
+            .is_some_and(|config| config.bot_alias == alias)
     }
 }
 
@@ -194,6 +254,44 @@ static PRIVATE_FILE_OPENS: std::sync::LazyLock<dashmap::DashMap<PathBuf, usize>>
 #[cfg(test)]
 mod file_read_tests {
     use super::*;
+
+    // Catches: a cached opt-in survives disable, atomic replacement or allowlist revocation.
+    #[tokio::test]
+    async fn telegram_watched_snapshot_observes_external_configuration_changes() {
+        let (_dir, paths) = crate::telegram::tests::setup();
+        let config = Config::load(&paths).unwrap().unwrap();
+        let runtime = crate::telegram::runtime::Runtime::new(
+            std::sync::Arc::new(crate::state::tests_support::make_test_app_state()),
+            config,
+            paths.clone(),
+            "watched-telegram".into(),
+        )
+        .unwrap();
+        async fn reaches(runtime: &crate::telegram::runtime::Runtime, enabled: bool) {
+            tokio::time::timeout(std::time::Duration::from_secs(30), async {
+                while runtime.enabled() != enabled {
+                    tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+                }
+            })
+            .await
+            .expect("configuration watcher did not apply the file event");
+        }
+        assert!(runtime.enabled());
+        std::fs::write(
+            paths.file("config.json"),
+            r#"{"enabled":false,"bot_alias":"test-bot"}"#,
+        )
+        .unwrap();
+        reaches(&runtime, false).await;
+        // Atomic rename is the setup writer's production publication pattern.
+        let replacement = paths.file("replacement.json");
+        std::fs::copy(paths.file("config.json"), &replacement).unwrap();
+        std::fs::write(&replacement, r#"{"enabled":true,"bot_alias":"test-bot"}"#).unwrap();
+        std::fs::rename(&replacement, paths.file("config.json")).unwrap();
+        reaches(&runtime, true).await;
+        std::fs::remove_file(paths.file("allowed_chat_ids")).unwrap();
+        reaches(&runtime, false).await;
+    }
 
     // Catches: every bus event and one-second tick reopens unchanged config and allowlist.
     #[test]
