@@ -82,6 +82,18 @@ No alternative native input or window-control transport was used to bypass this 
 
 Retained evidence: `agent-test.log`, `arm-result.json`, `park-observation.json`, `native-key-latency.json` (an incomplete timing attempt, not a latency result), `after-key-ps.txt`, `after-key-output.json`, `window-state.json`, and cleanup receipts. The owned PTY was deleted and the final session list was empty. `make agent-test-stop` requested shutdown through this instance's supervisor FIFO. No Vite server or browser session was started for this attempt.
 
+## Visible-window follow-up after 2090
+
+The desktop peer merged main at the coordinator's request and rebuilt runtime `5eba9d81bcd65c570117de5cb1a5413a80f94957`. This supersedes the earlier hidden-window prerequisite failure: the first follow-up observed `document.visibilityState === "visible"`, one terminal input, and nonzero canvas rectangles (302×320 and 302×280 CSS pixels) in the compact agent-test window. The observer did not request focus, send OS keystrokes, or inspect another window's pixels.
+
+The requested latency measurement is still incomplete:
+
+- `~/Gits/.tmp/results/desk-1986-visible-run/`: a native New Tab shell ran the foreground-child exit command and returned `CHILD_EXITED1986`. After native hidden visibility, a bounded 240-second OS observer did not see the owned shell enter `Ts+`. No parked-input latency sample was taken. This is a failed setup observation, not proof that standby or raw-input wake is defective.
+- `~/Gits/.tmp/results/desk-1986-visible-r2/`: an HTTP-created owned shell was idle in backend logs, but evaluation of a simple WebView canvas-state query returned no `eval_js` result within the native harness's 30-second budget. The script stopped before parking or measuring input.
+- `~/Gits/.tmp/results/desk-1986-visible-r3/`: a native New Tab shell again executed the foreground child to completion. The first terminal-store snapshot reported `shellState:null`; a later `return window.__TUIC__.terminals()` evaluation produced no result within 30 seconds. The observer stopped before parking or measuring input. This narrows the blocker to missing native evaluation completion during setup, not to a measured input-to-echo delay. It does not identify whether WebView execution or result delivery stalled.
+
+Each attempt started `make agent-test` as an owned subprocess, polled its own socket for readiness, and stopped it in the observer's `finally` block. Each `cleanup.json` records successful `make agent-test-stop`, an empty final session list, and no remaining executable from this worktree. The supervisor's make exit 2 reflects the requested child SIGTERM (143), not a build failure. No Vite server, browser daemon, production session, installed binary or daily API was used. There is still no valid native keyboard-to-rendered-echo latency, and AC4 remains unchecked. The physical-phone check remains with Boss.
+
 ## Cleanup
 
 Both owned PTYs were deleted; the final session list was empty. The owned browser tab and named daemon were closed; shared Chrome was left running. Backend PID 65820 and Vite PID 65821 received SIGTERM, and the final `ps` check found neither process nor either owned shell. The temporary Vite configuration was removed. No capture corpus, dependencies, production code or application test suites changed or ran.
