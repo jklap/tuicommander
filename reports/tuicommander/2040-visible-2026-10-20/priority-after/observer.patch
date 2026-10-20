@@ -1,0 +1,237 @@
+diff --git a/src-tauri/src/pty.rs b/src-tauri/src/pty.rs
+index 23d5ea28b0..2f914b806c 100755
+--- a/src-tauri/src/pty.rs
++++ b/src-tauri/src/pty.rs
+@@ -1,3 +1,45 @@
++// Temporary bounded input-priority measurement observer; remove before committing source.
++fn trace_2040(event: &str, session: &str, mut details: serde_json::Value) {
++    static ENABLED: LazyLock<bool> = LazyLock::new(|| std::env::var_os("TUIC_2040_TRACE").is_some());
++    static CLOCK: LazyLock<(std::time::Instant, u128)> = LazyLock::new(|| (std::time::Instant::now(), std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_micros()));
++    if !*ENABLED { return; }
++    let mono_us = CLOCK.0.elapsed().as_micros();
++    for field in ["bytes", "frame_bytes", "processed_bytes"] {
++        if let Some(value) = details.as_object_mut().and_then(|d| d.remove(field)) {
++            let bytes: Vec<u8> = value.as_array().unwrap().iter().map(|v| v.as_u64().unwrap() as u8).collect();
++            let hash = bytes.iter().fold(2166136261u32, |hash, byte| (hash ^ *byte as u32).wrapping_mul(16777619));
++            let keys: String = if event == "pty-read" || field == "processed_bytes" {
++                String::from_utf8_lossy(&bytes).chars().filter(|ch| ('①'..='⑮').contains(ch)).collect()
++            } else {
++                let mut keys = String::new();
++                let mut at = 26usize;
++                if bytes.len() >= at {
++                    let rows = u16::from_le_bytes([bytes[0], bytes[1]]);
++                    for _ in 0..rows {
++                        if at+4 > bytes.len() { break; }
++                        let flagged = u16::from_le_bytes([bytes[at+2], bytes[at+3]]);
++                        at += 4;
++                        if flagged & 0x4000 != 0 { at += 2; }
++                        for _ in 0..(flagged & 0x3fff) {
++                            if at+11 > bytes.len() { break; }
++                            if let Some(ch) = char::from_u32(u32::from_le_bytes(bytes[at..at+4].try_into().unwrap()))
++                                && ('①'..='⑮').contains(&ch) { keys.push(ch); }
++                            at += 11;
++                        }
++                    }
++                }
++                keys
++            };
++            details[field] = serde_json::json!({"len": bytes.len(), "fnv1a32": hash, "keys": keys});
++        }
++    }
++    if let Some(object) = details.as_object_mut() { object.remove("tail"); }
++    eprintln!("TUIC2040 {}", serde_json::json!({"event":event,"session":session,"mono_us":mono_us,"anchor_epoch_us":CLOCK.1,"details":details}));
++}
++fn trace_2040_screen(vt: &tuic_terminal::vt_log::VtLogBuffer) -> serde_json::Value {
++    serde_json::json!({"screen": vt.read_rows_in_range(vt.grid_history_size(), vt.grid_history_size()+vt.grid_screen_lines()-1).into_iter().map(|row| row.chars().filter(|ch| ('①'..='⑮').contains(ch)).collect::<String>()).collect::<Vec<_>>(), "origin": vt.grid_screen_origin(), "history": vt.grid_history_size(), "total": vt.grid_total_lines(), "rows": vt.grid_screen_lines(), "columns": vt.grid_columns()})
++}
++
+ use parking_lot::Mutex;
+ use portable_pty::{CommandBuilder, PtySize, native_pty_system};
+ use serde::Serialize;
+@@ -1841,7 +1883,10 @@ impl ChunkProcessor {
+             intent_candidate,
+         ): VtProcessResult = if let Some(vt_log) = state.grid.vt_log_buffers.get(session_id) {
+             let mut vt = vt_log.lock();
++            trace_2040("vt-begin", session_id, serde_json::json!({"processed_bytes": data.as_bytes()}));
+             let mut changed = vt.process(data.as_bytes());
++            let trace_total = vt.grid_total_lines();
++            trace_2040("vt-applied", session_id, serde_json::json!({"processed_bytes": data.as_bytes(), "state": trace_2040_screen(&vt), "tail_start": trace_total.saturating_sub(128), "tail": vt.read_rows_in_range(trace_total.saturating_sub(128), trace_total)}));
+             // Publish the real sync state (a nested BSU keeps it open) so the
+             // frame ticker knows whether this session can have a stalled
+             // synchronized update worth taking the lock for.
+@@ -4098,12 +4143,14 @@ pub(crate) fn spawn_reader_thread(
+         let mut last_sent: Option<std::time::Instant> = None;
+         let mut last_load_check: Option<std::time::Instant> = None;
+         let mut system_saturated = false;
++        let mut trace_tick = 0u64;
+         ticker_priority.bind_ticker();
+         let mut next_tick = std::time::Instant::now() + TICK;
+         let mut priority_retry: Option<std::time::Instant> = None;
+         while ticker_running.load(Ordering::Relaxed) {
+             let wake_at = priority_retry.map_or(next_tick, |retry| retry.min(next_tick));
+             std::thread::park_timeout(wake_at.saturating_duration_since(std::time::Instant::now()));
++            trace_tick += 1;
+             let now = std::time::Instant::now();
+             let periodic_tick = now >= next_tick;
+             priority_retry = None;
+@@ -4129,6 +4176,9 @@ pub(crate) fn spawn_reader_thread(
+                 drop(batch);
+             }
+             let mut effective_dirty = ticker_dirty.swap(false, Ordering::Relaxed);
++            if let Some(vt) = ticker_state.grid.vt_log_buffers.get(&ticker_sid) {
++                trace_2040("tick-start", &ticker_sid, serde_json::json!({"tick": trace_tick, "dirty": effective_dirty, "state": trace_2040_screen(&vt.lock())}));
++            }
+             // DEC 2026: the vendored VTE records a 150ms deadline but never fires
+             // it, so a synchronized update left open (delayed/lost ESU, or a stream
+             // that simply stops mid-update) would buffer forever and wedge the
+@@ -4155,6 +4205,7 @@ pub(crate) fn spawn_reader_thread(
+             if !effective_dirty {
+                 // Idle tick: leave sustained-animation mode so the next burst
+                 // (keystroke, fresh output) gets full 60 fps low-latency response.
++                trace_2040("tick-decision", &ticker_sid, serde_json::json!({"tick": trace_tick, "decision": "skip", "reason": "clean"}));
+                 dirty_run = 0;
+                 continue;
+             }
+@@ -4184,6 +4235,7 @@ pub(crate) fn spawn_reader_thread(
+                 {
+                     apply_scroll_target(&mut vt.lock(), target);
+                 }
++                trace_2040("tick-decision", &ticker_sid, serde_json::json!({"tick": trace_tick, "decision": "coalesce", "reason": "no-subscriber"}));
+                 dirty_run = 0;
+                 continue;
+             }
+@@ -4221,6 +4273,7 @@ pub(crate) fn spawn_reader_thread(
+                     {
+                         apply_scroll_target(&mut vt.lock(), target);
+                     }
++                    trace_2040("tick-decision", &ticker_sid, serde_json::json!({"tick": trace_tick, "decision": "coalesce", "reason": "gate-paused"}));
+                     continue;
+                 }
+             } else if gate.as_ref().is_some_and(|g| !g.is_open()) {
+@@ -4243,6 +4296,7 @@ pub(crate) fn spawn_reader_thread(
+                 }
+                 if !watchers {
+                     ticker_dirty.store(true, Ordering::Relaxed);
++                    trace_2040("tick-decision", &ticker_sid, serde_json::json!({"tick": trace_tick, "decision": "coalesce", "reason": "gate-in-flight"}));
+                     continue;
+                 }
+             } else {
+@@ -4298,6 +4352,7 @@ pub(crate) fn spawn_reader_thread(
+                 // periodic tick still owns gate/sync maintenance and background frames.
+                 priority_retry = priority_request.map(|request| request.ready_at);
+                 ticker_dirty.store(true, Ordering::Relaxed);
++                trace_2040("tick-decision", &ticker_sid, serde_json::json!({"tick": trace_tick, "decision": "coalesce", "reason": if priority_request.is_some() { "priority-spacing" } else { "rate-floor" }, "min_interval_ms": min_interval, "since_last_ms": last_sent.map(|last| now.duration_since(last).as_millis()), "input_recent": input_recent, "dirty_run": dirty_run, "saturated": system_saturated}));
+                 continue;
+             }
+             let priority_bypass = !sync_timeout_flush && (floor_pending || !periodic_tick);
+@@ -4318,6 +4373,7 @@ pub(crate) fn spawn_reader_thread(
+                 // delta carries are already in it.
+                 let repair = desktop_owed_full_frame.then(|| g.serialize_full_frame());
+                 let frame = g.serialize_dirty_rows();
++                trace_2040("tick-decision", &ticker_sid, serde_json::json!({"tick": trace_tick, "decision": "cut", "reason": "eligible", "priority_bypass": priority_bypass, "periodic_tick": periodic_tick, "min_interval_ms": min_interval, "input_recent": input_recent, "dirty_run": dirty_run, "saturated": system_saturated, "state": trace_2040_screen(&g), "frame_bytes": &frame.bytes}));
+                 drop(g);
+                 #[cfg(feature = "desktop")]
+                 if let Some(repair) = repair {
+@@ -4381,6 +4437,7 @@ pub(crate) fn spawn_reader_thread(
+                         // A chunk already being processed before input cannot
+                         // consume the new input's wake hint.
+                         let input_generation = input_priority.generation();
++                        trace_2040("pty-read", &session_id, serde_json::json!({"bytes": &buf[..n]}));
+                         state.metrics.bytes_emitted.fetch_add(n, Ordering::Relaxed);
+                         // Flight recorder: keep the last PTY_RAW_RING_CAP raw bytes
+                         // (pre-transform) so a wild rendering corruption can be
+@@ -4483,6 +4540,7 @@ pub(crate) fn spawn_reader_thread(
+                             flush_pending_injections(&state, &session_id);
+                         }
+ 
++                        trace_2040("reader-dirty", &session_id, serde_json::json!({}));
+                         frame_dirty.store(true, Ordering::Relaxed);
+                         input_priority.applied(input_generation, std::time::Instant::now());
+                     }
+@@ -4707,7 +4765,9 @@ pub(crate) fn send_grid_frame(
+     session_id: &str,
+     frame: crate::grid_gate::GridFrame,
+ ) {
++    trace_2040("grid-offer", session_id, serde_json::json!({"bytes": &frame.bytes, "empty": frame.is_empty()}));
+     if frame.is_empty() {
++        trace_2040("grid-decision", session_id, serde_json::json!({"decision": "skip", "reason": "empty"}));
+         return;
+     }
+     let crate::grid_gate::GridFrame { order, bytes } = frame;
+@@ -4733,12 +4793,13 @@ pub(crate) fn send_grid_frame(
+             if crate::grid_watch::claim_grid_frame(&watch_tx, order, for_watch)
+                 == crate::grid_gate::FrameOrder::Stale
+             {
++                trace_2040("grid-decision", session_id, serde_json::json!({"decision": "skip", "reason": "order-stale"}));
+                 repaint_after_reorder(state, session_id);
+                 return;
+             }
+             match for_desktop {
+                 Some(bytes) => bytes,
+-                None => return,
++                None => { trace_2040("grid-decision", session_id, serde_json::json!({"decision": "skip-desktop", "reason": "watch-only"})); return; },
+             }
+         }
+         None => bytes,
+@@ -4764,6 +4825,7 @@ pub(crate) fn send_grid_frame(
+             }
+         };
+         if stalled {
++            trace_2040("grid-decision", session_id, serde_json::json!({"decision": "coalesce", "reason": "desktop-gate-closed"}));
+             // Arm the ticker so the debt is paid even if the session falls silent
+             // the instant the WebView recovers: the repair rides a tick, and an
+             // undirty session never takes one.
+@@ -4786,14 +4848,17 @@ pub(crate) fn send_grid_frame(
+ #[cfg(feature = "desktop")]
+ fn send_desktop_grid_frame(state: &AppState, session_id: &str, bytes: Vec<u8>) {
+     let Some(ch) = state.grid.channels.get(session_id) else {
++        trace_2040("desktop-decision", session_id, serde_json::json!({"decision": "skip", "reason": "no-channel"}));
+         return;
+     };
+     if !ch.visible.load(Ordering::Relaxed) {
++        trace_2040("desktop-decision", session_id, serde_json::json!({"decision": "skip", "reason": "hidden"}));
+         return;
+     }
+     let gate = state.grid.gates.get(session_id);
+     if let Some(gate) = gate.as_deref() {
+         if gate.is_paused() {
++            trace_2040("desktop-decision", session_id, serde_json::json!({"decision": "coalesce", "reason": "paused"}));
+             gate.note_missed();
+             return;
+         }
+@@ -4805,7 +4870,9 @@ fn send_desktop_grid_frame(state: &AppState, session_id: &str, bytes: Vec<u8>) {
+     // over-threshold path (one extra IPC round trip per frame) and arrived in
+     // JS as a `number[]` to be walked back into bytes. `Response` carries the
+     // bytes as `Raw` and the frontend already accepts an ArrayBuffer.
++    trace_2040("desktop-submit", session_id, serde_json::json!({"bytes": &bytes}));
+     if let Err(error) = ch.channel.send(tauri::ipc::Response::new(bytes)) {
++        trace_2040("desktop-decision", session_id, serde_json::json!({"decision": "failed", "reason": error.to_string()}));
+         // A frame that never reached the webview will never be acked, and the
+         // counters are absolute: leaving this one counted would put the gate one
+         // frame behind for the rest of the session, i.e. every later frame would
+diff --git a/src-tauri/src/pty/commands.rs b/src-tauri/src/pty/commands.rs
+index e1421f77fd..aa8e0a3085 100644
+--- a/src-tauri/src/pty/commands.rs
++++ b/src-tauri/src/pty/commands.rs
+@@ -903,6 +903,7 @@ pub(crate) fn ack_terminal_frame(
+     received: u64,
+     visible: Option<bool>,
+ ) {
++    trace_2040("receipt-ack", &session_id, serde_json::json!({"epoch":epoch,"received":received,"visible":visible}));
+     if let Some(visible) = visible
+         && let Some(channel) = state.grid.channels.get(&session_id)
+         && channel.epoch == epoch
+diff --git a/src-tauri/src/pty/injection.rs b/src-tauri/src/pty/injection.rs
+index 0f8a1f4db4..09422a1b6a 100644
+--- a/src-tauri/src/pty/injection.rs
++++ b/src-tauri/src/pty/injection.rs
+@@ -2574,7 +2574,9 @@ fn write_pty_parts_blocking(
+     let byte_parts: Vec<&[u8]> = parts.iter().map(|part| part.as_bytes()).collect();
+     let t0 = std::time::Instant::now();
+     stamp_input_ms(state, session_id);
++    trace_2040("input-write-begin", session_id, serde_json::json!({"keys": parts}));
+     state.write_pty_parts(session_id, &byte_parts)?;
++    trace_2040("input-write-end", session_id, serde_json::json!({"keys": parts}));
+     let total_ms = t0.elapsed().as_millis();
+     if total_ms > 100 {
+         tracing::warn!(session_id = %session_id, total_ms = %total_ms,

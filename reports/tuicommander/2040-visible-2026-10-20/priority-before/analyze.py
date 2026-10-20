@@ -4,9 +4,10 @@ from collections import Counter
 import gzip
 import json
 import math
+import sys
 from pathlib import Path
 
-HERE = Path(__file__).resolve().parent
+HERE = Path(sys.argv[1]).resolve() if len(sys.argv) > 1 else Path(__file__).resolve().parent
 
 
 def fnv(data):

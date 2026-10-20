@@ -96,3 +96,16 @@ The continuation trace resolves the reproduced omission as viewport scrolling be
 - `plain-help.json`, `tuic-help.json`, corresponding `*-help-events.json`, `help-window.json`: help comparison and window precondition.
 - `launch.json`, `health.json`, `repeat-launch.txt`, `observer-diagnostics.txt`, `cleanup.json`, `story-close.txt`: owned native lifecycle.
 - `measure.js`, `layered.js`, `socket_tools.py`, `run_measure.py`, `run_layered.py`, `run_visible.py`, `help_probe.py`: observer sources. They are evidence helpers, not unattended application tests.
+
+## Bounded input-priority implementation follow-up
+
+The later visible monotonic baseline proves material frame-floor delays and
+adds a ticker-boundary RED. The production fix in `6eb6bbefa` gives post-input
+reader output bounded wakes on the same serializer. Twenty selected tests pass
+on native macOS and rb. Same-workload matched-glyph proxy p95 changes from
+74ms to 22ms/28ms; distributions remain censored, and original native
+GREEN/REALITY plus the combined heartbeat/non-regression criterion stay open.
+See [`priority-after/README.md`](priority-after/README.md) for all denominators,
+the first after run's unexplained absent echo, throughput/tail limits, exact
+commands and cleanup. This supersedes only the earlier absence of floor
+attribution; it does not turn the prior benign viewport omissions into loss.

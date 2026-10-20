@@ -1,0 +1,267 @@
+{
+  "runs": {
+    "priority-before": {
+      "metrics_ms": {
+        "fillText_ms": {
+          "count": 14,
+          "p50": 39,
+          "p95": 74,
+          "max": 74
+        },
+        "write_to_vt_ms": {
+          "count": 15,
+          "p50": 0.968,
+          "p95": 1.622,
+          "max": 1.622
+        },
+        "vt_processing_ms": {
+          "count": 15,
+          "p50": 0.295,
+          "p95": 0.413,
+          "max": 0.413
+        },
+        "vt_to_cut_ms": {
+          "count": 14,
+          "p50": 30.622,
+          "p95": 50.355,
+          "max": 50.355
+        },
+        "first_floor_decision_to_cut_ms": {
+          "count": 10,
+          "p50": 17.923,
+          "p95": 36.312,
+          "max": 36.312
+        },
+        "cut_to_send_ms": {
+          "count": 14,
+          "p50": 1.063,
+          "p95": 1.597,
+          "max": 1.597
+        },
+        "dispatch_to_arrival_ms": {
+          "count": 14,
+          "p50": 33,
+          "p95": 54,
+          "max": 54
+        },
+        "arrival_to_fillText_ms": {
+          "count": 14,
+          "p50": 9,
+          "p95": 20,
+          "max": 20
+        },
+        "send_to_arrival_estimate_ms": {
+          "count": 14,
+          "p50": -0.09912109375,
+          "p95": 0.568115234375,
+          "max": 0.568115234375
+        }
+      },
+      "backend_echo_count": 15,
+      "matching_fillText_count": 14,
+      "missing_from_vt": [],
+      "applied_without_matching_cut": [
+        "\u2460"
+      ],
+      "arrived_without_matching_fillText": [],
+      "output_bytes_per_second_observed": 19516.99133107669,
+      "raf_gap_ms": {
+        "count": 201,
+        "p50": 17,
+        "p95": 18,
+        "max": 43
+      },
+      "timer_gap_ms": {
+        "count": 32,
+        "p50": 104,
+        "p95": 105,
+        "max": 108
+      },
+      "recorder_dropped": 0,
+      "priority_bypasses": 0,
+      "max_bypasses_in_rolling_100ms": 0
+    },
+    "priority-after": {
+      "metrics_ms": {
+        "fillText_ms": {
+          "count": 13,
+          "p50": 15,
+          "p95": 22,
+          "max": 22
+        },
+        "write_to_vt_ms": {
+          "count": 14,
+          "p50": 0.807,
+          "p95": 1.958,
+          "max": 1.958
+        },
+        "vt_processing_ms": {
+          "count": 14,
+          "p50": 0.257,
+          "p95": 0.514,
+          "max": 0.514
+        },
+        "vt_to_cut_ms": {
+          "count": 13,
+          "p50": 1.174,
+          "p95": 9.103,
+          "max": 9.103
+        },
+        "first_floor_decision_to_cut_ms": {
+          "count": 1,
+          "p50": 0.839,
+          "p95": 0.839,
+          "max": 0.839
+        },
+        "cut_to_send_ms": {
+          "count": 13,
+          "p50": 0.852,
+          "p95": 0.976,
+          "max": 0.976
+        },
+        "dispatch_to_arrival_ms": {
+          "count": 13,
+          "p50": 4,
+          "p95": 13,
+          "max": 13
+        },
+        "arrival_to_fillText_ms": {
+          "count": 13,
+          "p50": 5,
+          "p95": 14,
+          "max": 14
+        },
+        "send_to_arrival_estimate_ms": {
+          "count": 13,
+          "p50": -0.677001953125,
+          "p95": -0.218994140625,
+          "max": -0.218994140625
+        }
+      },
+      "backend_echo_count": 14,
+      "matching_fillText_count": 13,
+      "missing_from_vt": [
+        "\u2467"
+      ],
+      "applied_without_matching_cut": [
+        "\u2464"
+      ],
+      "arrived_without_matching_fillText": [],
+      "output_bytes_per_second_observed": 18639.24280970703,
+      "raf_gap_ms": {
+        "count": 201,
+        "p50": 17,
+        "p95": 18,
+        "max": 49
+      },
+      "timer_gap_ms": {
+        "count": 32,
+        "p50": 104,
+        "p95": 106,
+        "max": 115
+      },
+      "recorder_dropped": 0,
+      "priority_bypasses": 28,
+      "max_bypasses_in_rolling_100ms": 2,
+      "observed_throughput_change_percent": -4.497355696274918
+    },
+    "priority-after-repeat": {
+      "metrics_ms": {
+        "fillText_ms": {
+          "count": 13,
+          "p50": 16,
+          "p95": 28,
+          "max": 28
+        },
+        "write_to_vt_ms": {
+          "count": 15,
+          "p50": 1.137,
+          "p95": 1.952,
+          "max": 1.952
+        },
+        "vt_processing_ms": {
+          "count": 15,
+          "p50": 0.357,
+          "p95": 0.901,
+          "max": 0.901
+        },
+        "vt_to_cut_ms": {
+          "count": 14,
+          "p50": 1.607,
+          "p95": 5.738,
+          "max": 5.738
+        },
+        "first_floor_decision_to_cut_ms": null,
+        "cut_to_send_ms": {
+          "count": 14,
+          "p50": 1.245,
+          "p95": 1.663,
+          "max": 1.663
+        },
+        "dispatch_to_arrival_ms": {
+          "count": 14,
+          "p50": 5,
+          "p95": 22,
+          "max": 22
+        },
+        "arrival_to_fillText_ms": {
+          "count": 13,
+          "p50": 8,
+          "p95": 14,
+          "max": 14
+        },
+        "send_to_arrival_estimate_ms": {
+          "count": 14,
+          "p50": 0.10400390625,
+          "p95": 0.89794921875,
+          "max": 0.89794921875
+        }
+      },
+      "backend_echo_count": 15,
+      "matching_fillText_count": 13,
+      "missing_from_vt": [],
+      "applied_without_matching_cut": [
+        "\u2465"
+      ],
+      "arrived_without_matching_fillText": [
+        "\u2460"
+      ],
+      "output_bytes_per_second_observed": 19580.9055072538,
+      "raf_gap_ms": {
+        "count": 195,
+        "p50": 17,
+        "p95": 18,
+        "max": 88
+      },
+      "timer_gap_ms": {
+        "count": 32,
+        "p50": 104,
+        "p95": 105,
+        "max": 109
+      },
+      "recorder_dropped": 0,
+      "priority_bypasses": 28,
+      "max_bypasses_in_rolling_100ms": 2,
+      "observed_throughput_change_percent": 0.32747965653567856
+    }
+  },
+  "repeat_raw_ring_bytes": 116463,
+  "repeat_raw_ring_key_counts": {
+    "\u2460": 1,
+    "\u2461": 1,
+    "\u2462": 1,
+    "\u2463": 1,
+    "\u2464": 1,
+    "\u2465": 1,
+    "\u2466": 1,
+    "\u2467": 1,
+    "\u2468": 1,
+    "\u2469": 1,
+    "\u246a": 1,
+    "\u246b": 1,
+    "\u246c": 1,
+    "\u246d": 1,
+    "\u246e": 1
+  },
+  "claim": "Untrusted JS dispatch to matching fillText only; censored samples remain explicit. No trusted keyboard, compositor or native frontend-heartbeat non-regression claim."
+}
