@@ -13,6 +13,7 @@ from pathlib import Path
 import subprocess
 import sys
 import time
+import uuid
 
 ROOT = Path(__file__).resolve().parent.parent
 TEST = "agent_test_window_renders_visible_without_focus"
@@ -35,20 +36,37 @@ def api(socket, path, body=None, method=None):
 
 
 def evaluate(socket, script, evidence):
-    rows = api(socket, "/logs?source=eval_js&limit=1")
-    previous = rows[0]["id"] if rows else -1
-    reply = api(socket, "/debug/invoke_js", {"script": script})
+    # Identical eval logs coalesce without changing their ID. Correlate the
+    # request itself, not a log ID or another observer's newest result.
+    nonce = uuid.uuid4().hex
+    wrapped = f"""
+try {{
+ const result = await (async () => {{ {script} }})();
+ return {{nonce: {json.dumps(nonce)}, result}};
+}} catch (error) {{
+ return {{nonce: {json.dumps(nonce)}, error: String(error)}};
+}}
+"""
+    reply = api(socket, "/debug/invoke_js", {"script": wrapped})
     if not reply.get("ok"):
         raise RuntimeError(f"native evaluation refused: {reply}")
     # Harness budget is larger than the ten-second paint observation below.
     deadline = time.monotonic() + 30
     while time.monotonic() < deadline:
-        rows = api(socket, "/logs?source=eval_js&limit=1")
-        if rows and rows[0]["id"] != previous:
-            (evidence / "eval.json").write_text(json.dumps(rows[0], indent=2))
-            return json.loads(rows[0]["message"].split("\n---\n")[-1])
+        rows = api(socket, "/logs?source=eval_js&limit=20")
+        for row in rows:
+            try:
+                response = json.loads(row["message"].split("\n---\n")[-1])
+            except (ValueError, KeyError):
+                continue
+            if not isinstance(response, dict) or response.get("nonce") != nonce:
+                continue
+            (evidence / "eval.json").write_text(json.dumps(row, indent=2))
+            if "error" in response:
+                raise RuntimeError(f"native evaluation failed: {response['error']}")
+            return response.get("result")
         time.sleep(.1)
-    raise RuntimeError("native evaluation did not return within the harness budget")
+    raise RuntimeError(f"native evaluation {nonce} did not return within the harness budget")
 
 
 def presentation_snapshot(pid):
