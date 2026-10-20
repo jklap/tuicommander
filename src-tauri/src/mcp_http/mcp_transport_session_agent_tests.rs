@@ -1734,6 +1734,51 @@ fn session_output_redacts_a_secret_on_the_terminal() {
     }
 }
 
+/// Catches: an inverted ring-cache generation check reuses the pre-write
+/// secret list, leaking a newly appended token through a fragment-only tail.
+#[test]
+fn session_output_raw_redacts_new_secret_fragment_after_cache_warmup() {
+    use crate::OutputRingBuffer;
+
+    let state = test_state();
+    let sid = "raw-secret-cache-session";
+    let mut ring = OutputRingBuffer::new(4096);
+    ring.write(b"ready\n");
+    state
+        .session_maps
+        .output_buffers
+        .insert(sid.to_string(), parking_lot::Mutex::new(ring));
+    let args = serde_json::json!({
+        "action": "output", "session_id": sid, "format": "raw", "limit": 13
+    });
+
+    // Warm the cache through the consumer path, including an unchanged poll.
+    for _ in 0..2 {
+        let response = handle_session(&state, &args, None);
+        assert_eq!(response["data"], "ready\n");
+    }
+
+    // Match the PTY writer: append to the existing ring, with no VT grid to
+    // independently supply the secret and conceal a stale ring cache.
+    state
+        .session_maps
+        .output_buffers
+        .get(sid)
+        .unwrap()
+        .lock()
+        .write(b"ghp_0123456789abcdefghijklmnopqrstuvwxyzAB\n");
+
+    // Only the suffix qrstuvwxyzAB is in the requested window. It cannot be
+    // recognized as a token without the updated whole-ring secret context.
+    for _ in 0..2 {
+        let response = handle_session(&state, &args, None);
+        assert_eq!(
+            response["data"], "[REDACTED]\n",
+            "a new secret's tail must stay redacted on every poll: {response}"
+        );
+    }
+}
+
 /// Read `session action=output` in every shape a caller can ask for and
 /// assert that no secret fragment survives.
 fn assert_no_fragment_in_reads(vt: crate::state::VtLogBuffer, label: &str) {

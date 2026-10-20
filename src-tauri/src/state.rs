@@ -1939,6 +1939,9 @@ pub(crate) struct GridState {
     /// Dirty flag: set by PTY reader when new data is processed, cleared by frame ticker.
     /// Decouples read() from frame serialization to coalesce rapid writes (spinners).
     pub(crate) frame_dirty: DashMap<String, Arc<AtomicBool>>,
+    /// Bounded input wake hint; owned and removed by the reader/ticker lifecycle.
+    pub(crate) input_frame_priority:
+        DashMap<String, Arc<crate::pty::frame_priority::InputFramePriority>>,
     /// Hint: true while a DEC 2026 synchronized update is open on this session.
     /// Written by the PTY reader after each `process()`, read by the frame ticker
     /// so an idle tick only takes the vt lock for sessions that can actually have

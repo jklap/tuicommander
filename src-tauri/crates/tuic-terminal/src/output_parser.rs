@@ -2213,6 +2213,10 @@ pub fn parse_choice_prompt(screen_rows: &[String]) -> Option<ParsedEvent> {
         // Supported Codex 0.162 request_user_input opens with Shift+Left.
         static ref CODEX_FOOTER_RE: regex::Regex =
             regex::Regex::new(r"(?i)^\s*enter\s+submit\s+⌃\]\s+skip\s+⇧→\s+main prompt\s*$").unwrap();
+        // Narrow /plan layouts put each footer action on its own row.
+        static ref CODEX_PLAN_NOTES_RE: regex::Regex = regex::Regex::new(
+            r"^(?:option [1-9][0-9]*/[1-9][0-9]* \| )?tab to add notes$"
+        ).unwrap();
         // Title sentinel: question mark OR imperative verb. Keeps us off markdown lists.
         static ref TITLE_VERB_RE: regex::Regex =
             regex::Regex::new(r"(?i)^\s*(?:do you want|proceed with|continue|should i|confirm|apply|allow)\b").unwrap();
@@ -2251,6 +2255,17 @@ pub fn parse_choice_prompt(screen_rows: &[String]) -> Option<ParsedEvent> {
             idx -= 1;
             continue;
         }
+        if idx >= 3
+            && row == "esc to interrupt"
+            && screen_rows[idx - 2].trim() == "enter to submit answer"
+            && CODEX_PLAN_NOTES_RE.is_match(screen_rows[idx - 3].trim())
+        {
+            dismiss_key = Some("cancel".to_owned());
+            amend_key = Some("amend".to_owned());
+            codex_plan = true;
+            idx -= 3;
+            continue;
+        }
         if row == "tab to add notes | enter to submit answer | esc to interrupt" {
             dismiss_key = Some("cancel".to_owned());
             amend_key = Some("amend".to_owned());
@@ -2270,6 +2285,7 @@ pub fn parse_choice_prompt(screen_rows: &[String]) -> Option<ParsedEvent> {
 
     // Step 2: collect contiguous option rows bottom-up.
     let mut options_rev: Vec<ChoiceOption> = Vec::new();
+    let mut continuations: Vec<&str> = Vec::new();
     while idx > 0 {
         let raw = &screen_rows[idx - 1];
         if raw.trim().is_empty() {
@@ -2283,13 +2299,45 @@ pub fn parse_choice_prompt(screen_rows: &[String]) -> Option<ParsedEvent> {
             // /plan renders descriptions in a second column, including its
             // notes hint. They are not part of the selectable answer label.
             let hint = if codex_plan {
-                if let Some((answer, description)) = label.split_once("  ") {
-                    let hint = Some(description.trim().to_owned());
-                    label = answer.trim().to_owned();
-                    hint
-                } else {
-                    None
+                let label_column = raw[..caps.get(2)?.start()].chars().count();
+                let hint_column = label.find("  ").map(|split| {
+                    label_column
+                        + label[..split].chars().count()
+                        + label[split..]
+                            .chars()
+                            .take_while(|ch| ch.is_whitespace())
+                            .count()
+                });
+                let mut hint = label.split_once("  ").map(|(answer, description)| {
+                    (answer.trim().to_owned(), description.trim().to_owned())
+                });
+                if let Some((answer, _)) = &hint {
+                    label = answer.clone();
                 }
+                // Native /plan wraps the answer and its description independently.
+                // Keep their columns separate; a description is never an answer key.
+                for continuation in continuations.drain(..).rev() {
+                    let columns: Vec<char> = continuation.chars().collect();
+                    if columns
+                        .iter()
+                        .take(label_column)
+                        .any(|ch| !ch.is_whitespace())
+                    {
+                        return None;
+                    }
+                    let split = hint_column.unwrap_or(columns.len()).min(columns.len());
+                    let answer: String = columns
+                        .iter()
+                        .skip(label_column)
+                        .take(split.saturating_sub(label_column))
+                        .collect();
+                    append_codex_plan_fragment(&mut label, answer.trim());
+                    if let Some((_, description)) = &mut hint {
+                        let fragment: String = columns.iter().skip(split).collect();
+                        append_codex_plan_fragment(description, fragment.trim());
+                    }
+                }
+                hint.map(|(_, description)| description)
             } else {
                 let hint = HINT_RE.captures(&label).map(|c| c[1].to_string());
                 if hint.is_some() {
@@ -2317,12 +2365,15 @@ pub fn parse_choice_prompt(screen_rows: &[String]) -> Option<ParsedEvent> {
                 hint,
             });
             idx -= 1;
+        } else if codex_plan && raw.starts_with("       ") {
+            continuations.push(raw.as_str());
+            idx -= 1;
         } else {
             break;
         }
     }
 
-    if options_rev.len() < 2 {
+    if !continuations.is_empty() || options_rev.len() < 2 {
         return None;
     }
 
@@ -2414,6 +2465,17 @@ pub fn parse_choice_prompt(screen_rows: &[String]) -> Option<ParsedEvent> {
         dismiss_key,
         amend_key,
     })
+}
+
+// /plan wraps at word boundaries, but punctuation can start a continuation.
+fn append_codex_plan_fragment(text: &mut String, fragment: &str) {
+    if fragment.is_empty() {
+        return;
+    }
+    if !text.is_empty() && !fragment.starts_with([',', '.', ';', ':', ')']) {
+        text.push(' ');
+    }
+    text.push_str(fragment);
 }
 
 /// Grok's native Ask is a framed radio form, not a numbered Markdown list.
@@ -7136,6 +7198,76 @@ Enter to select · ↑/↓ to navigate · Esc to cancel";
             .unwrap();
         *header = "  Question 1/1 (0 unanswered)".to_owned();
         assert!(parse_choice_prompt(&answered).is_none());
+    }
+
+    fn captured_codex_narrow_plan_rows() -> Vec<String> {
+        let capture = crate::pty_capture::decode_capture(include_bytes!(
+            "../../../src/fixtures/agent_prompts/codex-first-plan-narrow-2094.tcap"
+        ))
+        .unwrap();
+        let (rows, cols) = capture.geometry.unwrap();
+        let mut grid = crate::terminal_grid::TerminalGrid::new(rows, cols, 2000);
+        for record in capture.records {
+            if record.direction == crate::pty_capture::CaptureDirection::Output {
+                grid.process(&record.data);
+            }
+        }
+        grid.screen_text_rows()
+    }
+
+    // Catches: native wrapped descriptions or labels preventing first-question controls.
+    #[test]
+    fn captured_codex_narrow_plan_exports_clean_columns() {
+        let rows = captured_codex_narrow_plan_rows();
+        let parsed = parse_choice_prompt(&rows);
+        assert!(parsed.is_some(), "native narrow rows: {rows:#?}");
+        let ParsedEvent::ChoicePrompt { options, .. } = parsed.unwrap() else {
+            panic!("native question must export choices");
+        };
+        assert_eq!(options[3].label, "None of the above");
+        assert_eq!(
+            options[3].hint.as_deref(),
+            Some("Optionally, add details in notes (tab)")
+        );
+    }
+
+    // Catches: relaxing the narrow footer accepting a departed or incomplete dialog.
+    #[test]
+    fn captured_codex_narrow_plan_requires_live_footer_and_counter() {
+        let rows = captured_codex_narrow_plan_rows();
+        for needle in [
+            "Question 1/1",
+            "tab to add notes",
+            "enter to submit answer",
+            "esc to interrupt",
+        ] {
+            let mut incomplete = rows.clone();
+            *incomplete
+                .iter_mut()
+                .find(|row| row.contains(needle))
+                .unwrap() = String::new();
+            assert!(
+                parse_choice_prompt(&incomplete).is_none(),
+                "missing {needle}"
+            );
+        }
+        let mut departed = rows;
+        departed.push("New agent output after the answered question".into());
+        assert!(parse_choice_prompt(&departed).is_none());
+    }
+
+    // Catches: prose outside the native answer/description columns becoming a choice label.
+    #[test]
+    fn captured_codex_narrow_plan_rejects_misaligned_continuations() {
+        let mut rows = captured_codex_narrow_plan_rows();
+        let continuation = rows
+            .iter_mut()
+            .find(|row| row.trim() == "above            , add")
+            .unwrap();
+        *continuation = "       outside the answer column".into();
+        // A nonblank prefix before the answer column is not a native wrap.
+        continuation.replace_range(..1, "x");
+        assert!(parse_choice_prompt(&rows).is_none());
     }
 
     fn recorded_claude_question_rows() -> Vec<String> {

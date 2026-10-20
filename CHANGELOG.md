@@ -7,6 +7,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 - Keep clipped Claude native questions answerable with explicit previous/next/select controls instead of generic Yes/No or guessed hidden choices (#2093-0be6).
+- Export the first Codex /plan question in narrow terminals, including the split footer and independently wrapped answer labels and descriptions; keep its controls active through a delayed idle hook (#2094-da19).
+- Give reader-applied terminal input output bounded priority over animation frame floors on desktop and HTTP/PWA, using the existing gated serializer (#2040-16b2).
+- Re-measure mobile shell height and top on page restore, foreground visibility and document resume so stale viewport geometry is not retained (#1900-5ff6).
 
 - Keep the agent-test WebView visible and painting in a compact bottom-right floating window without activating the application or taking keyboard focus; add an opt-in native visibility observer and leave the daily window profile unchanged (#2090-cf8a).
 - Prevent a retained question footer from restoring Input state after the agent exits to the shell (#2091-ba03).
