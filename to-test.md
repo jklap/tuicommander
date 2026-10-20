@@ -1,6 +1,9 @@
 ## Repeated ego MCP approvals (2089-aafb) — Rust restart required
 
 - [ ] After Boss manually restarts a rebuilt `make dev` or installs `make build`, run a disposable ego default-mode session that requires two or more MCP approvals. Each approval must show Input and native answer controls on mobile; answer once and confirm the controls clear before the next approval. Include a long approval title that wraps. This peer did not restart or replace the running desktop backend. The retained capture supplies the replay regression; seven targeted rb parity/corpus tests pass. Live verification belongs to integration.
+## Isolated agent desktop target (2086-269b) — operator live proof pending
+
+- [ ] After the coordinator reviews/builds this branch, checksum Boss's running binary and app bundle, launch `make agent-test` from the worktree, verify the daily port and agent-test loopback port both answer, and recheck identical checksums. Confirm the daily shortcut/microphone/Telegram ownership remains unchanged. Stop with `make agent-test-stop`, verify only its PID exits, and confirm the daily instance still responds. This peer is implementation-only: no desktop app was launched or restarted, and no live isolation/TCC claim is made. The launch-instruction and global CLI/hook refusal changes require a rebuilt backend and refreshed agent launch text; it does not hot-reload into Boss's running app.
 
 ## Paired native plugin refresh (2039-428c) — rebuild required
 
@@ -2565,11 +2568,11 @@ Needs an iPhone (iOS 16.4+, 18.4+ preferred), the desktop TUICommander running a
 ## Plugin review follow-up (#1756)
 
 - [ ] After the existing provider configuration migration, reload GitHub Work, GitLab and Jira twice. Verify one registration per account, and verify that rejected startup reports its error. The read-only live snapshot on 2026-10-15 reported GitLab/Jira loaded, but GitHub Work failed with `Configurable plugin requires a settings schema`; no reload was attempted.
-- [ ] Set and use a project ID through the approved plugin settings UI. Tasks setup contains project fields, but the audited Plugins tab does not expose a settings schema form.
-- [ ] After Jira cancellation is implemented, resolve a Jira URL and cancel its in-flight request. The resolver passes a signal, but the audited provider `detail(ref)`, client request and host-fetch adapter do not propagate it.
+- [ ] After landing the restored #1756 branch and its plugin commit, set and use the Jira default project ID and GitLab default project through their schema-driven plugin settings pages. Verify an account-specific Tasks project overrides the default. Module tests cover schema registration and persistence; live UI set/use remains unverified.
+- [ ] After landing the restored #1756 branch and restarting the backend, resolve a Jira URL and cancel its in-flight request. The restored provider/client/account adapter forwards the signal and the host cancels headers/body reads; confirm this through the loaded plugin, not only the module tests.
 - [ ] Install an incompatible plugin in an isolated verification environment and check its refusal message. Catalogue/provider boundary checks passed 38/38 and loader minimum-version checks passed 3/3 (25 filtered) through build-slot on 2026-10-15; these are not native install E2E evidence.
 - [ ] Once GitHub Work loads with an authorized test account, invoke a read-only review action through core and verify it reaches the account-bound provider. No vendor writes are authorized.
-- [ ] Same-version stale-copy detection requires an approved source-content identity contract before its E2E check: the audited catalogue update decision compares versions only.
+- [ ] Verify same-version stale-copy detection with an isolated installed plugin and a catalogue payload digest. The host and catalogue now compare payload identities; mutable `data/` files are excluded. Module/package tests are not live installation E2E evidence.
 
 - [ ] #1756-4d42: after Boss restarts `make dev` (Rust does not hot-reload), resolve a Jira URL and cancel while headers/body are pending; confirm no late result and active requests stop. No live restart was performed by w-1756.
 
@@ -2687,6 +2690,10 @@ Needs an iPhone (iOS 16.4+, 18.4+ preferred), the desktop TUICommander running a
 
 - [ ] After Boss rebuilds/restarts the app, install a disposable plugin ZIP with a root manifest and another with a single top-level directory; confirm their files load. On Windows, install the speech runtime from its ZIP and confirm the selected library loads. Automated extraction/name tests run on rb; this item records that the currently running backend cannot load the ZIP 9 migration without a rebuild. Do not restart the running app for this check.
 
+
+## 1638-c94c — generated workload WKWebView replay
+
+- [ ] After story 2086's isolated `make agent-test` harness lands, run the single-command `scripts/stall-workload/desktop-replay.mjs` procedure from its README against the generated recording in `~/Gits/.tmp/stall-1638/font-workload/frame-workload.json`. Verify named-instance/executable guards, collect native heartbeat-command round trips and independent backend timings, and retain the result. This is paint-only replay of generated output, not the original captured-real-stall RED. No Boss-app restart or second ordinary desktop instance is needed or authorized.
 - [x] Mobile AI Chat tab availability (#2087-07bf): isolated worktree Vite + headless backend at 390×844 shows four tabs without ego and five with ego; host config saves update the tab over SSE without page reload. _(verified: ~/Gits/.tmp/feat-2087-visual/transcript.txt and with-ego.png / without-ego.png)_
 
 - [ ] After Boss rebuilds/restarts the Rust backend, ask ego for a native selector immediately after a TUIC connection/intent or successful tool receipt. Desktop and mobile must show only the native question title, with the same choices (#2088-98ea). The running app does not hot-reload this parser change; do not restart it during agent work.

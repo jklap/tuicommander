@@ -3289,6 +3289,8 @@ still requires local or authenticated access. MCP callers can continue to use
 `ui action=confirm proposalId=...` followed by an exact replay with `approval`.
 Tunnel forward lists, including empty replacements, require confirmation like tunnel ports.
 
+POST `/api/plugins/{plugin_id}/http` accepts optional `requestId` (UUID). POST `/api/plugins/{plugin_id}/http/cancel` accepts `{ "requestId": "<UUID>" }`; both use the shared IPC backend. Cancellation covers headers and body. Early cancellation markers expire after 60 seconds and the shared registry is capped at 4096 entries.
+
 ### Audio choice availability (#1908-c327, #1909-0d24)
 
 Existing input/output device enumeration returns the same device objects on success, including a successful empty array. Backend enumeration failure now returns an error rather than an empty array. Internal settings choice refresh reuses those owners; cache-only describe and typed voice asset actions are not new public routes in this change. The settings transport cutover remains separate.
