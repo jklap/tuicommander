@@ -77,23 +77,45 @@ maxima.
 | 1 | 1 | 36,000 | visible | 105 | 1 | 0.807 | 0 |
 | 2 | 11 | 37,252 | visible → hidden | 9,415 | 3,594 | 303.411 | 0 |
 | 3 | 11 | 36,110 | hidden | 1,287 | 1,185 | 144.884 | 0 |
-| 4 | 11 | 36,040 | hidden | 1,197 | 20 | 407.788 | 0 |
-| 5 | 11 | 45,075 | hidden | 18,796 | 6 | 15,003.016 | 1 |
+| 4 | 11 | 36,040 | hidden | 1,197 | 27 | 407.788 | 0 |
+| 5 | 11 | 45,075 | hidden | 18,796 | 19,530 | 15,003.016 | 1 |
 
-The native-heartbeat sample counts were 7, 5, 6, 6 and 4. The corresponding
-independent backend sample counts were 144, 148, 145, 144 and 103. Run 5's small
-RTT maximum must not conceal missing callbacks: its final native-heartbeat result
-preceded the final run callback by 24,635 ms. This is a censored tail, not proof of
-a healthy five-second heartbeat cadence. Run 2's largest spacing between observed
-native-heartbeat results was 13,948 ms. No retained diagnostics entry reports
-`Frontend unresponsive` in the successful workload instance.
+These values use **all retained callbacks in `webview.jsonl`**, including callbacks
+received after each run's `done` callback. The native-heartbeat sample counts are
+7, 5, 6, 7 and 5. Timer sample counts are 346, 112, 41, 41 and 33. The corresponding
+independent backend sample counts remain 144, 148, 145, 144 and 103.
+
+Run 4's last native-heartbeat callback arrived 328 ms after `done` at the collector;
+its measured command RTT was 27 ms. Run 5's last timer and native-heartbeat
+callbacks arrived 1 ms and 4 ms after `done`, respectively. That native-heartbeat
+command **completed successfully in 19,530 ms**. Its WebView wall timestamp is
+30 ms after `done`; the spacing from the previous native-heartbeat completion is
+24,665 ms. The tail is therefore **not censored**. Neither the successful
+completion nor its RTT demonstrates a healthy five-second heartbeat cadence.
+Run 2's largest spacing between observed native-heartbeat results was 13,948 ms.
+No retained diagnostics entry reports `Frontend unresponsive` in the successful
+workload instance.
+
+The earlier report incorrectly summarized the per-run snapshots, which stop at
+`done` and omit these late callbacks. Its run-4 RTT maximum of 20 ms, run-5 RTT
+maximum of 6 ms and censored-tail statement are withdrawn. Use the raw JSONL and
+`summary-all-callbacks.json`, not the original `summary.json` or per-run snapshots,
+for complete callback counts and heartbeat maxima.
 
 Run 2's app sample shows its main thread predominantly in the AppKit event-loop
 Mach wait. Run 5's sample includes AppKit accessibility window/space queries and
 Mach waits. Neither is a sample of the WebContent process or evidence attributing
 the timer delays to JavaScript painting, orphan deletion, machine starvation or
-an accessibility caller. The independent backend timeout in run 5 prevents
-classifying that interval as a WebView-only stall with a healthy backend.
+an accessibility caller. Run 5 includes a **backend-request stall, not a
+WebView-only stall**: the independent `/sessions` request timed out after
+15,003.016 ms, and the next request completed in 4,071.564 ms. These end-to-end
+measurements do not identify the blocked backend operation or exclude observer
+scheduling delays.
+
+The coordinator identified the hidden-window test limitation as the agent-test
+occlusion issue, story `2095-0106`. Runs 2–5 do not establish visible-WebView
+continuity. A five-run visible-window rerun is pending that harness fix; the
+original real-stall RED/GREEN remain open.
 
 The coordinator reported the Mac unlocked at 12:49 local. The successful run
 began at 12:49:34 local, with visible callbacks. Later hidden callbacks remain a
@@ -122,8 +144,11 @@ Key retained evidence:
 
 - `cleanup-probe.mjs`, `run-probe.py`, `wait-ready.py`: exact collection commands.
 - `launch-plan.json`, `identity.json`, `scratch-provenance.json`: launch and input.
-- `webview.jsonl`, `backend.json`, `summary.json`: raw and summarized observations.
-- `run1-report.json` through `run5-report.json`, plus worktree and receipt files.
+- `webview.jsonl`, `backend.json`: authoritative retained raw observations.
+- `summary-all-callbacks.json`: corrected summary including late callbacks.
+- `summary.json`: superseded snapshot-only summary, retained as correction history.
+- `run1-report.json` through `run5-report.json`: snapshots taken at `done`, not
+  complete late-callback records; plus worktree and receipt files.
 - `run2-app-sample.txt`, `run5-app-sample.txt`: contemporaneous native samples.
 - `logs.json`, `agent-test-attempt5.log`, `probe-attempt5.log`: runtime and cleanup.
 - Earlier `probe*.log` and `attempt4-*` files: distinct setup failures.
