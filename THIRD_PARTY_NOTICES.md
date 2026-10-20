@@ -30,7 +30,7 @@ authors and communities behind each project.
 | chrono-tz | 0.10.4 | MIT OR Apache-2.0 |
 | clap | 4.6.3 | MIT OR Apache-2.0 |
 | console-subscriber | 0.5.0 | MIT |
-| cpal | 0.17.3 | Apache-2.0 |
+| cpal | 0.18.2 | Apache-2.0 |
 | croner | 4.0.1 | MIT |
 | ctor | 0.8.0 | Apache-2.0 OR MIT |
 | cursor-icon | 1.2.0 | MIT OR Apache-2.0 OR Zlib |
@@ -72,13 +72,13 @@ authors and communities behind each project.
 | rayon | 1.12.0 | MIT OR Apache-2.0 |
 | regex | 1.13.1 | MIT OR Apache-2.0 |
 | regex-automata | 0.4.16 | MIT OR Apache-2.0 |
-| reqwest | 0.13.4 | MIT OR Apache-2.0 |
+| reqwest | 0.13.5 | MIT OR Apache-2.0 |
 | rfd | 0.16.0 | MIT |
 | ring | 0.17.14 | Apache-2.0 AND ISC |
-| rodio | 0.22.2 | MIT OR Apache-2.0 |
-| rusqlite | 0.40.1 | MIT |
+| rodio | 0.23.0 | MIT OR Apache-2.0 |
+| rusqlite | 0.40.2 | MIT |
 | rust-stemmers | 1.2.0 | MIT OR BSD-3-Clause |
-| rustls | 0.23.45 | Apache-2.0 OR ISC OR MIT |
+| rustls | 0.23.46 | Apache-2.0 OR ISC OR MIT |
 | safetensors | 0.6.2 | Apache-2.0 |
 | same-file | 1.0.6 | Unlicense OR MIT |
 | schemars | 1.2.1 | MIT |
@@ -122,7 +122,7 @@ authors and communities behind each project.
 | whichlang | 0.1.1 | MIT |
 | whisper-rs | 0.16.0 | Unlicense |
 | zeroize | 1.9.0 | Apache-2.0 OR MIT |
-| zip | 8.6.0 | MIT |
+| zip | 9.0.5 | MIT |
 <!-- END GENERATED:rust -->
 
 ### Rust Platform-Specific Dependencies
