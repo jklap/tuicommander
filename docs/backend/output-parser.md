@@ -760,3 +760,16 @@ cell, including when the title wraps; mobile keeps trailing spans and links outs
 the tint. The CONTEXT header receives only the parsed description. Source evidence
 for 2060-0ebe is the recorded ego assistant message in `ego-intent-2060.json`:
 the model itself emitted `)Criteri`, not two lines joined by the terminal renderer.
+
+### Clipped Claude questions
+
+A native column-zero scroll arrow on a numbered option, together with the Ink
+footer, identifies a clipped AskUserQuestion. A numbering gap before the separate
+`5. Chat about this` row also identifies clipping when the scroll arrow disappears
+at the last visible answer. Generic numbering gaps still fail closed. The parser exports `navigate-only`
+with `↑` (previous option), `↓` (next option), and `↵` (select highlighted option).
+These are native navigation controls, not a partial list presented as complete.
+Clients send exactly one corresponding arrow or Enter key; navigation does not
+clear awaiting. No hidden option label or cursor offset is inferred. A complete
+form keeps its existing ordered `navigate-enter` choices. The geometry-preserving
+`claude-narrow-2093.tcap` fixture records the original narrow failure.

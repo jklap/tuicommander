@@ -226,6 +226,8 @@ pub struct ChoicePromptPayload {
 #[derive(Clone, Copy, Debug, Serialize, serde::Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case")]
 pub enum ChoiceSelectionMode {
+    /// A clipped native form exposes navigation controls, not a complete choice list.
+    NavigateOnly,
     NavigateEnter,
     ToggleEnter,
 }
@@ -2581,20 +2583,66 @@ pub fn parse_claude_ask_user_question(screen_rows: &[String]) -> Option<ParsedEv
         static ref OPTION_RE: regex::Regex =
             regex::Regex::new(r"^\s*([❯›>]\s*)?(\d+)[.)]\s+(.+?)\s*$").unwrap();
     }
-    // Native titles can be imperative ("Pick a colour"). Locate the title
-    // from the active numbered form, not punctuation in earlier output or in
-    // an option description. The column-zero footer/review remains the anchor.
-    let first_option = (0..footer).rev().find(|&idx| {
+    // Claude replaces a clipped option's cursor with a column-zero scroll
+    // arrow. Hidden rows are not an ordered choice list: expose only the
+    // footer's native navigation instead of guessing labels or cursor offsets.
+    let last_first_option = (0..footer).rev().find(|&idx| {
         OPTION_RE
             .captures(&screen_rows[idx])
             .is_some_and(|caps| &caps[2] == "1")
-    })?;
+    });
+    let clipped = (last_first_option.unwrap_or(0)..footer).rev().find(|&idx| {
+        let row = &screen_rows[idx];
+        row.strip_prefix('↑')
+            .or_else(|| row.strip_prefix('↓'))
+            .is_some_and(|rest| OPTION_RE.is_match(rest))
+    });
+    let clipped_start = clipped.map(|idx| {
+        screen_rows[..idx]
+            .iter()
+            .rposition(|row| row.starts_with("──"))
+            .map_or(0, |separator| separator + 1)
+    });
+    // Native titles can be imperative ("Pick a colour"). Locate the title
+    // from the active numbered form, not punctuation in earlier output or in
+    // an option description. The column-zero footer/review remains the anchor.
+    let first_option = if let Some(start) = clipped_start {
+        (start..footer).find(|&idx| {
+            let row = screen_rows[idx].trim_start_matches(['↑', '↓']);
+            OPTION_RE.is_match(row)
+        })
+    } else {
+        last_first_option
+    }?;
     let title = (0..first_option)
         .rev()
         .find(|&idx| !screen_rows[idx].trim().is_empty())?;
     let title_text = screen_rows[title].trim();
     if title_text.starts_with("──") || title_text.starts_with('←') {
         return None;
+    }
+    let navigation = || ParsedEvent::ChoicePrompt {
+        title: title_text.to_string(),
+        options: [
+            ("↑", "Previous option"),
+            ("↓", "Next option"),
+            ("↵", "Select highlighted option"),
+        ]
+        .into_iter()
+        .map(|(key, label)| ChoiceOption {
+            key: key.to_string(),
+            label: label.to_string(),
+            highlighted: false,
+            destructive: false,
+            hint: None,
+        })
+        .collect(),
+        selection_mode: Some(ChoiceSelectionMode::NavigateOnly),
+        dismiss_key: Some("cancel".to_string()),
+        amend_key: None,
+    };
+    if clipped.is_some() {
+        return Some(navigation());
     }
     let mut options = Vec::new();
     for row in &screen_rows[title + 1..footer] {
@@ -2603,7 +2651,18 @@ pub fn parse_claude_ask_user_question(screen_rows: &[String]) -> Option<ParsedEv
         };
         let key = caps[2].to_string();
         if key.parse::<usize>().ok() != Some(options.len() + 1) {
-            return None;
+            // At the last visible option Claude can omit the scroll arrow while
+            // still clipping the native text alternative. Its separate Chat
+            // row is an exact native boundary, not an arbitrary numbered gap.
+            let native_chat_boundary = key == "5"
+                && caps[3].trim() == "Chat about this"
+                && screen_rows
+                    .get(footer)
+                    .is_some_and(|row| is_ink_dialog_footer_row(row))
+                && screen_rows[title + 1..footer]
+                    .iter()
+                    .any(|row| row.starts_with("──"));
+            return native_chat_boundary.then(navigation);
         }
         let label = caps[3].trim().to_string();
         let lower = label.to_lowercase();
@@ -7243,6 +7302,55 @@ Enter to select · ↑/↓ to navigate · Esc to cancel";
         assert!(options[1].highlighted);
         assert!(!options[2].highlighted);
         assert_eq!(options[1].hint.as_deref(), Some("shift+tab"));
+    }
+
+    // Catches: scrolling option 1 offscreen losing navigation, or quoted clipped forms becoming controls.
+    #[test]
+    fn captured_claude_clipped_forms_require_native_footer_and_keep_navigation() {
+        let bytes = std::fs::read(
+            std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("../../src/fixtures/agent_prompts/claude-narrow-2093.tcap"),
+        )
+        .unwrap();
+        let capture = crate::pty_capture::decode_capture(&bytes).unwrap();
+        let (rows, cols) = capture.geometry.unwrap();
+        let mut grid = crate::terminal_grid::TerminalGrid::new(rows, cols, 2000);
+        for record in capture.records {
+            if record.direction == crate::pty_capture::CaptureDirection::Output {
+                grid.process(&record.data);
+            }
+        }
+        let recorded = grid.screen_text_rows();
+        for (scrolled, arrowless) in [(false, false), (true, false), (false, true)] {
+            let mut rows = recorded.clone();
+            if arrowless {
+                for row in &mut rows {
+                    *row = row.replacen('↓', " ", 1);
+                }
+            }
+            if scrolled {
+                let first = rows.iter().position(|row| row.contains("1. Red")).unwrap();
+                rows[first].clear();
+                rows[first + 1].clear();
+            }
+            let Some(ParsedEvent::ChoicePrompt {
+                title,
+                options,
+                selection_mode,
+                ..
+            }) = parse_claude_ask_user_question(&rows)
+            else {
+                panic!("clipped form needs controls");
+            };
+            assert_eq!(title, "Pick a colour?");
+            assert_eq!(selection_mode, Some(ChoiceSelectionMode::NavigateOnly));
+            assert_eq!(
+                options.iter().map(|o| o.key.as_str()).collect::<Vec<_>>(),
+                ["↑", "↓", "↵"]
+            );
+            let quoted: Vec<_> = rows.iter().map(|row| format!("  {row}")).collect();
+            assert!(parse_claude_ask_user_question(&quoted).is_none());
+        }
     }
 
     #[test]

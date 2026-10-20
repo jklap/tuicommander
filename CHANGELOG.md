@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+- Keep clipped Claude native questions answerable with explicit previous/next/select controls instead of generic Yes/No or guessed hidden choices (#2093-0be6).
+
 - Keep the agent-test WebView visible and painting in a compact bottom-right floating window without activating the application or taking keyboard focus; add an opt-in native visibility observer and leave the daily window profile unchanged (#2090-cf8a).
 - Prevent a retained question footer from restoring Input state after the agent exits to the shell (#2091-ba03).
 - Restore awaiting state and native answer controls for repeated ego MCP approvals, including hard-wrapped approval titles (#2089-aafb).
