@@ -2,7 +2,11 @@
 
 Date: 2026-10-20. Source: `a778245a871c15e65b83061d88a4ff8bfdf60cfc`, branch `chore/gate-tuic-wt`.
 
-## Result
+## Latest follow-up status
+
+Story 2096-1d25 is implemented and its targeted rb tests pass. The survivor follow-up is **partial**, not a converged gate: composite current evidence is 111 unique mutants, 93 caught, 10 missed and 8 unviable; two misses have constrained equivalence arguments and eight remain unproven. See the final section for scope, per-unit counts and evidence. The initial campaign below is retained as history.
+
+## Initial result
 
 Completed on rb (Linux aarch64): 120 mutants, 84 caught, 28 missed, 8 unviable, 0 timeouts. Mutation kill rate: 84 / (84 + 28) = 75.0%. No equivalent-mutant exclusions were applied. Exit 2 means survivors remain. No numeric tier threshold was supplied in this assignment; this is not a converged gate.
 
@@ -214,3 +218,52 @@ Static checks on the worktree pass: `fmt-changed.sh "$PWD" main...HEAD`, `git di
 The coordinator restored VPN access. The queued GREEN at `8174dc91f` passed on rb: 257 worktree tests passed, 359 excluded by the filter, 6.346 s test time. Artifact: `~/Gits/.tmp/rb/20261020T193607Z-2513`; log: `~/Gits/.tmp/gate-tuic-wt/named-module-green-resume.log`; `RB_BOX_DIRTY=no`. The named and nested preservation tests and all invalid-mapping cases passed. Main-store criteria are checked; `story-close.sh --check` passes after adding the recorded reality and symptom contract. The story remains in progress for coordinator landing/critic.
 
 Survivor follow-up contract: real Git checkouts must honor an unchanged removal fingerprint, reject stale confirmation, allow explicitly confirmed dirty removal, preserve a changed module HEAD on force, refuse unreadable allocation metadata before moving, and report a real admin-directory permission failure as a generic Git failure rather than a confirmation request. Tests use Git-created registrations and objects; only Unix filesystem permissions are changed to induce deletion failure, restored immediately after the call. No fabricated stderr, subprocess mocks, or races are introduced. The permission test is Unix-only; this campaign is Linux rb evidence, not native Mac or Windows runtime evidence.
+
+
+## Survivor follow-up results after the fix
+
+Source `a17b18094`: same function-superset command as the initial run, with `--re` unchanged, found 111 mutants. Baseline: 262 worktree tests passed (359 filtered out), 25.881 s build phase and 8.724 s test phase; nextest's test-only summary was 6.969 s. Mutation result: **111 tested, 91 caught, 12 missed, 8 unviable, 0 timeout**, tool-reported 19 minutes, exit 2. Registry run `5ddc4b57ca092181f2244f5f4ceb387de5bd18fe54a85bc46436ca660a5bdcd9` imported 112 outcomes including baseline. Artifacts: `~/Gits/.tmp/rb/20261020T194221Z-73288/artifacts/src-tauri/mutants.out/`; log `~/Gits/.tmp/gate-tuic-wt/survivor-rerun.log`; `RB_BOX_DIRTY=no`.
+
+The surviving admin-container predicate led to one additional real-Git case: a configured module name `bucket/objects/git-module-name`. Git creates a non-repository admin-name container with an `objects` subdirectory; treating HEAD-or-objects as sufficient misclassifies that container. The existing named-module regression now covers both the original simple name and this name; its original preservation assertions are retained. No production change was needed.
+
+At `23a4ae6a3`, reran exactly `--re ':2092:51:'`, forwarding the unchanged `test(worktree)` filter. **1 selected mutant, 1 caught**, exit 0; baseline 262 passed, 359 filtered out, 6.873 s test summary. Tool-reported baseline build 49 s and test 7 s; total mutation run 68 s. Artifacts: `~/Gits/.tmp/rb/20261020T202044Z-35230`; log `~/Gits/.tmp/gate-tuic-wt/admin-container-mutant.log`; registry run `549709f8785139284d1347d737ee6a29805d4c20e00af1935dec482cb8e1a7b0` imported two outcomes. The only remote dirtiness was `src-tauri/mutants.out.old/lock.json`, not production/test source. The baseline passed, so this is not a vacuous filter or empty missed.txt claim.
+
+Composite evidence replaces the admin-container and bare-entry predicates' missed outcomes with their caught reruns: **111 unique mutants, 93 caught, 10 missed, 8 unviable, 0 timeout**; raw kill rate `93 / (93 + 10) = 90.29%`. This is not a fresh all-111 run at final HEAD. Later changes add the container case with its original assertions and the bare-entry test; production and the other tests are unchanged. Final comment-only deferral notes do not alter tested behavior. The fix removed nine mutation candidates, so the old 120 and current 111 populations differ: do not describe all 18 fewer misses as killed original mutants.
+
+The next source review found a real distinguishing case for the detached-orphan predicate: a **bare** repository emits neither a branch nor a detached marker. Added `orphan_validation_refuses_a_bare_repository_entry` using a real `git clone --bare` and the production validator; no fabricated porcelain is used. At `c1a8c54c9`, `--re ':3684:24:'` selected exactly one mutant and caught it (exit 0). Baseline: 263 worktree tests passed, 359 filtered out, 6.851 s test summary; tool-reported baseline 49 s build plus 13 s test, total 77 s. Artifact `~/Gits/.tmp/rb/20261020T203609Z-14069`, log `~/Gits/.tmp/gate-tuic-wt/bare-entry-mutant.log`, registry `d1926e189a6e698bf9390adbc2ce8eeaf9c3b5c8c0d187e31ea95486807089f3` (two imported outcomes), `RB_BOX_DIRTY=no`. This is not an equivalent mutant. The source passed and the mutant failed, so it is not a new source defect either.
+
+### Current per-unit function supersets
+
+Shared functions still count in multiple rows. Counts include unviable candidates in Tested; no equivalence exclusions change these raw numbers.
+
+| Unit | Tested | Caught | Missed | Unviable | Timeout | Raw kill rate |
+|---|---:|---:|---:|---:|---:|---:|
+| 1001-fc30 | 54 | 42 | 5 | 7 | 0 | 89.36% |
+| 992-d46d | 13 | 9 | 3 | 1 | 0 | 75.00% |
+| 994-69fe | 34 | 28 | 5 | 1 | 0 | 84.85% |
+| 995-d43e | 19 | 19 | 0 | 0 | 0 | 100.00% |
+| 996-f44b | 11 | 11 | 0 | 0 | 0 | 100.00% |
+| 997-672c | 17 | 15 | 2 | 0 | 0 | 88.24% |
+
+### Remaining survivors and classification
+
+Line numbers refer to `a17b18094` (all mutation sites remain at those lines at `23a4ae6a3`). Each row is one unique remaining outcome; no row is silently waived.
+
+| Site and mutation | Classification and reason |
+|---|---|
+| `762:25` verify_submodules_at, first `||` to `&&` | Equivalent for the Git status protocol and current removal caller. It removes rejection only for `+` in non-force mode. `dirty_files_at` explicitly uses `--ignore-submodules=none` and rejects that dirty checkout before verification; the post-preservation fingerprint and dirty recheck also reject a late change. `U` still rejects via the final state predicate. No helper-only test is added to manufacture an unreachable production case. |
+| `762:53` verify_submodules_at, second `||` to `&&` | Same caller/protocol equivalence for supported Git status prefixes (` `, `-`, `+`, `U`); `-` is handled earlier, `U` still rejects, and `+` non-force is blocked by the real status/fingerprint checks. Arbitrary invented status bytes could distinguish this, but are not recorded Git behavior. |
+| `2467:16` already-gone stderr guard to false | Unresolved. Missing registrations are handled before invoking Git; deterministic tests do not make the checkout/registration disappear during the final Git call. Generic post-error cleanup may produce the same outcome, but differing error paths are not proven equivalent. |
+| `2467:54` already-gone guard `||` to `&&` | Unresolved for the same late-removal boundary; no fabricated stderr or timing race is used. |
+| `2477:17` locked stderr guard `||` to `&&` | Unresolved compatibility distinction. Current real locked-removal tests still catch rejection, but do not distinguish the two wording fragments. No universal Git-version equivalence claim is made. |
+| `2489:16` main-worktree stderr guard to false | Unresolved/dominated in ordinary calls by the initial main-path refusal and registration check. No recorded real Git removal reaches this fallback with an otherwise valid main-worktree state, so no test invents one and no global equivalence claim is made. |
+| `2505:20` delete `!` in generic-error final cleanup | Unresolved. The real admin-permission failure keeps its registration and cannot exercise a failure after Git has already removed registration. A deterministic partial-unregister failure is not available in the current fixture. |
+| `4248:35` archive rollback NotFound guard to true | Unresolved. Initial marker read failures are now covered, but rollback marker deletion failure needs a distinct filesystem failure after moving back; no synthetic I/O error is injected. |
+| `4248:35` archive rollback NotFound guard to false | Unresolved. Need a real rollback after allocation publication fails while no marker exists; normal journal failure publishes then successfully removes the marker. |
+| `4248:48` archive rollback `==` to `!=` | Unresolved for the same rollback-deletion boundary. Existing successful rollback alone cannot distinguish the error-kind predicate. |
+
+Two constrained equivalent misses remain in raw counts; eight are unresolved, not equivalents and not reproduced production defects. The campaign is **partial**. The permission and marker tests carry inline dated deferral notes for the unexercised adjacent failures. No additional production change was made after the named-module fix. A coordinator decision or critic can supply a deterministic real partial-deletion/rollback reproducer; a fake Git CLI or handwritten stderr would not satisfy this assignment.
+
+New tests that caught formerly surviving mutants: confirmed dirty force-removal, direct final fingerprint acceptance/refusal, generic admin-permission error classification, allocation-marker read refusal, forced changed-module preservation, the real admin-name container case, and bare repository orphan refusal. The canary function replacements (including removing the initialized-destination check) were caught in the complete campaign; mutation execution was effective.
+
+Final validation scope remains Linux aarch64 on rb only. No Mac/Windows runtime, full crate/workspace suite, UI/HTTP consumer suite, GUI or frontend run is claimed. No daemon/browser/Vite process was started. Formatting and instruction-link checks pass; story-close preflight passes for 2096-1d25. Its main-store criteria are checked, but completion/landing and the separate high-risk critic remain coordinator-owned.
