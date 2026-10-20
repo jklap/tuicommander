@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+- Preserve named and nested submodule history when force-removing a missing worktree checkout; refuse missing or malformed destination mappings before pruning (#2096-1d25).
+
 - Accept the recorded managed Claude startup trust dialog with No selected above Yes; send Down then Enter once and leave incomplete or unmanaged dialogs untouched (#2097-5739).
 
 - Keep clipped Claude native questions answerable with explicit previous/next/select controls instead of generic Yes/No or guessed hidden choices (#2093-0be6).

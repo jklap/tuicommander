@@ -1,3 +1,6 @@
+## Missing-checkout named submodule preservation (2096-1d25) — Rust restart required
+
+- [ ] After Boss manually restarts a rebuilt backend, verify forced cleanup of a disposable missing worktree with a named submodule preserves its local-only commit in the initialized main module before pruning registration. No running desktop backend was restarted by this peer. Automated Git boundary evidence is recorded in the gate report.
 ## Managed Claude default-No trust dialog (2097-5739) — Rust restart required
 
 - [ ] After Boss manually restarts a rebuilt `make dev` or installs `make build`, spawn a managed Claude child in a disposable untrusted folder. Check that the startup dialog selects Yes with Down then Enter once; an unmanaged terminal and trust opt-out must remain unanswered. The recorded 1987 capture is covered by automated replay; this Rust change does not hot-reload into the daily app. No daily app restart was performed.
