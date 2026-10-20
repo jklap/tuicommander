@@ -107,9 +107,8 @@ harness and exports required JSON inputs. No production route was changed.
 
 - The original captured-real-stall RED/GREEN remain open. Generated source text
   and this short retained suffix cannot substitute for historical evidence.
-- `desktop-replay.mjs` prepares one-command WKWebView paint replay for the
-  already-running, verified `make agent-test` instance from story 2086. It is
-  syntax-checked but has not been executed against that instance.
+- Native WKWebView replay subsequently completed on the isolated instance;
+  see `DESKTOP-RESULTS.md`. No long stall was reproduced in that short replay.
 - Browser rendering omits Tauri delivery and overlays during snapshot replay;
   the capture phase uses production `CanvasTerminal`, while the revision
   comparison calls only the grid renderer. Input continuity is not tested.
