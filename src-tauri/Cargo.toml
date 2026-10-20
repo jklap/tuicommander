@@ -149,6 +149,13 @@ name = "tuicommander_lib"
 crate-type = ["rlib"]
 
 [[bin]]
+name = "tuicommander-agent-test"
+path = "src/bin/agent_test.rs"
+required-features = ["desktop"]
+test = false
+bench = false
+
+[[bin]]
 name = "tuic-remote"
 path = "src/bin/tuic_remote.rs"
 

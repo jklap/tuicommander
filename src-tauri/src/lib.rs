@@ -34,6 +34,7 @@ pub(crate) mod session_wake;
 pub(crate) mod suspended_sessions;
 pub mod work_items;
 pub use tuic_core::app_instance;
+mod agent_test;
 pub(crate) mod app_logger;
 pub(crate) mod changelog;
 mod frame_workload;
@@ -1562,6 +1563,23 @@ fn release_webview_document_resources(state: &AppState, webview_label: &str) {
         .remove_webview(webview_label);
 }
 
+/// Isolated desktop entry point. Normal launches cannot enable this policy by env.
+#[cfg(feature = "desktop")]
+pub fn run_agent_test(mut context: tauri::Context<tauri::Wry>) {
+    // DEFERRED (2026-10-20) — coordinator owns simultaneous desktop/TCC proof;
+    // the implementation-only peer must not launch another desktop instance.
+    if let Err(error) = agent_test::enable() {
+        eprintln!("agent-test: {error}");
+        std::process::exit(1);
+    }
+    context.config_mut().identifier = "com.tuic.commander.agent-test".into();
+    context.config_mut().product_name = Some("TUICommander Agent Test".into());
+    for window in &mut context.config_mut().app.windows {
+        window.title = "TUICommander Agent Test".into();
+    }
+    run(context);
+}
+
 #[cfg(feature = "desktop")]
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run(mut context: tauri::Context<tauri::Wry>) {
@@ -1602,6 +1620,9 @@ pub fn run(mut context: tauri::Context<tauri::Wry>) {
     let worktrees_dir = config::config_dir().join("worktrees");
 
     let mut config = config::load_app_config();
+    if let Some(port) = agent_test::port() {
+        agent_test::apply_config(&mut config, port);
+    }
 
     // Auto-generate VAPID keys and session token on first run
     let mut config_dirty = false;
@@ -1664,10 +1685,12 @@ pub fn run(mut context: tauri::Context<tauri::Wry>) {
                 spawn_background_tasks(&server_state);
                 telegram::start(&server_state);
 
-                tokio::spawn(relay_client::supervise(server_state.clone(), relay_rx));
+                if !agent_test::active() {
+                    tokio::spawn(relay_client::supervise(server_state.clone(), relay_rx));
+                }
 
                 // Detect Tailscale and provision TLS cert (async, doesn't block window render)
-                let tls_config = if remote_enabled {
+                let tls_config = if remote_enabled && !agent_test::active() {
                     let ts_state = detect_tailscale_bounded(async {
                         tokio::task::spawn_blocking(tailscale::detect)
                             .await
@@ -1858,8 +1881,12 @@ pub fn run(mut context: tauri::Context<tauri::Wry>) {
                 release_webview_document_resources(state.inner(), window.label());
             }
         })
-        .plugin(tauri_plugin_deep_link::init())
         .manage(native_clipboard::NativeClipboard::default());
+    let builder = if agent_test::active() {
+        builder
+    } else {
+        builder.plugin(tauri_plugin_deep_link::init())
+    };
 
     #[cfg(feature = "desktop")]
     let builder = builder.manage(sleep_prevention::SleepBlocker::new());
@@ -1877,8 +1904,10 @@ pub fn run(mut context: tauri::Context<tauri::Wry>) {
     builder
         .setup(move |app| {
             #[cfg(desktop)]
-            app.handle()
-                .plugin(tauri_plugin_updater::Builder::new().build())?;
+            if !agent_test::active() {
+                app.handle()
+                    .plugin(tauri_plugin_updater::Builder::new().build())?;
+            }
 
             #[cfg(feature = "desktop")]
             {
@@ -1898,7 +1927,7 @@ pub fn run(mut context: tauri::Context<tauri::Wry>) {
                 });
             }
 
-            {
+            if !agent_test::active() {
                 use tauri_plugin_deep_link::DeepLinkExt;
                 let handle = app.handle().clone();
                 app.deep_link().on_open_url(move |_| background_mode::desktop::leave_background(&handle));
