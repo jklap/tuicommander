@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+- Add `make agent-test` for isolated macOS desktop checks with a distinct binary, preset instance and loopback port, disabled machine-wide integrations, dry-run plan and instance-only stop target (#2086-269b).
+
 - **BREAKING:** replace native per-tool MCP switches with capability switches. Migrate saved denials without widening access and retain unknown-name diagnostics. Remove task, story, workflow_run/workflow_story_create/workflow_report/workflow_launch and design_mode aliases: use agent task_*, workflow actions and ui design_*. Reconnect cached clients and review external allow rules for the expanded groups (#2068-63b9).
 
 - Populate mobile New Session from installed registry agents, including ego; show detection failures and select the first installed agent (#2083-149c).

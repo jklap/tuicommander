@@ -1,5 +1,7 @@
 # TUICommander Specification
 
+Agent desktop verification (#2086-269b): `make agent-test` uses a dedicated macOS debug binary, named config namespace and explicit loopback port. Global input, dictation, Telegram, updater, deep links, global MCP writes and sleep inhibition are disabled. Dry-run and supervised instance-only stop are available; simultaneous desktop/TCC proof remains an operator validation step.
+
 MCP capability cutover (#2068-63b9): persist `mcp_capabilities`, migrate saved tool denials once with visible unknown-name diagnostics, enforce parent/member restrictions on discovery and dispatch, and remove retired names without aliases. Clients must reconnect and review external allow rules.
 
 Native MCP guidance (#2069-7347): session, agent, repo, ui, voice, telegram and automations expose compact agent-facing action contracts. Their action=help returns every displaced rule from the full native guide. Existing action validation, conditional availability, disabled-tool gates and Settings copy remain unchanged.

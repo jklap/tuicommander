@@ -98,6 +98,9 @@ pub(crate) struct Snapshot {
 /// Match setup's opt-in without reading the bot credential or requiring a live
 /// polling connection. Registration remains a separate, caller-bound gate.
 pub(crate) fn configured() -> bool {
+    if crate::agent_test::active() {
+        return false;
+    }
     paths().is_ok_and(|paths| configured_at(&paths))
 }
 
@@ -268,6 +271,9 @@ pub(crate) async fn change_owner_with_phase(
     change: Change,
     persisted: &mut bool,
 ) -> Result<Value, Error> {
+    if crate::agent_test::active() {
+        return Err(Error::Config);
+    }
     // Cross-process serialization prevents a desktop save racing daemon pairing.
     ensure_directory(&paths)?;
     let lock = super::config::private_open(&paths.file("setup.lock"), true)?;

@@ -82,7 +82,7 @@ pub(crate) const MODULES: [(&str, &str); 5] = [
     ),
     (
         "process_safety",
-        "## Process safety\nStop only PIDs you started and recorded. Never use `pkill` or `killall` by pattern: other agents carry matching text. Never walk up the process tree to choose a victim: TUIC owns the ancestors and all sessions. Stop your dev servers, watchers and browser sessions before finishing. Never start a second desktop TUICommander instance; it can take global shortcuts and microphone ownership.\n",
+        "## Process safety\nStop only PIDs you started and recorded. Never use `pkill` or `killall` by pattern: other agents carry matching text. Never walk up the process tree to choose a victim: TUIC owns the ancestors and all sessions. Stop your dev servers, watchers and browser sessions before finishing. Never start a second desktop TUICommander instance except through `make agent-test`, which isolates port, config folder, binary name, shortcuts and microphone.\n",
     ),
     (
         "children",

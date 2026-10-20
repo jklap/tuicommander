@@ -3293,3 +3293,7 @@ Plugin catalogue update detection compares equal-version payload identities as w
 as versions. Installed identity is computed by Rust and ignores mutable plugin data.
 
 MCP capability switches replace implementation-name switches. Saved denials migrate once, unknown names remain visible, and discovery and dispatch share the policy. Retired task/story/workflow-member/Design Mode names have no aliases; reconnect cached clients and review grouped allow rules (#2068-63b9).
+
+## Agent desktop verification
+
+`make agent-test` provides a preset isolated macOS desktop instance for authorized agent live checks. It uses a distinctly named binary and config namespace, loopback port 19876, disabled global input/microphone/Telegram/updater integrations, a side-effect-free dry-run and an instance-only stop target. See [Development Setup](guides/development-setup.md#isolated-agent-desktop-checks-macos).

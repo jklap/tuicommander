@@ -2877,11 +2877,15 @@ pub async fn start_server(
     // --- TCP listener (only for remote access with auth) ---
     // Supports dual-protocol (HTTP+HTTPS on same port) when TLS cert is available.
     let tcp_handle = if remote_enabled {
-        let base_port = std::env::var("TUIC_PORT")
-            .ok()
-            .and_then(|value| value.parse::<u16>().ok())
-            .unwrap_or(config.services.server.port);
-        let host = if config.services.server.ipv6_enabled {
+        let base_port = crate::agent_test::port().unwrap_or_else(|| {
+            std::env::var("TUIC_PORT")
+                .ok()
+                .and_then(|value| value.parse::<u16>().ok())
+                .unwrap_or(config.services.server.port)
+        });
+        let host = if crate::agent_test::active() {
+            "127.0.0.1"
+        } else if config.services.server.ipv6_enabled {
             "[::]"
         } else {
             "0.0.0.0"
@@ -2900,7 +2904,11 @@ pub async fn start_server(
 
         let mut listener_result: Option<std::net::TcpListener> = None;
         // Port 0 = OS-assigned, no retry needed
-        let attempts = if base_port == 0 { 1 } else { MAX_PORT_ATTEMPTS };
+        let attempts = if base_port == 0 || crate::agent_test::active() {
+            1
+        } else {
+            MAX_PORT_ATTEMPTS
+        };
         'bind: for round in 0..BIND_RETRY_ROUNDS {
             for attempt in 0..attempts {
                 let port = base_port + attempt;

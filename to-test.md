@@ -1,3 +1,7 @@
+## Isolated agent desktop target (2086-269b) — operator live proof pending
+
+- [ ] After the coordinator reviews/builds this branch, checksum Boss's running binary and app bundle, launch `make agent-test` from the worktree, verify the daily port and agent-test loopback port both answer, and recheck identical checksums. Confirm the daily shortcut/microphone/Telegram ownership remains unchanged. Stop with `make agent-test-stop`, verify only its PID exits, and confirm the daily instance still responds. This peer is implementation-only: no desktop app was launched or restarted, and no live isolation/TCC claim is made. The launch-instruction change requires a rebuilt backend and refreshed agent launch text; it does not hot-reload into Boss's running app.
+
 ## Paired native plugin refresh (2039-428c) — rebuild required
 
 - [ ] After Boss manually restarts a rebuilt backend or installs a signed package, verify notification permission and delivery, then the updater check/download/install flow and deferred relaunch. Rust/npm notification 2.7.0 and updater 2.14.0 are paired; Linux default-feature compilation and targeted tests pass, but macOS/Windows packaging and real OS integration still need release validation. This peer did not restart or replace the running app.
