@@ -791,16 +791,8 @@ impl GitReads for GixGitReads {
         &self,
         repo: &Path,
     ) -> Result<HashMap<String, crate::worktree::WorkspaceWorktree>, String> {
-        use gix::bstr::ByteSlice;
         let grepo = self.repo(repo)?;
         let mut map = HashMap::new();
-
-        let branch_of = |r: &gix::Repository| -> Option<String> {
-            r.head_ref()
-                .ok()
-                .flatten()
-                .map(|href| href.name().shorten().to_str_lossy().into_owned())
-        };
         // `git worktree list` reports resolved real paths (symlinks followed,
         // e.g. macOS /var -> /private/var). Match that so paths are byte-equal.
         let real = |p: &Path| -> String {
@@ -812,12 +804,7 @@ impl GitReads for GixGitReads {
         // non-bare layout: the main work dir is the `.git` directory's parent.
         if let Some(main_wd) = grepo.common_dir().parent()
             && main_wd.exists()
-            && let Ok(main_repo) = {
-                #[cfg(test)]
-                record_repository_open();
-                gix::open(main_wd)
-            }
-            && let Some(branch) = branch_of(&main_repo)
+            && let Some(branch) = crate::git::read_branch_from_head(main_wd)
         {
             // A git worktree's workspace id currently is its branch.
             map.insert(
@@ -838,20 +825,17 @@ impl GitReads for GixGitReads {
             if !base.exists() {
                 continue;
             }
-            #[cfg(test)]
-            record_repository_open();
-            let Ok(wt_repo) = proxy.into_repo() else {
-                continue;
-            };
             // Recycled checkouts parked in `__archived/` are a pool, not workspaces.
             if crate::worktree::is_archived_checkout(&base) {
                 continue;
             }
             let path = real(&base);
-            // A worktree mid-rebase is on a detached HEAD, so gix reports no branch. Recover the
+            // A worktree mid-rebase has a detached HEAD. Recover the
             // pre-rebase branch from git's own state files, otherwise the row vanishes from the
             // sidebar and its terminals are closed mid-conflict-resolution (GH #112).
-            let branch = branch_of(&wt_repo)
+            // Only the admin HEAD is checkout-specific. Opening a full gix repository
+            // here rereads shared config and object-store layout for every workspace.
+            let branch = crate::git::read_branch_from_head(&base)
                 .or_else(|| crate::worktree::operation_head_branch(&base.to_string_lossy()));
             if let Some(branch) = branch {
                 map.insert(
@@ -1438,12 +1422,21 @@ mod tests {
             let path = linked.path().join(format!("linked-{n}"));
             run_git(
                 &repo,
-                &["worktree", "add", "-b", &format!("wt-{n}"), path.to_str().unwrap()],
+                &[
+                    "worktree",
+                    "add",
+                    "-b",
+                    &format!("wt-{n}"),
+                    path.to_str().unwrap(),
+                ],
             );
             paths.push(path);
         }
         let reads = GixGitReads::new();
-        assert_eq!(reads.worktree_paths(&repo).unwrap(), CliGitReads.worktree_paths(&repo).unwrap());
+        assert_eq!(
+            reads.worktree_paths(&repo).unwrap(),
+            CliGitReads.worktree_paths(&repo).unwrap()
+        );
         let before = REPOSITORY_OPENS.with(std::cell::Cell::get);
         // Inventory must observe current HEAD without rebuilding every repository.
         run_git(&paths[0], &["switch", "-c", "replacement"]);
@@ -1458,7 +1451,10 @@ mod tests {
             assert!(!actual.contains_key("wt-2"));
         }
         let opens = REPOSITORY_OPENS.with(std::cell::Cell::get) - before;
-        assert_eq!(opens, 0, "warm inventory reopened full repositories {opens} times");
+        assert_eq!(
+            opens, 0,
+            "warm inventory reopened full repositories {opens} times"
+        );
     }
 
     /// Init a fresh, empty repo with one committed `a.txt` and return guard+path.

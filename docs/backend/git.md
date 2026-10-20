@@ -32,6 +32,8 @@ PR proof is reapplied on each repository stats refresh and is not stored in the 
 
 A sidebar refresh builds one shared ref snapshot through `monitoring_ref_keys`: it enumerates refs and reads the common HEAD/config once, then derives each branch key from that snapshot and its own reflog. A sibling branch tip is not part of another branch's key. Standalone lifecycle readers use the same dependency set; repository handles come from the shared gix handle cache.
 
+Worktree inventory reuses its root repository handle and reads each checkout’s admin HEAD directly. It does not open a full repository for the main checkout or each linked checkout. Detached rebase checkouts still recover their branch from Git’s operation files; missing and archived checkouts remain excluded.
+
 Merged classifications have a separate bounded cache keyed by repository refs, symbolic HEAD, Git configuration and branch reflogs. File saves and the repository cache TTL do not rerun `cherry`, integration history or `merge-tree`; moving a ref recomputes classification. This eliminates the integration-process fan-out across active worktrees. Git subprocess counts for unsupported gix checkouts remain dependent on the fallback reads.
 
 **Watcher-miss observability:** each cache's `moka` eviction listener increments a shared `ttl_fallbacks` counter only on `RemovalCause::Expired` (TTL aged out without the watcher invalidating first) — explicit invalidations do not count. A rising counter means the watcher likely missed events; it is surfaced in the `cpu_watchdog` HEALTH/CPU-SPIKE snapshots as `git_cache_ttl_fallbacks`.
