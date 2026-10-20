@@ -655,6 +655,18 @@ fn read_codex_rollout_cwd(path: &Path) -> Option<PathBuf> {
     Some(normalize_cwd(cwd))
 }
 
+#[cfg(test)]
+static CODEX_ROLLOUT_STATS: std::sync::LazyLock<dashmap::DashMap<PathBuf, usize>> =
+    std::sync::LazyLock::new(dashmap::DashMap::new);
+
+fn codex_rollout_metadata(path: &Path) -> std::io::Result<std::fs::Metadata> {
+    #[cfg(test)]
+    {
+        *CODEX_ROLLOUT_STATS.entry(path.to_path_buf()).or_insert(0) += 1;
+    }
+    std::fs::metadata(path)
+}
+
 fn collect_codex_files(
     dir: &PathBuf,
     now: SystemTime,
@@ -671,7 +683,7 @@ fn collect_codex_files(
             collect_codex_files(&path, now, wanted_cwd, out);
         } else if let Some(name) = path.file_name().map(|n| n.to_string_lossy().to_string())
             && let Some(uuid) = extract_codex_uuid(&name)
-            && let Ok(meta) = entry.metadata()
+            && let Ok(meta) = codex_rollout_metadata(&path)
             && let Ok(mtime) = meta.modified()
         {
             // Age first: it is a stat we already have, and it rejects almost
@@ -2352,6 +2364,40 @@ mod tests {
             !dirs.contains(&codex_day_dir(root.path(), 2020, 1, 1)),
             "stale date subtree must be pruned before walking"
         );
+    }
+
+    // Catches re-statting every historical rollout on each idle/busy discovery.
+    #[test]
+    fn codex_warm_discovery_does_not_restat_historical_rollouts() {
+        let root = TempDir::new().unwrap();
+        let sessions = root.path().join("sessions");
+        let day = codex_recent_day_dirs_for_test(&sessions);
+        fs::create_dir_all(&day).unwrap();
+        let cwd = root.path().to_str().unwrap();
+        let current = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb";
+        for n in 0..64 {
+            let id = format!("aaaaaaaa-aaaa-aaaa-aaaa-{n:012x}");
+            let path = make_codex_rollout(&day, &format!("rollout-test-{id}.jsonl"), cwd);
+            fs::File::options().write(true).open(path).unwrap()
+                .set_modified(SystemTime::now() - Duration::from_secs(3600)).unwrap();
+        }
+        make_codex_rollout(&day, &format!("rollout-test-{current}.jsonl"), cwd);
+        let discover = || discover_codex_session(cwd, &[], Some(cwd));
+        assert_eq!(discover().as_deref(), Some(current));
+        let count = || CODEX_ROLLOUT_STATS.iter()
+            .filter(|entry| entry.key().starts_with(root.path()))
+            .map(|entry| *entry.value()).sum::<usize>();
+        let before = count();
+        for _ in 0..10 {
+            assert_eq!(discover().as_deref(), Some(current));
+        }
+        assert_eq!(count() - before, 0, "unchanged discovery must not stat rollouts again");
+    }
+
+    fn codex_recent_day_dirs_for_test(root: &Path) -> PathBuf {
+        use chrono::Datelike;
+        let today = chrono::Local::now().date_naive();
+        codex_day_dir(root, today.year(), today.month(), today.day())
     }
 
     #[test]
