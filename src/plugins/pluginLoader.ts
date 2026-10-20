@@ -361,6 +361,9 @@ export function replayActiveAgents(store: typeof terminalsStore): void {
  * Call once at app startup after the disabled-plugin state is synchronized.
  */
 export async function loadUserPlugins(syncDisabled = true): Promise<void> {
+	// DEFERRED (2026-10-20) — Isolated headless/Vite user-plugin E2Es need a browser
+	// module-asset transport first. HTTP RPC parity alone cannot load plugin://
+	// modules; do not remove this guard or substitute a test loader as live proof.
 	if (!isTauri()) {
 		appLogger.debug("plugin", "User plugin loading skipped in browser mode");
 		return;
