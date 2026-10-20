@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+- Preserve named and nested submodule history when force-removing a missing worktree checkout; refuse missing or malformed destination mappings before pruning (#2096-1d25).
+
 - Keep the agent-test WebView visible and painting in a compact bottom-right floating window without activating the application or taking keyboard focus; add an opt-in native visibility observer and leave the daily window profile unchanged (#2090-cf8a).
 - Prevent a retained question footer from restoring Input state after the agent exits to the shell (#2091-ba03).
 - Restore awaiting state and native answer controls for repeated ego MCP approvals, including hard-wrapped approval titles (#2089-aafb).
