@@ -45,4 +45,3 @@ build-slot: admitted after 80s (running=0 free=70%)
 [2m      Tests [22m [1m[31m3 failed[39m[22m[2m | [22m[33m9 skipped[39m[90m (12)[39m
 [2m   Start at [22m 12:56:56
 [2m   Duration [22m 1.14s[2m (transform 30%, import 25%, environment 23%, setup 19%, tests 4%)[22m
-

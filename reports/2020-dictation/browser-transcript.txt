@@ -201,4 +201,3 @@
 ['tab', 'close']
 ✓ Tab [t2] closed
 [ab-stealth] session=desk-2020-visual Chrome=81136 CDP=57162 tab=pinned
-
