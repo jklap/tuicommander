@@ -1203,6 +1203,8 @@ Ego PTY launches use `--read-only-dir` for the same canonical directory. Shell
 shims apply the grants to typed launches; resumed ego sessions receive fresh
 read roots because discovery does not persist ego argv. ACP uploads still require an existing profile read root.
 
+Plugin HTTP cancellation: a host-local AbortSignal maps to a generated request UUID scoped to the plugin. Shared IPC/HTTP helpers cancel the full Rust request future, including headers and body. Jira URL resolver cancellation reaches all detail requests.
+
 ### Voice owner discovery (#1909-0d24)
 
 Internal voice settings refresh resolves devices, model state, installed voices and language-filtered Edge voices through existing owners. Describe is cache-only; typed asset actions retain existing owner validation and runtime effects. Public settings transport cutover remains separate.
@@ -1309,3 +1311,5 @@ Consumer retry enforcement remains a separate live ego verification requirement.
 ## Mobile device-local font sizes
 
 Implemented (#2023-54c4): mobile Settings has separate Terminal and Chat controls with smaller/larger buttons and current values, without explanatory text. Each preference has its own localStorage key and 10–24 px range with 1 px steps. The existing defaults stay 14 px for CLI output and Chat body text. Chat changes apply only within Session Chat and AI Chat transcripts. Composers, UI chrome, desktop fonts and other devices are unchanged. CLI rows rewrap locally without resizing the shared PTY and keep the visible row when scrolled back.
+
+Mobile offers the **Chat** tab only when the host has a configured ego executable, using the same availability predicate as desktop. Host settings changes update the tab without reloading. Removing ego configuration returns an open Chat view to **Sessions**; unavailable saved Chat links also stay on **Sessions**.
