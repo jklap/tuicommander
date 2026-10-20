@@ -1,4 +1,4 @@
-{"fixture":"src-tauri/src/fixtures/agent_prompts/ego-selector-receipt-title-2088.tcap","agent":"ego","geometry":[41,128]}
+{"fixture":"src-tauri/src/fixtures/agent_prompts/ego-mcp-questions-2088-2089.tcap","agent":"ego","geometry":[41,128]}
 {"record":0,"event":{"type":"shell-state","state":"busy","agent_type":"ego"}}
 {"record":0,"state":{"shell":1,"agent":"working","awaiting":false,"question":null,"confident":false,"last_question":null,"choice_sig":null,"fullscreen":false}}
 {"record":1,"state":{"shell":1,"agent":"working","awaiting":false,"question":null,"confident":false,"last_question":null,"choice_sig":null,"fullscreen":false}}
@@ -38,11 +38,12 @@
 {"record":33,"event":{"type":"question","prompt_text":"","confident":true,"_turn_epoch":0}}
 {"record":33,"state":{"shell":1,"agent":"awaiting_input","awaiting":true,"question":"","confident":true,"last_question":"","choice_sig":null,"fullscreen":false}}
 {"record":34,"state":{"shell":1,"agent":"awaiting_input","awaiting":true,"question":"","confident":true,"last_question":"","choice_sig":null,"fullscreen":false}}
-{"record":35,"state":{"shell":1,"agent":"awaiting_input","awaiting":true,"question":"","confident":true,"last_question":"","choice_sig":null,"fullscreen":false}}
-{"record":37,"state":{"shell":1,"agent":"awaiting_input","awaiting":true,"question":"","confident":true,"last_question":"","choice_sig":null,"fullscreen":false}}
-{"record":38,"state":{"shell":1,"agent":"awaiting_input","awaiting":true,"question":"","confident":true,"last_question":"","choice_sig":null,"fullscreen":false}}
-{"record":39,"state":{"shell":1,"agent":"awaiting_input","awaiting":true,"question":"","confident":true,"last_question":"","choice_sig":null,"fullscreen":false}}
-{"record":40,"event":{"type":"protocol-question-cleared"}}
+{"record":35,"event":{"type":"choice-prompt","title":"Allow call tuic/search_tools; run /Users/stefano.straus/Gits/personal/tuicommander__wt/chore-live-postland2/src-tauri/binaries/tuic-bridge-aarch64-app?","options":[{"key":"y","label":"yes","highlighted":true,"destructive":false},{"key":"a","label":"yes, remember rule (details: d)","highlighted":false,"destructive":false},{"key":"n","label":"no, say what to do instead","highlighted":false,"destructive":true},{"key":"e","label":"edit","highlighted":false,"destructive":false},{"key":"d","label":"details","highlighted":false,"destructive":false}],"_turn_epoch":0}}
+{"record":35,"state":{"shell":1,"agent":"awaiting_input","awaiting":true,"question":"Allow call tuic/search_tools; run /Users/stefano.straus/Gits/personal/tuicommander__wt/chore-live-postland2/src-tauri/binaries/tuic-bridge-aarch64-app?","confident":true,"last_question":"","choice_sig":"Allow call tuic/search_tools; run /Users/stefano.straus/Gits/personal/tuicommander__wt/chore-live-postland2/src-tauri/binaries/tuic-bridge-aarch64-app?|y,a,n,e,d","fullscreen":false}}
+{"record":37,"state":{"shell":1,"agent":"awaiting_input","awaiting":true,"question":"Allow call tuic/search_tools; run /Users/stefano.straus/Gits/personal/tuicommander__wt/chore-live-postland2/src-tauri/binaries/tuic-bridge-aarch64-app?","confident":true,"last_question":"","choice_sig":"Allow call tuic/search_tools; run /Users/stefano.straus/Gits/personal/tuicommander__wt/chore-live-postland2/src-tauri/binaries/tuic-bridge-aarch64-app?|y,a,n,e,d","fullscreen":false}}
+{"record":38,"state":{"shell":1,"agent":"awaiting_input","awaiting":true,"question":"Allow call tuic/search_tools; run /Users/stefano.straus/Gits/personal/tuicommander__wt/chore-live-postland2/src-tauri/binaries/tuic-bridge-aarch64-app?","confident":true,"last_question":"","choice_sig":"Allow call tuic/search_tools; run /Users/stefano.straus/Gits/personal/tuicommander__wt/chore-live-postland2/src-tauri/binaries/tuic-bridge-aarch64-app?|y,a,n,e,d","fullscreen":false}}
+{"record":39,"event":{"type":"choice-cleared","_turn_epoch":0}}
+{"record":39,"state":{"shell":1,"agent":"working","awaiting":false,"question":null,"confident":false,"last_question":"","choice_sig":null,"fullscreen":false}}
 {"record":40,"event":{"type":"user-input","content":"","line":-1,"_turn_epoch":0}}
 {"record":40,"state":{"shell":1,"agent":"working","awaiting":false,"question":null,"confident":false,"last_question":"","choice_sig":null,"fullscreen":false}}
 {"record":41,"state":{"shell":1,"agent":"working","awaiting":false,"question":null,"confident":false,"last_question":"","choice_sig":null,"fullscreen":false}}
@@ -69,11 +70,15 @@
 {"record":61,"state":{"shell":1,"agent":"working","awaiting":false,"question":null,"confident":false,"last_question":"","choice_sig":null,"fullscreen":false}}
 {"record":62,"state":{"shell":1,"agent":"working","awaiting":false,"question":null,"confident":false,"last_question":"","choice_sig":null,"fullscreen":false}}
 {"record":63,"state":{"shell":1,"agent":"working","awaiting":false,"question":null,"confident":false,"last_question":"","choice_sig":null,"fullscreen":false}}
-{"record":64,"state":{"shell":1,"agent":"working","awaiting":false,"question":null,"confident":false,"last_question":"","choice_sig":null,"fullscreen":false}}
-{"record":65,"state":{"shell":1,"agent":"working","awaiting":false,"question":null,"confident":false,"last_question":"","choice_sig":null,"fullscreen":false}}
-{"record":66,"state":{"shell":1,"agent":"working","awaiting":false,"question":null,"confident":false,"last_question":"","choice_sig":null,"fullscreen":false}}
-{"record":68,"state":{"shell":1,"agent":"working","awaiting":false,"question":null,"confident":false,"last_question":"","choice_sig":null,"fullscreen":false}}
+{"record":64,"event":{"type":"question","prompt_text":"","confident":true,"_turn_epoch":0}}
+{"record":64,"state":{"shell":1,"agent":"awaiting_input","awaiting":true,"question":"","confident":true,"last_question":"","choice_sig":null,"fullscreen":false}}
+{"record":65,"state":{"shell":1,"agent":"awaiting_input","awaiting":true,"question":"","confident":true,"last_question":"","choice_sig":null,"fullscreen":false}}
+{"record":66,"event":{"type":"choice-prompt","title":"Allow call tuic/call_tool; call tuic/session; run /Users/stefano.straus/Gits/personal/tuicommander__wt/chore-live-postland2/src-tauri/binaries/tuic-bridge-aarch64-app?","options":[{"key":"y","label":"yes","highlighted":true,"destructive":false},{"key":"a","label":"yes, remember rule (details: d)","highlighted":false,"destructive":false},{"key":"n","label":"no, say what to do instead","highlighted":false,"destructive":true},{"key":"e","label":"edit","highlighted":false,"destructive":false},{"key":"d","label":"details","highlighted":false,"destructive":false}],"_turn_epoch":0}}
+{"record":66,"state":{"shell":1,"agent":"awaiting_input","awaiting":true,"question":"Allow call tuic/call_tool; call tuic/session; run /Users/stefano.straus/Gits/personal/tuicommander__wt/chore-live-postland2/src-tauri/binaries/tuic-bridge-aarch64-app?","confident":true,"last_question":"","choice_sig":"Allow call tuic/call_tool; call tuic/session; run /Users/stefano.straus/Gits/personal/tuicommander__wt/chore-live-postland2/src-tauri/binaries/tuic-bridge-aarch64-app?|y,a,n,e,d","fullscreen":false}}
+{"record":68,"state":{"shell":1,"agent":"awaiting_input","awaiting":true,"question":"Allow call tuic/call_tool; call tuic/session; run /Users/stefano.straus/Gits/personal/tuicommander__wt/chore-live-postland2/src-tauri/binaries/tuic-bridge-aarch64-app?","confident":true,"last_question":"","choice_sig":"Allow call tuic/call_tool; call tuic/session; run /Users/stefano.straus/Gits/personal/tuicommander__wt/chore-live-postland2/src-tauri/binaries/tuic-bridge-aarch64-app?|y,a,n,e,d","fullscreen":false}}
+{"record":69,"event":{"type":"protocol-question-cleared"}}
 {"record":69,"event":{"type":"user-input","content":"","line":-1,"_turn_epoch":0}}
+{"record":69,"event":{"type":"choice-cleared","_turn_epoch":0}}
 {"record":69,"state":{"shell":1,"agent":"working","awaiting":false,"question":null,"confident":false,"last_question":"","choice_sig":null,"fullscreen":false}}
 {"record":70,"state":{"shell":1,"agent":"working","awaiting":false,"question":null,"confident":false,"last_question":"","choice_sig":null,"fullscreen":false}}
 {"record":71,"state":{"shell":1,"agent":"working","awaiting":false,"question":null,"confident":false,"last_question":"","choice_sig":null,"fullscreen":false}}
@@ -97,9 +102,10 @@
 {"record":89,"state":{"shell":1,"agent":"working","awaiting":false,"question":null,"confident":false,"last_question":"","choice_sig":null,"fullscreen":false}}
 {"record":90,"state":{"shell":1,"agent":"working","awaiting":false,"question":null,"confident":false,"last_question":"","choice_sig":null,"fullscreen":false}}
 {"record":91,"state":{"shell":1,"agent":"working","awaiting":false,"question":null,"confident":false,"last_question":"","choice_sig":null,"fullscreen":false}}
-{"record":92,"state":{"shell":1,"agent":"working","awaiting":false,"question":null,"confident":false,"last_question":"","choice_sig":null,"fullscreen":false}}
-{"record":93,"state":{"shell":1,"agent":"working","awaiting":false,"question":null,"confident":false,"last_question":"","choice_sig":null,"fullscreen":false}}
-{"record":94,"state":{"shell":1,"agent":"working","awaiting":false,"question":null,"confident":false,"last_question":"","choice_sig":null,"fullscreen":false}}
+{"record":92,"event":{"type":"question","prompt_text":"","confident":true,"_turn_epoch":0}}
+{"record":92,"state":{"shell":1,"agent":"awaiting_input","awaiting":true,"question":"","confident":true,"last_question":"","choice_sig":null,"fullscreen":false}}
+{"record":93,"state":{"shell":1,"agent":"awaiting_input","awaiting":true,"question":"","confident":true,"last_question":"","choice_sig":null,"fullscreen":false}}
+{"record":94,"state":{"shell":1,"agent":"awaiting_input","awaiting":true,"question":"","confident":true,"last_question":"","choice_sig":null,"fullscreen":false}}
 {"record":95,"event":{"type":"choice-prompt","title":"Pick a colour?","options":[{"key":"1","label":"Red","highlighted":true,"destructive":false},{"key":"2","label":"Green","highlighted":false,"destructive":false},{"key":"3","label":"Blue","highlighted":false,"destructive":false}],"selection_mode":"navigate-enter","dismiss_key":"cancel","_turn_epoch":0}}
 {"record":95,"state":{"shell":1,"agent":"awaiting_input","awaiting":true,"question":"Pick a colour?","confident":true,"last_question":"","choice_sig":"Pick a colour?|1,2,3","fullscreen":false}}
 {"record":97,"state":{"shell":1,"agent":"awaiting_input","awaiting":true,"question":"Pick a colour?","confident":true,"last_question":"","choice_sig":"Pick a colour?|1,2,3","fullscreen":false}}
@@ -132,12 +138,15 @@
 {"record":121,"state":{"shell":1,"agent":"working","awaiting":false,"question":null,"confident":false,"last_question":"","choice_sig":null,"fullscreen":false}}
 {"record":122,"state":{"shell":1,"agent":"working","awaiting":false,"question":null,"confident":false,"last_question":"","choice_sig":null,"fullscreen":false}}
 {"record":123,"state":{"shell":1,"agent":"working","awaiting":false,"question":null,"confident":false,"last_question":"","choice_sig":null,"fullscreen":false}}
-{"record":124,"state":{"shell":1,"agent":"working","awaiting":false,"question":null,"confident":false,"last_question":"","choice_sig":null,"fullscreen":false}}
-{"record":125,"state":{"shell":1,"agent":"working","awaiting":false,"question":null,"confident":false,"last_question":"","choice_sig":null,"fullscreen":false}}
-{"record":126,"state":{"shell":1,"agent":"working","awaiting":false,"question":null,"confident":false,"last_question":"","choice_sig":null,"fullscreen":false}}
-{"record":127,"state":{"shell":1,"agent":"working","awaiting":false,"question":null,"confident":false,"last_question":"","choice_sig":null,"fullscreen":false}}
-{"record":129,"state":{"shell":1,"agent":"working","awaiting":false,"question":null,"confident":false,"last_question":"","choice_sig":null,"fullscreen":false}}
-{"record":130,"state":{"shell":1,"agent":"working","awaiting":false,"question":null,"confident":false,"last_question":"","choice_sig":null,"fullscreen":false}}
+{"record":124,"event":{"type":"question","prompt_text":"","confident":true,"_turn_epoch":0}}
+{"record":124,"state":{"shell":1,"agent":"awaiting_input","awaiting":true,"question":"","confident":true,"last_question":"","choice_sig":null,"fullscreen":false}}
+{"record":125,"state":{"shell":1,"agent":"awaiting_input","awaiting":true,"question":"","confident":true,"last_question":"","choice_sig":null,"fullscreen":false}}
+{"record":126,"state":{"shell":1,"agent":"awaiting_input","awaiting":true,"question":"","confident":true,"last_question":"","choice_sig":null,"fullscreen":false}}
+{"record":127,"event":{"type":"choice-prompt","title":"Allow call tuic/progress; run /Users/stefano.straus/Gits/personal/tuicommander__wt/chore-live-postland2/src-tauri/binaries/tuic-bridge-aarch64-app?","options":[{"key":"y","label":"yes","highlighted":true,"destructive":false},{"key":"a","label":"yes, remember rule (details: d)","highlighted":false,"destructive":false},{"key":"n","label":"no, say what to do instead","highlighted":false,"destructive":true},{"key":"e","label":"edit","highlighted":false,"destructive":false},{"key":"d","label":"details","highlighted":false,"destructive":false}],"_turn_epoch":0}}
+{"record":127,"state":{"shell":1,"agent":"awaiting_input","awaiting":true,"question":"Allow call tuic/progress; run /Users/stefano.straus/Gits/personal/tuicommander__wt/chore-live-postland2/src-tauri/binaries/tuic-bridge-aarch64-app?","confident":true,"last_question":"","choice_sig":"Allow call tuic/progress; run /Users/stefano.straus/Gits/personal/tuicommander__wt/chore-live-postland2/src-tauri/binaries/tuic-bridge-aarch64-app?|y,a,n,e,d","fullscreen":false}}
+{"record":129,"state":{"shell":1,"agent":"awaiting_input","awaiting":true,"question":"Allow call tuic/progress; run /Users/stefano.straus/Gits/personal/tuicommander__wt/chore-live-postland2/src-tauri/binaries/tuic-bridge-aarch64-app?","confident":true,"last_question":"","choice_sig":"Allow call tuic/progress; run /Users/stefano.straus/Gits/personal/tuicommander__wt/chore-live-postland2/src-tauri/binaries/tuic-bridge-aarch64-app?|y,a,n,e,d","fullscreen":false}}
+{"record":130,"state":{"shell":1,"agent":"awaiting_input","awaiting":true,"question":"Allow call tuic/progress; run /Users/stefano.straus/Gits/personal/tuicommander__wt/chore-live-postland2/src-tauri/binaries/tuic-bridge-aarch64-app?","confident":true,"last_question":"","choice_sig":"Allow call tuic/progress; run /Users/stefano.straus/Gits/personal/tuicommander__wt/chore-live-postland2/src-tauri/binaries/tuic-bridge-aarch64-app?|y,a,n,e,d","fullscreen":false}}
+{"record":131,"event":{"type":"choice-cleared","_turn_epoch":0}}
 {"record":131,"state":{"shell":1,"agent":"working","awaiting":false,"question":null,"confident":false,"last_question":"","choice_sig":null,"fullscreen":false}}
 {"record":132,"event":{"type":"user-input","content":"","line":-1,"_turn_epoch":0}}
 {"record":132,"state":{"shell":1,"agent":"working","awaiting":false,"question":null,"confident":false,"last_question":"","choice_sig":null,"fullscreen":false}}
