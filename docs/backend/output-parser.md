@@ -497,7 +497,10 @@ Observed Codex prompt forms and evidence:
 
 The distinct `/plan` form uses `Question N/M (K unanswered)` above the title and
 `tab to add notes | enter to submit answer | esc to interrupt` below its options.
-Both anchors and contiguous keys starting at 1 are required. Descriptions in the
+The footer can also use three native rows (tab, enter, esc), with an optional
+`option N/M |` prefix on the notes row. Both anchors and contiguous keys starting
+at 1 are required. Only the complete final footer enables continuation rows;
+wrapped answers and descriptions keep their separate native columns. Descriptions in the
 second column become option hints, not answer labels. Numeric answers submit
 immediately; Tab opens notes and Escape interrupts. The retained real PTY bytes
 are in `codex-plan-question-20261019.json`; this retained snapshot has no original
@@ -505,7 +508,16 @@ geometry/timing. A fresh isolated headless recording,
 `codex-plan-question-20261019-real.tcap`, preserves real 41×128 geometry and
 ordered input/output. Parser and shared-accumulator regressions replay the open
 question before its recorded Ctrl+C. Neither fixture proves authenticated mobile
-rendering. Codex 0.162.1 accepts `/plan <question prompt>` in one submission.
+rendering. `codex-first-plan-narrow-2094.tcap` records the first Codex
+0.163.0 question at 41×36: the narrow layout changes the footer and wraps both
+option columns. The shared accumulator regression asserts Input state and all
+four clean labels from those ordered chunks. Resizing the same unanswered live
+question to 128 columns exported controls without a new question, which isolates
+one failure to layout recognition. The same capture also includes a delayed
+`state=idle` after the question opens. The completion guard applies to the same
+active native dialog, not only enforced command approvals; answer input still
+retires its controls and permits normal completion.
+Codex 0.162.1 accepts `/plan <question prompt>` in one submission.
 
 ### Grok native questions and enforced approvals
 

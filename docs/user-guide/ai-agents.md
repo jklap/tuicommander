@@ -174,6 +174,11 @@ Grok Ask selectors expose numbered answers and the `z` free-text action to deskt
 
 Codex 0.162.1 queues native questions before showing their options. Use **Open Codex question** on mobile, or Shift+Left in the terminal. A numbered key answers once; Ctrl+] skips, and Shift+Right returns to the main prompt. Open questions supply the same title and options to desktop and mobile.
 
+Codex `/plan` questions also export named choices in narrow panes. The native
+footer can span three rows, and wrapped descriptions stay separate from answer
+labels. An unanswered question keeps Input state through a delayed idle hook;
+answering it clears the controls. Only visible native options are exported.
+
 CLI-enforced command approvals are separate from native questions. Their title and numeric controls are available to desktop and mobile; a numeric refusal submits immediately, and Escape cancels.
 
 ### Codex terminal Chat
