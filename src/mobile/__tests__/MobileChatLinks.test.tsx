@@ -48,6 +48,7 @@ vi.mock("../../components/AIChatPanel/useAcpChat", () => ({
 }));
 vi.mock("../useSessions", () => ({
 	useSessions: () => ({
+		aiChatAvailable: () => true,
 		sessions: () => [],
 		loading: () => false,
 		refreshing: () => false,

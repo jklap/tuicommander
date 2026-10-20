@@ -3293,3 +3293,5 @@ Plugin catalogue update detection compares equal-version payload identities as w
 as versions. Installed identity is computed by Rust and ignores mutable plugin data.
 
 MCP capability switches replace implementation-name switches. Saved denials migrate once, unknown names remain visible, and discovery and dispatch share the policy. Retired task/story/workflow-member/Design Mode names have no aliases; reconnect cached clients and review grouped allow rules (#2068-63b9).
+
+Mobile offers the **Chat** tab only when the host has a configured ego executable, using the same availability predicate as desktop. Host settings changes update the tab without reloading. Removing ego configuration returns an open Chat view to **Sessions**; unavailable saved Chat links also stay on **Sessions**.
