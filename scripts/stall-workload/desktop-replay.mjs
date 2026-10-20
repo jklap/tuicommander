@@ -162,6 +162,7 @@ finally {clearInterval(timer);cancelAnimationFrame(animation);for(const canvas o
 `;
 let outer;
 let receipt;
+let report;
 try {
 	const response = await call("/debug/invoke_js", {
 		method: "POST",
@@ -172,7 +173,7 @@ try {
 	});
 	receipt = await response.json();
 	if (!response.ok || !receipt.ok) throw new Error(`invoke rejected: ${JSON.stringify(receipt)}`);
-	const report = await Promise.race([
+	report = await Promise.race([
 		done,
 		new Promise((_, reject) => {
 			outer = setTimeout(
@@ -209,6 +210,7 @@ try {
 		resolve(output),
 		JSON.stringify(
 			{
+				...report,
 				error: String(error),
 				receipt,
 				backend,
