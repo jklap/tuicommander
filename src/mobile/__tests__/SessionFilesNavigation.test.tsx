@@ -19,6 +19,7 @@ vi.mock("../../stores/appLogger", () => ({ appLogger: { warn: vi.fn(), info: vi.
 vi.mock("../../stores/ideas", () => ({ ideasStore: { hydrate: vi.fn() } }));
 vi.mock("../useSessions", () => ({
 	useSessions: () => ({
+		aiChatAvailable: () => true,
 		sessions: () => mockSessions.current,
 		loading: () => false,
 		refreshing: () => false,

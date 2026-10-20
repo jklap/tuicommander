@@ -23,6 +23,7 @@ vi.mock("../../stores/appLogger", () => ({ appLogger: { info: vi.fn(), warn: vi.
 vi.mock("../../stores/ideas", () => ({ ideasStore: { hydrate: vi.fn() } }));
 vi.mock("../useSessions", () => ({
 	useSessions: () => ({
+		aiChatAvailable: () => true,
 		sessions: () => [session],
 		loading: () => false,
 		refreshing: () => false,
