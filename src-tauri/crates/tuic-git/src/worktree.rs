@@ -4437,9 +4437,42 @@ mod tests {
         );
     }
 
+    // Catches: a bare Git entry with neither a branch nor detached marker is accepted as an orphan.
+    #[test]
+    fn orphan_validation_refuses_a_bare_repository_entry() {
+        let (_temp, repo, _workspaces) = workspace_fixture();
+        let bare = repo.parent().unwrap().join("bare.git");
+        git_cmd(&repo)
+            .args([
+                "clone",
+                "--bare",
+                &repo.to_string_lossy(),
+                &bare.to_string_lossy(),
+            ])
+            .run()
+            .unwrap();
+        let porcelain = git_cmd(&bare)
+            .args(["worktree", "list", "--porcelain"])
+            .run()
+            .unwrap();
+        assert!(
+            porcelain.stdout.lines().any(|line| line == "bare"),
+            "{}",
+            porcelain.stdout
+        );
+        let error =
+            validate_worktree_path(&bare.to_string_lossy(), &bare.to_string_lossy()).unwrap_err();
+        assert!(error.contains("not detached"), "{error}");
+        git_cmd(&bare)
+            .args(["cat-file", "-e", "HEAD"])
+            .run()
+            .unwrap();
+    }
+
     // Catches: an unreadable allocation marker is treated as absent and the checkout is moved.
     #[test]
     fn archive_refuses_an_allocation_marker_that_is_a_directory() {
+        // DEFERRED (2026-10-20) — rollback remove_file failures need a deterministic real filesystem reproducer; this covers the initial read refusal only.
         let (_temp, repo, _workspaces) = workspace_fixture();
         let path = add_worktree(&repo, "marker-directory");
         let marker = allocation_marker(&repo, &path).unwrap();
@@ -4519,6 +4552,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn removal_keeps_a_generic_admin_permission_failure_distinct_from_confirmation_errors() {
+        // DEFERRED (2026-10-20) — late unregister/delete races and alternate Git error wording remain mutation survivors; do not synthesize stderr to claim coverage.
         use std::os::unix::fs::PermissionsExt;
         let (_temp, repo, _workspaces) = workspace_fixture();
         let path = add_worktree(&repo, "admin-permissions");
