@@ -19,6 +19,7 @@ use crate::worktree::{
     WorktreeConfig, WorktreeResult, create_worktree_with_stale_recovery, remove_worktree_internal,
 };
 
+pub(crate) mod frame_priority;
 mod injection;
 mod lifecycle;
 mod screen;
@@ -3942,9 +3943,18 @@ fn grid_send_min_interval_ms(input_recent: bool, dirty_run: u32) -> u64 {
 /// Stamp the per-session last-input timestamp (epoch ms). Read by the grid
 /// ticker to throttle frame sends while the user types under CPU saturation,
 /// keeping the WebView/browser main thread free for keystroke dispatch + echo.
-/// Called from every interactive input entry point (desktop `write_pty` +
-/// HTTP/PWA `write_to_session`).
+/// Called before an interactive PTY write (desktop and HTTP/PWA), so a fast
+/// echo cannot beat priority arming. Only reader-applied output wakes the ticker.
 pub(crate) fn stamp_input_ms(state: &AppState, session_id: &str) {
+    record_input_ms(state, session_id);
+    if let Some(priority) = state.grid.input_frame_priority.get(session_id) {
+        priority.arm(std::time::Instant::now());
+    }
+}
+
+/// Timestamp-only bookkeeping after successful writes, including automated input.
+/// It must not re-arm priority after the reader already applied a fast echo.
+pub(crate) fn record_input_ms(state: &AppState, session_id: &str) {
     let now_ms = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
@@ -4028,7 +4038,7 @@ pub(crate) fn spawn_reader_thread(
     );
 
     // Frame ticker: decouples PTY read() from frame serialization.
-    // Reader sets dirty flag; ticker serializes+sends at fixed interval.
+    // Reader sets dirty flag; ticker serializes+sends on paced or input wakes.
     // Coalesces rapid writes (spinner erase+rewrite) into a single frame.
     let frame_dirty = Arc::new(AtomicBool::new(false));
     state
@@ -4044,6 +4054,12 @@ pub(crate) fn spawn_reader_thread(
         .grid
         .pending_scroll
         .insert(session_id.clone(), Arc::new(AtomicI64::new(-1)));
+    let input_priority = Arc::new(frame_priority::InputFramePriority::default());
+    state
+        .grid
+        .input_frame_priority
+        .insert(session_id.clone(), input_priority.clone());
+    let ticker_priority = input_priority.clone();
     let sync_active = Arc::new(AtomicBool::new(false));
     state
         .grid
@@ -4083,8 +4099,21 @@ pub(crate) fn spawn_reader_thread(
         let mut last_sent: Option<std::time::Instant> = None;
         let mut last_load_check: Option<std::time::Instant> = None;
         let mut system_saturated = false;
+        ticker_priority.bind_ticker();
+        let mut next_tick = std::time::Instant::now() + TICK;
+        let mut priority_retry: Option<std::time::Instant> = None;
         while ticker_running.load(Ordering::Relaxed) {
-            std::thread::sleep(TICK);
+            let wake_at = priority_retry.map_or(next_tick, |retry| retry.min(next_tick));
+            std::thread::park_timeout(wake_at.saturating_duration_since(std::time::Instant::now()));
+            let now = std::time::Instant::now();
+            let periodic_tick = now >= next_tick;
+            priority_retry = None;
+            if periodic_tick {
+                next_tick = now + TICK;
+            } else if ticker_priority.request(now, last_sent).is_none() {
+                // Spurious/late notifications do not accelerate background output.
+                continue;
+            }
             // Drain a watcher-line tail the reader left batched. read() blocks, so
             // without this the last line of a burst waits for output that may
             // never arrive and a rare-line watcher matches minutes late. It must
@@ -4150,14 +4179,6 @@ pub(crate) fn spawn_reader_thread(
             // holding a grid WebSocket is exactly the browser/PWA case. It costs
             // the vt lock only when a client actually asked for a scroll.
             //
-            // DEFERRED (2026-08-20) — parking the THREAD itself, which is what
-            // F28 asked for. What is left after the skip above is timer churn, not
-            // work: ~62.5 wakeups/s per session, each an atomic load and two
-            // checks, and macOS coalesces them. Parking needs a condvar the PTY
-            // writer signals, plus a `wait_timeout` for the DEC 2026 sync flush
-            // above, which must keep running headlessly — and a missed notify
-            // shows up as a terminal that silently stops painting. Small win,
-            // worst failure mode of the group.
             if !grid_has_subscriber(&ticker_state, &ticker_sid) {
                 if let Some(target) = take_pending_scroll(&ticker_state, &ticker_sid)
                     && let Some(vt) = ticker_state.grid.vt_log_buffers.get(&ticker_sid)
@@ -4267,13 +4288,20 @@ pub(crate) fn spawn_reader_thread(
             } else {
                 grid_send_min_interval_ms(input_recent, dirty_run)
             };
-            if min_interval > 0
-                && let Some(last) = last_sent
-                && (now.duration_since(last).as_millis() as u64) < min_interval
-            {
-                ticker_dirty.store(true, Ordering::Relaxed); // keep pending for a later tick
+            let floor_pending = min_interval > 0
+                && last_sent.is_some_and(|last| {
+                    now.duration_since(last).as_millis() < min_interval as u128
+                });
+            let priority_request = ticker_priority.request(now, last_sent);
+            let priority_due = priority_request.is_some_and(|request| request.ready_at <= now);
+            if !sync_timeout_flush && (floor_pending || !periodic_tick) && !priority_due {
+                // Retry only a coalescing deadline, never a closed gate. The
+                // periodic tick still owns gate/sync maintenance and background frames.
+                priority_retry = priority_request.map(|request| request.ready_at);
+                ticker_dirty.store(true, Ordering::Relaxed);
                 continue;
             }
+            let priority_bypass = !sync_timeout_flush && (floor_pending || !periodic_tick);
             // The WebView missed frames while its gate was closed and has caught
             // up: those rows went to the WebSocket subscribers and left the shared
             // damage, so a delta now would land on a row map with holes in it.
@@ -4300,6 +4328,9 @@ pub(crate) fn spawn_reader_thread(
                 let _ = repair;
                 send_grid_frame(&ticker_state, &ticker_sid, frame);
                 last_sent = Some(now);
+                if let Some(request) = priority_request {
+                    ticker_priority.sent(request, now, priority_bypass);
+                }
             }
         }
         // Final flush after reader exits. Session teardown is the other "no more
@@ -4318,6 +4349,7 @@ pub(crate) fn spawn_reader_thread(
         }
         ticker_state.grid.frame_dirty.remove(&ticker_sid);
         ticker_state.grid.sync_update_active.remove(&ticker_sid);
+        ticker_state.grid.input_frame_priority.remove(&ticker_sid);
     });
 
     std::thread::spawn(move || {
@@ -4347,6 +4379,9 @@ pub(crate) fn spawn_reader_thread(
                 match reader.read(&mut buf) {
                     Ok(0) => break,
                     Ok(n) => {
+                        // A chunk already being processed before input cannot
+                        // consume the new input's wake hint.
+                        let input_generation = input_priority.generation();
                         state.metrics.bytes_emitted.fetch_add(n, Ordering::Relaxed);
                         // Flight recorder: keep the last PTY_RAW_RING_CAP raw bytes
                         // (pre-transform) so a wild rendering corruption can be
@@ -4450,6 +4485,7 @@ pub(crate) fn spawn_reader_thread(
                         }
 
                         frame_dirty.store(true, Ordering::Relaxed);
+                        input_priority.applied(input_generation, std::time::Instant::now());
                     }
                     Err(e) => {
                         tracing::error!(session_id = %session_id, "PTY reader error: {e}");
