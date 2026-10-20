@@ -49,6 +49,29 @@ pub(crate) fn apply_config(config: &mut crate::config::AppConfig, port: u16) {
     config.prevent_sleep_when_busy = false;
 }
 
+/// Ready runs on the main thread, after Tao's initial application activation.
+/// The test window starts hidden so Tao's visible-window activation sweep skips it.
+#[cfg(all(feature = "desktop", target_os = "macos"))]
+pub(crate) fn present_without_focus(window: &tauri::WebviewWindow) -> tauri::Result<()> {
+    if let Some(monitor) = window.primary_monitor()? {
+        let area = monitor.work_area();
+        let size = window.outer_size()?;
+        let margin = (16.0 * monitor.scale_factor()) as i32;
+        window.set_position(tauri::PhysicalPosition::new(
+            area.position.x + (area.size.width as i32 - size.width as i32 - margin).max(0),
+            area.position.y + (area.size.height as i32 - size.height as i32 - margin).max(0),
+        ))?;
+    }
+    let pointer = window.ns_window()?;
+    // SAFETY: Tauri returns this live window's NSWindow; Ready is on AppKit's
+    // main thread and the borrowed native window cannot outlive the Tauri window.
+    unsafe {
+        let native = &*pointer.cast::<objc2_app_kit::NSWindow>();
+        native.orderFront(None);
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

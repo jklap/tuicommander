@@ -1,3 +1,7 @@
+## Agent-test non-focusing visibility (2090-cf8a) — isolated native check verified
+
+- [x] `scripts/agent-test-visible.py --instance at-2090 --port 19883` observes a visible document, positive terminal canvas and real `fillText` paint without native/document focus. The window is 640x420 logical pixels, 17 pixels from the primary work-area right edge and 16 from its bottom edge. Unrelated frontmost PID 761 stays unchanged before launch, at readiness and after paint (owned PID 42795). Removing only `native.orderFront(None)` produces hidden document/native window, no canvas and no text paint; restoring it passes. Both runs delete their sessions, stop through `make agent-test-stop`, and report no remaining worktree executable. Evidence: `~/Gits/.tmp/results/fix-2090-round2/{red2,green}/` (JSON, logs and GREEN canvas-only PNGs). This opt-in native observer requires desktop authorization; source/config contracts do not prove visibility. The change loads only in a newly built agent-test binary and requires no daily-app restart.
+
 ## Question state after agent exit (2091-ba03) — Rust restart required
 
 - [ ] After a manual backend restart, exit a Claude question to the shell and run a command. Input and question controls must stay absent; verify an active question still shows its controls. Isolated automated live verification is recorded in the story. The daily app cannot load this Rust fix through hot reload.

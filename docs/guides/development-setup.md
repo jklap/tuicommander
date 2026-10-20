@@ -93,6 +93,19 @@ assets use `tauri/custom-protocol` even though this is a debug build.
 Defaults are `AGENT_TEST_INSTANCE=agent-test` and `AGENT_TEST_PORT=19876`.
 Override with, for example, `make agent-test AGENT_TEST_INSTANCE=agent-check
 AGENT_TEST_PORT=19877` (on one line). Use the same instance on the stop target.
+Agents must connect through the instance's Unix socket, printed as `socket` and
+as a ready-to-run `connect` command in the launch JSON:
+
+```bash
+curl --unix-socket '<socket from launch JSON>' http://localhost/health
+```
+
+Replace `/health` with the endpoint needed for the check. The socket does not
+require HTTP authentication. TCP requests to `127.0.0.1:<port>` require Basic
+auth (or another configured authenticated session); an unauthenticated request
+can return 401. A ready TCP listener does not mean an agent can use its API
+without credentials. Do not read or copy the daily instance's credentials.
+
 These dedicated variables ignore inherited `TUIC_APP_INSTANCE`, `TUIC_PORT`,
 `TUIC_SOCKET` and `TUIC_DEV_BIN_DIR`. Empty/default instance IDs and port 9876
 are rejected, not interpreted as production defaults. The dedicated Rust entry
@@ -105,6 +118,53 @@ is not a symlink into mbx's target cache. The default instance stores app state
 in `~/Library/Application Support/com.tuic.commander/instances/agent-test/`.
 It never seeds from the daily config. Never copy daily tokens or config there.
 
+The test window is 640×420 logical pixels, with matching minimum dimensions,
+at the bottom-right of the primary screen work area (16 logical pixels inset).
+It is always on top so macOS does not fully
+occlude its WebView behind the active application. It cannot become key or take
+keyboard focus. Background throttling is disabled (supported on macOS 14+), and
+initial application activation is disabled only for the agent-test runtime.
+It starts hidden: Tao 0.37.1 `app_state.rs::window_activation_hack` otherwise
+orders every visible window key even when `focus=false`. At Tauri Ready, after
+that sweep, the agent-test path calls native `NSWindow.orderFront` without
+becoming key. Saved-window restoration is disabled for this profile because
+the window-state plugin calls `show` and `set_focus` during restoration.
+Do not call `window.show()` or `setFocus()` to present it: the pinned Tao backend
+uses `makeKeyAndOrderFront` for those APIs. The agent-test capability override
+denies `show` and `set-focus`; it adds no presentation permission. The daily
+capability file is unchanged. Stop the instance when the check ends to remove
+the floating window. The daily window configuration remains unchanged.
+
+#### Native visibility regression (authorized macOS runs only)
+
+The unattended `scripts/agent-test-tests.py` checks launcher/configuration and
+source-wiring contracts. It does **not** observe a rendered window. The separate
+native regression launches this worktree's `make agent-test`, observes the real
+WebView through its Unix socket, and stops the supervised instance in cleanup:
+
+```bash
+python3 -B scripts/agent-test-visible.py --instance at-2090 --port 19883 \
+  --evidence-dir "$HOME/Gits/.tmp/results/agent-test-visible-$(date +%s)"
+```
+
+This needs explicit desktop-execution authorization, macOS, a linked worktree
+with build inputs, an unused named instance/port, and an unrelated foreground
+application. Keep that foreground application unchanged during the build and
+check. Do not use an existing instance with sessions. The evidence directory
+must be new and under `~/Gits`.
+
+`agent_test_window_renders_visible_without_focus` checks document/native
+visibility, positive terminal canvas area, actual `fillText` paint, no native or
+document focus, and the same unrelated frontmost PID before launch, at readiness
+and after painting. It also verifies the compact viewport and corner geometry.
+It retains JSON receipts, the native build log and canvas-only PNGs, deletes
+only sessions created by the check, calls `make agent-test-stop`, and checks
+`ps` for this worktree's executable. It never captures the desktop or drives
+the daily instance. A failure exits nonzero after cleanup. Commenting out the
+native `orderFront` presentation must make this observer fail; source contracts
+alone are not behavioral RED evidence. This native check is intentionally not
+part of the unattended shell/Rust/JS suites.
+
 #### Shared-resource audit
 
 | Resource | Agent-test policy |
@@ -112,7 +172,7 @@ It never seeds from the daily config. Never copy daily tokens or config there.
 | Daily binary, dev-bin and installed app bundle | No writes. Only the worktree's distinctly named binary and adjacent sidecars are copied. A held supervisor lock prevents replacing the running test executable. |
 | Config, credential vault, databases and file locks | Existing named-instance namespace; debug credentials remain file-backed. The test never claims the global-input lock, even in its own namespace. |
 | HTTP and MCP | Explicit loopback-only `127.0.0.1:19876`; never port 9876 or automatic next-port fallback. Unix MCP socket uses the selected instance hash and the launch's short `TMPDIR` under `~/Gits/.tmp/tuic-at/`. Child CLI/bridge processes inherit the same namespace. |
-| Global window shortcut and Fn/Globe monitor | Input ownership refused and shortcut registration rejected at runtime, including later Settings changes. Local, focused-window keyboard handling remains available. |
+| Global window shortcut and Fn/Globe monitor | Input ownership refused and shortcut registration rejected at runtime, including later Settings changes. The verification window is non-focusable; drive its own HTTP/socket API. |
 | Microphone and dictation | Not compiled into this binary. A dictation-enabled build refuses to start; no microphone permission request or capture path is available. Audio/voice hardware checks still belong to Boss. |
 | Telegram bot | Supervisor never starts, tool availability is false, and setup changes are rejected. A copied or previously saved bot configuration cannot start polling. |
 | Global CLI | Startup auto-update is skipped. Explicit installation, update and removal are rejected before sidecar resolution or filesystem changes, including elevated helper paths. |
@@ -121,6 +181,7 @@ It never seeds from the daily config. Never copy daily tokens or config there.
 | Updater | No native updater plugin, no channel checks and automatic updates default off. The test cannot replace the daily bundle. |
 | Deep links, release single-instance lock and login items | Deep-link plugin is not installed. This debug-only binary never takes the release single-instance lock. Desktop startup has no login-item registration; remote service installation is an explicit operation, not part of this target. |
 | Relay, Tailscale and sleep inhibition | Relay supervisor and startup TLS provisioning are skipped; sleep inhibition is a no-op. No remote configuration is copied. |
+| Daily window-state repair | Skipped: the legacy repair scans daily config paths, not the test namespace. |
 | WebView identity | `com.tuic.commander.agent-test`, titled **TUICommander Agent Test**, separate from the daily Tauri identity. |
 | Stop ownership | PID is informational. The stop target writes to the instance's FIFO; only the live supervisor signals its own `Popen` child. It never kills a PID read from disk. |
 
