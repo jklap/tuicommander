@@ -1,7 +1,5 @@
 # Isolated post-landing checks — 2026-10-20
 
-The initial results below are historical. The **Current-ego follow-up** section supersedes the three blocked ego cells and the initial blocking prerequisite. Other cells retain their initial scope and limits.
-
 ## Scope and isolation
 
 Source: `chore/live-postland`, commit `a0bec09eea760f18ad113745d66cc8d8bbe166de`.
@@ -32,7 +30,7 @@ Local evidence directory: `~/Gits/.tmp/results/live-postland/`. These are retain
 
 > read-only directory: cannot enforce a read-only directory beneath a writable root
 
-The backend-owned attachment grant lies under the isolated HOME within the inherited writable root. No permission, sandbox, configuration, transport or attachment-grant override was used to bypass this refusal. The remaining ego checks need an approved layout that preserves the read-only grant and an authenticated provider available in that layout. No credential store was read or copied, and no login was started.
+The backend-owned attachment grant lies under the isolated HOME within `~/Gits`. No permission, sandbox, configuration, transport or attachment-grant override was used to bypass this refusal. The remaining ego checks need an approved layout that preserves the read-only grant and an authenticated provider available in that layout. No credential store was read or copied, and no login was started.
 
 ## Harness observations
 
@@ -45,6 +43,8 @@ The first Codex prompt submission after `/plan` was refused as `agent_not_ready`
 Each assigned completed story receives a fresh worklog entry with the scope above. No story is reopened and no missing live proof is claimed complete. All ten `story-close.sh --check` preflights passed without writes (`story-close-checks.json`). The existing completed criteria were not reinterpreted as fresh live proof. `fmt-changed.sh main...HEAD`, `git diff --check`, and instruction-link validation passed. `sessions-after-cleanup.json` is `[]`; the named browser tab and daemon closed; the recorded backend and final Vite process groups received SIGTERM, and `ps` found neither PID. The temporary Vite configuration was removed. No production implementation changed.
 
 ## Current-ego follow-up — live-postland2
+
+This follow-up supersedes the three blocked ego cells and the initial blocking prerequisite above. Other cells retain their initial scope and limits.
 
 ### Executable identity and isolation
 
@@ -94,7 +94,7 @@ instead prints the admitted read-only launch directory and reaches a real turn.
 The grant remains nested under the inherited writable root, for example:
 
 ```text
-/Users/stefano.straus/Gits/.tmp/results/live-postland2/home/Library/Application Support/com.tuic.commander/instances/live-postland2/attachments/pty-82963ec9-62ee-47d5-84b7-18bd7f100bb7
+~/Gits/.tmp/results/live-postland2/home/Library/Application Support/com.tuic.commander/instances/live-postland2/attachments/pty-82963ec9-62ee-47d5-84b7-18bd7f100bb7
 ```
 
 The attachment flag was not removed, relocated, or bypassed. This is evidence
