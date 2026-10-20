@@ -102,6 +102,16 @@ fn git_spelling(path: &str) -> String {
     tuic_core::path_spelling::portable_spelling(path)
 }
 
+#[cfg(test)]
+thread_local! {
+    static REPOSITORY_OPENS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+#[cfg(test)]
+fn record_repository_open() {
+    REPOSITORY_OPENS.with(|count| count.set(count.get() + 1));
+}
+
 /// In-process gix adapter. Implements the same port as the CLI adapter; ops are
 /// flipped to gix one at a time in later steps, each gated by a parity test.
 ///
@@ -131,6 +141,8 @@ impl GixGitReads {
         let tsr = self
             .handles
             .try_get_with(repo.to_path_buf(), || {
+                #[cfg(test)]
+                record_repository_open();
                 // Box the (large) open error to keep the Result small.
                 gix::ThreadSafeRepository::open(repo).map_err(Box::new)
             })
@@ -146,6 +158,8 @@ impl GixGitReads {
         use gix::status::index_worktree::Item as IwItem;
         use gix::status::plumbing::index_as_worktree::EntryStatus;
 
+        #[cfg(test)]
+        record_repository_open();
         let grepo = gix::open(repo).ok()?;
         if Self::gix_repo_unsupported(&grepo) {
             return None;
@@ -798,7 +812,11 @@ impl GitReads for GixGitReads {
         // non-bare layout: the main work dir is the `.git` directory's parent.
         if let Some(main_wd) = grepo.common_dir().parent()
             && main_wd.exists()
-            && let Ok(main_repo) = gix::open(main_wd)
+            && let Ok(main_repo) = {
+                #[cfg(test)]
+                record_repository_open();
+                gix::open(main_wd)
+            }
             && let Some(branch) = branch_of(&main_repo)
         {
             // A git worktree's workspace id currently is its branch.
@@ -820,6 +838,8 @@ impl GitReads for GixGitReads {
             if !base.exists() {
                 continue;
             }
+            #[cfg(test)]
+            record_repository_open();
             let Ok(wt_repo) = proxy.into_repo() else {
                 continue;
             };
@@ -1406,6 +1426,39 @@ mod tests {
             "pending"
         );
         crate::worktree::clear_warm(&wt);
+    }
+
+    /// Catches full config/ref-store reopens on every unchanged sidebar refresh.
+    #[test]
+    fn worktree_inventory_does_not_reopen_warmed_repositories() {
+        let (_guard, repo) = fixture_repo();
+        let linked = tempfile::tempdir().unwrap();
+        let mut paths = Vec::new();
+        for n in 0..8 {
+            let path = linked.path().join(format!("linked-{n}"));
+            run_git(
+                &repo,
+                &["worktree", "add", "-b", &format!("wt-{n}"), path.to_str().unwrap()],
+            );
+            paths.push(path);
+        }
+        let reads = GixGitReads::new();
+        assert_eq!(reads.worktree_paths(&repo).unwrap(), CliGitReads.worktree_paths(&repo).unwrap());
+        let before = REPOSITORY_OPENS.with(std::cell::Cell::get);
+        // Inventory must observe current HEAD without rebuilding every repository.
+        run_git(&paths[0], &["switch", "-c", "replacement"]);
+        run_git(&paths[1], &["switch", "--detach"]);
+        std::fs::remove_dir_all(&paths[2]).unwrap();
+        for _ in 0..10 {
+            let actual = reads.worktree_paths(&repo).unwrap();
+            assert_eq!(actual, CliGitReads.worktree_paths(&repo).unwrap());
+            assert!(actual.contains_key("replacement"));
+            assert!(!actual.contains_key("wt-0"));
+            assert!(!actual.contains_key("wt-1"));
+            assert!(!actual.contains_key("wt-2"));
+        }
+        let opens = REPOSITORY_OPENS.with(std::cell::Cell::get) - before;
+        assert_eq!(opens, 0, "warm inventory reopened full repositories {opens} times");
     }
 
     /// Init a fresh, empty repo with one committed `a.txt` and return guard+path.
