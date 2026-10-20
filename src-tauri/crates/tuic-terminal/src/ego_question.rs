@@ -160,8 +160,23 @@ pub fn parse_ego_approval(rows: &[String]) -> Option<ParsedEvent> {
     if end < 4 || !rows[end - 3].trim().starts_with("Risk: ") {
         return None;
     }
-    let title = rows[end - 4].trim();
-    if !title.starts_with("Allow ") || !title.ends_with('?') {
+    // Ego explicitly hard-wraps long approval titles with CRLF, so grid
+    // soft-wrap joining cannot recover them. Read the contiguous title back
+    // from Risk, without crossing a blank or another native surface.
+    let title_end = end - 3;
+    let mut title_start = title_end - 1;
+    while !rows[title_start].trim().starts_with("Allow ") {
+        if title_start == 0 || is_question_boundary(&rows[title_start]) {
+            return None;
+        }
+        title_start -= 1;
+    }
+    let title = rows[title_start..title_end]
+        .iter()
+        .map(|row| row.trim())
+        .collect::<Vec<_>>()
+        .join(" ");
+    if !title.ends_with('?') {
         return None;
     }
     lazy_static::lazy_static! {
