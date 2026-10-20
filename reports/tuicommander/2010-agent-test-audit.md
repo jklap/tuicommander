@@ -62,7 +62,7 @@ no reply bytes. Its audit row retained null bytes and application outcome,
 handling, not loss of a reply that had already been constructed, delivery,
 rollback, or a human permission refusal.
 
-The projection contained exactly the documented eleven row fields. Private
+The projection contained exactly the documented ten row fields. Private
 request markers and the invalid action text were absent. It reported seven
 retained rows, zero evictions, capacity 1024, projection limit 100, scope
 `runtime_mcp_tools_call_ingress`, and `delivery_observed=false`. This small run
