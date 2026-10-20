@@ -1792,6 +1792,29 @@ mod tests {
         );
     }
 
+    /// Catches a no-op validation leaving the cooldown expired, so each later
+    /// RepoChanged schedules another full stat walk despite unchanged content.
+    #[tokio::test]
+    async fn unchanged_validation_rearms_repo_changed_cooldown() {
+        let repo = make_test_repo();
+        let repo_path = repo.path().to_string_lossy().to_string();
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+        let mut built = ContentIndex::build(repo.path().to_path_buf(), None, HashMap::new());
+        built.built_at = std::time::Instant::now() - REBUILD_COOLDOWN;
+        let index = Arc::new(parking_lot::RwLock::new(built));
+        state
+            .content_indices
+            .insert(repo_path.clone(), Arc::clone(&index));
+
+        rebuild_in_place(&index, &repo_path, None);
+        rebuild_index(&state, &repo_path);
+
+        assert!(
+            !state.index_in_flight.contains(&repo_path),
+            "an unchanged validation must suppress the next RepoChanged before scheduling any walk"
+        );
+    }
+
     #[test]
     fn rebuild_in_place_leaves_an_unchanged_index_alone() {
         let repo = make_test_repo();
