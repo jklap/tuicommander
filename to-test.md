@@ -1,3 +1,7 @@
+## Agent-test non-focusing visibility (2090-cf8a) — isolated native check verified
+
+- [x] `make agent-test AGENT_TEST_INSTANCE=at-2090 AGENT_TEST_PORT=19883` reports a visible document and paints a non-zero terminal canvas through its own Unix socket, without native/document focus. NSWorkspace keeps the same other frontmost PID before launch, at readiness and after terminal paint. The session was deleted, `make agent-test-stop` succeeded, and `ps` found no agent-test executable from this worktree. Evidence: `~/Gits/.tmp/results/fix-2090-run/activation-proof.log` and `live-proof.json`. This change loads only in a newly built agent-test binary; it does not hot-reload into or require restarting the daily app.
+
 ## Isolated agent desktop target (2086-269b) — operator live proof pending
 
 - [ ] After the coordinator reviews/builds this branch, checksum Boss's running binary and app bundle, launch `make agent-test` from the worktree, verify the daily port and agent-test loopback port both answer, and recheck identical checksums. Confirm the daily shortcut/microphone/Telegram ownership remains unchanged. Stop with `make agent-test-stop`, verify only its PID exits, and confirm the daily instance still responds. This peer is implementation-only: no desktop app was launched or restarted, and no live isolation/TCC claim is made. The launch-instruction and global CLI/hook refusal changes require a rebuilt backend and refreshed agent launch text; it does not hot-reload into Boss's running app.
