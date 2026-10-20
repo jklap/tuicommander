@@ -1457,6 +1457,27 @@ mod tests {
         );
     }
 
+    // Catches reopening global Git configuration for every monitoring dirty read.
+    // A config edit must still be visible after handle reuse is introduced.
+    #[test]
+    fn monitoring_dirty_reads_reuse_handles_and_observe_config_edits() {
+        let (_guard, repo) = fixture_repo();
+        cached_repo(&repo).unwrap();
+        let before = REPOSITORY_OPENS.with(std::cell::Cell::get);
+        for _ in 0..10 {
+            assert_eq!(GixGitReads::dirty_files(&repo), Some(3));
+        }
+        assert_eq!(REPOSITORY_OPENS.with(std::cell::Cell::get) - before, 0,
+            "warmed dirty checks must not reopen repository configuration");
+        run_git(&repo, &["config", "core.sparseCheckout", "true"]);
+        assert!(cached_repo(&repo).unwrap().config_snapshot()
+            .boolean("core.sparseCheckout").unwrap());
+        assert_eq!(GixGitReads::dirty_files(&repo), None,
+            "a fresh sparse-checkout setting must retain the CLI fallback");
+        run_git(&repo, &["config", "core.sparseCheckout", "false"]);
+        assert_eq!(GixGitReads::dirty_files(&repo), Some(3));
+    }
+
     /// Init a fresh, empty repo with one committed `a.txt` and return guard+path.
     fn clean_repo() -> (tempfile::TempDir, std::path::PathBuf) {
         let dir = tempfile::tempdir().unwrap();
