@@ -572,7 +572,20 @@ fn plugin_asset_mime(path: &Path) -> &'static str {
 /// Scan the user plugins directory and return all valid manifests.
 /// Invalid manifests are logged and skipped — never cause an error.
 #[cfg_attr(feature = "desktop", tauri::command)]
-pub fn list_user_plugins() -> Vec<PluginManifest> {
+pub fn list_user_plugins(plugin_ids: Option<Vec<String>>) -> Vec<PluginManifest> {
+    if let Some(plugin_ids) = plugin_ids {
+        let mut seen = std::collections::HashSet::new();
+        return plugin_ids
+            .into_iter()
+            .filter(|id| !id.starts_with('.') && seen.insert(id.clone()))
+            .filter_map(|id| {
+                let mut manifest = read_single_manifest(&id).ok()?;
+                manifest.content_digest =
+                    crate::plugin_content::digest(&plugins_dir().join(&id)).ok();
+                Some(manifest)
+            })
+            .collect();
+    }
     let dir = plugins_dir();
     if !dir.exists() {
         return Vec::new();
@@ -1933,7 +1946,7 @@ mod tests {
         // just returns an empty vec when the dir doesn't exist.
         // We can't easily override plugins_dir() in tests, but we can verify
         // the function doesn't panic
-        let _ = list_user_plugins();
+        let _ = list_user_plugins(None);
     }
 
     // -- Plugin data path resolution --

@@ -2353,10 +2353,13 @@ Returns list of `{{var}}` placeholder names found in content.
 ### List Plugins
 
 ```
-GET /plugins/list
+GET /plugins/list[?plugin_ids=<URL-encoded JSON string array>]
 ```
 
-Returns array of valid plugin manifests.
+Returns an array of valid plugin manifests. Omit `plugin_ids` for full discovery;
+pass a JSON string array to read only those plugin IDs. An empty array returns no
+plugins. Invalid JSON returns 400. IPC uses the same optional `pluginIds` array.
+Payload digests reuse unchanged file hashes by modification time and size.
 
 ### Plugin Development Guide
 

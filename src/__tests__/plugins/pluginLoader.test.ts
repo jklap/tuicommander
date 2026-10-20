@@ -216,6 +216,15 @@ describe("loadUserPlugins", () => {
 		expect(invoke).toHaveBeenCalledWith("list_user_plugins", { pluginIds: ["plugin-a", "plugin-b"] });
 	});
 
+	it("coalesces overlapping reload notifications — catches concurrent duplicate discovery", async () => {
+		await loadUserPlugins(false);
+		const handler = (listen as Mock).mock.calls.find(([event]) => event === "plugin-changed")?.[1];
+		vi.clearAllMocks();
+		await Promise.all([handler({ payload: ["plugin-a"] }), handler({ payload: ["plugin-b"] })]);
+		expect(invoke).toHaveBeenCalledTimes(1);
+		expect(invoke).toHaveBeenCalledWith("list_user_plugins", { pluginIds: ["plugin-a", "plugin-b"] });
+	});
+
 	it("registers listen handler for plugin-changed events", async () => {
 		await loadUserPlugins();
 		expect(listen).toHaveBeenCalledWith("plugin-changed", expect.any(Function));
