@@ -7,6 +7,7 @@
 {"fixture":"src-tauri/src/fixtures/agent_prompts/claude-mobile-permission-1987.tcap","events":72}
 {"fixture":"src-tauri/src/fixtures/agent_prompts/claude-mobile-resume-1971.tcap","events":114}
 {"fixture":"src-tauri/src/fixtures/agent_prompts/claude-mobile-startup-1987.tcap","events":33}
+{"fixture":"src-tauri/src/fixtures/agent_prompts/claude-question-exit-2091.tcap","events":191}
 {"fixture":"src-tauri/src/fixtures/agent_prompts/claude-quoted-ink-footer.tcap","events":127}
 {"fixture":"src-tauri/src/fixtures/agent_prompts/claude-ready-idle-notify-statement.tcap","events":24}
 {"fixture":"src-tauri/src/fixtures/agent_prompts/claude-ready-idle-notify.tcap","events":16}
@@ -43,11 +44,11 @@
 {"fixture":"src-tauri/src/fixtures/agent_prompts/ego-intent-1964.tcap","events":52}
 {"fixture":"src-tauri/src/fixtures/agent_prompts/ego-intent-aside-wrap-2060.tcap","events":13}
 {"fixture":"src-tauri/src/fixtures/agent_prompts/ego-intent-joined-2060.tcap","events":5}
+{"fixture":"src-tauri/src/fixtures/agent_prompts/ego-mcp-questions-2088-2089.tcap","events":187}
 {"fixture":"src-tauri/src/fixtures/agent_prompts/ego-multiple-120-1973.tcap","events":28}
 {"fixture":"src-tauri/src/fixtures/agent_prompts/ego-multiple-44-1973.tcap","events":32}
-{"fixture":"src-tauri/src/fixtures/agent_prompts/ego-native-questions-2028.tcap","events":442}
+{"fixture":"src-tauri/src/fixtures/agent_prompts/ego-native-questions-2028.tcap","events":443}
 {"fixture":"src-tauri/src/fixtures/agent_prompts/ego-provider-recovery-1902.tcap","events":34}
-{"fixture":"src-tauri/src/fixtures/agent_prompts/ego-selector-receipt-title-2088.tcap","events":178}
 {"fixture":"src-tauri/src/fixtures/agent_prompts/ego-selector-retirement-2028.tcap","events":35}
 {"fixture":"src-tauri/src/fixtures/agent_prompts/ego-single-120-1973.tcap","events":28}
 {"fixture":"src-tauri/src/fixtures/agent_prompts/ego-single-44-1973.tcap","events":28}
