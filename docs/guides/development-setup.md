@@ -147,6 +147,14 @@ python3 -B scripts/agent-test-visible.py --instance at-2090 --port 19883 \
   --evidence-dir "$HOME/Gits/.tmp/results/agent-test-visible-$(date +%s)"
 ```
 
+Add `--duration 300` to observe presentation for five minutes. The observer records
+visibility changes, animation-frame progress and gaps, native window-server layers,
+application-hidden state, foreground identity, and compact-window geometry in
+`presentation.json`. It fails if presentation or animation frames stop, focus moves
+to the test instance, the foreground application changes, or window geometry changes.
+The window-server query is read-only and does not activate or move other windows.
+These observations do not identify `NSWindow.occlusionState` or prove App Nap activity.
+
 This needs explicit desktop-execution authorization, macOS, a linked worktree
 with build inputs, an unused named instance/port, and an unrelated foreground
 application. Keep that foreground application unchanged during the build and
