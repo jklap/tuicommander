@@ -2682,3 +2682,8 @@ Needs an iPhone (iOS 16.4+, 18.4+ preferred), the desktop TUICommander running a
 ## ZIP 9 dependency migration (2037-6c5a) — backend rebuild required
 
 - [ ] After Boss rebuilds/restarts the app, install a disposable plugin ZIP with a root manifest and another with a single top-level directory; confirm their files load. On Windows, install the speech runtime from its ZIP and confirm the selected library loads. Automated extraction/name tests run on rb; this item records that the currently running backend cannot load the ZIP 9 migration without a rebuild. Do not restart the running app for this check.
+
+
+## 1638-c94c — generated workload WKWebView replay
+
+- [ ] After story 2086's isolated `make agent-test` harness lands, run the single-command `scripts/stall-workload/desktop-replay.mjs` procedure from its README against the generated recording in `~/Gits/.tmp/stall-1638/font-workload/frame-workload.json`. Verify named-instance/executable guards, collect native heartbeat-command round trips and independent backend timings, and retain the result. This is paint-only replay of generated output, not the original captured-real-stall RED. No Boss-app restart or second ordinary desktop instance is needed or authorized.
