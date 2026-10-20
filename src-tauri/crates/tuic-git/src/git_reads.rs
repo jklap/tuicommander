@@ -119,7 +119,109 @@ fn record_repository_open() {
 /// refs and the object DB layout, so we keep a `ThreadSafeRepository` per path
 /// and cheaply derive a thread-local `Repository` per call.
 pub struct GixGitReads {
-    handles: moka::sync::Cache<PathBuf, gix::ThreadSafeRepository>,
+    handles: moka::sync::Cache<PathBuf, CachedRepository>,
+}
+
+#[derive(Clone)]
+struct CachedRepository {
+    handle: gix::ThreadSafeRepository,
+    config_files: Vec<(PathBuf, Option<(std::time::SystemTime, u64)>)>,
+    stable: bool,
+}
+
+fn config_signature(path: &Path) -> Option<(std::time::SystemTime, u64)> {
+    let metadata = std::fs::metadata(path).ok()?;
+    Some((metadata.modified().ok()?, metadata.len()))
+}
+
+impl CachedRepository {
+    fn open(path: &Path) -> Result<Self, String> {
+        let started = std::time::SystemTime::now();
+        #[cfg(test)]
+        record_repository_open();
+        let handle = gix::ThreadSafeRepository::open(path).map_err(|e| e.to_string())?;
+        let repo = handle.to_thread_local();
+        let mut paths = std::collections::BTreeSet::from([
+            repo.common_dir().join("config"),
+            repo.git_dir().join("config.worktree"),
+        ]);
+        // Include absent standard user configs too, so creating one refreshes
+        // the snapshot. Existing system and included sources come from gix's
+        // own provenance rather than a second configuration loader.
+        let home = gix::path::env::home_dir();
+        if let Some(home) = &home {
+            paths.insert(home.join(".gitconfig"));
+            paths.insert(home.join(".config/git/config"));
+        }
+        if let Some(xdg) = std::env::var_os("XDG_CONFIG_HOME") {
+            paths.insert(PathBuf::from(xdg).join("git/config"));
+        }
+        for key in ["GIT_CONFIG_GLOBAL", "GIT_CONFIG_SYSTEM"] {
+            if let Some(path) = std::env::var_os(key) {
+                paths.insert(PathBuf::from(path));
+            }
+        }
+        let config = repo.config_snapshot();
+        paths.extend(
+            config
+                .sections()
+                .filter_map(|section| section.meta().path.clone()),
+        );
+        for name in ["include", "includeIf", "includeif"] {
+            if let Some(sections) = config.sections_by_name(name) {
+                // Conditional onbranch includes depend on the symbolic HEAD,
+                // not the branch's moving tip.
+                if name != "include" {
+                    paths.insert(repo.git_dir().join("HEAD"));
+                }
+                for section in sections {
+                    for value in section.values("path") {
+                        let path = gix::path::from_bstr(&value).map_err(|e| e.to_string())?;
+                        let resolved = if let Ok(relative) = path.strip_prefix("~") {
+                            home.as_ref().map(|home| home.join(relative))
+                        } else if path.is_absolute() {
+                            Some(path.into_owned())
+                        } else {
+                            section
+                                .meta()
+                                .path
+                                .as_deref()
+                                .and_then(Path::parent)
+                                .map(|parent| parent.join(path.as_ref()))
+                        };
+                        if let Some(path) = resolved {
+                            paths.insert(path);
+                        }
+                    }
+                }
+            }
+        }
+        let config_files: Vec<_> = paths
+            .into_iter()
+            .map(|path| {
+                let signature = config_signature(&path);
+                (path, signature)
+            })
+            .collect();
+        // A file modified while gix was loading might belong to a newer
+        // generation than the parsed snapshot. Do not retain that handle.
+        let stable = config_files
+            .iter()
+            .all(|(_, signature)| signature.is_none_or(|(modified, _)| modified < started));
+        Ok(Self {
+            handle,
+            config_files,
+            stable,
+        })
+    }
+
+    fn config_is_current(&self) -> bool {
+        self.stable
+            && self
+                .config_files
+                .iter()
+                .all(|(path, previous)| config_signature(path) == *previous)
+    }
 }
 
 impl Default for GixGitReads {
@@ -138,16 +240,17 @@ impl GixGitReads {
     /// Open (or reuse a cached) repository handle for `repo` and return a
     /// thread-local `Repository` for use on the current thread.
     pub fn repo(&self, repo: &Path) -> Result<gix::Repository, String> {
-        let tsr = self
+        if let Some(cached) = self.handles.get(repo) {
+            if cached.config_is_current() {
+                return Ok(cached.handle.to_thread_local());
+            }
+            self.handles.invalidate(repo);
+        }
+        let cached = self
             .handles
-            .try_get_with(repo.to_path_buf(), || {
-                #[cfg(test)]
-                record_repository_open();
-                // Box the (large) open error to keep the Result small.
-                gix::ThreadSafeRepository::open(repo).map_err(Box::new)
-            })
-            .map_err(|e: Arc<Box<gix::Error>>| e.to_string())?;
-        Ok(tsr.to_thread_local())
+            .try_get_with(repo.to_path_buf(), || CachedRepository::open(repo))
+            .map_err(|error: Arc<String>| error.as_ref().clone())?;
+        Ok(cached.handle.to_thread_local())
     }
 
     /// Porcelain dirty record count for sidebar monitoring. Tracked paths staged
@@ -158,9 +261,7 @@ impl GixGitReads {
         use gix::status::index_worktree::Item as IwItem;
         use gix::status::plumbing::index_as_worktree::EntryStatus;
 
-        #[cfg(test)]
-        record_repository_open();
-        let grepo = gix::open(repo).ok()?;
+        let grepo = cached_repo(repo).ok()?;
         if Self::gix_repo_unsupported(&grepo) {
             return None;
         }
@@ -1467,15 +1568,98 @@ mod tests {
         for _ in 0..10 {
             assert_eq!(GixGitReads::dirty_files(&repo), Some(3));
         }
-        assert_eq!(REPOSITORY_OPENS.with(std::cell::Cell::get) - before, 0,
-            "warmed dirty checks must not reopen repository configuration");
+        assert_eq!(
+            REPOSITORY_OPENS.with(std::cell::Cell::get) - before,
+            0,
+            "warmed dirty checks must not reopen repository configuration"
+        );
         run_git(&repo, &["config", "core.sparseCheckout", "true"]);
-        assert!(cached_repo(&repo).unwrap().config_snapshot()
-            .boolean("core.sparseCheckout").unwrap());
-        assert_eq!(GixGitReads::dirty_files(&repo), None,
-            "a fresh sparse-checkout setting must retain the CLI fallback");
+        assert!(
+            cached_repo(&repo)
+                .unwrap()
+                .config_snapshot()
+                .boolean("core.sparseCheckout")
+                .unwrap()
+        );
+        assert_eq!(
+            GixGitReads::dirty_files(&repo),
+            None,
+            "a fresh sparse-checkout setting must retain the CLI fallback"
+        );
         run_git(&repo, &["config", "core.sparseCheckout", "false"]);
         assert_eq!(GixGitReads::dirty_files(&repo), Some(3));
+    }
+
+    // Catches config snapshots remaining frozen after an optional include appears,
+    // changes or disappears, including branch-conditional include selection.
+    #[test]
+    fn cached_repository_observes_included_configuration_changes() {
+        let (_guard, repo) = clean_repo();
+        let extra = repo.join(".git/extra-config");
+        run_git(&repo, &["config", "include.path", extra.to_str().unwrap()]);
+        let reads = GixGitReads::new();
+        assert_eq!(
+            reads
+                .repo(&repo)
+                .unwrap()
+                .config_snapshot()
+                .boolean("core.sparseCheckout"),
+            None
+        );
+        std::fs::write(&extra, "[core]\n sparseCheckout = true\n").unwrap();
+        assert_eq!(
+            reads
+                .repo(&repo)
+                .unwrap()
+                .config_snapshot()
+                .boolean("core.sparseCheckout"),
+            Some(true)
+        );
+        std::fs::write(&extra, "[core]\n sparseCheckout = false\n").unwrap();
+        assert_eq!(
+            reads
+                .repo(&repo)
+                .unwrap()
+                .config_snapshot()
+                .boolean("core.sparseCheckout"),
+            Some(false)
+        );
+        std::fs::remove_file(&extra).unwrap();
+        assert_eq!(
+            reads
+                .repo(&repo)
+                .unwrap()
+                .config_snapshot()
+                .boolean("core.sparseCheckout"),
+            None
+        );
+        run_git(&repo, &["config", "--unset", "include.path"]);
+        std::fs::write(&extra, "[core]\n sparseCheckout = true\n").unwrap();
+        run_git(
+            &repo,
+            &[
+                "config",
+                "includeIf.onbranch:feature.path",
+                extra.to_str().unwrap(),
+            ],
+        );
+        assert_eq!(
+            reads
+                .repo(&repo)
+                .unwrap()
+                .config_snapshot()
+                .boolean("core.sparseCheckout"),
+            None
+        );
+        run_git(&repo, &["switch", "-c", "feature"]);
+        assert_eq!(
+            reads
+                .repo(&repo)
+                .unwrap()
+                .config_snapshot()
+                .boolean("core.sparseCheckout"),
+            Some(true)
+        );
     }
 
     /// Init a fresh, empty repo with one committed `a.txt` and return guard+path.

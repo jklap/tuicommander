@@ -11,6 +11,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - Read shared Git ref state once per sidebar refresh instead of reopening and scanning it for every linked worktree (#2098-98b2).
 - Read worktree inventory from checkout HEAD files without reopening each checkout’s Git configuration and object store (#2098-98b2).
+- Reuse monitoring repository handles for dirty and lifecycle reads, with configuration-signature invalidation instead of reopening global Git configuration for every workspace (#2098-98b2).
 
 - Keep clipped Claude native questions answerable with explicit previous/next/select controls instead of generic Yes/No or guessed hidden choices (#2093-0be6).
 - Export the first Codex /plan question in narrow terminals, including the split footer and independently wrapped answer labels and descriptions; keep its controls active through a delayed idle hook (#2094-da19).

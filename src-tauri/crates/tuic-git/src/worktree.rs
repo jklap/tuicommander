@@ -1470,7 +1470,7 @@ fn lifecycle_branch_merge(
     // monitoring cache classifies the ref, so retain fresh HEAD classification
     // in that case rather than changing the lifecycle verdict.
     let branch_matches_head = monitoring
-        && gix::open(base_repo)
+        && crate::git_reads::cached_repo(base_repo)
             .ok()
             .and_then(|repo| {
                 repo.rev_parse_single(format!("refs/heads/{branch}").as_str())
