@@ -3132,6 +3132,39 @@ mod tests {
         FILENAME_WALKS.with(|walks| assert_eq!(walks.get(), 3));
     }
 
+    /// Explicit corpus measurement; also catches a warm lookup rebuilding the
+    /// measured cold inventory instead of reusing its allocation.
+    #[test]
+    #[ignore = "benchmark: requires TUIC_FILENAME_INVENTORY_REPO pointing at an authorized corpus"]
+    fn filename_inventory_cold_walk_measurement_2099() {
+        let repo = PathBuf::from(
+            std::env::var("TUIC_FILENAME_INVENTORY_REPO").expect("authorized corpus path"),
+        )
+        .canonicalize()
+        .unwrap();
+        FILENAME_INVENTORIES.invalidate(&repo);
+        FILENAME_WALKS.with(|walks| walks.set(0));
+        let start = std::time::Instant::now();
+        let paths = filename_inventory(&repo);
+        let elapsed = start.elapsed();
+        let capacity_bytes = std::mem::size_of_val(paths.as_ref())
+            + paths.capacity() * std::mem::size_of::<(String, String)>()
+            + paths
+                .iter()
+                .map(|(name, relative)| name.capacity() + relative.capacity())
+                .sum::<usize>();
+        println!(
+            "{}",
+            serde_json::json!({
+                "repo": repo, "files": paths.len(), "elapsed_micros": elapsed.as_micros(),
+                "retained_vector_and_string_capacity_bytes": capacity_bytes,
+                "excludes": "allocator headers, Arc headers, slot and cache-map overhead"
+            })
+        );
+        assert!(Arc::ptr_eq(&paths, &filename_inventory(&repo)));
+        FILENAME_WALKS.with(|walks| assert_eq!(walks.get(), 1));
+    }
+
     #[test]
     fn test_search_files_basic() {
         let dir = setup_test_repo();
