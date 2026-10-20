@@ -1,0 +1,1 @@
+story-close: REFUSED: criterion 3 is not checked: [ ] GREEN: /help in TUIC prints within 2x of the plain PTY baseline and keystroke echo stays under one frame while rows print
