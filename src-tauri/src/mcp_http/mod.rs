@@ -8194,18 +8194,15 @@ mod tests {
             .output();
     }
 
+    // Catches: unknown-tool errors lose the rejected name or advertise a stale tool inventory.
     #[tokio::test]
     async fn test_unknown_tool() {
         let state = test_state();
         let result = call_mcp_tool(&state, "nonexistent_tool", serde_json::json!({})).await;
-        assert!(result["error"].as_str().unwrap().contains("Unknown tool"));
-        assert!(
-            result["error"]
-                .as_str()
-                .unwrap()
-                .contains("story, progress, ui")
+        assert_eq!(
+            result,
+            serde_json::json!({"error": "Unknown tool 'nonexistent_tool'"})
         );
-        assert!(result["error"].as_str().unwrap().contains("search_tools"));
     }
 
     // --- isError flag tests ---
