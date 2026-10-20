@@ -1,5 +1,7 @@
 ## Bounded repository file reads (2098-98b2) — Rust restart required
 
+- [ ] After loading the rebuilt backend, verify Codex session replacement in an isolated CODEX_HOME and unchanged discovery without historical rollout scans; watched-index and cwd/age/claimed-ID regressions run on rb, but macOS watcher behavior still needs the isolated instance.
+
 - [ ] After Boss manually restarts a rebuilt backend, commit in one disposable linked worktree and check current dirty/integration badges and unchanged sibling rows. This Rust change does not hot-reload into the daily app. The peer must not restart that app; isolated counter evidence is recorded in the story.
 
 ## First narrow Codex /plan question (2094-da19) — Rust restart required

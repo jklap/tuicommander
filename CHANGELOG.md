@@ -6,6 +6,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+- Index recent Codex rollouts with file-watch updates instead of re-statting the full recent-day history on every discovery poll (#2098-98b2).
 - Stop reopening Telegram configuration on every idle tick and unrelated app event; use file events for runtime opt-in and setup changes (#2098-98b2).
 
 - Read shared Git ref state once per sidebar refresh instead of reopening and scanning it for every linked worktree (#2098-98b2).
