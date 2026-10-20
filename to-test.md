@@ -2675,3 +2675,6 @@ Needs an iPhone (iOS 16.4+, 18.4+ preferred), the desktop TUICommander running a
 - [ ] On a real phone, open a registry-bound Grok session and switch CLI → Chat → CLI. Confirm the existing question controls and composer remain touch-usable. Worktree browser evidence does not prove phone touch behavior.
 
 - [ ] After Boss restarts `make dev` or installs a rebuilt release, verify MCP capability switches, migrated denial diagnostics and client reconnect to the alias-free catalogue (#2068-63b9). Rust changes do not hot-reload.
+## ZIP 9 dependency migration (2037-6c5a) — backend rebuild required
+
+- [ ] After Boss rebuilds/restarts the app, install a disposable plugin ZIP with a root manifest and another with a single top-level directory; confirm their files load. On Windows, install the speech runtime from its ZIP and confirm the selected library loads. Automated extraction/name tests run on rb; this item records that the currently running backend cannot load the ZIP 9 migration without a rebuild. Do not restart the running app for this check.
