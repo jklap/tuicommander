@@ -1262,6 +1262,8 @@ pub fn monitoring_ref_keys(
     let grepo = crate::git_reads::cached_repo(repo)?;
     let mut targets = std::collections::BTreeMap::new();
     let references = grepo.references().map_err(|e| e.to_string())?;
+    #[cfg(test)]
+    MONITORING_REF_ENUMERATIONS.with(|reads| reads.set(reads.get() + 1));
     for reference in references.all().map_err(|e| e.to_string())? {
         let reference = reference.map_err(|e| e.to_string())?;
         targets.insert(
@@ -1313,6 +1315,8 @@ pub fn monitoring_ref_keys(
         let name = format!("refs/heads/{branch}");
         digest.update(format!("{name}={:?}\0", targets.get(&name)).as_bytes());
         // Own branch history distinguishes an untouched branch from a merge.
+        #[cfg(test)]
+        MONITORING_LOG_READS.with(|reads| reads.set(reads.get() + 1));
         if let Ok(log) = std::fs::read(grepo.common_dir().join("logs/refs/heads").join(branch)) {
             digest.update(log);
         }
@@ -1324,6 +1328,8 @@ pub fn monitoring_ref_keys(
 #[cfg(test)]
 thread_local! {
     static MONITORING_COMMON_READS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    static MONITORING_REF_ENUMERATIONS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    static MONITORING_LOG_READS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 /// Standalone callers get the same dependency set as a batched sidebar refresh.
@@ -9579,6 +9585,34 @@ branch refs/heads/feat
         assert!(
             reads <= 2,
             "shared HEAD/config file opens after one commit: {reads}; limit 2, independent of 8 worktrees"
+        );
+    }
+
+    // Catches: one commit enumerates every ref and reopens every sibling reflog.
+    #[test]
+    fn monitoring_one_commit_reads_only_changed_ref_and_history() {
+        let (_temp, repo, _) = workspace_fixture();
+        let branches: Vec<_> = (0..16).map(|i| format!("incremental-{i}")).collect();
+        for branch in &branches {
+            add_worktree(&repo, branch);
+        }
+        let before = monitoring_ref_keys(&repo, &branches).unwrap();
+        let checkout = resolve_any_workspace(&repo, &branches[0]).unwrap();
+        commit_file(Path::new(&checkout.path), "incremental.txt", "one change\n");
+        MONITORING_COMMON_READS.with(|reads| reads.set(0));
+        MONITORING_REF_ENUMERATIONS.with(|reads| reads.set(0));
+        MONITORING_LOG_READS.with(|reads| reads.set(0));
+        let after = monitoring_ref_keys(&repo, &branches).unwrap();
+        assert_ne!(before[&branches[0]], after[&branches[0]]);
+        for branch in &branches[1..] {
+            assert_eq!(before[branch], after[branch]);
+        }
+        let common = MONITORING_COMMON_READS.with(std::cell::Cell::get);
+        let enumerations = MONITORING_REF_ENUMERATIONS.with(std::cell::Cell::get);
+        let logs = MONITORING_LOG_READS.with(std::cell::Cell::get);
+        assert!(
+            common == 0 && enumerations == 0 && logs <= 1,
+            "one commit: {common} unchanged common reads, {enumerations} full ref enumerations, {logs} reflog reads; expected 0, 0, at most 1"
         );
     }
 
