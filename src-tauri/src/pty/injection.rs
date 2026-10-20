@@ -2573,6 +2573,7 @@ fn write_pty_parts_blocking(
 
     let byte_parts: Vec<&[u8]> = parts.iter().map(|part| part.as_bytes()).collect();
     let t0 = std::time::Instant::now();
+    stamp_input_ms(state, session_id);
     state.write_pty_parts(session_id, &byte_parts)?;
     let total_ms = t0.elapsed().as_millis();
     if total_ms > 100 {
@@ -2603,7 +2604,7 @@ fn apply_desktop_input_bookkeeping(state: &Arc<AppState>, session_id: &str, data
     // Stamp last-input time so the grid ticker can throttle frame sends while
     // the user types under CPU saturation (keeps the WebView thread free for
     // keystroke dispatch + echo).
-    stamp_input_ms(state, session_id);
+    record_input_ms(state, session_id);
     crate::state::resolve_choice_prompt_input(state, session_id, data);
 
     // Feed input through the line buffer to reconstruct user-typed lines.
