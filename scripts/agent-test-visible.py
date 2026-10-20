@@ -13,6 +13,7 @@ from pathlib import Path
 import subprocess
 import sys
 import time
+import uuid
 
 ROOT = Path(__file__).resolve().parent.parent
 TEST = "agent_test_window_renders_visible_without_focus"
@@ -35,23 +36,88 @@ def api(socket, path, body=None, method=None):
 
 
 def evaluate(socket, script, evidence):
-    rows = api(socket, "/logs?source=eval_js&limit=1")
-    previous = rows[0]["id"] if rows else -1
-    reply = api(socket, "/debug/invoke_js", {"script": script})
+    # Identical eval logs coalesce without changing their ID. Correlate the
+    # request itself, not a log ID or another observer's newest result.
+    nonce = uuid.uuid4().hex
+    wrapped = f"""
+try {{
+ const result = await (async () => {{ {script} }})();
+ return {{nonce: {json.dumps(nonce)}, result}};
+}} catch (error) {{
+ return {{nonce: {json.dumps(nonce)}, error: String(error)}};
+}}
+"""
+    reply = api(socket, "/debug/invoke_js", {"script": wrapped})
     if not reply.get("ok"):
         raise RuntimeError(f"native evaluation refused: {reply}")
     # Harness budget is larger than the ten-second paint observation below.
     deadline = time.monotonic() + 30
     while time.monotonic() < deadline:
-        rows = api(socket, "/logs?source=eval_js&limit=1")
-        if rows and rows[0]["id"] != previous:
-            (evidence / "eval.json").write_text(json.dumps(rows[0], indent=2))
-            return json.loads(rows[0]["message"].split("\n---\n")[-1])
+        rows = api(socket, "/logs?source=eval_js&limit=20")
+        for row in rows:
+            try:
+                response = json.loads(row["message"].split("\n---\n")[-1])
+            except (ValueError, KeyError):
+                continue
+            if not isinstance(response, dict) or response.get("nonce") != nonce:
+                continue
+            (evidence / "eval.json").write_text(json.dumps(row, indent=2))
+            if "error" in response:
+                raise RuntimeError(f"native evaluation failed: {response['error']}")
+            return response.get("result")
         time.sleep(.1)
-    raise RuntimeError("native evaluation did not return within the harness budget")
+    raise RuntimeError(f"native evaluation {nonce} did not return within the harness budget")
 
 
-def agent_test_window_renders_visible_without_focus(instance, port, evidence):
+def presentation_snapshot(pid):
+    # Read only the window server; never activate or change another app's windows.
+    script = '''ObjC.import("AppKit"); ObjC.import("CoreGraphics");
+const front=$.NSWorkspace.sharedWorkspace.frontmostApplication;
+const rows=ObjC.deepUnwrap(ObjC.castRefToObject($.CGWindowListCopyWindowInfo(0,0)));
+JSON.stringify({front:{pid:front.processIdentifier,name:front.localizedName.js},
+ applicationHidden:$.NSRunningApplication.runningApplicationWithProcessIdentifier(__PID__).hidden,
+ windows:rows.filter(x=>x.kCGWindowOwnerPID===__PID__ || x.kCGWindowOwnerPID===front.processIdentifier)
+ .map(x=>({pid:x.kCGWindowOwnerPID,number:x.kCGWindowNumber,layer:x.kCGWindowLayer,
+ onScreen:x.kCGWindowIsOnscreen,alpha:x.kCGWindowAlpha,bounds:x.kCGWindowBounds}))})'''
+    return json.loads(subprocess.check_output(
+        ["osascript", "-l", "JavaScript", "-e", script.replace("__PID__", str(pid))], text=True))
+
+
+def observe_presentation(socket, pid, seconds, evidence):
+    # Bug caught: inactive/occluded agent-test windows stop rAF and hide the document.
+    evaluate(socket, '''
+const state={started:performance.now(),frames:0,maxFrameGap:0,lastFrame:null,
+ visibility:[{at:performance.now(),state:document.visibilityState}]};
+const changed=()=>state.visibility.push({at:performance.now(),state:document.visibilityState});
+document.addEventListener('visibilitychange',changed);
+const frame=now=>{if(state.lastFrame!==null)state.maxFrameGap=Math.max(state.maxFrameGap,now-state.lastFrame);
+ state.lastFrame=now;state.frames++;state.handle=requestAnimationFrame(frame);};
+state.handle=requestAnimationFrame(frame);state.changed=changed;window.__agentTestPresentation=state;
+return true;''', evidence)
+    samples = []
+    started = time.monotonic()
+    try:
+        while True:
+            sample = evaluate(socket, '''
+const s=window.__agentTestPresentation,w=window.__TAURI__.window.getCurrentWindow();
+return {elapsed:performance.now()-s.started,frames:s.frames,maxFrameGap:s.maxFrameGap,
+ lastFrameAge:s.lastFrame===null?null:performance.now()-s.lastFrame,
+ visibility:document.visibilityState,changes:s.visibility,focus:document.hasFocus(),
+ nativeFocus:await w.isFocused(),visible:await w.isVisible(),
+ position:await w.outerPosition(),size:await w.outerSize()};''', evidence)
+            sample["native"] = presentation_snapshot(pid)
+            samples.append(sample)
+            (evidence / "presentation.json").write_text(json.dumps(samples, indent=2))
+            if time.monotonic() - started >= seconds:
+                return samples
+            time.sleep(min(5, seconds - (time.monotonic() - started)))
+    finally:
+        evaluate(socket, '''const s=window.__agentTestPresentation;
+cancelAnimationFrame(s.handle);document.removeEventListener('visibilitychange',s.changed);
+delete window.__agentTestPresentation;return true;''', evidence)
+
+
+def agent_test_window_renders_visible_without_focus(instance, port, evidence, duration=0):
     if sys.platform != "darwin" or not (ROOT / ".git").is_file():
         raise RuntimeError("native observer requires an authorized macOS linked worktree")
     evidence = evidence.resolve()
@@ -173,10 +239,26 @@ try {
                     gap = area["position"][axis] + area["size"][size] - result["position"][axis] - result["size"][size]
                     if not 0 <= gap <= 64 * scale:
                         failures.append(f"window is not at the primary work-area corner ({axis} gap={gap})")
-            result["failures"] = failures
+            result["native"] = presentation_snapshot(owned_pid)
+            if duration:
+                samples = observe_presentation(launch["socket"], owned_pid, duration, evidence)
+                previous_frames = -1
+                for sample in samples:
+                    if sample["visibility"] != "visible" or not sample["visible"] or any(change["state"] != "visible" for change in sample["changes"]):
+                        failures.append("document/window lost presentation during observation")
+                    if sample["focus"] or sample["nativeFocus"] or sample["native"]["front"]["pid"] == owned_pid:
+                        failures.append("agent-test took focus during observation")
+                    if sample["native"]["front"]["pid"] != before["pid"]:
+                        failures.append("frontmost application changed during observation")
+                    if previous_frames >= 0 and (sample["frames"] <= previous_frames or sample["lastFrameAge"] is None or sample["lastFrameAge"] > 1000 or sample["maxFrameGap"] > 1000):
+                        failures.append("animation frames stopped during observation")
+                    if sample["position"] != result["position"] or sample["size"] != result["size"]:
+                        failures.append("compact corner geometry changed during observation")
+                    previous_frames = sample["frames"]
+            result["failures"] = sorted(set(failures))
             (evidence / "observer.json").write_text(json.dumps(result, indent=2))
             if failures:
-                raise AssertionError("; ".join(failures))
+                raise AssertionError("; ".join(result["failures"]))
         finally:
             if owned_pid is not None:
                 try:
@@ -207,9 +289,12 @@ def main():
     parser.add_argument("--instance", default="at-2090")
     parser.add_argument("--port", default="19883")
     parser.add_argument("--evidence-dir", type=Path, required=True)
+    parser.add_argument("--duration", type=int, default=0, help="observe visibility and animation frames for this many seconds")
     args = parser.parse_args()
+    if args.duration < 0:
+        parser.error("duration must not be negative")
     try:
-        agent_test_window_renders_visible_without_focus(args.instance, args.port, args.evidence_dir)
+        agent_test_window_renders_visible_without_focus(args.instance, args.port, args.evidence_dir, args.duration)
     except (AssertionError, OSError, RuntimeError, ValueError, subprocess.SubprocessError) as error:
         print(f"FAIL {TEST}: {error}; evidence={args.evidence_dir}", file=sys.stderr)
         return 1
