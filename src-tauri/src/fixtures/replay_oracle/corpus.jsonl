@@ -7,6 +7,7 @@
 {"fixture":"src-tauri/src/fixtures/agent_prompts/claude-mobile-permission-1987.tcap","events":72}
 {"fixture":"src-tauri/src/fixtures/agent_prompts/claude-mobile-resume-1971.tcap","events":114}
 {"fixture":"src-tauri/src/fixtures/agent_prompts/claude-mobile-startup-1987.tcap","events":33}
+{"fixture":"src-tauri/src/fixtures/agent_prompts/claude-narrow-2093.tcap","events":107}
 {"fixture":"src-tauri/src/fixtures/agent_prompts/claude-question-exit-2091.tcap","events":191}
 {"fixture":"src-tauri/src/fixtures/agent_prompts/claude-quoted-ink-footer.tcap","events":127}
 {"fixture":"src-tauri/src/fixtures/agent_prompts/claude-ready-idle-notify-statement.tcap","events":24}
@@ -24,6 +25,7 @@
 {"fixture":"src-tauri/src/fixtures/agent_prompts/codex-enforced-approval-2026.tcap","events":977}
 {"fixture":"src-tauri/src/fixtures/agent_prompts/codex-enforced-hook-idle-2075.tcap","events":1040}
 {"fixture":"src-tauri/src/fixtures/agent_prompts/codex-enforced-open-2075.tcap","events":625}
+{"fixture":"src-tauri/src/fixtures/agent_prompts/codex-first-plan-narrow-2094.tcap","events":989}
 {"fixture":"src-tauri/src/fixtures/agent_prompts/codex-headless-short-20261008.tcap","events":379}
 {"fixture":"src-tauri/src/fixtures/agent_prompts/codex-idle-animation-20260921.tcap","events":638}
 {"fixture":"src-tauri/src/fixtures/agent_prompts/codex-narrow-ink-replay-20260925.tcap","events":354}

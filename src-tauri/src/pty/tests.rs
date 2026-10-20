@@ -14,6 +14,7 @@ include!("core_tests.rs");
 include!("lifecycle_tests.rs");
 include!("screen_tests.rs");
 include!("injection_tests.rs");
+include!("managed_trust_tests.rs");
 
 include!("codex_binding_tests.rs");
 

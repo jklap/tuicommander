@@ -315,7 +315,8 @@ async fn a_reader_panic_stops_the_ticker_and_the_silence_timer() {
         .expect("silence state is registered before the threads start");
     assert!(
         state.grid.frame_dirty.contains_key(&sid)
-            && state.grid.sync_update_active.contains_key(&sid),
+            && state.grid.sync_update_active.contains_key(&sid)
+            && state.grid.input_frame_priority.contains_key(&sid),
         "precondition: the ticker owns both per-session entries"
     );
 
@@ -324,7 +325,8 @@ async fn a_reader_panic_stops_the_ticker_and_the_silence_timer() {
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
     loop {
         let ticker_alive = state.grid.frame_dirty.contains_key(&sid)
-            || state.grid.sync_update_active.contains_key(&sid);
+            || state.grid.sync_update_active.contains_key(&sid)
+            || state.grid.input_frame_priority.contains_key(&sid);
         let timer_alive = Arc::strong_count(&silence) > 1;
         if !ticker_alive && !timer_alive {
             break;
@@ -13485,6 +13487,222 @@ mod grid_delivery_tests {
         stop
     }
 
+    struct ChunkReader(std::sync::mpsc::Receiver<Vec<u8>>);
+    impl Read for ChunkReader {
+        fn read(&mut self, bytes: &mut [u8]) -> std::io::Result<usize> {
+            match self.0.recv() {
+                Ok(chunk) => {
+                    bytes[..chunk.len()].copy_from_slice(&chunk);
+                    Ok(chunk.len())
+                }
+                Err(_) => Ok(0),
+            }
+        }
+    }
+    fn carries_echo(bytes: &[u8]) -> bool {
+        if bytes.len() < 26 {
+            return false;
+        }
+        let rows = u16::from_le_bytes([bytes[0], bytes[1]]);
+        let mut at = 26usize;
+        for _ in 0..rows {
+            let flagged = u16::from_le_bytes([bytes[at + 2], bytes[at + 3]]);
+            at += 4;
+            if flagged & 0x4000 != 0 {
+                at += 2;
+            }
+            for _ in 0..(flagged & 0x3fff) {
+                let codepoint = u32::from_le_bytes(bytes[at..at + 4].try_into().unwrap());
+                if codepoint == '⑤' as u32 {
+                    return true;
+                }
+                at += 11;
+            }
+        }
+        false
+    }
+
+    /// Catches: post-input echo remaining behind the sustained/typing rate floor
+    /// even though the real reader applied it and the subscriber is caught up.
+    #[tokio::test(flavor = "current_thread")]
+    async fn input_echo_reaches_grid_before_animation_floor() {
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+        let sid = "input-priority-echo";
+        let mut rx = grid_session(&state, sid);
+        let (tx, reader) = std::sync::mpsc::channel();
+        spawn_reader_thread(
+            Box::new(ChunkReader(reader)),
+            Arc::new(AtomicBool::new(false)),
+            sid.to_string(),
+            state.clone(),
+            None,
+        );
+        let stop_feed = feed_continuously(&state, sid);
+        let observed = tokio::time::timeout(TICKER_LIVENESS_BOUND, async {
+            // Warm through ten actual publications. This guarantees the ticker
+            // has crossed six dirty ticks; setup speed is not the assertion.
+            for _ in 0..10 {
+                rx.changed().await.unwrap();
+                rx.borrow_and_update();
+            }
+            // The last publication just reset last_sent. Submit a controlled
+            // PTY chunk through the real reader, not by setting grid damage.
+            let submitted = std::time::Instant::now();
+            stamp_input_ms(&state, sid);
+            tx.send("⑤".as_bytes().to_vec()).unwrap();
+            loop {
+                rx.changed().await.unwrap();
+                if carries_echo(&rx.borrow_and_update().frame) {
+                    break submitted.elapsed();
+                }
+            }
+        })
+        .await;
+        stop_feed.store(true, Ordering::Relaxed);
+        drop(tx); // EOF stops the owned reader/ticker even when the assertion fails.
+        let elapsed = observed.expect("the real reader/ticker never delivered the echo");
+        // One 16ms tick plus 8ms scheduling tolerance, still well below the
+        // 33/50ms floor. The bound is the behavior, not a setup deadline.
+        assert!(
+            elapsed < std::time::Duration::from_millis(24),
+            "post-input echo waited {elapsed:?} for the animation/typing floor"
+        );
+    }
+
+    /// Catches: a fast echo arriving before arming, or post-write bookkeeping
+    /// replacing its already-applied generation. Exercises both write adapters.
+    #[cfg(all(unix, feature = "desktop"))]
+    #[tokio::test]
+    async fn input_priority_is_armed_before_desktop_and_http_writes() {
+        struct ImmediateOutput(Arc<frame_priority::InputFramePriority>);
+        impl Write for ImmediateOutput {
+            fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+                let generation = self.0.generation();
+                assert_ne!(generation, 0, "PTY write preceded priority arming");
+                self.0.applied(generation, std::time::Instant::now());
+                Ok(bytes.len())
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+        for desktop in [true, false] {
+            let state = Arc::new(crate::state::tests_support::make_test_app_state());
+            let sid = "fast-input-arming";
+            let priority = Arc::new(frame_priority::InputFramePriority::default());
+            state
+                .grid
+                .input_frame_priority
+                .insert(sid.into(), priority.clone());
+            insert_session_with_writer(
+                &state,
+                sid,
+                Box::new(ImmediateOutput(priority.clone())),
+                TtyMode::Raw,
+            );
+            if desktop {
+                write_pty_parts_off_thread(state.clone(), sid.into(), vec!["x".into()])
+                    .await
+                    .unwrap();
+            } else {
+                crate::mcp_http::session::write_pty_input_parts(&state, sid, &["x"]).unwrap();
+            }
+            let retained = priority.request(std::time::Instant::now(), None).is_some();
+            close_pty_core(&state, sid, false);
+            assert!(retained, "post-write bookkeeping erased the fast echo hint");
+        }
+    }
+
+    /// Catches: an input-priority wake flushing DEC-2026 content before ESU.
+    #[tokio::test(flavor = "current_thread")]
+    async fn input_priority_preserves_synchronized_output_until_esu() {
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+        let sid = "input-priority-sync";
+        let mut rx = grid_session(&state, sid);
+        let (tx, reader) = std::sync::mpsc::channel();
+        spawn_reader_thread(
+            Box::new(ChunkReader(reader)),
+            Arc::new(AtomicBool::new(false)),
+            sid.to_string(),
+            state.clone(),
+            None,
+        );
+        stamp_input_ms(&state, sid);
+        tx.send("\x1b[?2026h⑤".as_bytes().to_vec()).unwrap();
+        // Shorter than the protocol's 150ms safety timeout: no ESU was sent.
+        let premature = tokio::time::timeout(std::time::Duration::from_millis(60), async {
+            loop {
+                rx.changed().await.unwrap();
+                if carries_echo(&rx.borrow_and_update().frame) {
+                    break;
+                }
+            }
+        })
+        .await
+        .is_ok();
+        tx.send(b"\x1b[?2026l".to_vec()).unwrap();
+        let completed = tokio::time::timeout(TICKER_LIVENESS_BOUND, async {
+            loop {
+                rx.changed().await.unwrap();
+                if carries_echo(&rx.borrow_and_update().frame) {
+                    break;
+                }
+            }
+        })
+        .await;
+        drop(tx);
+        assert!(
+            !premature,
+            "input priority exposed a partial synchronized update"
+        );
+        completed.expect("ESU did not release synchronized content");
+    }
+
+    /// Catches: input priority bypassing the desktop receipt gate.
+    #[cfg(feature = "desktop")]
+    #[tokio::test(flavor = "current_thread")]
+    async fn input_priority_cannot_open_a_stalled_desktop_gate() {
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+        let sid = "input-priority-gate";
+        let rx = grid_session(&state, sid);
+        let (gate, received) = subscribe_a_frozen_webview(&state, sid);
+        let initial = cut_frame(&state, sid, "initial");
+        send_grid_frame(&state, sid, initial);
+        drop(rx);
+        state.grid.watch.remove(sid); // Desktop is the sole subscriber.
+        assert!(!gate.is_open());
+        let (tx, reader) = std::sync::mpsc::channel();
+        spawn_reader_thread(
+            Box::new(ChunkReader(reader)),
+            Arc::new(AtomicBool::new(false)),
+            sid.to_string(),
+            state.clone(),
+            None,
+        );
+        stamp_input_ms(&state, sid);
+        tx.send("⑤".as_bytes().to_vec()).unwrap();
+        tokio::time::sleep(std::time::Duration::from_millis(60)).await;
+        let applied = state
+            .grid
+            .vt_log_buffers
+            .get(sid)
+            .unwrap()
+            .lock()
+            .read_rows_in_range(0, 24)
+            .join("\n")
+            .contains('⑤');
+        let frames = received.lock().len();
+        drop(tx);
+        assert!(
+            applied,
+            "the controlled reader did not apply the input echo"
+        );
+        assert_eq!(
+            frames, 1,
+            "priority sent through an unacknowledged desktop frame"
+        );
+    }
+
     /// Every frame a subscriber was handed, in the order it was handed them.
     #[cfg(feature = "desktop")]
     type RecordedFrames = Arc<Mutex<Vec<Vec<u8>>>>;
@@ -15908,4 +16126,82 @@ async fn ego_recorded_joined_intent_ends_at_title_closure_2060() {
             "trailing prose must remain in terminal output: {visible}"
         );
     }
+}
+
+// Catches: a clipped native AskUserQuestion exporting no controls and falling back to binary Yes/No.
+#[tokio::test(flavor = "current_thread")]
+async fn captured_claude_narrow_question_remains_answerable() {
+    let capture =
+        crate::pty_capture::decode_capture(&agent_prompt_fixture("claude-narrow-2093.tcap"))
+            .expect("authentic narrow Claude capture");
+    assert_eq!(capture.geometry, Some((14, 37)));
+    assert!(
+        capture
+            .records
+            .iter()
+            .any(|r| r.direction == crate::pty_capture::CaptureDirection::Input)
+    );
+    let sid = "claude-narrow-2093";
+    let (state, silence) = chunk_trace_state(sid);
+    state
+        .session_maps
+        .session_states
+        .get_mut(sid)
+        .unwrap()
+        .agent_type = Some("claude".into());
+    state
+        .grid
+        .vt_log_buffers
+        .insert(sid.into(), Mutex::new(VtLogBuffer::new(14, 37, 2000)));
+    crate::state::AppState::spawn_session_state_accumulator(state.clone());
+    let mut processor = ChunkProcessor::new(None, None);
+    let mut utf8 = Utf8ReadBuffer::new();
+    let mut escape = EscapeAwareBuffer::new();
+    for record in capture.records {
+        if record.direction == crate::pty_capture::CaptureDirection::Output {
+            let data = utf8.push(&record.data);
+            let data = escape.push(&data);
+            let (clean, _) = crate::state::strip_kitty_sequences(&data);
+            processor.process_chunk(&clean, &silence, sid, &state);
+        }
+    }
+    assert!(
+        await_session(&state, sid, |s| {
+            s.awaiting_input
+                && s.question_text.as_deref() == Some("Pick a colour?")
+                && s.choice_prompt.as_ref().is_some_and(|p| {
+                    serde_json::to_value(p).unwrap()["selection_mode"] == "navigate-only"
+                        && p.options.iter().map(|o| o.key.as_str()).collect::<Vec<_>>()
+                            == ["↑", "↓", "↵"]
+                        && p.options
+                            .iter()
+                            .map(|o| o.label.as_str())
+                            .collect::<Vec<_>>()
+                            == [
+                                "Previous option",
+                                "Next option",
+                                "Select highlighted option",
+                            ]
+                })
+        })
+        .await,
+        "clipped choices need explicit native navigation, never an invented complete list or binary fallback"
+    );
+    assert!(!crate::state::resolve_choice_prompt_input(
+        &state, sid, "\x1b[B"
+    ));
+    assert!(
+        state
+            .session_maps
+            .session_states
+            .get(sid)
+            .unwrap()
+            .awaiting_input
+    );
+    assert!(crate::state::resolve_choice_prompt_input(&state, sid, "\r"));
+    assert!(
+        await_session(&state, sid, |s| !s.awaiting_input
+            && s.choice_prompt.is_none())
+        .await
+    );
 }

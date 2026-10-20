@@ -154,3 +154,58 @@ async fn codex_enforced_approval_stays_awaiting_without_answer() {
         "real capture includes three minutes without an answer"
     );
 }
+
+/// Catches: the first narrow /plan question remaining Idle without named controls.
+#[tokio::test]
+async fn captured_codex_first_plan_question_exports_choices() {
+    let mut final_state = None;
+    let mut opened = false;
+    let mut delayed_idle = false;
+    replay_native_question(
+        "codex-first-plan-narrow-2094.tcap",
+        "codex",
+        |record, session| {
+            opened |= session.choice_prompt.is_some();
+            if opened {
+                assert!(
+                    session.awaiting_input && session.choice_prompt.is_some(),
+                    "unanswered first question lost Input at {}us",
+                    record.elapsed_us
+                );
+                delayed_idle |= record
+                    .data
+                    .windows(b"state=idle".len())
+                    .any(|bytes| bytes == b"state=idle");
+            }
+            final_state = Some(session.clone());
+        },
+    );
+    let session = final_state.expect("real first-question capture has output");
+    assert!(
+        session.awaiting_input && session.question_confident,
+        "first native question must be Input, not Idle: {session:?}"
+    );
+    let prompt = session
+        .choice_prompt
+        .expect("first question exports controls");
+    assert_eq!(prompt.title, "Pick a colour?");
+    assert_eq!(
+        prompt
+            .options
+            .iter()
+            .map(|option| option.label.as_str())
+            .collect::<Vec<_>>(),
+        ["Red", "Green", "Blue", "None of the above"]
+    );
+    assert_eq!(prompt.options[0].hint.as_deref(), Some("Select Red."));
+    assert_eq!(
+        prompt.options[3].hint.as_deref(),
+        Some("Optionally, add details in notes (tab)")
+    );
+    assert_eq!(prompt.dismiss_key.as_deref(), Some("cancel"));
+    assert_eq!(prompt.amend_key.as_deref(), Some("amend"));
+    assert!(
+        delayed_idle,
+        "capture includes native idle after the open question"
+    );
+}

@@ -120,10 +120,21 @@ It never seeds from the daily config. Never copy daily tokens or config there.
 
 The test window is 640×420 logical pixels, with matching minimum dimensions,
 at the bottom-right of the primary screen work area (16 logical pixels inset).
-It is always on top so macOS does not fully
-occlude its WebView behind the active application. It cannot become key or take
-keyboard focus. Background throttling is disabled (supported on macOS 14+), and
-initial application activation is disabled only for the agent-test runtime.
+It is always on top so ordinary application windows do not cover it. A higher
+or another floating window (a second agent-test instance in the same corner, a
+system authentication prompt) can still cover it fully; WebKit would then mark
+the page hidden and stop `requestAnimationFrame`. The agent-test WebView
+therefore disables WebKit window-occlusion detection, so the document stays
+visible while the window is ordered in. It cannot become key or take keyboard
+focus. Background throttling is disabled (supported on macOS 14+). The
+agent-test application uses the `Prohibited` activation policy, set between
+Tauri build and run: Tao 0.37.1 still calls `activateIgnoringOtherApps(false)`
+at launch, and macOS grants it when the launching application (usually the
+daily TUIC) is frontmost. As a result the test instance has no Dock icon or
+menu bar and never becomes the active application. A process-lifetime activity
+prevents App Nap during live latency checks but still permits idle system sleep.
+These changes apply only to the dedicated agent-test runtime; the daily app keeps
+its existing activation, occlusion and power-management behavior.
 It starts hidden: Tao 0.37.1 `app_state.rs::window_activation_hack` otherwise
 orders every visible window key even when `focus=false`. At Tauri Ready, after
 that sweep, the agent-test path calls native `NSWindow.orderFront` without
@@ -147,16 +158,27 @@ python3 -B scripts/agent-test-visible.py --instance at-2090 --port 19883 \
   --evidence-dir "$HOME/Gits/.tmp/results/agent-test-visible-$(date +%s)"
 ```
 
+Add `--duration 300` to observe presentation for five minutes. Add `--cover` as
+well to put an opaque, non-activating panel from another process (accessory
+policy; it absorbs clicks without activating anything) over the window for the whole observation; this is the
+story 2095 regression for a covered test window. The observer records
+visibility changes, animation-frame progress and gaps, native window-server layers,
+application-hidden state, foreground identity, and compact-window geometry in
+`presentation.json`. It fails if presentation or animation frames stop, the test instance becomes
+frontmost or takes focus, or window geometry changes. Foreground changes between
+other applications are recorded, not failures: the check must pass while Boss works.
+The window-server query is read-only and does not activate or move other windows.
+These observations do not read `NSWindow.occlusionState` directly or prove App Nap activity.
+
 This needs explicit desktop-execution authorization, macOS, a linked worktree
 with build inputs, an unused named instance/port, and an unrelated foreground
-application. Keep that foreground application unchanged during the build and
-check. Do not use an existing instance with sessions. The evidence directory
+application at launch. Do not use an existing instance with sessions. The evidence directory
 must be new and under `~/Gits`.
 
 `agent_test_window_renders_visible_without_focus` checks document/native
 visibility, positive terminal canvas area, actual `fillText` paint, no native or
-document focus, and the same unrelated frontmost PID before launch, at readiness
-and after painting. It also verifies the compact viewport and corner geometry.
+document focus, and that the test instance is not frontmost at readiness or
+after painting. It also verifies the compact viewport and corner geometry.
 It retains JSON receipts, the native build log and canvas-only PNGs, deletes
 only sessions created by the check, calls `make agent-test-stop`, and checks
 `ps` for this worktree's executable. It never captures the desktop or drives

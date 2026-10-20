@@ -208,7 +208,7 @@ character budget, then reads hard-wrap continuations only above the input-box
 chrome cutoff. A capped history scroll keeps the open intent's anchor stable;
 repainting its unchanged anchor does not close it as replaced prose.
 
-For a managed Claude child with workspace trust acceptance enabled, the rendered screen is also checked for its exact startup safety question, both choices, and **No, exit** selected. Only then does the reader send Up followed by Enter under the PTY writer lock, once for that session. Other dialogs and user-opened terminals are never answered by this path; session cleanup removes an unused allowance.
+For a managed Claude child with workspace trust acceptance enabled, the rendered screen is also checked for its exact startup safety question, both choices, and **No, exit** selected above **Yes, I trust this folder**, as recorded in the Claude startup capture. Only then does the reader send Down followed by Enter under the PTY writer lock, once for that session. Other dialogs and user-opened terminals are never answered by this path; session cleanup removes an unused allowance.
 
 **ANSI anomaly detection** — The `detect_anomalous_sequences()` function scans PTY output for unusual escape sequences (screen clears, cursor home, alt-screen toggles, scrollback clears) and logs them at warn level. This is a diagnostic tool for investigating scroll-jump issues.
 
@@ -293,9 +293,21 @@ a cleaned line can carry a bare CR.
 Frame emission is decoupled from PTY reading via a per-session **frame ticker** thread (display-link style pacing):
 
 1. **Reader thread**: processes PTY data into the alacritty VT grid, sets a `grid_frame_dirty` AtomicBool flag
-2. **Ticker thread**: every 16ms, checks the dirty flag → if set, serializes dirty rows via `serialize_dirty_rows()` → sends frame via `send_grid_frame()` (respects the `GridGate` backpressure)
+2. **Ticker thread**: on its 16ms maintenance tick or a bounded input wake, checks the dirty flag → if set, serializes dirty rows via `serialize_dirty_rows()` → sends frame via `send_grid_frame()` (respects the `GridGate` backpressure)
 3. **Frontend**: coalesces paint triggers via `requestAnimationFrame` (~60fps)
 4. **Ack handler**: credits the gate; the ticker sends any dirty rows accumulated while the prior frame was in flight
+
+**Bounded input priority.** Desktop and HTTP/PWA input arm a 100ms window before
+writing to the PTY. Only output applied by the reader after that input can wake
+the same ticker early. A priority frame waits at least 8ms after the previous
+frame; at most two priority bypasses are allowed in any rolling 100ms, even if
+input continues. Other output retains the sustained-animation 33ms floor and
+the typing-under-saturation 50ms floor. The desktop receipt gate, synchronized
+output buffering, frame ordering and shared-damage repair are unchanged.
+A generic PTY stream does not identify application echo: the second credit can
+serve later output if unrelated post-input output used the first. This is not a
+guarantee that every transient glyph survives viewport scrolling or that native
+compositor presentation meets a deadline.
 
 **Cell text fidelity.** Text extraction and binary serialization retain each
 cell's base scalar plus its zero-width scalars. A separately received combining

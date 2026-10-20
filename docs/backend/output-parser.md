@@ -497,7 +497,10 @@ Observed Codex prompt forms and evidence:
 
 The distinct `/plan` form uses `Question N/M (K unanswered)` above the title and
 `tab to add notes | enter to submit answer | esc to interrupt` below its options.
-Both anchors and contiguous keys starting at 1 are required. Descriptions in the
+The footer can also use three native rows (tab, enter, esc), with an optional
+`option N/M |` prefix on the notes row. Both anchors and contiguous keys starting
+at 1 are required. Only the complete final footer enables continuation rows;
+wrapped answers and descriptions keep their separate native columns. Descriptions in the
 second column become option hints, not answer labels. Numeric answers submit
 immediately; Tab opens notes and Escape interrupts. The retained real PTY bytes
 are in `codex-plan-question-20261019.json`; this retained snapshot has no original
@@ -505,7 +508,16 @@ geometry/timing. A fresh isolated headless recording,
 `codex-plan-question-20261019-real.tcap`, preserves real 41×128 geometry and
 ordered input/output. Parser and shared-accumulator regressions replay the open
 question before its recorded Ctrl+C. Neither fixture proves authenticated mobile
-rendering. Codex 0.162.1 accepts `/plan <question prompt>` in one submission.
+rendering. `codex-first-plan-narrow-2094.tcap` records the first Codex
+0.163.0 question at 41×36: the narrow layout changes the footer and wraps both
+option columns. The shared accumulator regression asserts Input state and all
+four clean labels from those ordered chunks. Resizing the same unanswered live
+question to 128 columns exported controls without a new question, which isolates
+one failure to layout recognition. The same capture also includes a delayed
+`state=idle` after the question opens. The completion guard applies to the same
+active native dialog, not only enforced command approvals; answer input still
+retires its controls and permits normal completion.
+Codex 0.162.1 accepts `/plan <question prompt>` in one submission.
 
 ### Grok native questions and enforced approvals
 
@@ -760,3 +772,16 @@ cell, including when the title wraps; mobile keeps trailing spans and links outs
 the tint. The CONTEXT header receives only the parsed description. Source evidence
 for 2060-0ebe is the recorded ego assistant message in `ego-intent-2060.json`:
 the model itself emitted `)Criteri`, not two lines joined by the terminal renderer.
+
+### Clipped Claude questions
+
+A native column-zero scroll arrow on a numbered option, together with the Ink
+footer, identifies a clipped AskUserQuestion. A numbering gap before the separate
+`5. Chat about this` row also identifies clipping when the scroll arrow disappears
+at the last visible answer. Generic numbering gaps still fail closed. The parser exports `navigate-only`
+with `↑` (previous option), `↓` (next option), and `↵` (select highlighted option).
+These are native navigation controls, not a partial list presented as complete.
+Clients send exactly one corresponding arrow or Enter key; navigation does not
+clear awaiting. No hidden option label or cursor offset is inferred. A complete
+form keeps its existing ordered `navigate-enter` choices. The geometry-preserving
+`claude-narrow-2093.tcap` fixture records the original narrow failure.
