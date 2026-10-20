@@ -477,6 +477,8 @@ The adapter shapes are recorded in `ego-composer-1957*.tcap`.
 
 Ego selector recovery accepts both single-answer and checkbox footers, including mid-word terminal wrapping. The complete footer must be the last nonblank content: answered selector history above newer output or a composer must never re-arm awaiting. Checkbox state uses `toggle-enter` and changes only on a toggle; Enter or Escape settles the dialog. Free-text modal text enriches an existing confident ego wait, never a ready composer. The mobile header question action supports all three forms.
 
+Ego empty-title native awaiting markers are lifecycle events, not screen text: never deduplicate them through selector repaint state. MCP approval titles can contain explicit CRLF continuation rows before `Risk:`; preserve the complete contiguous `Allow …?` title and the exact native controls.
+
 Ego selector and free-text titles share diagnostic, working-row and submitted-composer boundaries. Default-mode approvals require the native Allow/Risk/y-a-n-e-d shape; n replaces choices with the refusal explanation prompt, and Enter settles it.
 
 Codex native question parsing targets installed 0.162.1: `⌃]` / `⇧→` footer, Shift+Left to open, immediate numeric answers. The queued-panel heading is required; imperative titles are accepted only behind that exact panel shape. Enforced command approvals instead require their exact confirm/cancel footer and command question title; numeric refusal submits immediately. While that exact dialog and its unanswered controls remain active, a delayed idle hook cannot retract the approval. Answer input or a departed dialog permits normal completion. The distinct `/plan` question requires its Question counter and exact tab/enter/esc footer; second-column descriptions become hints, not answer labels.
@@ -499,6 +501,8 @@ whatever sets it owns nothing until something retracts it. These paths clear it:
 `question-cleared` is the backstop that catches the rest. It never touches a
 confident question: grok repaints while it waits, so "not on screen this tick"
 is not proof of an answer.
+
+**Dialog recovery requires an active agent identity.** After foreground observation returns to the shell, a retained Ink footer or question title above its prompt is history, not a live dialog. Both full-screen recovery and silence-timer chat heuristics require that identity. Never re-arm awaiting from shell output just because that footer remains visible (`claude-question-exit-2091.tcap`).
 
 **The mirror failure is a SET that never comes back.** A multi-question
 `AskUserQuestion` answers one sub-question at a time; each repaints its title and
