@@ -78,8 +78,10 @@ than silently falling back to the default instance.
 and Tauri identifier. It does not inherit the daily target's `TUIC_*` settings.
 Its dedicated entry point rejects default/empty instances, production port 9876,
 release builds and dictation-enabled builds before reading configuration.
-Runtime guards disable global input, Telegram, updater and global MCP writes;
-these are not merely editable configuration defaults. See
+Runtime guards disable global input, Telegram, updater, global MCP writes and
+global CLI installation/update/removal. Hook enable/disable requests are rejected
+before saving instance flags or changing shared agent files. These are not merely
+editable configuration defaults. See
 [Development Setup](../guides/development-setup.md#isolated-agent-desktop-checks-macos)
 for the resource audit, dry-run and stop commands.
 

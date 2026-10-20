@@ -48,7 +48,7 @@ def plan(instance: str, port: str) -> dict:
         "frontend": ["pnpm", "exec", "vite", "build"],
         "build_environment": {"PATH_prefix": str(Path.home() / "Library/Application Support/mbx/bin"), "TAURI_CONFIG": json.dumps({"identifier": "com.tuic.commander.agent-test", "productName": "TUICommander Agent Test", "bundle": {"externalBin": []}})},
         "launch": [str(executable)],
-        "disabled": ["global shortcuts", "dictation/microphone", "Telegram", "updater", "global MCP install", "deep links", "sleep inhibition"],
+        "disabled": ["global shortcuts", "dictation/microphone", "Telegram", "updater", "global MCP install", "global CLI mutations", "global agent hooks", "deep links", "sleep inhibition"],
     }
 
 

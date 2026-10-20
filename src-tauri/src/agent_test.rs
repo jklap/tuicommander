@@ -5,6 +5,10 @@ use std::sync::OnceLock;
 static PORT: OnceLock<u16> = OnceLock::new();
 
 pub(crate) fn active() -> bool {
+    #[cfg(test)]
+    if test_root().is_some() {
+        return true;
+    }
     PORT.get().is_some()
 }
 
@@ -84,4 +88,27 @@ mod tests {
         assert!(!config.auto_update_plugins_enabled);
         assert!(!config.prevent_sleep_when_busy);
     }
+}
+
+// Test policy and path routing are thread-local: parallel tests never inherit them.
+#[cfg(test)]
+thread_local! {
+    static TEST_ROOT: std::cell::RefCell<Option<std::path::PathBuf>> = const { std::cell::RefCell::new(None) };
+}
+
+#[cfg(test)]
+pub(crate) fn test_root() -> Option<std::path::PathBuf> {
+    TEST_ROOT.with(|root| root.borrow().clone())
+}
+
+#[cfg(test)]
+pub(crate) fn with_test_profile(root: &std::path::Path, test: impl FnOnce()) {
+    struct Restore(Option<std::path::PathBuf>);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            TEST_ROOT.with(|root| *root.borrow_mut() = self.0.take());
+        }
+    }
+    let _restore = Restore(TEST_ROOT.with(|slot| slot.replace(Some(root.to_path_buf()))));
+    test();
 }

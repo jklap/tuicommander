@@ -115,6 +115,8 @@ It never seeds from the daily config. Never copy daily tokens or config there.
 | Global window shortcut and Fn/Globe monitor | Input ownership refused and shortcut registration rejected at runtime, including later Settings changes. Local, focused-window keyboard handling remains available. |
 | Microphone and dictation | Not compiled into this binary. A dictation-enabled build refuses to start; no microphone permission request or capture path is available. Audio/voice hardware checks still belong to Boss. |
 | Telegram bot | Supervisor never starts, tool availability is false, and setup changes are rejected. A copied or previously saved bot configuration cannot start polling. |
+| Global CLI | Startup auto-update is skipped. Explicit installation, update and removal are rejected before sidecar resolution or filesystem changes, including elevated helper paths. |
+| Global agent hooks | Hook enable and disable requests are rejected over IPC and HTTP before saving the instance flag or changing shared Claude, Gemini, Grok, Codex or OpenCode files. Read-only hook status remains available. |
 | Global agent MCP configuration | Startup installation cannot claim ownership, even with an inherited owner override; explicit install/remove writes are rejected. |
 | Updater | No native updater plugin, no channel checks and automatic updates default off. The test cannot replace the daily bundle. |
 | Deep links, release single-instance lock and login items | Deep-link plugin is not installed. This debug-only binary never takes the release single-instance lock. Desktop startup has no login-item registration; remote service installation is an explicit operation, not part of this target. |

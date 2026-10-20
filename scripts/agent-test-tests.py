@@ -26,7 +26,7 @@ class AgentTestPlanTests(unittest.TestCase):
         self.assertEqual(Path(plan["binary"]).name, "tuicommander-agent-test")
         self.assertTrue(Path(plan["binary"]).is_relative_to(ROOT / ".tmp"))
         self.assertEqual(plan["listener"], "127.0.0.1:19876 (no port fallback)")
-        self.assertEqual(plan["disabled"], ["global shortcuts", "dictation/microphone", "Telegram", "updater", "global MCP install", "deep links", "sleep inhibition"])
+        self.assertEqual(plan["disabled"], ["global shortcuts", "dictation/microphone", "Telegram", "updater", "global MCP install", "global CLI mutations", "global agent hooks", "deep links", "sleep inhibition"])
         self.assertIn("tauri/custom-protocol", plan["cargo"])
         self.assertNotIn("dictation", plan["cargo"])
         self.assertNotIn("CARGO_TARGET_DIR", plan["environment"])
