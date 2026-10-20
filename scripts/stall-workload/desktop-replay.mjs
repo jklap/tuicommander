@@ -1,16 +1,15 @@
 #!/usr/bin/env node
-/** Prepared for story 2086's make agent-test. Never launches/restarts an app. */
-// DEFERRED (2026-10-20) — execute only after the isolated desktop harness lands.
+/** Replay in an already-running make agent-test instance. Never launches/restarts an app. */
 import { spawnSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { readFileSync, writeFileSync } from "node:fs";
-import { createServer } from "node:http";
+import { createServer, request } from "node:http";
 import { resolve } from "node:path";
 
-const [input, output, instance = "agent-test", port = "19876"] = process.argv.slice(2);
+const [input, output, instance = "agent-test", port = "19876", socketPath] = process.argv.slice(2);
 if (!input || !output || !/^[a-z0-9][a-z0-9-]*$/.test(instance) || Number(port) < 19000 || Number(port) > 65535)
 	throw new Error(
-		"usage: node scripts/stall-workload/desktop-replay.mjs RECORDING OUTPUT [agent-test-instance] [port>=19000]",
+		"usage: node scripts/stall-workload/desktop-replay.mjs RECORDING OUTPUT [agent-test-instance] [port>=19000] [instance-socket]",
 	);
 if (resolve(input) === resolve(output)) throw new Error("Output must not replace the recording");
 const contents = readFileSync(input, "utf8");
@@ -22,14 +21,45 @@ if (
 )
 	throw new Error("Unsupported recording");
 const endpoint = `http://127.0.0.1:${Number(port)}`;
+const hash = createHash("sha256").update(instance).digest("hex").slice(0, 16);
+if (socketPath && !resolve(socketPath).endsWith(`/tuic-at/${hash}/tuic-mcp-${hash}.sock`))
+	throw new Error("Socket must belong to the named make agent-test instance");
+const call = (path, options = {}) => {
+	if (!socketPath)
+		return fetch(`${endpoint}${path}`, { ...options, signal: AbortSignal.timeout(5000), redirect: "error" });
+	return new Promise((resolve, reject) => {
+		const req = request(
+			{
+				socketPath,
+				path,
+				method: options.method ?? "GET",
+				headers: options.headers,
+				signal: AbortSignal.timeout(5000),
+			},
+			(response) => {
+				const chunks = [];
+				response.on("data", (chunk) => chunks.push(chunk));
+				response.on("error", reject);
+				response.on("end", () =>
+					resolve({
+						ok: response.statusCode >= 200 && response.statusCode < 300,
+						status: response.statusCode,
+						json: async () => JSON.parse(Buffer.concat(chunks).toString()),
+					}),
+				);
+			},
+		);
+		req.on("error", reject);
+		req.end(options.body);
+	});
+};
 const get = async (path) => {
-	const response = await fetch(`${endpoint}${path}`, { signal: AbortSignal.timeout(5000), redirect: "error" });
+	const response = await call(path);
 	if (!response.ok) throw new Error(`agent-test ${path}: ${response.status}`);
 	return response.json();
 };
 // Fail closed: verify the named harness socket AND the actual listener executable.
 // A non-production port alone is not evidence that this is the isolated binary.
-const hash = createHash("sha256").update(instance).digest("hex").slice(0, 16);
 const health = await get("/health");
 if (!health.ok || !String(health.socket_path).endsWith(`/tuic-at/${hash}/tuic-mcp-${hash}.sock`))
 	throw new Error("Target is not the named make agent-test instance");
@@ -107,7 +137,9 @@ const heartbeat = [], raf = [], ipc = [], canvases = new Map();
 let timer, animation, last = performance.now(), lastRaf = last, pending = false;
 try {
   if (!window.__TUIC__?.frameWorkload?.replay || !window.__TAURI__?.core?.invoke) throw new Error('Desktop replay API unavailable');
+  await window.__TAURI__.core.invoke('push_log', {level:'info',source:'desktop_replay',message:JSON.stringify({stage:'start',visibility:document.visibilityState,userAgent:navigator.userAgent}),dataJson:null});
   const recording = await (await fetch(endpoint + '/recording')).json();
+  await window.__TAURI__.core.invoke('push_log', {level:'info',source:'desktop_replay',message:JSON.stringify({stage:'recording-loaded',visibility:document.visibilityState}),dataJson:null});
   timer = setInterval(async () => {
     const now = performance.now(); heartbeat.push({wall_ms:Date.now(), gap_ms:now-last}); last=now;
     if (pending) return; pending=true; const start=performance.now();
@@ -129,15 +161,16 @@ try {
 finally {clearInterval(timer);cancelAnimationFrame(animation);for(const canvas of canvases.values())canvas.remove();}
 `;
 let outer;
+let receipt;
 try {
-	const response = await fetch(`${endpoint}/debug/invoke_js`, {
+	const response = await call("/debug/invoke_js", {
 		method: "POST",
 		headers: { "Content-Type": "application/json" },
 		body: JSON.stringify({ script }),
 		signal: AbortSignal.timeout(5000),
 		redirect: "error",
 	});
-	const receipt = await response.json();
+	receipt = await response.json();
 	if (!response.ok || !receipt.ok) throw new Error(`invoke rejected: ${JSON.stringify(receipt)}`);
 	const report = await Promise.race([
 		done,
@@ -156,6 +189,7 @@ try {
 				backend,
 				instance,
 				listener_pid: pids[0],
+				transport: socketPath ? "unix-socket" : "tcp",
 				recording_sha256: createHash("sha256").update(contents).digest("hex"),
 			},
 			null,
@@ -164,6 +198,32 @@ try {
 	);
 	if (report.error) throw new Error(report.error);
 	console.log(`Saved native replay report: ${resolve(output)}`);
+} catch (error) {
+	let logs;
+	try {
+		logs = await get("/logs?limit=100");
+	} catch (logError) {
+		logs = { error: String(logError) };
+	}
+	writeFileSync(
+		resolve(output),
+		JSON.stringify(
+			{
+				error: String(error),
+				receipt,
+				backend,
+				logs,
+				instance,
+				listener_pid: pids[0],
+				transport: socketPath ? "unix-socket" : "tcp",
+				recording_sha256: createHash("sha256").update(contents).digest("hex"),
+				claim: "Incomplete replay; eval acceptance and backend probes do not establish WebView liveness",
+			},
+			null,
+			2,
+		),
+	);
+	throw error;
 } finally {
 	clearTimeout(outer);
 	clearInterval(timer);
