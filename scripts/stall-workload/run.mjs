@@ -74,25 +74,31 @@ let resolveReport;
 const completed = new Promise((resolve) => {
 	resolveReport = resolve;
 });
+const cancellation = new AbortController();
 const sessions = [];
 const backendSamples = [];
-const api = async (path, method = "GET", body) => {
+const api = async (path, method = "GET", body, cleanup = false) => {
 	const url = new URL(path, base);
 	url.searchParams.set("token", token);
 	const response = await fetch(url, {
 		method,
 		headers: body === undefined ? {} : { "Content-Type": "application/json" },
 		body: body === undefined ? undefined : JSON.stringify(body),
-		signal: AbortSignal.timeout(10000),
+		signal: cleanup
+			? AbortSignal.timeout(10000)
+			: AbortSignal.any([cancellation.signal, AbortSignal.timeout(10000)]),
 	});
 	const text = await response.text();
 	if (!response.ok) throw new Error(`${method} ${path}: ${response.status} ${text}`);
 	return text ? JSON.parse(text) : null;
 };
-const browser = (args) =>
+const browser = (args, cleanup = false) =>
 	new Promise((resolve, reject) => {
+		if (!cleanup) cancellation.signal.throwIfAborted();
 		const child = spawn(wrapper, args, { env: browserEnv });
 		const timeout = setTimeout(() => child.kill("SIGTERM"), 45000);
+		// Let an in-flight attach publish its named-session identity before teardown.
+		// Killing the wrapper here could strand a tab before browserDaemon is known.
 		let output = "";
 		child.stdout.on("data", (data) => {
 			output += data;
@@ -109,7 +115,8 @@ const browser = (args) =>
 			);
 			const match = output.match(/\[ab-stealth\] session=.*? Chrome=(\d+)/);
 			if (match) browserDaemon = `ab-shared-${session}-${match[1]}`;
-			code === 0 ? resolve(output) : reject(new Error(`Browser command exit ${code}: ${output}`));
+			if (!cleanup && cancellation.signal.aborted) reject(cancellation.signal.reason);
+			else code === 0 ? resolve(output) : reject(new Error(`Browser command exit ${code}: ${output}`));
 		});
 	});
 function resolvePath(name) {
@@ -132,6 +139,17 @@ function json(res, value) {
 	res.setHeader("Content-Type", "application/json");
 	res.end(JSON.stringify(value));
 }
+// Signal handlers request cancellation; only the existing finally block owns teardown.
+// Keep handlers installed through teardown so a second signal cannot interrupt it.
+const cancel = (signal) => {
+	if (cancellation.signal.aborted) return;
+	process.exitCode = signal === "SIGINT" ? 130 : 143;
+	const error = new Error(`Workload cancelled by ${signal}`);
+	cancellation.abort(error);
+	resolveReport({ error: error.message });
+};
+process.on("SIGINT", cancel);
+process.on("SIGTERM", cancel);
 try {
 	const binary = resolve(process.env.STALL_BACKEND_BIN ?? "src-tauri/target/debug/tuic-remote");
 	const log = createWriteStream(resolvePath("backend.log"));
@@ -159,7 +177,7 @@ try {
 			await api("/health");
 			break;
 		} catch (error) {
-			if (attempt >= 100 || backend.exitCode !== null) throw error;
+			if (cancellation.signal.aborted || attempt >= 100 || backend.exitCode !== null) throw error;
 			await new Promise((resolve) => setTimeout(resolve, 100));
 		}
 	}
@@ -246,7 +264,9 @@ try {
 			},
 		},
 	});
+	cancellation.signal.throwIfAborted();
 	await vite.listen();
+	cancellation.signal.throwIfAborted();
 	let probing = false;
 	interval = setInterval(async () => {
 		if (probing) return;
@@ -316,16 +336,19 @@ try {
 	writeFileSync(resolvePath("provenance.json"), JSON.stringify(provenance, null, 2));
 	if (report.error) throw new Error(report.error);
 	console.log(`Saved workload and distributions: ${evidence}`);
+} catch (error) {
+	if (!cancellation.signal.aborted) throw error;
+	console.error(cancellation.signal.reason.message);
 } finally {
 	clearInterval(interval);
 	for (const id of sessions) {
 		try {
-			await api(`/sessions/${id}`, "DELETE");
+			await api(`/sessions/${id}`, "DELETE", undefined, true);
 		} catch {}
 	}
 	if (browserDaemon) {
 		try {
-			await browser(["--", "tab", "close"]);
+			await browser(["--", "tab", "close"], true);
 		} catch (error) {
 			console.error(`Tab cleanup: ${error}`);
 		}
@@ -345,4 +368,6 @@ try {
 	rmSync(snapshots, { recursive: true, force: true });
 	rmSync(resolve(evidence, "vite-cache"), { recursive: true, force: true });
 	console.log("Owned PTYs, Vite, headless backend and named browser session cleaned up.");
+	process.removeListener("SIGINT", cancel);
+	process.removeListener("SIGTERM", cancel);
 }

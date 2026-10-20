@@ -49,7 +49,21 @@ Outputs:
 - `captures/*.tcap`: actual PTY captures, capped at 512 KiB each. Keep these
   outside the committed parser corpus unless you also regenerate their oracles.
 - Backend and browser transcripts. The named browser tab/daemon, PTYs, Vite and
-  backend are stopped in `finally`. The shared Chrome process is not stopped.
+  backend are stopped in `finally`, including on SIGINT or SIGTERM. The first
+  signal cancels pending work and sets exit status 130 or 143; later signals
+  leave that same teardown running. The shared Chrome process is not stopped.
+  SIGKILL cannot run cleanup.
+
+Cancellation regression (no browser, desktop app or generated workload):
+
+```sh
+"$HOME/Gits/personal/orchestrator/tools/build/build-slot.sh" \
+  scripts/with-test-tmp.sh node --test scripts/stall-workload/run.test.mjs
+```
+
+The test starts the actual runner with a small child that holds its health
+request open. It checks the child PID is gone, the teardown completed once, and
+signal exit status is retained, including repeated signals during teardown.
 
 Summarize the raw data with nearest-rank quantiles:
 
