@@ -1,3 +1,39 @@
+/// Catches: a successful tool receipt leaking into the shared native selector title.
+#[tokio::test]
+async fn captured_ego_selector_title_excludes_tool_receipts() {
+    let mut saw_selector = false;
+    replay_native_question(
+        "ego-selector-receipt-title-2088.tcap",
+        "ego",
+        |_, session| {
+            let Some(prompt) = session.choice_prompt.as_ref() else {
+                return;
+            };
+            if prompt
+                .options
+                .iter()
+                .map(|option| option.label.as_str())
+                .collect::<Vec<_>>()
+                != ["Red", "Green", "Blue"]
+            {
+                return;
+            }
+            saw_selector = true;
+            assert_eq!(prompt.title, "Pick a colour?");
+            assert_eq!(session.question_text.as_deref(), Some("Pick a colour?"));
+            assert!(session.awaiting_input && session.question_confident);
+            assert_eq!(
+                prompt.selection_mode,
+                Some(crate::output_parser::ChoiceSelectionMode::NavigateEnter)
+            );
+        },
+    );
+    assert!(
+        saw_selector,
+        "recorded selector must reach shared client state"
+    );
+}
+
 /// Catches: real ego diagnostics/submitted history contaminating selector titles.
 #[tokio::test]
 async fn captured_ego_selector_title_excludes_diagnostics() {
