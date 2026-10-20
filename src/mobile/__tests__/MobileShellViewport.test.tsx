@@ -13,6 +13,7 @@ vi.mock("../../stores/settings", () => ({
 vi.mock("../../stores/ideas", () => ({ ideasStore: { hydrate: vi.fn() } }));
 vi.mock("../useSessions", () => ({
 	useSessions: () => ({
+		aiChatAvailable: () => true,
 		sessions: () => [],
 		loading: () => false,
 		refreshing: () => false,

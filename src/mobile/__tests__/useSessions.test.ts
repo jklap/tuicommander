@@ -6,11 +6,14 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 // only faking the network/event layer it depends on.
 // ---------------------------------------------------------------------------
 
+// Keep session-poll assertions scoped to session RPCs; availability uses its own config read.
+const { sessionRpc } = vi.hoisted(() => ({ sessionRpc: vi.fn() }));
 /** Event handlers the hook registered with `subscribeEvents`. */
 const sseHandlers = new Map<string, (payload: unknown) => void>();
 
 vi.mock("../../transport", () => ({
-	rpc: vi.fn(),
+	rpc: (command: string, ...args: unknown[]) =>
+		command === "load_config" ? Promise.resolve({ ego_executable: "" }) : sessionRpc(command, ...args),
 	isTauri: vi.fn(() => false),
 	subscribeEvents: vi.fn((handlers: Record<string, (payload: unknown) => void>) => {
 		for (const [event, handler] of Object.entries(handlers)) sseHandlers.set(event, handler);
@@ -22,11 +25,11 @@ vi.mock("../../stores/appLogger", () => ({
 	appLogger: { warn: vi.fn(), error: vi.fn(), info: vi.fn() },
 }));
 
-import { rpc, subscribeEvents } from "../../transport";
+import { subscribeEvents } from "../../transport";
 import type { SessionInfo } from "../useSessions";
 import { isAuthError, pollDelayMs, useSessions } from "../useSessions";
 
-const mockRpc = vi.mocked(rpc);
+const mockRpc = sessionRpc;
 const mockSubscribeEvents = vi.mocked(subscribeEvents);
 
 // ---------------------------------------------------------------------------
@@ -514,7 +517,7 @@ describe("useSessions — SSE subscription", () => {
 		await vi.advanceTimersByTimeAsync(0);
 
 		// `subscribeEvents` derives the `?types=` query from the handler keys, so
-		// one call with exactly these three keys is what keeps the client from
+		// one call with exactly these keys is what keeps the client from
 		// receiving and parsing every event kind the backend publishes.
 		expect(mockSubscribeEvents).toHaveBeenCalledTimes(1);
 		const handlers = mockSubscribeEvents.mock.calls[0][0];
@@ -523,6 +526,7 @@ describe("useSessions — SSE subscription", () => {
 			"pty-parsed",
 			"session-closed",
 			"session-created",
+			"settings-changed",
 		]);
 
 		dispose();
