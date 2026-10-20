@@ -4437,6 +4437,166 @@ mod tests {
         );
     }
 
+    // Catches: an unreadable allocation marker is treated as absent and the checkout is moved.
+    #[test]
+    fn archive_refuses_an_allocation_marker_that_is_a_directory() {
+        let (_temp, repo, _workspaces) = workspace_fixture();
+        let path = add_worktree(&repo, "marker-directory");
+        let marker = allocation_marker(&repo, &path).unwrap();
+        assert!(!marker.exists());
+        fs::create_dir(&marker).unwrap();
+        let error = archive_worktree(&repo, "marker-directory", None).unwrap_err();
+        assert!(error.contains("Cannot read allocation marker"), "{error}");
+        assert!(path.join(".git").exists());
+        assert_eq!(
+            get_worktree_paths_raw(&repo.to_string_lossy()).unwrap()["marker-directory"].path,
+            path.to_string_lossy()
+        );
+    }
+
+    // Catches: a valid dirty-file confirmation is inverted or force is reinterpreted as non-force.
+    #[test]
+    fn confirmed_force_removal_discards_only_the_confirmed_dirty_checkout() {
+        let (_temp, repo, _workspaces) = workspace_fixture();
+        let path = add_worktree(&repo, "confirmed-dirty");
+        fs::write(path.join("untracked.txt"), "confirmed discard\n").unwrap();
+        let lifecycle = inspect_workspace_lifecycle(&repo, "confirmed-dirty");
+        assert_eq!(lifecycle.dirty_files, Some(1));
+        remove_worktree_by_workspace_id_with_missing_confirmation_and_pr(
+            &repo.to_string_lossy(),
+            "confirmed-dirty",
+            false,
+            None,
+            true,
+            false,
+            lifecycle.dirty_fingerprint.as_deref(),
+            Some(false),
+            |_, _, _| false,
+        )
+        .unwrap();
+        assert!(!path.exists());
+        assert!(rev_at(&repo, "refs/heads/confirmed-dirty").is_ok());
+    }
+
+    // Catches: the final removal boundary accepts a stale fingerprint or refuses an unchanged one.
+    #[test]
+    fn removal_boundary_rechecks_the_confirmed_fingerprint() {
+        for changed in [false, true] {
+            let (_temp, repo, _workspaces) = workspace_fixture();
+            let path = add_worktree(&repo, "boundary-fingerprint");
+            let confirmed = dirty_fingerprint_at(&path).unwrap().0;
+            if changed {
+                fs::write(path.join("new.txt"), "not confirmed\n").unwrap();
+            }
+            let worktree = WorktreeInfo {
+                name: "boundary-fingerprint".into(),
+                path: path.clone(),
+                branch: Some("boundary-fingerprint".into()),
+                base_repo: repo,
+            };
+            let result = remove_worktree_internal_with_lock(
+                &worktree,
+                true,
+                false,
+                Some(&confirmed),
+                Some(false),
+            );
+            if changed {
+                let error = result.unwrap_err();
+                assert!(error.contains("changed since confirmation"), "{error}");
+                assert_eq!(
+                    fs::read_to_string(path.join("new.txt")).unwrap(),
+                    "not confirmed\n"
+                );
+            } else {
+                result.unwrap();
+                assert!(!path.exists());
+            }
+        }
+    }
+
+    // Catches: generic Git deletion errors are reported as lock/main-worktree errors or cleanup success.
+    #[cfg(unix)]
+    #[test]
+    fn removal_keeps_a_generic_admin_permission_failure_distinct_from_confirmation_errors() {
+        use std::os::unix::fs::PermissionsExt;
+        let (_temp, repo, _workspaces) = workspace_fixture();
+        let path = add_worktree(&repo, "admin-permissions");
+        let admin = registered_worktree_admin_dir(&repo, &path)
+            .unwrap()
+            .unwrap();
+        let worktree = WorktreeInfo {
+            name: "admin-permissions".into(),
+            path: path.clone(),
+            branch: Some("admin-permissions".into()),
+            base_repo: repo.clone(),
+        };
+        let original = fs::metadata(&admin).unwrap().permissions();
+        fs::set_permissions(&admin, fs::Permissions::from_mode(0o500)).unwrap();
+        let result = remove_worktree_internal(&worktree, true);
+        fs::set_permissions(&admin, original).unwrap();
+        let error = result.unwrap_err();
+        assert!(error.starts_with("Git worktree remove failed:"), "{error}");
+        assert!(
+            admin.exists(),
+            "Git failure must not silently prune the registration"
+        );
+    }
+
+    // Catches: force incorrectly refuses a changed submodule HEAD before preserving its local-only commit.
+    #[test]
+    fn forced_removal_preserves_a_changed_submodule_head() {
+        let (_temp, repo, _workspaces) = workspace_fixture();
+        add_populated_submodule(&repo);
+        let path = add_worktree(&repo, "ignored-submodule-dirt");
+        git_cmd(&path)
+            .args([
+                "-c",
+                "protocol.file.allow=always",
+                "submodule",
+                "update",
+                "--init",
+            ])
+            .run()
+            .unwrap();
+        let module = path.join("modules/local");
+        git_cmd(&module)
+            .args(["config", "user.email", "test@test.com"])
+            .run()
+            .unwrap();
+        git_cmd(&module)
+            .args(["config", "user.name", "Test"])
+            .run()
+            .unwrap();
+        commit_file(&module, "only-here.txt", "preserve this commit\n");
+        let oid = rev_at(&module, "HEAD").unwrap();
+        let status = git_cmd(&path).args(["submodule", "status"]).run().unwrap();
+        assert!(status.stdout.starts_with('+'), "{}", status.stdout);
+        let worktree = WorktreeInfo {
+            name: "ignored-submodule-dirt".into(),
+            path: path.clone(),
+            branch: Some("ignored-submodule-dirt".into()),
+            base_repo: repo.clone(),
+        };
+        remove_worktree_internal(&worktree, true).unwrap();
+        assert!(!path.exists());
+        git_cmd(&repo.join("modules/local"))
+            .args(["cat-file", "-e", &oid])
+            .run()
+            .unwrap();
+        let refs = git_cmd(&repo.join("modules/local"))
+            .args([
+                "for-each-ref",
+                "--format=%(refname)",
+                "--points-at",
+                &oid,
+                "refs/tuic/preserved",
+            ])
+            .run()
+            .unwrap();
+        assert!(!refs.stdout.trim().is_empty());
+    }
+
     // Catches: archive errors leave the sidebar and registry pointing at a moved checkout.
     #[test]
     fn archive_journal_failure_restores_the_original_checkout() {
