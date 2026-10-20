@@ -502,6 +502,8 @@ whatever sets it owns nothing until something retracts it. These paths clear it:
 confident question: grok repaints while it waits, so "not on screen this tick"
 is not proof of an answer.
 
+**Dialog recovery requires an active agent identity.** After foreground observation returns to the shell, a retained Ink footer or question title above its prompt is history, not a live dialog. Both full-screen recovery and silence-timer chat heuristics require that identity. Never re-arm awaiting from shell output just because that footer remains visible (`claude-question-exit-2091.tcap`).
+
 **The mirror failure is a SET that never comes back.** A multi-question
 `AskUserQuestion` answers one sub-question at a time; each repaints its title and
 options while the `Enter to select` footer stays byte-identical. The changed-rows

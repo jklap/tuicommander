@@ -146,7 +146,7 @@ unambiguous permission or approval wording. Claude's generic `is waiting for
 your input` body also appears after a completed turn at the ready composer, so
 it cannot set awaiting by itself.
 
-The full-screen Ink-footer recovery also applies with hooks enabled. A later
+The full-screen Ink-footer recovery requires an active agent identity: retained dialog rows above a returned shell prompt do not establish a wait. Silence-timer chat-question heuristics enforce the same identity boundary, so a retained title cannot restore a low-confidence wait later. It also applies with hooks enabled. A later
 busy hook can clear awaiting while the dialog is still open. Before recovery,
 the reader evaluates the last pending Question/UserInput event in the current
 chunk: a Question followed by UserInput is a clear, not an existing question.

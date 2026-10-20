@@ -6,6 +6,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+- Prevent a retained question footer from restoring Input state after the agent exits to the shell (#2091-ba03).
 - Restore awaiting state and native answer controls for repeated ego MCP approvals, including hard-wrapped approval titles (#2089-aafb).
 
 - Keep connection, intent and finished tool rows out of ego selector titles shared by desktop and mobile (#2088-98ea).
