@@ -53,11 +53,15 @@ pub(crate) fn apply_config(config: &mut crate::config::AppConfig, port: u16) {
 /// when the launching app (the daily TUIC) is frontmost (story 2095). Tauri runs
 /// `setup` after that call, so the policy is set between build and run.
 #[cfg(feature = "desktop")]
-pub(crate) fn without_launch_activation(mut app: tauri::App) -> tauri::App {
+pub(crate) fn without_launch_activation(app: tauri::App) -> tauri::App {
     #[cfg(target_os = "macos")]
-    if active() {
-        app.set_activation_policy(tauri::ActivationPolicy::Prohibited);
-    }
+    let app = {
+        let mut app = app;
+        if active() {
+            app.set_activation_policy(tauri::ActivationPolicy::Prohibited);
+        }
+        app
+    };
     app
 }
 
