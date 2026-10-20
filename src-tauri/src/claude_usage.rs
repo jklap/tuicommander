@@ -1200,6 +1200,11 @@ pub async fn get_claude_session_stats_impl(
     get_claude_session_stats_from_dir(state, scope, &projects_dir).await
 }
 
+#[cfg(test)]
+thread_local! {
+    static SESSION_FILE_STATS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 async fn get_claude_session_stats_from_dir(
     state: &Arc<crate::AppState>,
     scope: String,
@@ -1289,6 +1294,8 @@ async fn get_claude_session_stats_from_dir(
 
         // Incremental parse each file
         for (name, path) in &jsonl_files {
+            #[cfg(test)]
+            SESSION_FILE_STATS.with(|stats| stats.set(stats.get() + 1));
             let current_size = match std::fs::metadata(path) {
                 Ok(m) => m.len(),
                 Err(_) => continue,
@@ -1829,6 +1836,40 @@ mod tests {
             .unwrap();
         assert!(deleted_project.per_project.is_empty());
         assert!(!state.claude_usage_cache.lock().contains_key("project-a"));
+    }
+
+    /// Catches a warm Usage refresh still statting every historical JSONL
+    /// before its already-populated parse cache can reject unchanged files.
+    #[tokio::test]
+    async fn session_stats_warm_refresh_does_not_stat_unchanged_history() {
+        let dir = tempfile::tempdir().unwrap();
+        let _guard = crate::config::set_config_dir_override(dir.path().join("config"));
+        let projects = dir.path().join("projects");
+        let project = projects.join("project-a");
+        std::fs::create_dir_all(&project).unwrap();
+        std::fs::write(
+            project.join("session.jsonl"),
+            transcript(10, 1, "s1", "2026-07-30T10"),
+        )
+        .unwrap();
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+        SESSION_FILE_STATS.with(|stats| stats.set(0));
+        let first = get_claude_session_stats_from_dir(&state, "all".into(), &projects)
+            .await
+            .unwrap();
+        assert_eq!(first.total_input_tokens, 10);
+        SESSION_FILE_STATS.with(|stats| assert_eq!(stats.get(), 1));
+        let second = get_claude_session_stats_from_dir(&state, "all".into(), &projects)
+            .await
+            .unwrap();
+        assert_eq!(second.total_input_tokens, 10);
+        SESSION_FILE_STATS.with(|stats| {
+            assert_eq!(
+                stats.get(),
+                1,
+                "warm refresh must not stat unchanged history"
+            )
+        });
     }
 
     #[tokio::test]
