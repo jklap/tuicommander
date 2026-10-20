@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+- Restore awaiting state and native answer controls for repeated ego MCP approvals, including hard-wrapped approval titles (#2089-aafb).
+
 - Keep connection, intent and finished tool rows out of ego selector titles shared by desktop and mobile (#2088-98ea).
 
 - Hide mobile AI Chat when ego is not configured on the host, refresh availability on settings changes, and return unavailable Chat views to Sessions (#2087-07bf).

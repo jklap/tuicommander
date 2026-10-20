@@ -1,3 +1,7 @@
+## Repeated ego MCP approvals (2089-aafb) — Rust restart required
+
+- [ ] After Boss manually restarts a rebuilt `make dev` or installs `make build`, run a disposable ego default-mode session that requires two or more MCP approvals. Each approval must show Input and native answer controls on mobile; answer once and confirm the controls clear before the next approval. Include a long approval title that wraps. This peer did not restart or replace the running desktop backend. The retained capture supplies the replay regression; seven targeted rb parity/corpus tests pass. Live verification belongs to integration.
+
 ## Paired native plugin refresh (2039-428c) — rebuild required
 
 - [ ] After Boss manually restarts a rebuilt backend or installs a signed package, verify notification permission and delivery, then the updater check/download/install flow and deferred relaunch. Rust/npm notification 2.7.0 and updater 2.14.0 are paired; Linux default-feature compilation and targeted tests pass, but macOS/Windows packaging and real OS integration still need release validation. This peer did not restart or replace the running app.
