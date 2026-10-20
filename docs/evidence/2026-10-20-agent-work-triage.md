@@ -66,3 +66,114 @@ This peer ran one targeted Rust regression on rb and one explicitly authorized n
 A read-only request for worktree warm status through the desktop HTTP API returned 401 Unauthorized; no credentials were read and no bypass attempted. The evidence-only Vite replay used the already available worktree dependencies. The authorized story GREEN addition also encountered the terminal-story CLI refusal described in the ego report; no criteria success is inferred from a failed command.
 
 Final coordinator disposition: do not reopen terminal story 573 to add criteria; retain its current criteria and record the successful verification in its worklog only. Final preflight passes 1995, refuses 573 original broad GREEN, and refuses 2040 native GREEN. These refusals are explicit limitations, not test failures to suppress. Story states remain complete / wontfix / blocked respectively.
+
+
+## 2040 native follow-up: isolated WebView, 2026-10-20
+
+### Scope and provenance
+
+The coordinator authorized `make agent-test AGENT_TEST_INSTANCE=at-2040
+AGENT_TEST_PORT=19879` in the `chore/desk-2040` worktree at
+`ba54df45f6678ef443ec8d9293b3ab31492c6a91`. The native frontend and Rust build
+used the target's build-slot/mbx wrappers. The installed app and Boss's running
+instance were not changed. No trusted native input was authorized.
+
+TCP `/health` initially returned the Basic Auth challenge. The coordinator then
+authorized the instance's own Unix socket. All subsequent workload and debug
+requests used that socket, with no login, token-file read or credential copy:
+`~/Gits/.tmp/tuic-at/71f77a801497f18a/tuic-mcp-71f77a801497f18a.sock`.
+
+Raw evidence and the executable measurement scripts are retained in
+`~/Gits/.tmp/desk-2040-native/`. The main files are `native-loaded.json`,
+`native-loaded-backend.json`, `native-loaded-frame-workload.json`,
+`native-loaded-*-output.json`, `summary.json`, `measure.js`, `run-measure.py`,
+`eval.mjs` and `agent-test-socket.log`. A preceding ten-key, one-session smoke
+is retained separately as `smoke*`; its samples are not pooled with the main run.
+
+### Workload and observation
+
+One throwaway PTY ran the unchanged `scripts/stall-workload/output.py` generator:
+12 source-like rows per tick, a requested 100 ms pause, two-second startup pause
+and default 15-second output window. This is paced synthetic output, not a
+historical agent stall or an ego `/help` run. The session was selected through
+its normal tab click handler. The terminal canvas had a nonzero 862 by 660
+CSS-pixel rectangle, 1724 by 1320 device pixels, DPR 2.
+
+The WebView reported `visibilityState=hidden` throughout both measurement
+windows. No visibility override, focus workaround or native input was used.
+The initial inspection before measurement had reported `visible`; a nonzero
+canvas rectangle did not establish visible document scheduling later.
+
+The main run dispatched 15 untrusted `KeyboardEvent` objects through the actual
+terminal input element, using distinct circled-number characters. Its intended
+150 ms pauses were delayed, with an observed maximum dispatch gap of 3747 ms.
+An independent Python observer polled the session output over the Unix socket,
+with a 20 ms pause after each completed request. It recorded the first response
+containing each character. This gives a **JS dispatch to backend-output
+observation upper bound**, not backend read time, IPC duration, paint latency
+or trusted keyboard latency. It includes observer scheduling and request cost.
+Both clocks are from the same Mac; the WebView timestamps use
+`performance.timeOrigin + performance.now()` and the observer uses wall time.
+
+### Main-run results
+
+All durations below are milliseconds; quantiles use nearest rank.
+
+| Metric | n | p50 | p95 | p99 | max |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| JS dispatch to backend echo observation, matched samples only | 11 | 243.959 | 811.406 | 811.406 | 811.406 |
+| 100 ms WebView timer gap | 16 | 671 | 3480 | 3480 | 3480 |
+| Independent Unix-socket output request | 97 | 36.542 | 587.484 | 3777.371 | 3777.371 |
+| Production frame decode | 26 | 0 | 4 | not retained | 50 |
+| rAF callback / production paint | 0 | unavailable | unavailable | unavailable | unavailable |
+
+Four dispatched characters (⑧, ⑨, ⑪ and ⑫) were absent from both the final
+backend output and the observer's matches. The 11-sample echo distribution is
+therefore censored, not a 15/15 pass. The layer responsible for the four absent
+characters was not isolated. No production fix or regression claim is based
+on this exploratory result.
+
+The observer saw 207537 bytes of output growth over 17.146339 seconds, or
+12103.867 bytes/s across that observation window. The final retained output
+contains 792 generator row prefixes, spanning steps 0 through 65. The requested
+120 rows/s is a generator setting, not a measured achieved rate; scheduling,
+startup and observation boundaries prevent treating those two rates as equal.
+
+The draw hook observed zero `fillText` calls on the selected terminal canvas,
+and the rAF observer received zero callbacks. The production frame timing hook
+also recorded zero paints. The bounded workload recorder retained 17 arrival
+events and zero paints, with nine events dropped. Its arrival timestamp is the
+frontend frame callback, not the backend PTY read timestamp. There is therefore
+**no backend-read-to-WebView-paint measurement** in this run. The observations
+are consistent with the known hidden-WebView prerequisite being tracked by
+story 2090; they do not isolate a terminal renderer defect.
+
+### Browser comparison and disposition
+
+The earlier Chrome run in `scripts/stall-workload/RESULTS.md` used a visible
+1878 by 1260 CSS-pixel terminal, four PTYs and a 30-second output window. Its
+active-capture timer-gap p95 was 101.9 ms, rAF-gap p95 was 16.7 ms and maximum
+rAF gap was 57.5 ms. Its renderer-only main replay paint p95 was 6.2 ms.
+Those are not native keyboard measurements. The older triage numbers above
+also measure PTY/application echo, not presentation.
+
+The hidden native run's timer p95 of 3480 ms and absence of rAF/paint cannot be
+used as an engine performance ratio against visible Chrome. Geometry, visibility,
+workload duration and request/measurement paths differ. Native paint and original
+`/help` REALITY/GREEN criteria remain unproved. Next prerequisites are the
+coordinator-owned hidden-WebView resolution or an authorized visible observation,
+and Boss's decision on trusted input/presentation capture. Do not close 2040 or
+claim a pre-fix native RED from these proxy samples.
+
+### Cleanup and validation
+
+All workload sessions were deleted in the driver's `finally` block. The exact
+`make agent-test-stop AGENT_TEST_INSTANCE=at-2040 AGENT_TEST_PORT=19879` command
+returned `Stop requested for this agent-test instance only`. A subsequent
+`ps -axo pid=,command= | grep "$PWD/.tmp/agent-test"` check found no matching
+worktree agent-test process. No browser, Vite server or separate backend was
+started for this run. No token or account login was used.
+
+This follow-up changes documentation only. No production test, mutation run,
+backend edit, installed executable replacement, merge or push was done. The
+original story close check still refuses its unproved native GREEN criterion.
