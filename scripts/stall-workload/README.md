@@ -96,10 +96,17 @@ that already-running WebView:
 ```sh
 node scripts/stall-workload/desktop-replay.mjs \
   "$HOME/Gits/.tmp/stall-workload-example/frame-workload.json" \
-  "$HOME/Gits/.tmp/stall-workload-example/wkwebview-report.json" agent-test 19876
+  "$HOME/Gits/.tmp/stall-workload-example/wkwebview-report.json" agent-test 19876 \
+  "<socket field from the agent-test dry-run JSON>"
 ```
 
-This helper has **not yet been executed against the desktop harness**. It checks
+The optional final argument selects the named instance's Unix socket for control
+and independent backend probes. TCP can require Basic authentication even on
+loopback; do not read token files or log in for this harness. Obtain the socket
+from `make agent-test AGENT_TEST_DRY_RUN=1` with the same instance and port
+overrides used at launch. The helper was executed on native WKWebView on
+2026-10-20; see `DESKTOP-RESULTS.md` for the distributions and incomplete attempt.
+It checks
 the expected named socket and the actual listener executable before submitting
 JS. It refuses production ports and never launches, restarts or stops an app.
 It serves the capture temporarily on loopback, uses dedicated canvases, collects
@@ -108,7 +115,14 @@ HTTP timings, and waits for an actual result callback rather than treating eval
 acceptance as completion. The helper does not replay PTY arrivals or prove input
 continuity, and it does not replay the historical stall. On a permanent WebView
 hang, an outer timeout can report failure but cannot make that thread run its
-cleanup until it resumes.
+cleanup until it resumes. Failure reports retain the eval receipt, independent
+backend probes and recent instance logs, plus any measurements received in an
+error callback; acceptance alone is never completion. Check callback-error and
+no-callback timeout persistence without a desktop:
+
+```sh
+scripts/with-test-tmp.sh node --test scripts/stall-workload/desktop-replay.test.mjs
+```
 
 ## Recorded result: 2026-10-20
 
