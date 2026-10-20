@@ -263,6 +263,12 @@ The name, tasks, and session-scoped Progress open temporary sheets over the
 terminal; Commands, Files, output search, Ideas, usage, copy ID, and terminate
 remain reachable in overflow. No fixed intent/task rows reduce terminal space.
 
+`MobileApp` measures `visualViewport.height` and `offsetTop` into the fixed shell's
+CSS variables. Resize, viewport scroll, `pageshow`, foreground `visibilitychange`
+and document `resume` share one animation-frame measurement. Lifecycle listeners
+are removed on unmount. This prevents stale geometry after a restore without a
+viewport event; it does not establish the cause of the reported iPhone grey screen.
+
 `MobileApp` keeps `SessionDetailScreen` mounted while its overflow opens the shared
 `FilesScreen` at the session's worktree or containing registered repository.
 The session's output stream and command draft stay alive while Files is shown;

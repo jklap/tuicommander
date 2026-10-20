@@ -65,6 +65,9 @@ export default function MobileApp() {
 				document.documentElement.style.setProperty("--app-top", `${vv.offsetTop}px`);
 			});
 		};
+		const onVisible = () => {
+			if (document.visibilityState === "visible") update();
+		};
 		const pinScroll = () => {
 			window.scrollTo(0, 0);
 		};
@@ -72,10 +75,17 @@ export default function MobileApp() {
 		update();
 		vv.addEventListener("resize", update);
 		vv.addEventListener("scroll", update);
+		// A restored document may have new geometry without a viewport event.
+		window.addEventListener("pageshow", update);
+		document.addEventListener("visibilitychange", onVisible);
+		document.addEventListener("resume", update);
 		window.addEventListener("scroll", pinScroll);
 		onCleanup(() => {
 			vv.removeEventListener("resize", update);
 			vv.removeEventListener("scroll", update);
+			window.removeEventListener("pageshow", update);
+			document.removeEventListener("visibilitychange", onVisible);
+			document.removeEventListener("resume", update);
 			window.removeEventListener("scroll", pinScroll);
 			cancelAnimationFrame(raf);
 		});

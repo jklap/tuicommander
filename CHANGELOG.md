@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+- Re-measure mobile shell height and top on page restore, foreground visibility and document resume so stale viewport geometry is not retained (#1900-5ff6).
+
 - Keep the agent-test WebView visible and painting in a compact bottom-right floating window without activating the application or taking keyboard focus; add an opt-in native visibility observer and leave the daily window profile unchanged (#2090-cf8a).
 - Prevent a retained question footer from restoring Input state after the agent exits to the shell (#2091-ba03).
 - Restore awaiting state and native answer controls for repeated ego MCP approvals, including hard-wrapped approval titles (#2089-aafb).
