@@ -1,6 +1,0 @@
-Command: story-close.sh --check /Users/stefano.straus/Gits/personal/tuicommander 2040-16b2 /Users/stefano.straus/Gits/personal/tuicommander__wt/chore-2040-visible-recheck
-Exit: 1
-
-story-close: REFUSED: criterion 3 is not checked: [ ] GREEN: /help in TUIC prints within 2x of the plain PTY baseline and keystroke echo stays under one frame while rows print
-
-The original criterion is not weakened or checked from censored untrusted-input/fillText evidence. Combined new GREEN remains unchecked because native heartbeat and all-tail non-regression are not certified. Named ticker RED and targeted20/20 native/rb GREEN are checked in the main story store.
