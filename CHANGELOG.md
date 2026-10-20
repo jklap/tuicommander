@@ -10,6 +10,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Stop reopening Telegram configuration on every idle tick and unrelated app event; use file events for runtime opt-in and setup changes (#2098-98b2).
 
 - Read shared Git ref state once per sidebar refresh instead of reopening and scanning it for every linked worktree (#2098-98b2).
+- Refresh monitoring ref targets and reflog hashes incrementally from Git paths; retain signature validation when complete file watching is unavailable (#2098-98b2).
 - Read worktree inventory from checkout HEAD files without reopening each checkout’s Git configuration and object store (#2098-98b2).
 - Reuse monitoring repository handles for dirty and lifecycle reads, with configuration-signature invalidation instead of reopening global Git configuration for every workspace (#2098-98b2).
 

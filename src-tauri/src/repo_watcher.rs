@@ -68,14 +68,20 @@ pub(crate) fn classify_path(
         if let Some(name) = rel.file_name().and_then(|n| n.to_str())
             && matches!(
                 name,
-                "index" | "MERGE_HEAD" | "REBASE_HEAD" | "CHERRY_PICK_HEAD" | "REVERT_HEAD"
+                "index"
+                    | "packed-refs"
+                    | "config"
+                    | "MERGE_HEAD"
+                    | "REBASE_HEAD"
+                    | "CHERRY_PICK_HEAD"
+                    | "REVERT_HEAD"
             )
             && rel.parent().is_some_and(|p| p == Path::new(""))
         {
             return EventCategory::GitState;
         }
 
-        // Everything else under .git/ is noise (objects, config, hooks, logs, etc.)
+        // Everything else under .git/ is noise (objects, hooks, logs, etc.)
         return EventCategory::Noise;
     }
 
@@ -814,6 +820,9 @@ pub(crate) fn start_watching(repo_path: &str, state: &Arc<AppState>) -> Result<(
     #[cfg(target_os = "linux")]
     let rt_for_cb = rt_handle.clone();
     let emitter = Arc::new(CategoryEmitter::new(rt_handle));
+    // The base-checkout fingerprint cannot see a sibling ref/HEAD move. Keep
+    // one pending bit across the debounce rather than reading every checkout.
+    let shared_git_changed = Arc::new(std::sync::atomic::AtomicBool::new(false));
 
     let repo_for_cb = repo.clone();
     let git_dir_for_cb = git_dir.clone();
@@ -826,6 +835,7 @@ pub(crate) fn start_watching(repo_path: &str, state: &Arc<AppState>) -> Result<(
                 Ok(e) => e,
                 Err(err) => {
                     tracing::warn!(source = "repo_watcher", path = %repo_path_owned, "Watcher error: {err}");
+                    tuic_git::worktree::set_monitoring_watch_active(&repo_for_cb, false);
                     return;
                 }
             };
@@ -835,6 +845,25 @@ pub(crate) fn start_watching(repo_path: &str, state: &Arc<AppState>) -> Result<(
             // core processing them on this (notify event) thread (issue #84).
             if is_ignorable_access(&event.kind) {
                 return;
+            }
+
+            if event.need_rescan() {
+                tuic_git::worktree::set_monitoring_watch_active(&repo_for_cb, false);
+            }
+            let git_paths: Vec<_> = event.paths.iter()
+                .filter(|path| path.starts_with(&git_dir_for_cb)).cloned().collect();
+            if !git_paths.is_empty() {
+                tuic_git::worktree::monitoring_paths_changed(&repo_for_cb, &git_paths);
+            }
+            if git_paths.iter().any(|path| {
+                path == &git_dir_for_cb.join("packed-refs")
+                    || path == &git_dir_for_cb.join("config")
+                    || (path.starts_with(git_dir_for_cb.join("refs"))
+                        && !path.extension().is_some_and(|extension| extension == "lock"))
+                    || (path.starts_with(git_dir_for_cb.join("worktrees"))
+                        && path.file_name().is_some_and(|name| name == "HEAD"))
+            }) {
+                shared_git_changed.store(true, std::sync::atomic::Ordering::Relaxed);
             }
 
             // Rebuild the matcher when an ignore source that matters changes.
@@ -958,13 +987,15 @@ pub(crate) fn start_watching(repo_path: &str, state: &Arc<AppState>) -> Result<(
                 let repo = repo_for_cb.clone();
                 let git_dir = git_dir_for_cb.clone();
                 let em = Arc::clone(&emitter);
+                let shared_changed = Arc::clone(&shared_git_changed);
                 emitter.trigger(&EventCategory::GitState, move || {
                     // Skip the emit (and cache invalidation) when the meaningful git
                     // state is unchanged. A no-op `.git` touch — e.g. a non-writing
                     // status refreshing the index stat cache — leaves the fingerprint
                     // identical, so we avoid the redundant ~20-panel frontend cascade.
+                    let shared_changed = shared_changed.swap(false, std::sync::atomic::Ordering::Relaxed);
                     let fp = repo_git_fingerprint(&repo, &git_dir);
-                    if st.repo_git_fingerprints.get(&repo_path).map(|v| *v) == Some(fp) {
+                    if !shared_changed && st.repo_git_fingerprints.get(&repo_path).map(|v| *v) == Some(fp) {
                         tracing::debug!(source = "repo_watcher", path = %repo_path, "Skip repo-changed (git-state unchanged)");
                         return;
                     }
@@ -1048,6 +1079,12 @@ pub(crate) fn start_watching(repo_path: &str, state: &Arc<AppState>) -> Result<(
     // `.git/objects`, whose churn floods the callback and pins CPU (issue #82).
     let mut watched_dirs = std::collections::HashSet::new();
     let watch_failures = watch_working_tree_root(&mut watcher, repo.as_path(), &mut watched_dirs);
+    // Only claim path-complete Git watching for a canonical main checkout.
+    // Linked roots, partial registrations and watcher loss retain signature checks.
+    #[allow(unused_mut)]
+    let mut monitoring_watch_complete = watch_failures == 0
+        && git_dir == repo.join(".git")
+        && std::fs::canonicalize(&repo).ok().as_ref() == Some(&repo);
 
     #[cfg(not(target_os = "linux"))]
     if watch_failures > 0 {
@@ -1083,6 +1120,7 @@ pub(crate) fn start_watching(repo_path: &str, state: &Arc<AppState>) -> Result<(
                 .map_err(|e| format!("Failed to watch .git: {e}"))?;
             let refs_dir = git_dir.join("refs");
             if let Err(e) = watcher.watch(&refs_dir, RecursiveMode::Recursive) {
+                monitoring_watch_complete = false;
                 tracing::warn!(source = "repo_watcher", path = %refs_dir.display(), "Failed to watch .git/refs: {e}");
             }
             let worktrees_dir = git_dir.join("worktrees");
@@ -1106,6 +1144,7 @@ pub(crate) fn start_watching(repo_path: &str, state: &Arc<AppState>) -> Result<(
     // Linked worktrees get their own watches — the handle must be registered
     // first, since the sync reaches it through `state.repo_watchers`.
     sync_worktree_watches(state, repo_path, &git_dir);
+    tuic_git::worktree::set_monitoring_watch_active(&repo, monitoring_watch_complete);
     Ok(())
 }
 
@@ -1118,6 +1157,7 @@ pub(crate) fn start_watching(repo_path: &str, state: &Arc<AppState>) -> Result<(
 /// removed the repo, parked it, or the refresh coordinator retired it. An
 /// in-flight build keeps its own `Arc` and simply writes into an orphan.
 pub(crate) fn stop_watching(repo_path: &str, state: &Arc<AppState>) {
+    tuic_git::worktree::set_monitoring_watch_active(Path::new(repo_path), false);
     if state.repo_watchers.remove(repo_path).is_some() {
         tracing::info!(source = "repo_watcher", path = %repo_path, "Stopping watcher");
     }
@@ -1387,6 +1427,21 @@ mod tests {
         );
     }
 
+    // Catches: packing refs or changing integration configuration never wakes monitoring.
+    #[test]
+    fn monitoring_dependency_files_are_git_state_not_noise() {
+        let root = Path::new("/repo");
+        let git = root.join(".git");
+        let gi = empty_gitignore();
+        for name in ["packed-refs", "config"] {
+            assert_eq!(
+                classify_path(&git.join(name), root, &git, &[], &gi),
+                EventCategory::GitState,
+                "{name}"
+            );
+        }
+    }
+
     #[test]
     fn test_classify_noise_git_internals() {
         let root = Path::new("/repo");
@@ -1395,10 +1450,6 @@ mod tests {
 
         assert_eq!(
             classify_path(Path::new("/repo/.git/objects/ab/cdef"), root, git, &[], &gi),
-            EventCategory::Noise
-        );
-        assert_eq!(
-            classify_path(Path::new("/repo/.git/config"), root, git, &[], &gi),
             EventCategory::Noise
         );
         assert_eq!(
@@ -2332,6 +2383,14 @@ mod tests {
         std::fs::write(repo.join("a.txt"), "hi\n").unwrap();
         git(&["add", "a.txt"]);
         git(&["commit", "-m", "init"]);
+        let sibling = repo.parent().unwrap().join("watcher-sibling");
+        git(&[
+            "worktree",
+            "add",
+            "-b",
+            "watcher-sibling",
+            sibling.to_str().unwrap(),
+        ]);
 
         let state = Arc::new(crate::state::tests_support::make_test_app_state());
         let repo_path = repo.to_string_lossy().to_string();
@@ -2342,6 +2401,7 @@ mod tests {
         // writes that land between the registration call and the stream opening,
         // and this test makes exactly one burst of them.
         tokio::time::sleep(Duration::from_millis(500)).await;
+        let before = tuic_git::worktree::monitoring_ref_key(&repo, "main").unwrap();
 
         std::fs::write(repo.join("b.txt"), "second\n").unwrap();
         git(&["add", "b.txt"]);
@@ -2364,6 +2424,34 @@ mod tests {
         .expect("a commit must emit GitState after any preceding working-tree notifications");
 
         assert_eq!(kind, RepoChangeKind::GitState);
+        // Catches: watcher delivery refreshes panels but leaves the ref snapshot stale.
+        let after = tuic_git::worktree::monitoring_ref_key(&repo, "main").unwrap();
+        assert_ne!(before, after);
+
+        // Catches: the base fingerprint suppresses later linked-checkout commits.
+        for _ in 0..2 {
+            let before = tuic_git::worktree::monitoring_ref_key(&repo, "watcher-sibling").unwrap();
+            git(&[
+                "-C",
+                sibling.to_str().unwrap(),
+                "commit",
+                "--allow-empty",
+                "-m",
+                "sibling",
+            ]);
+            tokio::time::timeout(Duration::from_secs(20), async {
+                loop {
+                    match rx.recv().await {
+                        Ok(AppEvent::RepoChanged { repo_path: p, kind: RepoChangeKind::GitState }) if p == repo_path => {
+                            let after = tuic_git::worktree::monitoring_ref_key(&repo, "watcher-sibling").unwrap();
+                            if after != before { break; }
+                        }
+                        Ok(_) => {}
+                        Err(error) => panic!("event bus closed: {error}"),
+                    }
+                }
+            }).await.expect("a linked-checkout commit must wake monitoring even when the base fingerprint is unchanged");
+        }
 
         stop_watching(&repo_path, &state);
     }

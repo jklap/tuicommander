@@ -1249,79 +1249,366 @@ fn patches_integrated_in(repo: &Path, target: &str, tip: &str) -> Result<bool, S
     Ok(cherry.stdout.lines().all(|line| line.starts_with("- ")))
 }
 
-/// Build one shared ref snapshot for a sidebar refresh. Local branch targets
-/// stay outside the common digest: a sibling commit must not expire every proof.
+type MonitoringSignature = Option<(std::time::SystemTime, u64)>;
+
+fn monitoring_signature(path: &Path) -> MonitoringSignature {
+    #[cfg(test)]
+    MONITORING_SIGNATURE_READS.with(|reads| reads.set(reads.get() + 1));
+    let metadata = std::fs::metadata(path).ok()?;
+    Some((metadata.modified().ok()?, metadata.len()))
+}
+
+#[derive(Clone)]
+struct MonitoringFile {
+    signature: MonitoringSignature,
+    digest: Vec<u8>,
+    symbolic: Option<String>,
+}
+
+#[derive(Default)]
+struct MonitoringRefs {
+    packed: MonitoringSignature,
+    initialized: bool,
+    watching: bool,
+    watch_registered: bool,
+    verify_files: bool,
+    changed_paths: std::collections::HashSet<PathBuf>,
+    targets: std::collections::BTreeMap<String, (String, Option<String>)>,
+    loose: HashMap<PathBuf, MonitoringSignature>,
+    directories: HashMap<PathBuf, (MonitoringSignature, Vec<(PathBuf, bool)>)>,
+    files: HashMap<PathBuf, MonitoringFile>,
+}
+
+// The mutex single-flights snapshots for this checkout, including standalone
+// callers outside the app's repository diff cache. Values retain hashes, not logs.
+static MONITORING_REFS: LazyLock<
+    moka::sync::Cache<PathBuf, Arc<std::sync::Mutex<MonitoringRefs>>>,
+> = LazyLock::new(|| moka::sync::Cache::builder().max_capacity(64).build());
+
+/// Enable path-driven snapshots only after the app has armed its Git watches.
+/// Watch failures and stop transitions restore signature validation.
+pub fn set_monitoring_watch_active(repo: &Path, active: bool) {
+    let cache = MONITORING_REFS.get_with(repo.to_path_buf(), || {
+        Arc::new(std::sync::Mutex::new(MonitoringRefs::default()))
+    });
+    if let Ok(mut snapshot) = cache.lock() {
+        snapshot.watch_registered = active;
+        // Some backends return from watch() before the stream is armed. Keep
+        // signature validation until a delivered event proves it is live.
+        snapshot.watching = false;
+        snapshot.initialized = false;
+        snapshot.verify_files = true;
+    }
+}
+
+/// Feed the existing repository watcher; never start a second recursive watcher.
+/// The snapshot lock serializes updates with refresh: events arriving during a
+/// refresh remain pending for the next coalesced refresh, not cleared mid-read.
+pub fn monitoring_paths_changed(repo: &Path, paths: &[PathBuf]) {
+    let Some(cache) = MONITORING_REFS.get(repo) else {
+        return;
+    };
+    if let Ok(mut snapshot) = cache.lock() {
+        let git = repo.join(".git");
+        let paths: Vec<_> = paths
+            .iter()
+            .filter(|path| {
+                *path == &git
+                    || *path == &git.join("HEAD")
+                    || *path == &git.join("config")
+                    || *path == &git.join("packed-refs")
+                    || path.starts_with(git.join("refs"))
+                    || path.starts_with(git.join("logs/refs/heads"))
+            })
+            .cloned()
+            .collect();
+        if paths.is_empty() {
+            return;
+        }
+        if snapshot.watch_registered && !snapshot.watching {
+            snapshot.watching = true;
+            snapshot.initialized = false;
+            snapshot.verify_files = true;
+        }
+        if snapshot.changed_paths.len().saturating_add(paths.len()) > 4096 {
+            snapshot.initialized = false;
+            snapshot.verify_files = true;
+            snapshot.changed_paths.clear();
+        } else {
+            snapshot.changed_paths.extend(paths);
+        }
+    }
+}
+
+impl MonitoringRefs {
+    fn read_file(&mut self, path: &Path, required: bool) -> Result<MonitoringFile, String> {
+        if self.watching
+            && !self.verify_files
+            && !self.changed_paths.contains(path)
+            && let Some(file) = self.files.get(path)
+        {
+            return Ok(file.clone());
+        }
+        let signature = monitoring_signature(path);
+        if let Some(file) = self.files.get(path)
+            && file.signature == signature
+        {
+            return Ok(file.clone());
+        }
+        #[cfg(test)]
+        if required {
+            MONITORING_COMMON_READS.with(|reads| reads.set(reads.get() + 1));
+        } else {
+            MONITORING_LOG_READS.with(|reads| reads.set(reads.get() + 1));
+        }
+        let bytes = match std::fs::read(path) {
+            Ok(bytes) => bytes,
+            Err(error) if !required && error.kind() == std::io::ErrorKind::NotFound => Vec::new(),
+            Err(error) => return Err(error.to_string()),
+        };
+        let file = MonitoringFile {
+            signature,
+            digest: Sha256::digest(&bytes).to_vec(),
+            symbolic: bytes
+                .strip_prefix(b"ref: ")
+                .map(|name| String::from_utf8_lossy(name).trim().to_owned()),
+        };
+        // A concurrent write must be checked again, not cached as a new generation.
+        if monitoring_signature(path) == signature {
+            self.files.insert(path.to_path_buf(), file.clone());
+        } else {
+            self.files.remove(path);
+        }
+        Ok(file)
+    }
+
+    fn loose_files(&mut self, dir: &Path, files: &mut Vec<PathBuf>) -> Result<(), String> {
+        let signature = monitoring_signature(dir);
+        let cached = self
+            .directories
+            .get(dir)
+            .filter(|(old, _)| *old == signature);
+        let entries = if let Some((_, entries)) = cached {
+            entries.clone()
+        } else {
+            let entries = match std::fs::read_dir(dir) {
+                Ok(entries) => entries
+                    .map(|entry| {
+                        let entry = entry?;
+                        Ok::<_, std::io::Error>((entry.path(), entry.file_type()?.is_dir()))
+                    })
+                    .collect::<Result<Vec<_>, _>>()
+                    .map_err(|error| error.to_string())?,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => Vec::new(),
+                Err(error) => return Err(error.to_string()),
+            };
+            self.directories
+                .insert(dir.to_path_buf(), (signature, entries.clone()));
+            entries
+        };
+        for (path, is_dir) in entries {
+            if is_dir {
+                self.loose_files(&path, files)?;
+            } else if !path
+                .extension()
+                .is_some_and(|extension| extension == "lock")
+            {
+                files.push(path);
+            }
+        }
+        Ok(())
+    }
+
+    fn refresh(&mut self, repo: &gix::Repository) -> Result<(), String> {
+        use gix::bstr::ByteSlice;
+        if self.watching && self.initialized {
+            let common = repo.common_dir();
+            let refs = common.join("refs");
+            let broad = self.changed_paths.iter().any(|path| {
+                path == common
+                    || path == &common.join("packed-refs")
+                    || (path.starts_with(&refs)
+                        && (path.is_dir()
+                            || self.targets.keys().any(|name| {
+                                common.join(name).starts_with(path) && common.join(name) != *path
+                            })))
+            });
+            if !broad {
+                let paths: Vec<_> = self
+                    .changed_paths
+                    .iter()
+                    .filter(|path| {
+                        path.starts_with(&refs)
+                            && !path
+                                .extension()
+                                .is_some_and(|extension| extension == "lock")
+                    })
+                    .cloned()
+                    .collect();
+                for path in paths {
+                    let name = path
+                        .strip_prefix(common)
+                        .map_err(|e| e.to_string())?
+                        .components()
+                        .map(|part| part.as_os_str().to_string_lossy())
+                        .collect::<Vec<_>>()
+                        .join("/");
+                    match repo
+                        .try_find_reference(name.as_str())
+                        .map_err(|e| e.to_string())?
+                    {
+                        Some(reference) => {
+                            self.targets
+                                .insert(name.clone(), monitoring_target(&reference));
+                        }
+                        None => {
+                            self.targets.remove(&name);
+                        }
+                    }
+                    if let Some(branch) = name.strip_prefix("refs/heads/") {
+                        self.changed_paths
+                            .insert(common.join("logs/refs/heads").join(branch));
+                    }
+                }
+                return Ok(());
+            }
+            self.verify_files = true;
+        }
+        let packed = monitoring_signature(&repo.common_dir().join("packed-refs"));
+        let full = !self.initialized || packed != self.packed;
+        // Sample loose-file generations before reading targets. A write racing
+        // the snapshot then differs on the next refresh instead of being sealed
+        // into the cache with a newer signature than the value it describes.
+        let mut files = Vec::new();
+        self.loose_files(&repo.common_dir().join("refs"), &mut files)?;
+        let mut loose = HashMap::new();
+        for path in &files {
+            loose.insert(path.clone(), monitoring_signature(path));
+        }
+        if full {
+            let references = repo.references().map_err(|error| error.to_string())?;
+            #[cfg(test)]
+            MONITORING_REF_ENUMERATIONS.with(|reads| reads.set(reads.get() + 1));
+            let mut targets = std::collections::BTreeMap::new();
+            for reference in references.all().map_err(|error| error.to_string())? {
+                let reference = reference.map_err(|error| error.to_string())?;
+                targets.insert(
+                    reference.name().as_bstr().to_str_lossy().into_owned(),
+                    monitoring_target(&reference),
+                );
+            }
+            self.targets = targets;
+        }
+        if !full {
+            let paths: std::collections::HashSet<_> =
+                loose.keys().chain(self.loose.keys()).collect();
+            for path in paths {
+                if self.loose.get(path) == loose.get(path) {
+                    continue;
+                }
+                let name = path
+                    .strip_prefix(repo.common_dir())
+                    .map_err(|e| e.to_string())?
+                    .components()
+                    .map(|part| part.as_os_str().to_string_lossy())
+                    .collect::<Vec<_>>()
+                    .join("/");
+                match repo
+                    .try_find_reference(name.as_str())
+                    .map_err(|e| e.to_string())?
+                {
+                    Some(reference) => {
+                        self.targets.insert(name, monitoring_target(&reference));
+                    }
+                    None => {
+                        self.targets.remove(&name);
+                    }
+                }
+            }
+        }
+        self.loose = loose;
+        self.packed = packed;
+        self.initialized = true;
+        Ok(())
+    }
+}
+
+fn monitoring_target(reference: &gix::Reference<'_>) -> (String, Option<String>) {
+    use gix::bstr::ByteSlice;
+    let symbolic = match reference.target() {
+        gix::refs::TargetRef::Symbolic(target) => {
+            Some(target.as_bstr().to_str_lossy().into_owned())
+        }
+        gix::refs::TargetRef::Object(_) => None,
+    };
+    (format!("{:?}", reference.target()), symbolic)
+}
+
+/// Reuse unchanged ref and reflog pieces across sidebar refreshes. Metadata
+/// signatures also cover standalone callers that do not own an app watcher.
 pub fn monitoring_ref_keys(
     repo: &Path,
     branches: &[String],
 ) -> Result<HashMap<String, String>, String> {
-    use gix::bstr::ByteSlice;
     if branches.is_empty() {
         return Ok(HashMap::new());
     }
     let grepo = crate::git_reads::cached_repo(repo)?;
-    let mut targets = std::collections::BTreeMap::new();
-    let references = grepo.references().map_err(|e| e.to_string())?;
-    #[cfg(test)]
-    MONITORING_REF_ENUMERATIONS.with(|reads| reads.set(reads.get() + 1));
-    for reference in references.all().map_err(|e| e.to_string())? {
-        let reference = reference.map_err(|e| e.to_string())?;
-        targets.insert(
-            reference.name().as_bstr().to_str_lossy().into_owned(),
-            format!("{:?}", reference.target()),
-        );
+    let cache = MONITORING_REFS.get_with(repo.to_path_buf(), || {
+        Arc::new(std::sync::Mutex::new(MonitoringRefs::default()))
+    });
+    let mut snapshot = cache.lock().map_err(|error| error.to_string())?;
+    if let Err(error) = snapshot.refresh(&grepo) {
+        *snapshot = MonitoringRefs::default();
+        return Err(error);
     }
+    let head = snapshot.read_file(&grepo.git_dir().join("HEAD"), true)?;
+    let config = snapshot.read_file(&grepo.common_dir().join("config"), true)?;
     let mut common = Sha256::new();
-    // Every remote can prove containment. Read them once for the repository,
-    // never once per workspace, including the symbolic origin/HEAD target.
-    for (name, target) in &targets {
+    // Any remote can prove containment; keep all remote dependencies without
+    // reopening their files on every local commit.
+    for (name, (target, _)) in &snapshot.targets {
         if name.starts_with("refs/remotes/") {
             common.update(format!("{name}={target}\0").as_bytes());
         }
     }
-    let origin_default = grepo
-        .try_find_reference("refs/remotes/origin/HEAD")
-        .map_err(|e| e.to_string())?
-        .and_then(|reference| match reference.target() {
-            gix::refs::TargetRef::Symbolic(target) => target
-                .as_bstr()
-                .to_str_lossy()
-                .strip_prefix("refs/remotes/origin/")
-                .map(str::to_owned),
-            gix::refs::TargetRef::Object(_) => None,
-        });
-    let mut defaults = vec!["main".to_owned(), "master".to_owned()];
+    let origin_default = snapshot
+        .targets
+        .get("refs/remotes/origin/HEAD")
+        .and_then(|(_, symbolic)| symbolic.as_deref())
+        .and_then(|name| name.strip_prefix("refs/remotes/origin/"));
+    let mut defaults = vec!["main", "master"];
     defaults.extend(origin_default);
     defaults.sort();
     defaults.dedup();
     for branch in defaults {
         let name = format!("refs/heads/{branch}");
-        common.update(format!("{name}={:?}\0", targets.get(&name)).as_bytes());
+        common.update(format!("{name}={:?}\0", snapshot.targets.get(&name)).as_bytes());
     }
-    let head = grepo.rev_parse_single("HEAD").ok().map(|id| id.detach());
-    common.update(format!("HEAD={head:?}\0").as_bytes());
-    for file in [
-        grepo.git_dir().join("HEAD"),
-        grepo.common_dir().join("config"),
-    ] {
-        #[cfg(test)]
-        MONITORING_COMMON_READS.with(|reads| reads.set(reads.get() + 1));
-        common.update(std::fs::read(file).map_err(|e| e.to_string())?);
-        common.update([0]);
+    common.update(head.digest);
+    // Resolve symbolic HEAD from the shared snapshot, not another ref-store read.
+    let mut symbolic = head.symbolic.as_deref();
+    for _ in 0..16 {
+        let Some(name) = symbolic else { break };
+        let target = snapshot.targets.get(name);
+        common.update(format!("{name}={target:?}\0").as_bytes());
+        symbolic = target.and_then(|(_, next)| next.as_deref());
     }
+    common.update(config.digest);
     let mut keys = HashMap::new();
     for branch in branches {
         let mut digest = common.clone();
         let name = format!("refs/heads/{branch}");
-        digest.update(format!("{name}={:?}\0", targets.get(&name)).as_bytes());
-        // Own branch history distinguishes an untouched branch from a merge.
-        #[cfg(test)]
-        MONITORING_LOG_READS.with(|reads| reads.set(reads.get() + 1));
-        if let Ok(log) = std::fs::read(grepo.common_dir().join("logs/refs/heads").join(branch)) {
-            digest.update(log);
-        }
+        digest.update(format!("{name}={:?}\0", snapshot.targets.get(&name)).as_bytes());
+        let log = snapshot.read_file(
+            &grepo.common_dir().join("logs/refs/heads").join(branch),
+            false,
+        )?;
+        digest.update(log.digest);
         keys.insert(branch.clone(), hex::encode(digest.finalize()));
     }
+    snapshot.changed_paths.clear();
+    snapshot.verify_files = false;
     Ok(keys)
 }
 
@@ -1330,6 +1617,7 @@ thread_local! {
     static MONITORING_COMMON_READS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     static MONITORING_REF_ENUMERATIONS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     static MONITORING_LOG_READS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    static MONITORING_SIGNATURE_READS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 /// Standalone callers get the same dependency set as a batched sidebar refresh.
@@ -9614,6 +9902,39 @@ branch refs/heads/feat
             common == 0 && enumerations == 0 && logs <= 1,
             "one commit: {common} unchanged common reads, {enumerations} full ref enumerations, {logs} reflog reads; expected 0, 0, at most 1"
         );
+    }
+
+    // Catches: a branch-only event stats sibling refs/logs or forgets its own reflog.
+    #[test]
+    fn monitoring_path_update_does_not_probe_sibling_signatures() {
+        let (_temp, repo, _) = workspace_fixture();
+        let branches: Vec<_> = (0..16).map(|i| format!("event-{i}")).collect();
+        for branch in &branches {
+            add_worktree(&repo, branch);
+        }
+        set_monitoring_watch_active(&repo, true);
+        monitoring_paths_changed(&repo, &[repo.join(".git")]);
+        let before = monitoring_ref_keys(&repo, &branches).unwrap();
+        let checkout = resolve_any_workspace(&repo, &branches[0]).unwrap();
+        commit_file(Path::new(&checkout.path), "event.txt", "changed\n");
+        // The adapter receives a real Git ref path, not a synthesized file format.
+        monitoring_paths_changed(&repo, &[repo.join(".git/refs/heads").join(&branches[0])]);
+        MONITORING_SIGNATURE_READS.with(|reads| reads.set(0));
+        let after = monitoring_ref_keys(&repo, &branches).unwrap();
+        assert_ne!(before[&branches[0]], after[&branches[0]]);
+        for branch in &branches[1..] {
+            assert_eq!(before[branch], after[branch]);
+        }
+        let signatures = MONITORING_SIGNATURE_READS.with(std::cell::Cell::get);
+        assert!(
+            signatures <= 2,
+            "changed-branch reflog signatures: {signatures}; sibling signatures must not be probed"
+        );
+        // A failed/stopped watcher must not seal the cached generation forever.
+        set_monitoring_watch_active(&repo, false);
+        commit_file(Path::new(&checkout.path), "event.txt", "changed again\n");
+        let fallback = monitoring_ref_keys(&repo, &branches).unwrap();
+        assert_ne!(after[&branches[0]], fallback[&branches[0]]);
     }
 
     // Catches: batching misses packed refs, a moved remote, or the integration HEAD.
