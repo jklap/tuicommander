@@ -94,6 +94,18 @@ The requested latency measurement is still incomplete:
 
 Each attempt started `make agent-test` as an owned subprocess, polled its own socket for readiness, and stopped it in the observer's `finally` block. Each `cleanup.json` records successful `make agent-test-stop`, an empty final session list, and no remaining executable from this worktree. The supervisor's make exit 2 reflects the requested child SIGTERM (143), not a build failure. No Vite server, browser daemon, production session, installed binary or daily API was used. There is still no valid native keyboard-to-rendered-echo latency, and AC4 remains unchecked. The physical-phone check remains with Boss.
 
+## Observer correction and integrated-shell follow-up
+
+The coordinator's source audit explained two invalid prerequisites in the preceding attempts. `app_logger.rs` coalesces consecutive identical messages while retaining their log ID; the old `evaluate` helper waited only for a new ID. Those apparent timeouts do not establish a WebView stall. `shell_integration.rs` exports the integration path for interactive login bash but does not source it. The owned native bash therefore needed `source "$TUIC_SHELL_INTEGRATION"` before the child command to establish backend `idle` through OSC 133. The earlier `shellState:null` observation was not a valid standby prerequisite.
+
+`scripts/agent-test-visible.py` now wraps each evaluation in a unique nonce and matches that nonce in the result log. It ignores unrelated results and reports a correlated JavaScript error directly. The native r4/r5 observers each verified two consecutive identical snapshots and an expected thrown error against the real WebView, without mocks. Both then sourced the integration script in the owned bash, observed backend `idle`, and reached production SIGSTOP without reading session output during the standby wait. Thus the earlier evaluation and idle-prerequisite blockers are resolved.
+
+Evidence roots are `~/Gits/.tmp/results/desk-1986-visible-r4/` and `desk-1986-visible-r5/`. The r4 shell (PGID `15037`) stopped at 10:53:11.813269 UTC and resumed at 10:53:12.256102 UTC after one synthetic raw `Ω` key. The output ring contains that character. However, its document had become hidden, so the ten-second observer saw no canvas paint and produced no valid rendered-echo latency. Its initial frontmost application was `loginwindow`; this is not evidence from an unlocked visible surface.
+
+In r5 the initial and pre-key frontmost application was Slack, the setup document was visible, and the shell (PID/PGID `61198`) reached OS-confirmed `Ts+`. Before any key was sent, the owned native window reported `isVisible() === false` and the document reported hidden. The observer correctly aborted rather than cite a hidden-window latency. The cause of that presentation loss is not established. A question and the exact evidence were sent to the coordinator; no denied show/focus API was bypassed.
+
+Both observers deleted their owned session and ran `make agent-test-stop` in `finally`; both cleanup receipts record an empty session list and no remaining worktree executable. There is still no valid native keydown-to-painted-echo latency. AC4 and the physical-phone check remain open.
+
 ## Cleanup
 
 Both owned PTYs were deleted; the final session list was empty. The owned browser tab and named daemon were closed; shared Chrome was left running. Backend PID 65820 and Vite PID 65821 received SIGTERM, and the final `ps` check found neither process nor either owned shell. The temporary Vite configuration was removed. No capture corpus, dependencies, production code or application test suites changed or ran.
