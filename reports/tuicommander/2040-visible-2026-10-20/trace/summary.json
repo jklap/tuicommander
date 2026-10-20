@@ -1,0 +1,522 @@
+{
+  "session": "3230b912-9344-4a5a-bad3-996f0af243c3",
+  "window": {
+    "visibility": "hidden",
+    "focus": false,
+    "nativeFocus": false,
+    "visible": true,
+    "position": {
+      "x": 1632,
+      "y": 1092
+    },
+    "size": {
+      "width": 1280,
+      "height": 840
+    }
+  },
+  "event_counts": {
+    "tick-start": 97,
+    "tick-decision": 98,
+    "pty-read": 172,
+    "vt-applied": 171,
+    "grid-offer": 94,
+    "desktop-submit": 94,
+    "grid-decision": 31
+  },
+  "ticker_decisions": {
+    "skip:clean": 4,
+    "coalesce:no-subscriber": 2,
+    "cut:eligible": 92
+  },
+  "native_submit_count": 94,
+  "frontend_arrival_count": 50,
+  "recorder_dropped": 0,
+  "native_submit_payloads_not_observed": {
+    "cd0d2b9a9f645232de8b2c93ee43793fa032072239d0a785c8274b826e1e456b": 31,
+    "eb67a5f766918dc9c917dcf016c63209fde527302912c7cfffe7132666b90488": 2,
+    "ab1bfce51ac0264a148627f57d3a365f9b88c3cbbbe06b3b8a95eb18439b8431": 1,
+    "e49e356f035f43929c00c92517c46685b5eea518e505c571ecb9f76a82b3edd7": 1,
+    "12f8deface6672d4a8926eccf452279d78f230c81723c044833e2cfac335bb2f": 1,
+    "afd07a25a96292f10bf780608bb174ae9c28c4c67fb0e49cb20c8eb503882ed3": 1,
+    "b8d0fdd130330439533bf1d4841ce1c59c426f88e84e037f8837a55a85700c95": 1,
+    "ff3ab878a4efa2176d5869af115b34977cb7ae3a2fee2f006ad3f3f68d97665e": 1,
+    "cb22be99d1ac48b5c1b5a19b61340c7fe2c759cb39b12fac7382153c69659353": 1,
+    "cf6964eaebe361dd196534318a88a48bc1ccea468b21da8453b17efd2beeaab4": 1,
+    "0b416cba670dd33f0319be903b45519dab444de2874d55c7e03bbf51d3b533e4": 1,
+    "654bb2ce1667f66599b53ad5f0b042180fc54b515c35dadf41de0c8f762939ae": 1,
+    "ae10c67ce492376caa0b4ba7439b227089734e3c320a0f7ddb3e93842839ca7b": 1
+  },
+  "frontend_arrival_payloads_not_in_native_submit_trace": {},
+  "samples": [
+    {
+      "key": "\u2460",
+      "error": "sentinel missing from processed PTY chunks"
+    },
+    {
+      "key": "\u2461",
+      "error": "sentinel missing from processed PTY chunks"
+    },
+    {
+      "key": "\u2462",
+      "dispatch_epoch_us": 1792493288478000,
+      "first_vt_event_sequence": 218,
+      "first_vt_at_us": 1792493288489627,
+      "first_vt_screen_locations": [
+        {
+          "row": 13,
+          "column": 0,
+          "absolute_row": 314
+        }
+      ],
+      "first_vt_tail_locations": [
+        {
+          "absolute_row": 314,
+          "column": 0
+        }
+      ],
+      "first_vt_origin": 301,
+      "first_vt_history": 303,
+      "first_vt_geometry": {
+        "origin": 301,
+        "history": 303,
+        "total": 317,
+        "rows": 14,
+        "columns": 37
+      },
+      "last_vt_before_cut_sequence": 218,
+      "last_vt_before_cut_at_us": 1792493288489627,
+      "last_vt_before_cut_tail_locations": [
+        {
+          "absolute_row": 314,
+          "column": 0
+        }
+      ],
+      "last_vt_before_cut_origin": 301,
+      "first_eligible_cut_sequence": 220,
+      "first_eligible_cut_at_us": 1792493288492837,
+      "first_eligible_cut_tick": 41,
+      "first_eligible_cut_screen_locations": [
+        {
+          "row": 13,
+          "column": 0,
+          "absolute_row": 314
+        }
+      ],
+      "first_eligible_cut_origin": 301,
+      "first_eligible_cut_cells_contain_key": true,
+      "tick_decisions_before_cut": [
+        {
+          "sequence": 220,
+          "at_us": 1792493288492837,
+          "tick": 41,
+          "decision": "cut",
+          "reason": "eligible",
+          "min_interval_ms": 50,
+          "input_recent": true,
+          "dirty_run": 36,
+          "saturated": true
+        }
+      ],
+      "sentinel_above_viewport_before_cut": false,
+      "native_submit_count_containing_key": 1,
+      "frontend_arrival_count_containing_key": 1,
+      "fillText_ms": null
+    },
+    {
+      "key": "\u2463",
+      "error": "sentinel missing from processed PTY chunks"
+    },
+    {
+      "key": "\u2464",
+      "error": "sentinel missing from processed PTY chunks"
+    },
+    {
+      "key": "\u2465",
+      "dispatch_epoch_us": 1792493288933000,
+      "first_vt_event_sequence": 244,
+      "first_vt_at_us": 1792493288972512,
+      "first_vt_screen_locations": [
+        {
+          "row": 13,
+          "column": 0,
+          "absolute_row": 458
+        }
+      ],
+      "first_vt_tail_locations": [
+        {
+          "absolute_row": 458,
+          "column": 0
+        }
+      ],
+      "first_vt_origin": 445,
+      "first_vt_history": 447,
+      "first_vt_geometry": {
+        "origin": 445,
+        "history": 447,
+        "total": 461,
+        "rows": 14,
+        "columns": 37
+      },
+      "last_vt_before_cut_sequence": 249,
+      "last_vt_before_cut_at_us": 1792493288995627,
+      "last_vt_before_cut_tail_locations": [
+        {
+          "absolute_row": 458,
+          "column": 0
+        }
+      ],
+      "last_vt_before_cut_origin": 491,
+      "first_eligible_cut_sequence": 251,
+      "first_eligible_cut_at_us": 1792493289004177,
+      "first_eligible_cut_tick": 44,
+      "first_eligible_cut_screen_locations": [],
+      "first_eligible_cut_origin": 491,
+      "first_eligible_cut_cells_contain_key": false,
+      "tick_decisions_before_cut": [
+        {
+          "sequence": 251,
+          "at_us": 1792493289004177,
+          "tick": 44,
+          "decision": "cut",
+          "reason": "eligible",
+          "min_interval_ms": 50,
+          "input_recent": true,
+          "dirty_run": 39,
+          "saturated": true
+        }
+      ],
+      "sentinel_above_viewport_before_cut": true,
+      "native_submit_count_containing_key": 0,
+      "frontend_arrival_count_containing_key": 0,
+      "fillText_ms": null
+    },
+    {
+      "key": "\u2466",
+      "dispatch_epoch_us": 1792493289085000,
+      "first_vt_event_sequence": 256,
+      "first_vt_at_us": 1792493289124396,
+      "first_vt_screen_locations": [
+        {
+          "row": 13,
+          "column": 0,
+          "absolute_row": 530
+        }
+      ],
+      "first_vt_tail_locations": [
+        {
+          "absolute_row": 530,
+          "column": 0
+        }
+      ],
+      "first_vt_origin": 517,
+      "first_vt_history": 519,
+      "first_vt_geometry": {
+        "origin": 517,
+        "history": 519,
+        "total": 533,
+        "rows": 14,
+        "columns": 37
+      },
+      "last_vt_before_cut_sequence": 258,
+      "last_vt_before_cut_at_us": 1792493289133348,
+      "last_vt_before_cut_tail_locations": [
+        {
+          "absolute_row": 530,
+          "column": 0
+        }
+      ],
+      "last_vt_before_cut_origin": 540,
+      "first_eligible_cut_sequence": 261,
+      "first_eligible_cut_at_us": 1792493289141994,
+      "first_eligible_cut_tick": 45,
+      "first_eligible_cut_screen_locations": [],
+      "first_eligible_cut_origin": 540,
+      "first_eligible_cut_cells_contain_key": false,
+      "tick_decisions_before_cut": [
+        {
+          "sequence": 261,
+          "at_us": 1792493289141994,
+          "tick": 45,
+          "decision": "cut",
+          "reason": "eligible",
+          "min_interval_ms": 50,
+          "input_recent": true,
+          "dirty_run": 40,
+          "saturated": true
+        }
+      ],
+      "sentinel_above_viewport_before_cut": true,
+      "native_submit_count_containing_key": 0,
+      "frontend_arrival_count_containing_key": 0,
+      "fillText_ms": null
+    },
+    {
+      "key": "\u2467",
+      "dispatch_epoch_us": 1792493289236000,
+      "first_vt_event_sequence": 268,
+      "first_vt_at_us": 1792493289277946,
+      "first_vt_screen_locations": [
+        {
+          "row": 13,
+          "column": 0,
+          "absolute_row": 602
+        }
+      ],
+      "first_vt_tail_locations": [
+        {
+          "absolute_row": 602,
+          "column": 0
+        }
+      ],
+      "first_vt_origin": 589,
+      "first_vt_history": 591,
+      "first_vt_geometry": {
+        "origin": 589,
+        "history": 591,
+        "total": 605,
+        "rows": 14,
+        "columns": 37
+      },
+      "last_vt_before_cut_sequence": 268,
+      "last_vt_before_cut_at_us": 1792493289277946,
+      "last_vt_before_cut_tail_locations": [
+        {
+          "absolute_row": 602,
+          "column": 0
+        }
+      ],
+      "last_vt_before_cut_origin": 589,
+      "first_eligible_cut_sequence": 270,
+      "first_eligible_cut_at_us": 1792493289280629,
+      "first_eligible_cut_tick": 46,
+      "first_eligible_cut_screen_locations": [
+        {
+          "row": 13,
+          "column": 0,
+          "absolute_row": 602
+        }
+      ],
+      "first_eligible_cut_origin": 589,
+      "first_eligible_cut_cells_contain_key": true,
+      "tick_decisions_before_cut": [
+        {
+          "sequence": 270,
+          "at_us": 1792493289280629,
+          "tick": 46,
+          "decision": "cut",
+          "reason": "eligible",
+          "min_interval_ms": 50,
+          "input_recent": true,
+          "dirty_run": 41,
+          "saturated": true
+        }
+      ],
+      "sentinel_above_viewport_before_cut": false,
+      "native_submit_count_containing_key": 1,
+      "frontend_arrival_count_containing_key": 1,
+      "fillText_ms": null
+    },
+    {
+      "key": "\u2468",
+      "error": "sentinel missing from processed PTY chunks"
+    },
+    {
+      "key": "\u2469",
+      "error": "sentinel missing from processed PTY chunks"
+    },
+    {
+      "key": "\u246a",
+      "dispatch_epoch_us": 1792493289688000,
+      "first_vt_event_sequence": 296,
+      "first_vt_at_us": 1792493289695049,
+      "first_vt_screen_locations": [
+        {
+          "row": 13,
+          "column": 0,
+          "absolute_row": 746
+        }
+      ],
+      "first_vt_tail_locations": [
+        {
+          "absolute_row": 746,
+          "column": 0
+        }
+      ],
+      "first_vt_origin": 733,
+      "first_vt_history": 735,
+      "first_vt_geometry": {
+        "origin": 733,
+        "history": 735,
+        "total": 749,
+        "rows": 14,
+        "columns": 37
+      },
+      "last_vt_before_cut_sequence": 296,
+      "last_vt_before_cut_at_us": 1792493289695049,
+      "last_vt_before_cut_tail_locations": [
+        {
+          "absolute_row": 746,
+          "column": 0
+        }
+      ],
+      "last_vt_before_cut_origin": 733,
+      "first_eligible_cut_sequence": 298,
+      "first_eligible_cut_at_us": 1792493289698414,
+      "first_eligible_cut_tick": 49,
+      "first_eligible_cut_screen_locations": [
+        {
+          "row": 13,
+          "column": 0,
+          "absolute_row": 746
+        }
+      ],
+      "first_eligible_cut_origin": 733,
+      "first_eligible_cut_cells_contain_key": true,
+      "tick_decisions_before_cut": [
+        {
+          "sequence": 298,
+          "at_us": 1792493289698414,
+          "tick": 49,
+          "decision": "cut",
+          "reason": "eligible",
+          "min_interval_ms": 50,
+          "input_recent": true,
+          "dirty_run": 44,
+          "saturated": true
+        }
+      ],
+      "sentinel_above_viewport_before_cut": false,
+      "native_submit_count_containing_key": 1,
+      "frontend_arrival_count_containing_key": 1,
+      "fillText_ms": null
+    },
+    {
+      "key": "\u246b",
+      "dispatch_epoch_us": 1792493290023000,
+      "first_vt_event_sequence": 324,
+      "first_vt_at_us": 1792493290101424,
+      "first_vt_screen_locations": [
+        {
+          "row": 13,
+          "column": 0,
+          "absolute_row": 890
+        }
+      ],
+      "first_vt_tail_locations": [
+        {
+          "absolute_row": 890,
+          "column": 0
+        }
+      ],
+      "first_vt_origin": 877,
+      "first_vt_history": 879,
+      "first_vt_geometry": {
+        "origin": 877,
+        "history": 879,
+        "total": 893,
+        "rows": 14,
+        "columns": 37
+      },
+      "last_vt_before_cut_sequence": 329,
+      "last_vt_before_cut_at_us": 1792493290124498,
+      "last_vt_before_cut_tail_locations": [
+        {
+          "absolute_row": 890,
+          "column": 0
+        }
+      ],
+      "last_vt_before_cut_origin": 923,
+      "first_eligible_cut_sequence": 331,
+      "first_eligible_cut_at_us": 1792493290132439,
+      "first_eligible_cut_tick": 52,
+      "first_eligible_cut_screen_locations": [],
+      "first_eligible_cut_origin": 923,
+      "first_eligible_cut_cells_contain_key": false,
+      "tick_decisions_before_cut": [
+        {
+          "sequence": 331,
+          "at_us": 1792493290132439,
+          "tick": 52,
+          "decision": "cut",
+          "reason": "eligible",
+          "min_interval_ms": 50,
+          "input_recent": true,
+          "dirty_run": 47,
+          "saturated": true
+        }
+      ],
+      "sentinel_above_viewport_before_cut": true,
+      "native_submit_count_containing_key": 0,
+      "frontend_arrival_count_containing_key": 0,
+      "fillText_ms": null
+    },
+    {
+      "key": "\u246c",
+      "dispatch_epoch_us": 1792493291023000,
+      "first_vt_event_sequence": 392,
+      "first_vt_at_us": 1792493291071293,
+      "first_vt_screen_locations": [
+        {
+          "row": 13,
+          "column": 0,
+          "absolute_row": 1250
+        }
+      ],
+      "first_vt_tail_locations": [
+        {
+          "absolute_row": 1250,
+          "column": 0
+        }
+      ],
+      "first_vt_origin": 1237,
+      "first_vt_history": 1239,
+      "first_vt_geometry": {
+        "origin": 1237,
+        "history": 1239,
+        "total": 1253,
+        "rows": 14,
+        "columns": 37
+      },
+      "last_vt_before_cut_sequence": 394,
+      "last_vt_before_cut_at_us": 1792493291079737,
+      "last_vt_before_cut_tail_locations": [
+        {
+          "absolute_row": 1250,
+          "column": 0
+        }
+      ],
+      "last_vt_before_cut_origin": 1260,
+      "first_eligible_cut_sequence": 397,
+      "first_eligible_cut_at_us": 1792493291087894,
+      "first_eligible_cut_tick": 59,
+      "first_eligible_cut_screen_locations": [],
+      "first_eligible_cut_origin": 1260,
+      "first_eligible_cut_cells_contain_key": false,
+      "tick_decisions_before_cut": [
+        {
+          "sequence": 397,
+          "at_us": 1792493291087894,
+          "tick": 59,
+          "decision": "cut",
+          "reason": "eligible",
+          "min_interval_ms": 50,
+          "input_recent": true,
+          "dirty_run": 54,
+          "saturated": true
+        }
+      ],
+      "sentinel_above_viewport_before_cut": true,
+      "native_submit_count_containing_key": 0,
+      "frontend_arrival_count_containing_key": 0,
+      "fillText_ms": null
+    },
+    {
+      "key": "\u246d",
+      "error": "sentinel missing from processed PTY chunks"
+    },
+    {
+      "key": "\u246e",
+      "error": "sentinel missing from processed PTY chunks"
+    }
+  ]
+}

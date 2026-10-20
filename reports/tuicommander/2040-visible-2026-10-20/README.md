@@ -83,6 +83,10 @@ Commands executed:
 
 No production code changed. No Rust/JS unit suite, RED/GREEN cycle, mutation, release build, native trusted keyboard timing, or compositor capture is claimed. The original native GREEN/REALITY criteria remain open. The native-input decision report is not changed.
 
+## Sentinel boundary follow-up
+
+The continuation trace resolves the reproduced omission as viewport scrolling before serialization: ⑤, ⑨ and ⑪ in the inherited trace, and ⑦ in the single authorized repeat, are already above the viewport before their first eligible grid snapshot. Still-visible control glyphs are serialized and received. No serializer/delivery defect or RED was established. Both trace runs were hidden and do not add visible timing evidence or satisfy the original native GREEN/REALITY criteria. See [`trace/README.md`](trace/README.md) for the coordinates, event sequences, retained raw logs, observer patches, limitations and successful exact-instance cleanup. The temporary Rust observer is not part of the final source tree.
+
 ## Evidence index
 
 - `summary.json`, `analyze.py`: computed distributions and per-key stage times.

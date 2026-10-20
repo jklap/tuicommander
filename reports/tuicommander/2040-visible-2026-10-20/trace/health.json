@@ -1,0 +1,13 @@
+{
+  "ok": true,
+  "uptime_secs": 0,
+  "session_count": 0,
+  "protocol_version": 1,
+  "build": {
+    "version": "2.0.0",
+    "target": "aarch64-apple-darwin",
+    "sha256": "bf98cc0fa6a7d0b204fca1a86f809f7e4892a61136bf4c8b871f45a9d97fcdc7"
+  },
+  "socket_path": "/Users/stefano.straus/Gits/.tmp/tuic-at/d943b7d93347aefd/tuic-mcp-d943b7d93347aefd.sock",
+  "instance_id": "6d2f5107-6bce-4372-874e-fcefcd67dde6"
+}
