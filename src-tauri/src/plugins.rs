@@ -2639,7 +2639,9 @@ mod tests {
         std::fs::create_dir_all(&leftover).unwrap();
         std::fs::write(leftover.join("manifest.json"), valid_manifest_json("x")).unwrap();
 
-        assert!(list_user_plugins().is_empty());
+        assert!(list_user_plugins(None).is_empty());
+        // main's id-filtered listing refuses hidden ids too.
+        assert!(list_user_plugins(Some(vec![".tuic-data-backup-x-1234".to_string()])).is_empty());
     }
 
     /// A first install (no prior dir) has nothing to back up.
