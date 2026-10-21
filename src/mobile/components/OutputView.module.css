@@ -27,6 +27,9 @@
 }
 
 .tableBlock {
+  /* Keep the answer rule inside the scroll clip without indenting table text. */
+  margin-left: -8px;
+  padding-left: 8px;
   overflow-x: auto;
   -webkit-overflow-scrolling: touch;
   touch-action: pan-x;
@@ -34,7 +37,17 @@
 }
 
 .line {
+  position: relative;
   min-height: 1.5em;
+}
+
+.answerRule {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: -8px;
+  width: 3px;
+  pointer-events: none;
 }
 
 .intent {

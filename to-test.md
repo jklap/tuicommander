@@ -2761,3 +2761,5 @@ Needs an iPhone (iOS 16.4+, 18.4+ preferred), the desktop TUICommander running a
 - [ ] #2107-bbda: After the next Rust rebuild/restart, right-click shell and agent rows on main and linked branches; confirm exact session/PID clipboard values and copy toasts, and disabled PID for a suspended tab. The new child_pid session metadata does not hot-reload.
 
 - [ ] #2108-465b: After rebuilding/restarting the Rust backend, reconnect Claude Code and Codex and confirm served instructions distinguish the TUIC agent tool from native Agent. Client qualification is recorded in tool-names-2108.json.
+
+- [ ] Mobile CLI answer gutter (#2110-734c): on a phone, verify the green bar stays left of the first ego glyph, Claude keeps its existing margin, and blank paragraphs, wrapped links and tables keep their bars.

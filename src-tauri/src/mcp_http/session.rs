@@ -3862,6 +3862,69 @@ mod tests {
         assert_eq!(result.cutoff, 0);
     }
 
+    // Catches: mobile log capture or chrome trimming drops a tool header while
+    // later output remains visible under an older header.
+    #[test]
+    fn captured_claude_consecutive_tools_keep_mobile_headers() {
+        for fixture in [
+            include_bytes!("../fixtures/agent_prompts/claude-mobile-consecutive-tools-2109.tcap")
+                .as_slice(),
+            include_bytes!("../fixtures/agent_prompts/claude-mobile-verbose-tools-2109.tcap")
+                .as_slice(),
+        ] {
+            let capture = crate::pty_capture::decode_capture(fixture)
+                .expect("recorded Claude consecutive tool calls");
+            let (rows, cols) = capture.geometry.expect("recorded geometry");
+            let mut grid = crate::state::VtLogBuffer::new(rows, cols, 10_000);
+            let mut utf8 = crate::state::Utf8ReadBuffer::new();
+            let mut escape = crate::state::EscapeAwareBuffer::new();
+            let mut checked = 0;
+            for (index, record) in capture.records.into_iter().enumerate() {
+                if record.direction != crate::pty_capture::CaptureDirection::Output {
+                    continue;
+                }
+                let data = utf8.push(&record.data);
+                let data = escape.push(&data);
+                let (clean, _) = crate::state::strip_kitty_sequences(&data);
+                grid.process(clean.as_bytes());
+                let (log, _) = grid.lines_since_owned(0, usize::MAX);
+                let mut mobile: Vec<_> = log.iter().map(|line| line.text()).collect();
+                let screen = grid.screen_log_lines();
+                mobile.extend(
+                    screen
+                        .into_iter()
+                        .take(screen_chrome_cutoff(&grid).cutoff)
+                        .map(|line| line.text()),
+                );
+                let mobile = mobile.join("\n");
+                for header in grid
+                    .grid_get_lines(0, grid.grid_total_lines())
+                    .into_iter()
+                    .filter(|row| row.starts_with("⏺ Bash(") || row.starts_with("⏺ Write("))
+                {
+                    checked += 1;
+                    assert!(
+                        mobile.contains(header.trim_end()),
+                        "record {index}: mobile dropped canonical header {header:?}\n{mobile}"
+                    );
+                }
+            }
+            assert!(
+                checked > 6,
+                "capture must exercise consecutive tool headers across frames"
+            );
+            let headers = grid
+                .grid_get_lines(0, grid.grid_total_lines())
+                .into_iter()
+                .filter(|row| row.starts_with("⏺ Bash(") || row.starts_with("⏺ Write("))
+                .count();
+            assert_eq!(
+                headers, 6,
+                "capture must finish all three Bash/Write rounds"
+            );
+        }
+    }
+
     // Catches: the highlighted Claude option is mistaken for the composer prompt,
     // so the mobile screen loses the remaining choices and its selection footer.
     #[test]
