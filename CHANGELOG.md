@@ -6,6 +6,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+- Keep macOS App Nap off for the whole desktop process while still allowing idle system sleep. A controlled hidden-window replay under CPU contention reduced the maximum WebView callback gap from 36.753 s to 2.561 s with the activity alone; this does not attribute the historical backend outage to App Nap (#1638-c94c).
 - Export ego approval titles and all five native choices when the footer spans three or more rows, including newline-bearing printf rules (#2102-98ab).
 - Bind Grok Chat to the registered native process behind the npm launcher without guessing another terminal's transcript (#2104-0523).
 - Keep desktop ego Chat available after reload while a native question or permission prompt is pending; validate the transcript through the backend live-process binding (#2103-60e4).

@@ -138,6 +138,8 @@ pub(crate) mod secrets;
 pub(crate) use tuic_terminal::output_parser;
 pub(crate) use tuic_terminal::output_watchers;
 #[cfg(feature = "desktop")]
+mod app_nap;
+#[cfg(feature = "desktop")]
 mod panel_window;
 mod plugin_content;
 pub(crate) mod plugin_credentials;
@@ -2015,6 +2017,10 @@ pub fn run(mut context: tauri::Context<tauri::Wry>) {
                 // Disable macOS press-and-hold accent popup so held keys repeat
                 // in the terminal's hidden input (vim j/l/i — issue #79)
                 press_and_hold::disable();
+
+                // An occluded window must not nap the backend: PTYs, the local
+                // API and the heartbeat share this process (story 1638-c94c).
+                app_nap::disable();
             }
 
             // Themes are seeded before window creation so the first paint uses
