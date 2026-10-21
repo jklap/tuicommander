@@ -2357,6 +2357,16 @@ Unsupported actions are hidden. Menus close on outside tap or Escape and use
 
 TUICommander aggregates upstream MCP servers and exposes them through its own `/mcp` endpoint. Any MCP client (Claude Code, Cursor, VS Code) connecting to TUIC automatically gains access to all configured upstream tools.
 
+### Opt-in interrupting agent mail
+
+`agent action=send urgency=interrupt` sends Esc to a safe working Claude Code,
+Codex or ego, waits up to ten seconds for confirmed idle, then submits the full
+message as one input. Dialogs and drafts block the input. Unsupported agents
+and idle timeouts use the existing urgent notice/inbox fallback. The receipt
+reports `interrupt_delivered`, `interrupt_fallback_reason` and `delivery_path`.
+Normal and urgent mail remain non-interrupting. Interrupted tools may leave
+partial work, and their child processes may continue.
+
 ### 19.1 Architecture
 - TUIC acts as both an MCP server (to downstream clients) and an MCP client (to upstream servers)
 - All upstream tools are exposed via the single `POST /mcp` Streamable HTTP endpoint

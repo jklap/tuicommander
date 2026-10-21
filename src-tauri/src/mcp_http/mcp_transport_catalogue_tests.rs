@@ -1224,7 +1224,7 @@ fn agent_send_schema_and_description_explain_urgent_mail_without_exposing_payloa
         .unwrap();
     assert_eq!(
         agent["inputSchema"]["properties"]["urgency"]["enum"],
-        serde_json::json!(["normal", "urgent"])
+        serde_json::json!(["normal", "urgent", "interrupt"])
     );
     let description = agent["description"].as_str().unwrap();
     assert!(description.contains("Normal is the default"));
@@ -2613,6 +2613,7 @@ async fn conditional_configured_telegram_preserves_caller_authority() {
 // Catches: shortening the catalogue drops a rule instead of moving it to help.
 // Oracle: descriptions recorded from d4882b0f6c before the catalogue rewrite.
 // UI updated verbatim from main 06f115ae14 for the added 2067 Design Mode actions.
+// Agent guidance updated for the explicit interrupt delivery contract in 2113.
 #[tokio::test]
 async fn native_help_preserves_every_displaced_rule_2069() {
     let dir = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
