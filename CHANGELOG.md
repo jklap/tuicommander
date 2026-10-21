@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+- Keep the terminal mobile composer's bottom safe-area inset inside its painted surface, above the Home Indicator; the separately reported iPhone shell-height band still needs device evidence (#2116-0213).
+
 - Keep the mobile CLI green answer bar in its own gutter so column-zero ego text stays clear without adding a second Claude text margin (#2110-734c).
 
 - Distinguish TUIC MCP protocol names from client-callable Claude Code and Codex tool names, including native Agent versus TUIC agent (#2108-465b).

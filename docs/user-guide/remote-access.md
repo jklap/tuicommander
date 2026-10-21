@@ -98,6 +98,8 @@ In **Sessions → New session**, the Agent picker lists installed CLI agents fro
 
 ### Add to Home Screen
 
+The terminal composer keeps the bottom safe-area inset inside its background so its controls stay above the Home Indicator. Shell height and position still follow `visualViewport.height` and `visualViewport.offsetTop` when the keyboard opens. This padding change does not establish the cause of a separate empty band below the shell; capture a full-screen device screenshot before reloading if that band occurs.
+
 The mobile UI supports PWA (Progressive Web App) installation:
 
 - **iOS Safari**: Tap Share → "Add to Home Screen"
