@@ -1,3 +1,7 @@
+## Wrapped ego approval controls (2102-98ab) — Rust restart required
+
+- [x] An isolated `at-2102` worktree build exported a wrapped printf approval with all five native keys. The mobile header question card sent `y` and the command exited 0 with `PARITY_P_OK`. Evidence: `~/Gits/.tmp/results/fix-2102-live/`. The daily backend still requires Boss's manual `make dev` restart or `make build` installation to load this Rust fix; no daily app restart was performed.
+
 ## Bounded repository file reads (2098-98b2) — Rust restart required
 
 - [ ] After a manual backend rebuild/restart, verify an external edit under an ignored directory containing a tracked file updates that checkout, unchanged siblings remain correct, and watcher restart returns fresh status. macOS/Windows monitoring snapshots require complete watches; Linux stays fresh. No daily app restart was performed.
