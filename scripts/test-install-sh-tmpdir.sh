@@ -45,7 +45,9 @@ echo "\${last}" >'${record}'
 ls -ld "\$(dirname "\${last}")" | cut -c1-10 >>'${record}'
 ${fail:+exit 1}
 EOF
-  chmod +x "${bin}"/*
+  # Only the generated stubs: the tool symlinks above point at system-owned
+  # binaries, and chmod follows them (EPERM for a non-owner on GNU chmod).
+  chmod +x "${bin}/uname" "${bin}/sudo" "${bin}/curl" "${bin}/${manager}"
 
   if [ -n "${fail}" ]; then
     # The package manager fails: the installer aborts (set -e) but must still
