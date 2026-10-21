@@ -108,6 +108,7 @@ pub(super) fn watch_event_relevant(
     ancestors: bool,
 ) -> bool {
     match event {
+        Ok(event) if event.need_rescan() => true,
         Ok(event) if matches!(event.kind, notify::EventKind::Access(_)) => false,
         Ok(event) => event.paths.iter().any(|path| {
             path == directory
@@ -295,7 +296,7 @@ mod file_read_tests {
     async fn telegram_watched_snapshot_observes_external_configuration_changes() {
         let (_dir, paths) = crate::telegram::tests::setup();
         let config = Config::load(&paths).unwrap().unwrap();
-        let runtime = crate::telegram::runtime::Runtime::new(
+        let mut runtime = crate::telegram::runtime::Runtime::new(
             std::sync::Arc::new(crate::state::tests_support::make_test_app_state()),
             config,
             paths.clone(),
@@ -312,20 +313,40 @@ mod file_read_tests {
             .expect("configuration watcher did not apply the file event");
         }
         assert!(runtime.enabled());
+        // An invalid envelope proves the enabled runtime reaches protocol parsing
+        // without touching Telegram. Disabled delivery must stop before parsing.
+        let mail = crate::telegram::mail::PendingMail {
+            id: "watcher-gate".into(),
+            recipient: "test-bot".into(),
+            content: "{}".into(),
+        };
+        assert!(matches!(
+            runtime.deliver(mail.clone()).await,
+            Err(Error::Protocol)
+        ));
         std::fs::write(
             paths.file("config.json"),
             r#"{"enabled":false,"bot_alias":"test-bot"}"#,
         )
         .unwrap();
         reaches(&runtime, false).await;
+        assert!(matches!(
+            runtime.deliver(mail.clone()).await,
+            Err(Error::Config)
+        ));
         // Atomic rename is the setup writer's production publication pattern.
         let replacement = paths.file("replacement.json");
         std::fs::copy(paths.file("config.json"), &replacement).unwrap();
         std::fs::write(&replacement, r#"{"enabled":true,"bot_alias":"test-bot"}"#).unwrap();
         std::fs::rename(&replacement, paths.file("config.json")).unwrap();
         reaches(&runtime, true).await;
+        assert!(matches!(
+            runtime.deliver(mail.clone()).await,
+            Err(Error::Protocol)
+        ));
         std::fs::remove_file(paths.file("allowed_chat_ids")).unwrap();
         reaches(&runtime, false).await;
+        assert!(matches!(runtime.deliver(mail).await, Err(Error::Config)));
     }
 
     // Catches: every bus event and one-second tick reopens unchanged config and allowlist.
