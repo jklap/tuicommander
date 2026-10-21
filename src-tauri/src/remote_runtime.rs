@@ -2965,9 +2965,26 @@ mod tests {
             .expect(1)
             .create_async()
             .await;
+        // The recorded peer may exist on the host's real Tailscale network.
+        // Fail its short-name lookup locally; only the advertised FQDN resolves.
+        #[derive(Debug)]
+        struct ShortNameDnsFailure;
+        impl reqwest::dns::Resolve for ShortNameDnsFailure {
+            fn resolve(&self, name: reqwest::dns::Name) -> reqwest::dns::Resolving {
+                assert_eq!(name.as_str(), "mac-mint");
+                Box::pin(async {
+                    Err(std::io::Error::new(
+                        std::io::ErrorKind::NotFound,
+                        "test short-name DNS failure",
+                    )
+                    .into())
+                })
+            }
+        }
         let address: std::net::SocketAddr = server.host_with_port().parse().unwrap();
         let client = reqwest::Client::builder()
             .no_proxy()
+            .dns_resolver(std::sync::Arc::new(ShortNameDnsFailure))
             .resolve("mac-mint.tail911da.ts.net", address)
             .build()
             .unwrap();

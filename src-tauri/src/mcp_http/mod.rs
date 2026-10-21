@@ -7389,11 +7389,10 @@ mod tests {
             }),
         )
         .await;
-        assert!(
-            result["error"]
-                .as_str()
-                .unwrap()
-                .contains("workspace_id was renamed to branch")
+        // Catches: a removed alias starts removal without a supported target.
+        assert_eq!(
+            crate::test_support::mcp_argument_constraint(&result, "", "anyOf"),
+            &serde_json::json!([{"required": ["branch"]}, {"required": ["worktree_path"]}])
         );
     }
 

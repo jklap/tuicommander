@@ -446,10 +446,10 @@ async fn native_repo_identity_uses_path_and_branch_without_old_parameter_aliases
         None,
     )
     .await;
-    assert!(
-        old_workspace["error"]
-            .as_str()
-            .is_some_and(|error| error.contains("branch"))
+    // Catches: a removed alias bypasses pre-dispatch target validation.
+    assert_eq!(
+        crate::test_support::mcp_argument_constraint(&old_workspace, "", "anyOf"),
+        &serde_json::json!([{"required": ["branch"]}, {"required": ["worktree_path"]}])
     );
 
     let definitions = native_tool_definitions();
