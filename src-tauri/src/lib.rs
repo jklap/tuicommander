@@ -2630,6 +2630,7 @@ pub fn run(mut context: tauri::Context<tauri::Wry>) {
             ego_cli::ego_set_default_model
         ])
         .build(context)
+        .map(agent_test::without_launch_activation)
         .expect("error while building tauri application")
         .run(|app_handle, event| {
             match &event {

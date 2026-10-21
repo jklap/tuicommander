@@ -4008,6 +4008,22 @@ async fn managed_codex_wrapper_opt_out_leaves_trust_prompt() {
 }
 
 #[cfg(unix)]
+fn recorded_claude_trust_output(path: &std::path::Path) -> (u16, u16) {
+    let capture = crate::pty_capture::decode_capture(include_bytes!(
+        "../fixtures/agent_prompts/claude-mobile-startup-1987.tcap"
+    ))
+    .unwrap();
+    let output: Vec<u8> = capture
+        .records
+        .into_iter()
+        .take_while(|record| record.direction != crate::pty_capture::CaptureDirection::Input)
+        .flat_map(|record| record.data)
+        .collect();
+    std::fs::write(path, output).unwrap();
+    capture.geometry.unwrap()
+}
+
+#[cfg(unix)]
 #[tokio::test]
 async fn managed_claude_spawn_accepts_only_its_startup_trust_dialog() {
     use std::os::unix::fs::PermissionsExt;
@@ -4017,10 +4033,12 @@ async fn managed_claude_spawn_accepts_only_its_startup_trust_dialog() {
         .unwrap();
     let cwd = root.path().join("never-trusted");
     std::fs::create_dir(&cwd).unwrap();
+    let dialog = root.path().join("dialog.bin");
+    let (rows, cols) = recorded_claude_trust_output(&dialog);
     let script = root.path().join("claude");
     let accepted = root.path().join("accepted");
     let observed_keys = root.path().join("keys");
-    std::fs::write(&script, format!("#!/bin/sh\nif [ \"$1\" = --version ]; then exit 0; fi\nwhile [ \"$#\" -gt 0 ]; do\n  case \"$1\" in\n    --add-dir=*|--settings=*) shift;;\n    --add-dir|--settings|--append-system-prompt-file|--model) shift 2;;\n    --) shift; break;;\n    -*) shift;;\n    *) break;;\n  esac\ndone\nstty -echo -icanon -icrnl min 1 time 0\nprintf 'Quick safety check: Is this a project you created or one you trust?\\n  Yes, I trust this folder\\n❯ No, exit\\n'\nkeys=$(dd bs=1 count=4 2>/dev/null | od -An -tx1 | tr -d ' \\n')\nprintf '%s' \"$keys\" > '{}'\nif [ \"$keys\" = 1b5b410d ]; then printf '%s' \"$1\" > '{}'; fi\nexec cat >/dev/null\n", observed_keys.display(), accepted.display())).unwrap();
+    std::fs::write(&script, format!("#!/bin/sh\nif [ \"$1\" = --version ]; then exit 0; fi\nwhile [ \"$#\" -gt 0 ]; do\n  case \"$1\" in\n    --add-dir=*|--settings=*) shift;;\n    --add-dir|--settings|--append-system-prompt-file|--model) shift 2;;\n    --) shift; break;;\n    -*) shift;;\n    *) break;;\n  esac\ndone\nstty -echo -icanon -icrnl min 1 time 0\ncat '{}'\nkeys=$(dd bs=1 count=4 2>/dev/null | od -An -tx1 | tr -d ' \\n')\nprintf '%s' \"$keys\" > '{}'\nif [ \"$keys\" = 1b5b420d ]; then printf '%s' \"$1\" > '{}'; fi\nexec cat >/dev/null\n", dialog.display(), observed_keys.display(), accepted.display())).unwrap();
     std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o700)).unwrap();
     assert!(
         std::process::Command::new(&script)
@@ -4036,7 +4054,7 @@ async fn managed_claude_spawn_accepts_only_its_startup_trust_dialog() {
         "127.0.0.1:1".parse().unwrap(),
         &serde_json::json!({
             "action": "spawn", "agent_type": "claude", "binary_path": script,
-            "cwd": cwd, "prompt": "say READY", "cols": 120,
+            "cwd": cwd, "prompt": "say READY", "cols": cols, "rows": rows,
         }),
         None,
     );
@@ -4075,6 +4093,8 @@ async fn managed_claude_trust_opt_out_leaves_dialog_waiting() {
         .unwrap();
     let cwd = root.path().join("never-trusted");
     std::fs::create_dir(&cwd).unwrap();
+    let dialog = root.path().join("dialog.bin");
+    let (rows, cols) = recorded_claude_trust_output(&dialog);
     let script = root.path().join("claude");
     let observed_keys = root.path().join("keys");
     let help = root.path().join("claude-help.txt");
@@ -4083,7 +4103,7 @@ async fn managed_claude_trust_opt_out_leaves_dialog_waiting() {
         include_str!("../../tests/fixtures/agent-help/claude-2026-10-04.txt"),
     )
     .unwrap();
-    std::fs::write(&script, format!("#!/bin/sh\nif [ \"$1\" = --version ]; then exit 0; fi\nif [ \"$1\" = --help ]; then cat '{}'; exit 0; fi\nstty -echo -icanon -icrnl min 0 time 10\nprintf 'Quick safety check: Is this a project you created or one you trust?\\n  Yes, I trust this folder\\n❯ No, exit\\n'\nkeys=$(dd bs=1 count=1 2>/dev/null | od -An -tx1 | tr -d ' \\n')\nprintf '%s' \"$keys\" > '{}'\nexec cat >/dev/null\n", help.display(), observed_keys.display())).unwrap();
+    std::fs::write(&script, format!("#!/bin/sh\nif [ \"$1\" = --version ]; then exit 0; fi\nif [ \"$1\" = --help ]; then cat '{}'; exit 0; fi\nstty -echo -icanon -icrnl min 0 time 10\ncat '{}'\nkeys=$(dd bs=1 count=1 2>/dev/null | od -An -tx1 | tr -d ' \\n')\nprintf '%s' \"$keys\" > '{}'\nexec cat >/dev/null\n", help.display(), dialog.display(), observed_keys.display())).unwrap();
     std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o700)).unwrap();
     assert!(
         std::process::Command::new(&script)
@@ -4106,7 +4126,7 @@ async fn managed_claude_trust_opt_out_leaves_dialog_waiting() {
     let spawned = handle_agent(
         &state,
         "127.0.0.1:1".parse().unwrap(),
-        &serde_json::json!({"action":"spawn", "agent_type":"claude", "binary_path":script, "cwd":cwd, "prompt":"say READY", "cols":120}),
+        &serde_json::json!({"action":"spawn", "agent_type":"claude", "binary_path":script, "cwd":cwd, "prompt":"say READY", "cols":cols, "rows":rows}),
         None,
     );
     assert!(spawned.get("error").is_none(), "spawn failed: {spawned}");
