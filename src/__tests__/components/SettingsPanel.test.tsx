@@ -262,11 +262,13 @@ describe("SettingsPanel", () => {
 		// services split into MCP / Remote Access / Remote Machines, and providers
 		// became AI Chat; an old tuic://settings?tab=… link must land on a page.
 		vi.mocked(settingsStore.isAiChatEnabled).mockReturnValue(true);
-		mockInvoke.mockImplementation((command: string) =>
-			Promise.resolve(
-				command === "load_config" ? { mcp_capabilities: { denied: [], migration_unknown_tools: [] } } : undefined,
-			),
-		);
+		mockInvoke.mockImplementation((command: string) => {
+			if (command === "load_config") {
+				return Promise.resolve({ mcp_capabilities: { denied: [], migration_unknown_tools: [] } });
+			}
+			if (command === "load_mcp_upstreams") return Promise.resolve({ servers: [] });
+			return Promise.resolve(undefined);
+		});
 		try {
 			for (const [retired, label] of [
 				["services", "MCP"],
