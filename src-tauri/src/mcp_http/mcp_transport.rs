@@ -96,7 +96,6 @@ pub(crate) use super::mcp_transport_catalogue::native_tool_catalog;
 #[cfg(test)]
 use super::mcp_transport_catalogue::native_tool_definitions;
 pub(crate) use super::mcp_transport_catalogue::rebuild_tool_search_index;
-use super::mcp_transport_catalogue::removed_native_action_replacement;
 #[cfg(test)]
 use super::mcp_transport_catalogue::render_mcp_instructions;
 use super::mcp_transport_catalogue::resolve_allowed_upstreams;
@@ -553,31 +552,12 @@ async fn dispatch_mcp_tool_call_with_context(
     mcp_session_id: Option<&str>,
     managed_parent_cwd: Option<&str>,
 ) -> serde_json::Value {
-    if name == "config" {
-        return serde_json::json!({"error":"Unknown tool 'config'"});
-    }
     if let Some(error) = super::mcp_transport_catalogue::native_action_unavailability(
         state,
         name,
         args["action"].as_str(),
     ) {
         return serde_json::json!({"error": error});
-    }
-    if let Some(action) = args["action"].as_str()
-        && let Some(replacement) = removed_native_action_replacement(name, action)
-    {
-        return serde_json::json!({
-            "error": format!("{name} action={action} was removed; use {replacement}")
-        });
-    }
-    if name == "repo"
-        && matches!(
-            args["action"].as_str(),
-            Some("worktree_lifecycle" | "worktree_remove")
-        )
-        && args.get("workspace_id").is_some()
-    {
-        return serde_json::json!({"error": "repo parameter workspace_id was renamed to branch"});
     }
     if matches!(name, "session" | "agent")
         && let Some(connection) = args.get("connection_id")

@@ -437,20 +437,6 @@ pub(crate) async fn branches_detail_cached(
     .await
 }
 
-/// Get rich git panel context in a single IPC call (cached, 5s TTL).
-#[cfg(feature = "desktop")]
-#[tauri::command]
-pub(crate) async fn get_git_panel_context(
-    state: State<'_, Arc<AppState>>,
-    path: String,
-) -> Result<GitPanelContext, String> {
-    let p = path.clone();
-    cached_get(state.git_cache.git_panel_context.clone(), path, move || {
-        get_git_panel_context_impl(Path::new(&p))
-    })
-    .await
-}
-
 /// Result of a background git command execution
 #[derive(Clone, Serialize)]
 pub(crate) struct GitCommandResult {

@@ -78,7 +78,6 @@ grid-cell coordinates. Both match the stored sequence without normalization.
 | `get_last_prompt` | `session_id` | `Option<String>` | Get last user-typed prompt from input line buffer |
 | `get_shell_state` | `session_id` | `Option<String>` | Get current shell state ("busy", "idle", or null); agent-specific semantic Working markers can repair a transient false-idle state |
 | `has_foreground_process` | `session_id: String` | `bool` | Checks if a non-shell foreground process is running |
-| `debug_agent_detection` | `session_id: String` | `AgentDiagnostics` | Returns diagnostic breakdown of agent detection pipeline |
 | `get_pty_capture` | -- | `JSON` | Raw PTY capture tap state: enabled, session filter, directory, bytes per session. Browser parity: `GET /diagnostics/capture`. |
 | `set_pty_capture` | `enabled: bool, session_id: Option<String>` | `JSON` | Start/stop recording raw PTY bytes to `<config dir>/captures/<id>.tcap` or the absolute `TUIC_CAPTURE_DIR` override; a relative override returns an error and leaves recording disabled. Starting begins a fresh file. Surfaced as **Capture Session** in the tab context menu under `isPerfDebug()`. Browser parity: `POST /diagnostics/capture`. |
 | `set_session_name` | `session_id, name, is_custom?` | `()` | Set a session display name and whether it represents an explicit user rename |
@@ -91,11 +90,8 @@ grid-cell coordinates. Both match the stored sequence without normalization.
 | `chat_view_snapshot` | `session_id, epoch: Option<u64>, from_seq: Option<u64>` | `ChatViewSnapshot` | Chat view of a Claude or Grok terminal: transcript entries from the bound session file as ACP updates, with a bounded log, epoch and `reset` flag. Errors `not_bound: <reason>` for a terminal with no bound Claude or Grok agent. Browser parity: `GET /sessions/:id/chat-view` |
 | `terminal_styled_rows` | `session_id, start, count` | `Result<Response, String>` (packed bytes) | A range of styled rows by absolute index, filling the client-side scroll cache. Raw bytes for the same reason as grid frames. Browser parity: `GET /sessions/:id/terminal/styled-rows` (`application/octet-stream`) |
 
-Every terminal grid **read** — the two rows above plus `terminal_get_block_rows`,
 `terminal_scroll_info`, `terminal_search`, `terminal_search_buffer`,
 `terminal_get_row_text`, `terminal_get_logical_line`, `terminal_get_lines`,
-`terminal_get_cursor_line`, `terminal_hyperlink_at` and
-`terminal_hyperlink_span` and `read_vt_log` — is an `async fn` that runs on the blocking pool via
 `pty::vt_try_read`, so it returns `Result<T, String>` rather than a bare `T`.
 The `Err` arm means the pool task itself failed; a session that is gone is still
 the old default (or a 404 over HTTP). See
@@ -158,7 +154,6 @@ receive it on `/events`.
 | `get_repo_structure` | `repo_path` | `RepoStructure` | Fast phase: worktree paths + merged branches only (Phase 1 of progressive loading) |
 | `get_repo_diff_stats` | `repo_path` | `RepoDiffStats` | Slow phase: per-worktree diff stats, last commit timestamps, and `workspace_statuses` keyed by opaque workspace id (Phase 2 of progressive loading) |
 | `run_git_command` | `path, args` | `GitCommandResult` | Run allowlisted git command (success, stdout, stderr, exit_code) |
-| `get_git_panel_context` | `path` | `GitPanelContext` | Rich context for Git Panel (branch, ahead/behind, staged/changed/stash counts, last commit, rebase/cherry-pick state). Cached 5s TTL. |
 | `get_working_tree_status` | `path` | `WorkingTreeStatus` | Full porcelain v2 status: branch, upstream, ahead/behind, stash count, staged/unstaged entries, untracked files |
 | `update_from_base` | `path, branch_name, strategy?` | `String` | Fetch configured base ref and rebase or merge the branch onto it. Conflict cleanup reports `(aborted)` only after abort succeeds; abort failure includes manual recovery guidance. |
 | `git_stage_files` | `path, files` | `()` | Stage files (`git add`). Path-traversal validated |
@@ -378,24 +373,9 @@ Activity Dashboard and the Git panel.
 
 ## The embedded AI engine is gone (#784-0aec)
 
-There is no `ai_chat.rs`, `ai_chat_registry.rs`, `provider_registry.rs`,
-`llm_api.rs`, `diff_triage.rs`, `improvement_scan.rs` or `changelog.rs`, and
-`ai_agent/` holds only `knowledge.rs` and `tui_detect.rs`. Every command those
-modules registered is unregistered, every `/ai/*` route is unmounted, and the
-matching `COMMAND_TABLE` entries are removed from `src/transport.ts`.
-TUICommander makes no provider HTTP call and stores no model API key.
+The embedded ReAct loop, provider registry and model-key storage were removed. `ego` supplies intelligence over ACP — see **ACP client for ego** below. PR review, changelog generation and improvement scanning use unattended ego turns.
 
-`ego` supplies the intelligence over ACP — see **ACP client for ego** below.
-What comes back where is tabulated in [`docs/sync-matrix.md`](../sync-matrix.md)
-under *What #784-0aec removed*.
-
-Command knowledge is the one thing that stayed, because recording it involves no
-model: `pty.rs` still writes `CommandOutcome` rows per session and
-`ai_agent::knowledge::spawn_persist_task` still flushes them to
-`<config_dir>/ai-sessions/<session_id>.json`. No command reads them back — the
-`get_session_knowledge`, `list_knowledge_sessions` and
-`get_knowledge_session_detail` accessors went with the UI that called them.
-
+`ai_agent/` retains only `tui_detect.rs`, which classifies terminal activity. The write-only command knowledge store and its persistence task were removed in #2115-1333. No knowledge accessor command remains.
 
 ## MCP OAuth 2.1 (`mcp_oauth/commands.rs`)
 
@@ -555,10 +535,6 @@ the unwind is caught and returned as an error. The plugin's `confirm`/`message`
 are unaffected (they build `NSAlert`) and stay as they are.
 
 ## Filesystem (`fs.rs`)
-
-`upload_attachment` is the desktop IPC twin of `POST /attachments/upload`.
-It accepts `kind`, `id`, optional `session` (required for ACP), `name`, and
-binary `bytes`, returns the same `{ path, size, notice? }` receipt, and uses the same destination, cap, and cleanup rules.
 
 | Command | Args | Returns | Description |
 |---------|------|---------|-------------|

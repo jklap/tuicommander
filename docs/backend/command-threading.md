@@ -136,14 +136,10 @@ table rather than six match arms precisely so a test can assert the routing.
 `git status --porcelain` as a subprocess for the requested subdir.
 
 `pty.rs`, the terminal grid reads: `terminal_styled_rows`,
-`terminal_get_block_rows`, `terminal_scroll_info`, `terminal_search`,
+`terminal_scroll_info`, `terminal_search`,
 `terminal_search_buffer`, `terminal_get_row_text`, `terminal_get_logical_line`,
 `terminal_get_selection_text`, `terminal_get_lines`, `terminal_get_cursor_line`,
-`terminal_hyperlink_at`, `terminal_hyperlink_span` and `read_vt_log` — all
-through `pty::vt_try_read`, and their HTTP twins in `mcp_http/session.rs` with
-them. `read_vt_log` is the one worth naming: it has no frontend caller yet, so
-it survived the first pass of the audit purely by being unused, and being
-registered in the handler is all it takes to be reachable.
+`terminal_hyperlink_span` — all through `pty::vt_try_read`, and their HTTP twins in `mcp_http/session.rs` with them. The unused `read_vt_log`, `terminal_get_block_rows` and `terminal_hyperlink_at` commands were removed in #2115-1333.
 
 Every one of them moved, including the single-row reads. The cost that matters
 is not the work the closure does, it is the wait for the vt mutex, which the PTY

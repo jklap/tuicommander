@@ -1524,53 +1524,6 @@ async fn remote_mcp_caller_cannot_rename_resize_or_wait_for_peer_mail() {
     );
 }
 
-#[tokio::test]
-async fn removed_native_actions_name_a_single_call_replacement() {
-    let state = test_state();
-    let cases = [
-        ("agent", "detect", "GET /agents"),
-        ("agent", "stats", "GET /stats"),
-        ("agent", "metrics", "GET /metrics"),
-        ("session", "process_stats", "GET /process/stats"),
-        ("repo", "prs", "GET /repo/prs"),
-        ("repo", "issues", "GET /repo/issues"),
-        ("repo", "close_issue", "POST /repo/issues/close"),
-        ("repo", "reopen_issue", "POST /repo/issues/reopen"),
-        ("repo", "ci_logs", "GET /repo/ci-failure-logs"),
-    ];
-    for (tool, action, replacement) in cases {
-        let response = handle_mcp_tool_call(
-            &state,
-            loopback_addr(),
-            tool,
-            &serde_json::json!({"action": action}),
-            None,
-        )
-        .await;
-        assert!(
-            response["error"]
-                .as_str()
-                .is_some_and(|error| error.contains(replacement)),
-            "{tool} {action}: {response}"
-        );
-        let definitions = native_tool_definitions();
-        let schema = definitions
-            .as_array()
-            .unwrap()
-            .iter()
-            .find(|entry| entry["name"] == tool)
-            .unwrap();
-        let actions = schema["inputSchema"]["properties"]["action"]["description"]
-            .as_str()
-            .unwrap()
-            .trim_start_matches("One of: ");
-        assert!(
-            !actions.split(", ").any(|listed| listed == action),
-            "{tool} still advertises {action}: {actions}"
-        );
-    }
-}
-
 async fn subscribed_acp_mail_recipient() -> (Arc<AppState>, String, String) {
     use crate::acp::McpOverAcpHost;
 

@@ -642,13 +642,6 @@ export const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 			transform: (data) => (data as { text: string }).text,
 		}),
 	},
-	terminal_hyperlink_at: {
-		map: (args) => ({
-			method: "GET",
-			path: `/sessions/${args.sessionId}/terminal/hyperlink?row=${args.row}&col=${args.col}`,
-			transform: (data) => (data as { url: string | null }).url,
-		}),
-	},
 	terminal_hyperlink_span: {
 		map: (args) => ({
 			method: "GET",
@@ -1493,9 +1486,6 @@ export const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 			path: "/workitem-links",
 			body: { repoPath: args.repoPath, branch: args.branch },
 		}),
-	},
-	get_git_panel_context: {
-		map: (_args, p) => ({ method: "GET", path: `/repo/panel-context?path=${p("path")}` }),
 	},
 	run_git_command: {
 		map: (args) => ({
@@ -2446,9 +2436,6 @@ export const INTENTIONALLY_UNMAPPED: ReadonlySet<string> = new Set<string>([
 	// Data leaves the machine; source paths come from Finder and cannot be gated
 	// to registered roots. HTTP token holders must not trigger exfiltration.
 	"fs_transfer_remote_paths",
-	// Binary IPC uses byte arrays; browser uploads use a streaming fetch body to
-	// the equivalent /attachments/upload route instead of JSON rpc mapping.
-	"upload_attachment",
 	// Multi-window management — secondary/panel windows are a desktop-only concept.
 	"open_secondary_window",
 	// Open on the client machine; remote HTTP must not launch host applications.
@@ -2501,21 +2488,17 @@ export const INTENTIONALLY_UNMAPPED: ReadonlySet<string> = new Set<string>([
 	// mdkb daemon install/management — host binary lifecycle.
 	"install_mdkb",
 	"uninstall_mdkb",
-	// Terminal grid push — browser uses the WS log-mode stream
-	// (GET /sessions/{id}?format=log) instead of the native grid-frame protocol.
+	// Terminal grid push — browser uses its session WebSocket instead of Tauri channels.
 	"subscribe_terminal_grid",
 	"unsubscribe_terminal_grid",
 	"ack_terminal_frame",
 	"terminal_exit_alt_screen",
-	"read_vt_log",
-	"terminal_get_block_rows",
 	// WebView liveness beat. Deliberately host-only: it watches the embedded
 	// WebView's main thread, and a browser client beating on the same channel
 	// would mask a dead desktop one.
 	"frontend_heartbeat",
 	// Desktop-only terminal/session diagnostics or local visual state with no
 	// faithful HTTP contract yet.
-	"debug_agent_detection",
 	"set_ansi_colors",
 	// GitHub issues: Tauri command is multi-repo; current HTTP route is single-repo
 	// (/repo/issues), so mapping here would silently change the contract.

@@ -308,19 +308,16 @@ Refresh.
 | `docs/api/tauri-commands.md`, `docs/api/http-api.md` | Both transports for the provider and perimeter commands |
 | `docs/FEATURES.md` | The AI Chat page entry under Settings |
 
-### Session knowledge store and TUI detection
-Neither module has anything to do with an LLM, which is why both outlived the
-engine. `pty.rs` reads them, so they kept the `ai_agent/` module path:
+### TUI detection
+The embedded agent's write-only command knowledge store was removed in #2115-1333. Terminal-mode classification remains live.
 
 | File | What to update |
 |------|----------------|
-| `src-tauri/src/ai_agent/knowledge.rs` | CommandOutcome, SessionKnowledge, OSC 133 scanner, persist/load/spawn_persist_task |
 | `src-tauri/src/ai_agent/tui_detect.rs` | TerminalMode heuristics (Shell vs FullscreenTui) |
-| `src-tauri/src/pty.rs` | ChunkProcessor.record_osc133_outcomes + Inferred fallback in the silence timer |
-| `src-tauri/src/state.rs` | session_knowledge DashMap, knowledge_dirty set, has_osc133_integration, record_outcome helper |
-| `src-tauri/src/lib.rs` | spawn_persist_task at boot |
-| `src-tauri/crates/tuic-core/src/redaction.rs` | `redact_secrets` — lives OUTSIDE `ai_agent/` on purpose, because `session action=output` applies it |
-| `src-tauri/crates/tuic-terminal/src/terminal_grid.rs` | Grid reader methods in `tuic-terminal`: `search_buffer`, `enumerate_visible_hyperlinks`, `extract_semantic_zones`; `VtLogBuffer` delegates in `vt_log.rs` |
+| `src-tauri/src/pty.rs` | Alternate-screen and inline-TUI mode tracking; OSC 133 activity transitions |
+| `src-tauri/src/state.rs` | SessionState terminal_mode and has_osc133_integration |
+| `src-tauri/crates/tuic-core/src/redaction.rs` | `redact_secrets`, applied by session output |
+| `src-tauri/crates/tuic-terminal/src/terminal_grid.rs` | Grid search, hyperlinks and semantic zones; VtLogBuffer delegates |
 
 ### What #784-0aec removed, and where it comes back
 These areas had sections here and no longer have any code to sync. They are

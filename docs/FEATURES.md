@@ -1130,15 +1130,11 @@ What went with the embedded engine (#784-0aec) and did not come back here:
 | PR AI review, changelog generation, improvement scan | **795-320b** — one unattended ego turn each; see 8.3 and 8.10 |
 | Smart Prompts `api` execution mode | **787-ee50** — one unattended ego turn; see 10.5 |
 
-### 6.15 Session Knowledge Store (recording only)
-Outlived the engine because none of it involves a model, and `pty.rs` is the
-producer. Nothing reads it today — it is kept because the history cannot be
-re-derived later.
-- **Command outcomes** — exit code, duration, CWD, classification, output snippet, auto-correlated error→fix pairs, CWD history, `tui_apps_seen`, terminal mode
-- **OSC 133 semantic prompts** feed exact exit codes where the shell supports them; the PTY silence timer records an `Inferred` outcome where it does not
-- Persisted to `<config_dir>/ai-sessions/<session_id>.json` with a 2 s debounced flush
-- **TUI app detection** via alternate-screen tracking (`ESC[?1049h`/`l`). `TerminalMode::FullscreenTui { app_hint, depth }` is set when the terminal enters vim/htop/lazygit/less/tmux/…
-- Code: `src-tauri/src/ai_agent/{knowledge,tui_detect}.rs` — they kept the `ai_agent/` module path because `pty.rs` reads them there
+### 6.15 TUI Application Detection
+- Alternate-screen tracking (`ESC[?1049h`/`l`) and primary-screen mouse reporting classify shell versus fullscreen TUI activity.
+- `TerminalMode::FullscreenTui { app_hint, depth }` remains part of session state and protects agent-session conflict handling.
+- The write-only command knowledge store and its background disk flush were removed in #2115-1333. Existing history files are not deleted or migrated.
+- Code: `src-tauri/src/ai_agent/tui_detect.rs`.
 
 ### 6.16 ChoicePrompt Detection
 - Claude AskUserQuestion is parsed from its full-bleed Ink footer and numbered options, including rows with descriptions and imperative titles without a question mark (`Pick a colour`). Its `selection_mode: navigate-enter` tells mobile to move the highlight with arrows and submit with Enter; the mobile screen retains the whole open dialog
@@ -2583,8 +2579,7 @@ partial work, and their child processes may continue.
 - Runs the desktop's background tasks that a machine needs: process snapshots,
   standby parking, content indexing and boot pre-warm, tool search index, upstream
   MCP auto-connect and health checks, CPU watchdog, maintenance sweep. It does not
-  run the WebView watchdog (no WebView) or command-knowledge persistence (no
-  route exposes it). The embedded assistant's scheduler and watcher engine are
+  run the WebView watchdog (no WebView). Command-knowledge persistence was removed in #2115-1333. The embedded assistant's scheduler and watcher engine are
   not on this list any more — they were deleted outright in #784-0aec
 
 ### 22.2 Configuration

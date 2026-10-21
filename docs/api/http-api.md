@@ -3335,7 +3335,7 @@ Telegram replies now use TUIC-driven receipt (👀), working (👨‍💻), wait
 
 ### Styled terminal log wrap boundaries
 
-Rows returned by session `format=log` output and the `format=log|text` WebSocket include `wrapped: boolean` alongside `spans` and `cols`. True means the next row continues this logical line: concatenate span text verbatim, with no added space or newline. False means a hard line boundary. A finalized log row can wrap into the first current-screen row. Wrapped rows preserve real trailing spaces. The field is also present in the desktop `read_vt_log` response. MCP session text output applies these boundaries before redaction.
+Rows returned by session `format=log` output and the `format=log|text` WebSocket include `wrapped: boolean` alongside `spans` and `cols`. True means the next row continues this logical line: concatenate span text verbatim, with no added space or newline. False means a hard line boundary. A finalized log row can wrap into the first current-screen row. Wrapped rows preserve real trailing spaces. MCP session text output applies these boundaries before redaction.
 
 ### Settings change stream
 

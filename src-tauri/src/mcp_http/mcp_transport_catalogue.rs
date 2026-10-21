@@ -442,21 +442,6 @@ pub(super) const DEBUG_ACTIONS: &str =
 pub(super) const VOICE_ACTIONS: &str = "speak, stop, status, help";
 pub(super) const REMOTE_ACTIONS: &str = "preview, update";
 
-pub(super) fn removed_native_action_replacement(tool: &str, action: &str) -> Option<&'static str> {
-    match (tool, action) {
-        ("agent", "detect") => Some("GET /agents"),
-        ("agent", "stats") => Some("GET /stats"),
-        ("agent", "metrics") => Some("GET /metrics"),
-        ("session", "process_stats") => Some("GET /process/stats"),
-        ("repo", "prs") => Some("GET /repo/prs"),
-        ("repo", "issues") => Some("GET /repo/issues"),
-        ("repo", "close_issue") => Some("POST /repo/issues/close"),
-        ("repo", "reopen_issue") => Some("POST /repo/issues/reopen"),
-        ("repo", "ci_logs") => Some("GET /repo/ci-failure-logs"),
-        _ => None,
-    }
-}
-
 /// User-facing Settings summaries, separate from MCP descriptions and schemas.
 pub(super) const NATIVE_TOOL_SUMMARIES: &[(&str, &str)] = &[
     ("secret", "Request sensitive values from the user securely."),

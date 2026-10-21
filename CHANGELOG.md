@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+- Remove the unused command-knowledge recorder, xterm-only watcher clear injection, orphan desktop commands and git panel-context endpoint. Removed MCP action and workspace-parameter migration hints now use ordinary input errors; no compatibility aliases remain (#2115-1333).
+
 - Add opt-in `agent send urgency=interrupt`: Esc for safe working Claude/Codex/ego sessions, a ten-second confirmed-idle wait, then complete message submission, with explicit urgent fallback receipts (#2113-c419).
 - Remove inherited foreground peer identity from detached `tuic bg` commands and stop MCP ancestry recovery at their command boundary so background progress cannot block the parent composer and strand its completion wake; preserve runner wake and mail routing (#2100-c249).
 ### Added
