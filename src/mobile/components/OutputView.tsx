@@ -410,7 +410,6 @@ export function OutputView(props: OutputViewProps) {
 		const lineClass = isIntent && !partial ? `${styles.line} ${styles.intent}` : styles.line;
 		const wrapStyle = () => ({
 			"--wrap-indent": indent ? `${indent}ch` : undefined,
-			"box-shadow": isAnswer() ? ANSWER_RULE_SHADOW : undefined,
 		});
 		const links = detectOutputLinks(text).filter((link) => link.kind === "web" || props.onOpenFileLink);
 		function content(start: number, end: number): JSX.Element[] {
@@ -444,6 +443,9 @@ export function OutputView(props: OutputViewProps) {
 		}
 		return (
 			<div class={lineClass} style={wrapStyle()} data-terminal-marker={marker()}>
+				<Show when={isAnswer()}>
+					<span aria-hidden="true" class={styles.answerRule} style={{ "box-shadow": ANSWER_RULE_SHADOW }} />
+				</Show>
 				{partial ? (
 					<>
 						<span class={styles.intent} data-terminal-marker="intent">
