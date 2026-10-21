@@ -27,7 +27,10 @@ pub fn disable() {
         &reason,
     );
     std::mem::forget(activity);
-    tracing::info!(source = "app-nap", "App Nap disabled for the process lifetime");
+    tracing::info!(
+        source = "app-nap",
+        "App Nap disabled for the process lifetime"
+    );
 }
 
 /// No-op on non-macOS platforms (App Nap is macOS-only).

@@ -138,6 +138,8 @@ pub(crate) mod secrets;
 pub(crate) use tuic_terminal::output_parser;
 pub(crate) use tuic_terminal::output_watchers;
 #[cfg(feature = "desktop")]
+mod app_nap;
+#[cfg(feature = "desktop")]
 mod panel_window;
 mod plugin_content;
 pub(crate) mod plugin_credentials;
@@ -149,8 +151,6 @@ pub(crate) mod plugin_pty;
 pub(crate) mod plugin_settings;
 pub(crate) mod plugins;
 pub(crate) mod pr_review;
-#[cfg(feature = "desktop")]
-mod app_nap;
 #[cfg(feature = "desktop")]
 mod press_and_hold;
 pub(crate) use tuic_core::process_env;
