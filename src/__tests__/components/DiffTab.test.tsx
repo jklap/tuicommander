@@ -1,5 +1,3 @@
-import { readFileSync } from "node:fs";
-import path from "node:path";
 import { render } from "@solidjs/testing-library";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -23,6 +21,8 @@ vi.mock("../../components/ui/DiffViewer", () => ({
 	DiffViewer: (props: { diff: string; wrap?: boolean; maxLines?: number }) => (
 		<div data-testid="diff-stub" data-wrap={String(props.wrap ?? false)} data-max-lines={String(props.maxLines ?? 0)}>
 			{props.diff}
+			{/* Stand-in for the real hunk revert button (HunkRevertOverlay needs rendered diff rows). */}
+			<button type="button" data-testid="revert-stub" data-hunk-idx="0" />
 		</div>
 	),
 }));
@@ -47,6 +47,7 @@ vi.mock("../../components/DiffTab/BranchDiffScrollView", () => ({
 }));
 
 import { DiffTab } from "../../components/DiffTab/DiffTab";
+import css from "../../components/DiffTab/DiffTab.module.css";
 import { repositoriesStore } from "../../stores/repositories";
 import { settingsStore } from "../../stores/settings";
 import { uiStore } from "../../stores/ui";
@@ -230,16 +231,29 @@ describe("DiffTab scroll mode", () => {
 });
 
 describe("DiffTab discard confirm defaults to Cancel (regression)", () => {
-	// The revert `ConfirmDialog` can only be driven open via a real hunk button
-	// or a line-drag selection, both of which need a rendered @git-diff-view
-	// hunk DOM that jsdom/happy-dom cannot produce (no Canvas). This is a
-	// direct guard against the exact regression this file's extraction found:
-	// a `ConfirmDialog` with no `defaultButton` defaults to "confirm", so
-	// pressing Enter on "Discard this change?" destroyed work.
-	it('passes defaultButton="cancel" to the revert ConfirmDialog', () => {
-		const src = readFileSync(path.resolve(__dirname, "../../components/DiffTab/DiffTab.tsx"), "utf-8");
-		const dialogBlock = src.slice(src.indexOf("<ConfirmDialog"), src.indexOf("<ConfirmDialog") + 400);
-		expect(dialogBlock).toContain('defaultButton="cancel"');
+	// Behavioral: drive the real revert flow (hunk revert button click opens the
+	// ConfirmDialog), then press Enter. Without `defaultButton="cancel"` Enter
+	// confirms and `git_apply_reverse_patch` runs, destroying the user's work.
+	it("Enter on the discard confirm cancels instead of reverting the hunk", async () => {
+		h.invoke.mockReset();
+		h.invoke.mockResolvedValue("diff --git a/f.ts b/f.ts\n--- a/f.ts\n+++ b/f.ts\n@@ -1,1 +1,1 @@\n-old\n+new\n");
+		const { container, queryByText } = render(() => (
+			<DiffTab tabId="t1" repoPath={REPO} filePath={FILE} scope="unstaged" untracked={false} />
+		));
+		await settle();
+
+		const btn = container.querySelector('[data-testid="revert-stub"]') as HTMLElement | null;
+		expect(btn).not.toBeNull();
+		btn?.classList.add(css.revertBtn);
+		btn?.click();
+		await settle();
+		expect(queryByText("Discard")).not.toBeNull();
+
+		document.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+		await settle();
+
+		expect(callsTo("git_apply_reverse_patch")).toHaveLength(0);
+		expect(queryByText("Discard")).toBeNull();
 	});
 });
 
