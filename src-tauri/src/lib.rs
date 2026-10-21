@@ -160,6 +160,7 @@ pub(crate) mod push;
 pub(crate) use tuic_core::redaction;
 pub(crate) mod chat_view;
 mod codex_binding;
+mod monitoring_status;
 pub(crate) mod registry;
 pub(crate) mod relay_client;
 #[allow(dead_code)] // Constructors used by remote binary and future tests
@@ -2630,6 +2631,7 @@ pub fn run(mut context: tauri::Context<tauri::Wry>) {
             ego_cli::ego_set_default_model
         ])
         .build(context)
+        .map(agent_test::without_launch_activation)
         .expect("error while building tauri application")
         .run(|app_handle, event| {
             match &event {

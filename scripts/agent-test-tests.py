@@ -68,6 +68,11 @@ class AgentTestPlanTests(unittest.TestCase):
         self.assertTrue("agent_test::present_without_focus(&window)" in source, "Ready must present agent-test without making it key")
         policy = (ROOT / "src-tauri/src/agent_test.rs").read_text()
         self.assertTrue("native.orderFront(None)" in policy, "agent-test must use the non-key native presentation path")
+        # Bug caught (2095): a covered test window turns the page hidden and stops rAF.
+        self.assertIn("_setWindowOcclusionDetectionEnabled: false", policy)
+        # Bug caught (2095): Tao's launch activation makes the test app frontmost.
+        self.assertIn("app.set_activation_policy(tauri::ActivationPolicy::Prohibited)", policy)
+        self.assertIn(".map(agent_test::without_launch_activation)", source)
         self.assertNotIn("makeKeyAndOrderFront", policy)
         self.assertNotIn(".show()", policy)
         self.assertTrue(".with_filter(|_| !agent_test::active())" in source, "saved window restore must not focus agent-test")

@@ -9,6 +9,12 @@ export async function sendNativeChoice(
 	key: string,
 	onNotes?: () => void,
 ): Promise<void> {
+	if (prompt?.selection_mode === "navigate-only") {
+		const controls: Record<string, string> = { "↑": "\x1b[A", "↓": "\x1b[B", "↵": "\r" };
+		const data = controls[key];
+		if (data) await sendPtyKey(write, data);
+		return;
+	}
 	const options = prompt?.options ?? [];
 	const selectedIndex = options.findIndex((option) => option.highlighted);
 	const choiceIndex = options.findIndex((option) => option.key === key);

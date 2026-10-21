@@ -1,3 +1,41 @@
+## Wrapped ego approval controls (2102-98ab) — Rust restart required
+
+- [x] An isolated `at-2102` worktree build exported a wrapped printf approval with all five native keys. The mobile header question card sent `y` and the command exited 0 with `PARITY_P_OK`. Evidence: `~/Gits/.tmp/results/fix-2102-live/`. The daily backend still requires Boss's manual `make dev` restart or `make build` installation to load this Rust fix; no daily app restart was performed.
+## Grok npm launcher Chat binding (2104-0523) — Rust restart required
+
+- [ ] After Boss manually rebuilds and restarts the daily backend, verify a Grok terminal launched through npm opens its own Chat transcript. The isolated instance evidence does not load this Rust change into Boss's running app; no daily restart is performed by the peer.
+
+## Bounded repository file reads (2098-98b2) — Rust restart required
+
+- [ ] After a manual backend rebuild/restart, verify an external edit under an ignored directory containing a tracked file updates that checkout, unchanged siblings remain correct, and watcher restart returns fresh status. macOS/Windows monitoring snapshots require complete watches; Linux stays fresh. No daily app restart was performed.
+
+- [ ] After a manual backend rebuild/restart, verify one file staged then edited and a directory with two untracked files show unchanged diff totals and correct dirty counts; monitoring now shares one status traversal. No daily app restart was performed.
+
+- [ ] After Boss manually rebuilds and restarts the backend, commit twice in one linked worktree, fetch a remote, and pack refs. Confirm the changed row and integration badges update while sibling badges stay correct. This peer does not restart the daily app.
+
+- [ ] After loading the rebuilt backend, verify Codex session and same-path date-directory replacement in an isolated CODEX_HOME and unchanged discovery without historical rollout scans; watched-index and cwd/age/claimed-ID regressions run on rb, but macOS watcher behavior still needs the isolated instance.
+
+- [ ] After Boss manually restarts a rebuilt backend, commit in one disposable linked worktree and check current dirty/integration badges and unchanged sibling rows. This Rust change does not hot-reload into the daily app. The peer must not restart that app; isolated counter evidence is recorded in the story.
+## Unchanged content-index events (2099-8c87) — Rust restart required
+
+- [ ] After Boss manually restarts a rebuilt backend, confirm repeated unchanged repository events do not schedule content-index validation within 60 seconds of a completed validation. Verify a later content edit remains searchable after the cooldown. This Rust change does not hot-reload; this peer does not restart the daily app.
+## Missing-checkout named submodule preservation (2096-1d25) — Rust restart required
+
+- [ ] After Boss manually restarts a rebuilt backend, verify forced cleanup of a disposable missing worktree with a named submodule preserves its local-only commit in the initialized main module before pruning registration. No running desktop backend was restarted by this peer. Automated Git boundary evidence is recorded in the gate report.
+## Managed Claude default-No trust dialog (2097-5739) — Rust restart required
+
+- [ ] After Boss manually restarts a rebuilt `make dev` or installs `make build`, spawn a managed Claude child in a disposable untrusted folder. Check that the startup dialog selects Yes with Down then Enter once; an unmanaged terminal and trust opt-out must remain unanswered. The recorded 1987 capture is covered by automated replay; this Rust change does not hot-reload into the daily app. No daily app restart was performed.
+## Covered agent-test presentation (2095-0106) — isolated native check verified
+
+- [x] The recovered native observer passed a 300-second covered-window run: document/native visibility stayed true, rAF advanced with a 319 ms maximum gap, no focus or activation, and stable compact geometry. Evidence: `reports/tuicommander/2095-covered-observation/`. The dedicated agent-test binary must be rebuilt to load this Rust policy; the daily app is unchanged and needs no restart for this fix. This peer did not restart or replace Boss's running app.
+
+## First narrow Codex /plan question (2094-da19) — Rust restart required
+
+- [ ] After Boss manually restarts a rebuilt backend, open the first Codex /plan question in a narrow terminal. Check Input in the mobile list and named answer controls in CLI and Chat. Answer once and check native completion. This Rust parser change does not hot-reload into the daily app; isolated worktree verification is recorded in the story.
+## Bounded input frame priority (2040-16b2) — Rust restart required
+
+- [ ] After Boss manually restarts a rebuilt `make dev` or installs `make build`, type while a disposable terminal prints paced output. Check desktop and browser/PWA responsiveness, sustained output, and DEC-2026 complete redraws. This Rust change does not hot-reload into the running daily app. Isolated native trace timing is an untrusted-input-to-`fillText` proxy, not trusted keyboard or compositor proof; the original native REALITY criterion remains separate.
+
 ## Agent-test non-focusing visibility (2090-cf8a) — isolated native check verified
 
 - [x] `scripts/agent-test-visible.py --instance at-2090 --port 19883` observes a visible document, positive terminal canvas and real `fillText` paint without native/document focus. The window is 640x420 logical pixels, 17 pixels from the primary work-area right edge and 16 from its bottom edge. Unrelated frontmost PID 761 stays unchanged before launch, at readiness and after paint (owned PID 42795). Removing only `native.orderFront(None)` produces hidden document/native window, no canvas and no text paint; restoring it passes. Both runs delete their sessions, stop through `make agent-test-stop`, and report no remaining worktree executable. Evidence: `~/Gits/.tmp/results/fix-2090-round2/{red2,green}/` (JSON, logs and GREEN canvas-only PNGs). This opt-in native observer requires desktop authorization; source/config contracts do not prove visibility. The change loads only in a newly built agent-test binary and requires no daily-app restart.
@@ -2710,3 +2748,5 @@ Needs an iPhone (iOS 16.4+, 18.4+ preferred), the desktop TUICommander running a
 - [x] Mobile AI Chat tab availability (#2087-07bf): isolated worktree Vite + headless backend at 390×844 shows four tabs without ego and five with ego; host config saves update the tab over SSE without page reload. _(verified: ~/Gits/.tmp/feat-2087-visual/transcript.txt and with-ego.png / without-ego.png)_
 
 - [ ] After Boss rebuilds/restarts the Rust backend, ask ego for a native selector immediately after a TUIC connection/intent or successful tool receipt. Desktop and mobile must show only the native question title, with the same choices (#2088-98ea). The running app does not hot-reload this parser change; do not restart it during agent work.
+
+- [ ] After the next normal Rust rebuild, check a narrow Claude AskUserQuestion: previous/next/select controls replace generic Yes/No, and widening restores all native choices (#2093-0be6).

@@ -134,3 +134,28 @@ it("navigates and toggles ego options beyond the single-digit shortcuts", async 
 	await waitFor(() => expect(writes).toEqual(["\x1b[B", " "]));
 	expect(writes).not.toContain("\r");
 });
+
+// Catches: clipped-form navigation submits Enter, locks after one arrow, or duplicates settlement.
+it("navigates a clipped Claude form without answering until explicit selection", async () => {
+	const prompt: ChoicePrompt = {
+		title: "Pick a colour?",
+		selection_mode: "navigate-only",
+		dismiss_key: "cancel",
+		options: [
+			{ key: "↑", label: "Previous option", highlighted: false, destructive: false },
+			{ key: "↓", label: "Next option", highlighted: false, destructive: false },
+			{ key: "↵", label: "Select highlighted option", highlighted: false, destructive: false },
+		],
+	};
+	const { container } = render(() => (
+		<CommandInput sessionId="narrow-claude" agentType="claude" choicePrompt={prompt} />
+	));
+	await fireEvent.click(buttonFor(container, "Next option"));
+	await waitFor(() => expect(buttonFor(container, "Next option").disabled).toBe(false));
+	await fireEvent.click(buttonFor(container, "Next option"));
+	await waitFor(() => expect(writes).toEqual(["\x1b[B", "\x1b[B"]));
+	await fireEvent.click(buttonFor(container, "Select highlighted option"));
+	await fireEvent.click(buttonFor(container, "Select highlighted option"));
+	await waitFor(() => expect(writes).toEqual(["\x1b[B", "\x1b[B", "\r"]));
+	expect(buttonFor(container, "Select highlighted option").disabled).toBe(true);
+});

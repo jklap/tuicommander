@@ -2353,10 +2353,13 @@ Returns list of `{{var}}` placeholder names found in content.
 ### List Plugins
 
 ```
-GET /plugins/list
+GET /plugins/list[?plugin_ids=<URL-encoded JSON string array>]
 ```
 
-Returns array of valid plugin manifests.
+Returns an array of valid plugin manifests. Omit `plugin_ids` for full discovery;
+pass a JSON string array to read only those plugin IDs. An empty array returns no
+plugins. Invalid JSON returns 400. IPC uses the same optional `pluginIds` array.
+Payload digests reuse unchanged file hashes by modification time and size.
 
 ### Plugin Development Guide
 
@@ -3490,3 +3493,9 @@ Plugin catalogue entries returned by `fetch_plugin_registry` can include optiona
 `contentSha256`. Installed plugin discovery returns the same field computed from
 the installed payload, not from manifest input. Both transports use the same Rust
 manifest serialization and payload identity algorithm. See [Plugin Registry](../plugins.md#plugin-registry).
+
+Native question `choice_prompt.selection_mode` can be `navigate-only` for a
+clipped Claude form. Its `↑`, `↓`, and `↵` option keys denote previous, next,
+and select-highlighted controls, not native answer labels. Send one Up, Down, or
+Enter respectively; never append Enter to a navigation key. The same payload
+and semantics apply to desktop IPC state.

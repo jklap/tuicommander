@@ -1468,6 +1468,12 @@ Never use emoji — they render inconsistently across platforms.
 
 ## Hot Reload
 
+Reload batches deduplicate changed enabled IDs and run one discovery request for
+that batch. Concurrent notifications share a serialized reload queue. Only the
+selected plugin roots are read; payload hashing reuses unchanged file hashes by
+modification time and size. Same-version source edits still change the computed
+payload digest. Full discovery remains available at startup.
+
 When any file in a plugin directory changes, the app:
 1. Emits a `plugin-changed` event with the plugin ID
 2. Calls `pluginRegistry.unregister(id)` (runs `onunload`, disposes all registrations)

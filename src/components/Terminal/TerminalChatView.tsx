@@ -78,6 +78,7 @@ export const TerminalChatView: Component<{
 				await invoke<void>("write_pty", { sessionId, data });
 			};
 			await sendNativeChoice(write, question, agent, key, () => terminalsStore.setViewMode(props.terminalId, "cli"));
+			if (signature() === owner && question.selection_mode === "navigate-only" && key !== "↵") setSending(false);
 		} catch (err) {
 			if (signature() === owner) {
 				setSending(false);
