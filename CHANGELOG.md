@@ -10,6 +10,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Mark verified abandoned shells with their idle age on desktop and mobile. Add an optional machine-owned idle-hours close setting, disabled by default (#2111-131f).
 
 ### Fixed
+- Add Copy alias to sidebar session menus using the owning session-list value, and hide unknown process IDs instead of offering an unavailable action (#2112-8a79).
 - Route MCP remote session close to the owning daemon, with self-close protection and retained final output (#2111-131f).
 
 

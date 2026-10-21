@@ -17,7 +17,8 @@ export const TIPS: Tip[] = [
 	},
 	{
 		feature: "Session identifiers",
-		description: "Right-click a sidebar session row to copy its PTY session ID or live child process ID.",
+		description:
+			"Right-click a sidebar session row to copy its PTY session ID, live child process ID, or MCP alias. Hover an entry to see its value.",
 		shortcut: null,
 	},
 	{
