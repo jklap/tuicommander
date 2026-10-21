@@ -14,7 +14,8 @@ vi.mock("../../hooks/useRepository", () => ({
 }));
 
 // A list boundary: the real virtualized list is covered by its own tests and needs layout.
-vi.mock("../../components/shared/DiffFileList", () => ({
+vi.mock("../../components/shared/DiffFileList", async (importOriginal) => ({
+	...(await importOriginal<typeof import("../../components/shared/DiffFileList")>()),
 	DiffFileList: (props: { header: unknown; files: { path: string }[] }) => (
 		<div>
 			{props.header as never}
