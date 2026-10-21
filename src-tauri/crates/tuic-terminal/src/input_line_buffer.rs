@@ -655,6 +655,45 @@ mod tests {
     }
 
     #[test]
+    fn test_sgr_mouse_report_split_across_writes_does_not_leak() {
+        // The PTY input side can deliver a report in arbitrary chunks; the CSI
+        // state must survive the split at every byte boundary.
+        let report = "\x1b[<65;120;36M";
+        for cut in 1..report.len() {
+            let mut buf = InputLineBuffer::new();
+            buf.feed("hi");
+            buf.feed(&report[..cut]);
+            buf.feed(&report[cut..]);
+            assert_eq!(
+                feed_and_get_line(&mut buf, "!\r"),
+                Some("hi!".into()),
+                "split at byte {cut}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_sgr_mouse_press_release_motion_with_modifiers_do_not_leak() {
+        let mut buf = InputLineBuffer::new();
+        buf.feed("ls");
+        buf.feed("\x1b[<0;5;7M"); // left press
+        buf.feed("\x1b[<32;6;7M"); // drag motion
+        buf.feed("\x1b[<0;6;7m"); // release
+        buf.feed("\x1b[<68;1;1M"); // Shift+wheel-up (64 + 4)
+        buf.feed("\x1b[<1000;9999;9999M"); // wide coordinates
+        assert_eq!(feed_and_get_line(&mut buf, " -l\r"), Some("ls -l".into()));
+    }
+
+    #[test]
+    fn test_sgr_mouse_report_does_not_move_cursor_or_edit() {
+        // Final bytes M/m must not be mistaken for editing keys.
+        let mut buf = InputLineBuffer::new();
+        buf.feed("abc");
+        buf.feed("\x1b[<65;3;1M\x1b[<64;3;1m");
+        assert_eq!(feed_and_get_line(&mut buf, "d\r"), Some("abcd".into()));
+    }
+
+    #[test]
     fn test_kitty_keyboard_query_responses_do_not_leak_into_content() {
         // Broader private-marker coverage beyond SGR mouse's '<': kitty keyboard
         // protocol push/query/pop responses use '>' and '?' the same way (see
