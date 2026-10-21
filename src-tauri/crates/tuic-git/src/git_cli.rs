@@ -786,6 +786,42 @@ pub fn git_cmd_forks(cwd: &Path) -> usize {
     GIT_CMD_FORKS.get(cwd).map(|n| *n).unwrap_or(0)
 }
 
+/// The extra argument a requested `git merge` needs so a user's `merge.ff=only`
+/// cannot make it fail with "Not possible to fast-forward".
+///
+/// TUIC merges because the user asked for a merge (merge-and-archive, "update
+/// from base" with the merge strategy). Under `merge.ff=only` git refuses
+/// whenever the target has diverged, which is a policy for what a stray
+/// `git merge`/`git pull` may do, not a statement that this merge should fail.
+/// Returns `Some("--ff")` only when the effective fast-forward mode is `only`;
+/// `--ff` still fast-forwards when it can and creates a merge commit when it
+/// cannot. Default users (`merge.ff` unset) and `merge.ff=false`/`true` users
+/// get `None`, so their behaviour is untouched. `branch` is the branch being
+/// merged INTO: its `branch.<name>.mergeOptions` is applied by git ahead of
+/// the command line, so the last `--ff`/`--no-ff`/`--ff-only` in it
+/// decides, falling back to `merge.ff`.
+pub fn merge_ff_override(cwd: &Path, branch: Option<&str>) -> Option<&'static str> {
+    let read = |key: &str| -> Option<String> {
+        git_cmd(cwd)
+            .args(["config", "--get", key])
+            .run_silent()
+            .map(|o| o.stdout.trim().to_string())
+            .filter(|v| !v.is_empty())
+    };
+    let from_options = branch
+        .and_then(|b| read(&format!("branch.{b}.mergeOptions")))
+        .and_then(|opts| {
+            opts.split_whitespace().rev().find_map(|tok| match tok {
+                "--ff-only" => Some(true),
+                "--ff" | "--no-ff" => Some(false),
+                _ => None,
+            })
+        });
+    let ff_only = from_options
+        .unwrap_or_else(|| read("merge.ff").is_some_and(|v| v.eq_ignore_ascii_case("only")));
+    ff_only.then_some("--ff")
+}
+
 /// Create a git command builder rooted at the given directory.
 pub fn git_cmd(cwd: &Path) -> GitCmd {
     #[cfg(any(test, feature = "test-support"))]
@@ -923,6 +959,43 @@ mod tests {
             .output()
             .expect("git config name");
         (dir, path)
+    }
+
+    fn git_in(path: &Path, args: &[&str]) {
+        let out = Command::new("git")
+            .current_dir(path)
+            .args(args)
+            .output()
+            .expect("git");
+        assert!(out.status.success(), "git {args:?}");
+    }
+
+    #[test]
+    fn merge_ff_override_only_fires_for_ff_only() {
+        let (_dir, path) = setup_test_repo();
+        assert_eq!(merge_ff_override(&path, Some("main")), None, "unset");
+        for (value, want) in [
+            ("only", Some("--ff")),
+            ("ONLY", Some("--ff")),
+            ("false", None),
+            ("true", None),
+        ] {
+            git_in(&path, &["config", "merge.ff", value]);
+            assert_eq!(merge_ff_override(&path, Some("main")), want, "{value}");
+        }
+    }
+
+    #[test]
+    fn merge_ff_override_honours_branch_merge_options() {
+        let (_dir, path) = setup_test_repo();
+        git_in(&path, &["config", "branch.dev.mergeOptions", "--ff-only"]);
+        assert_eq!(merge_ff_override(&path, Some("dev")), Some("--ff"));
+        assert_eq!(merge_ff_override(&path, Some("other")), None);
+        assert_eq!(merge_ff_override(&path, None), None);
+        // mergeOptions outranks merge.ff: an explicit --no-ff wins over merge.ff=only.
+        git_in(&path, &["config", "merge.ff", "only"]);
+        git_in(&path, &["config", "branch.dev.mergeOptions", "--no-ff"]);
+        assert_eq!(merge_ff_override(&path, Some("dev")), None);
     }
 
     /// A child that outlives any deadline these tests set.
