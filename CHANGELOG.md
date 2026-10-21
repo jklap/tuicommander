@@ -8,6 +8,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- Merge-and-archive and Update-from-base (merge strategy) no longer fail with "Not possible to fast-forward" for users whose Git config sets `merge.ff=only`; `--ff` is passed only in that case, so default and `merge.ff=false` behavior is unchanged.
+
 - Correct Settings accent-action text, compact navigation, wrapped help badges, shortcut groups, and workspace path presentation; hide the desktop-only Local tools card in browser mode (#1945).
 
 - Keep marker-projected terminal frames incremental: repaint dirty display rows and changed projection slots instead of clearing the whole canvas (#2003-f218).
