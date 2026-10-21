@@ -215,12 +215,25 @@ describe("getTickerPriority", () => {
 					is_enabled: true,
 					monthly_limit: 1000,
 					used_credits: 950,
-					utilization: 95,
+					utilization: 96,
 					resets_at: null,
 					in_use: true,
 				},
 			}),
-		).toBe(90);
+		).toBe(96);
+		expect(
+			getTickerPriority({
+				...empty,
+				extra_usage: {
+					is_enabled: true,
+					monthly_limit: 1000,
+					used_credits: 750,
+					utilization: 75,
+					resets_at: null,
+					in_use: true,
+				},
+			}),
+		).toBe(50);
 		expect(
 			getTickerPriority({
 				...empty,
@@ -234,6 +247,38 @@ describe("getTickerPriority", () => {
 				},
 			}),
 		).toBe(10);
+	});
+
+	it("blinks on an over-limit extra_usage (utilization above 100) and shows it uncapped", () => {
+		const over = {
+			...empty,
+			extra_usage: {
+				is_enabled: true,
+				monthly_limit: 1000,
+				used_credits: 1200,
+				utilization: 120,
+				resets_at: null,
+				in_use: true,
+			},
+		};
+		expect(getTickerPriority(over)).toBe(96);
+		expect(buildTickerText(over)).toBe("usage: 120%");
+	});
+
+	it("handles enabled extra_usage with a null utilization (zero/absent limit) without NaN", () => {
+		const noPercent = {
+			...empty,
+			extra_usage: {
+				is_enabled: true,
+				monthly_limit: 0,
+				used_credits: null,
+				utilization: null,
+				resets_at: null,
+				in_use: false,
+			},
+		};
+		expect(getTickerPriority(noPercent)).toBe(10);
+		expect(buildTickerText(noPercent)).toBe("no data");
 	});
 
 	it("ignores extra_usage utilization when disabled", () => {
@@ -253,7 +298,7 @@ describe("getTickerPriority", () => {
 	});
 
 	it("escalates on seven_day_oauth_apps/seven_day_cowork even though the ticker text never renders them", () => {
-		expect(getTickerPriority({ ...empty, seven_day_oauth_apps: { utilization: 99, resets_at: null } })).toBe(90);
+		expect(getTickerPriority({ ...empty, seven_day_oauth_apps: { utilization: 99, resets_at: null } })).toBe(96);
 		expect(getTickerPriority({ ...empty, seven_day_cowork: { utilization: 75, resets_at: null } })).toBe(50);
 	});
 });
