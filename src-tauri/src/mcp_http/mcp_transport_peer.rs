@@ -1764,9 +1764,10 @@ fn handle_messaging_with_message_id(
                 } else {
                     None
                 };
-                // A blocking wait already owns the newly buffered message and
-                // returns it inside the recipient's current turn.
-                if state.assign_agent_delivery(to, &msg_id, false)
+                // Reserve interrupt payload delivery before cancellation so a
+                // waiter arriving during the idle wait cannot also consume it.
+                // An already active waiter still wins under the same gate.
+                if state.assign_agent_delivery(to, &msg_id, interrupt && managed_recipient)
                     == AgentDeliveryAssignment::Waiter
                 {
                     delivered = true;
@@ -1779,6 +1780,7 @@ fn handle_messaging_with_message_id(
                     if interrupt {
                         match crate::pty::deliver_interrupting_mail(state, pty_session, message) {
                             Ok(()) => {
+                                state.mark_terminal_delivery_dispatched(to, &msg_id);
                                 return serde_json::json!({
                                     "message_id": msg_id,
                                     "delivered": true,
@@ -1789,6 +1791,7 @@ fn handle_messaging_with_message_id(
                                 });
                             }
                             Err(reason) => {
+                                state.release_terminal_delivery(to, &msg_id);
                                 interrupt_fallback_reason = Some(reason);
                                 // A partial payload must never be followed by another
                                 // write or queued retry into that same composer.

@@ -6673,7 +6673,7 @@ fn interrupt_mail_preserves_dialogs_drafts_and_unsupported_agents() {
     }
 }
 
-/// Catches a timed-out interrupt typing the body while the tool is still busy.
+/// Catches a timed-out interrupt typing into a busy tool or stranding its inbox delivery lease.
 #[cfg(unix)]
 #[test]
 fn interrupt_mail_timeout_falls_back_to_urgent_notice_without_payload() {
@@ -6694,6 +6694,15 @@ fn interrupt_mail_timeout_falls_back_to_urgent_notice_without_payload() {
     assert!(typed.starts_with('\x1b'), "{typed:?}");
     assert!(typed.contains("agent action=inbox"), "{typed:?}");
     assert!(!typed.contains("do not type while busy"), "{typed:?}");
+    let lease = state.begin_agent_wait(TEST_UUID_B);
+    let fresh = state.waiter_fresh_message_count(TEST_UUID_B, 0);
+    let received = state.finish_agent_wait(TEST_UUID_B, lease, 0, fresh > 0);
+    assert_eq!(
+        received.messages.len(),
+        1,
+        "fallback must release the payload"
+    );
+    assert_eq!(received.messages[0].content, "do not type while busy");
 }
 
 /// Catches an approval opened during cancellation being answered by the mail body.
