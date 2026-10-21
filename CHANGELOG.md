@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+- Distinguish TUIC MCP protocol names from client-callable Claude Code and Codex tool names, including native Agent versus TUIC agent (#2108-465b).
+
 - Add a sidebar session context menu to copy the PTY session ID or live child PID, with copy confirmation and unavailable-process handling (#2107-bbda).
 
 - Align the native macOS Rust and CMake deployment targets with the bundle minimum of 12.0, overriding older shell defaults and removing Make's separate target (#2106-e647).

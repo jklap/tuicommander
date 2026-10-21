@@ -2710,3 +2710,40 @@ async fn native_help_respects_owner_availability_2069() {
         assert!(reply.get("description").is_none());
     }
 }
+
+// Catches: bare TUIC `agent` guidance being mistaken for a client's native Agent.
+#[test]
+fn instructions_name_tools_unambiguously() {
+    let recording: serde_json::Value =
+        serde_json::from_str(include_str!("fixtures/tool-names-2108.json")).unwrap();
+    let ctx = InstructionContext {
+        native_tools: tools(&["agent", "session", "repo"]),
+        peer_count: 1,
+        ..Default::default()
+    };
+    for (client, key) in [("claude-code", "claude"), ("codex", "codex")] {
+        let names = recording["clients"][key]["exposed_tool_names"]
+            .as_array()
+            .unwrap();
+        let agent = names
+            .iter()
+            .filter_map(serde_json::Value::as_str)
+            .find(|name| name.ends_with("__agent") || name.ends_with(".agent"))
+            .expect("capture must include the real client's qualified agent tool");
+        for collapsed in [false, true] {
+            let out = render_mcp_instructions(Some(client), collapsed, (true, true), true, &ctx);
+            assert!(
+                out.contains(agent),
+                "{client} cannot find its exposed {agent}: {out}"
+            );
+            assert!(
+                out.contains("not the native `Agent`"),
+                "must distinguish the client built-in: {out}"
+            );
+            assert!(
+                out.contains("protocol names"),
+                "short examples need an explicit naming rule: {out}"
+            );
+        }
+    }
+}
