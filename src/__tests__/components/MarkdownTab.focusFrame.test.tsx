@@ -76,7 +76,7 @@ describe("MarkdownTab focus-frame lifecycle", () => {
 
 		unmount();
 
-		expect(cancelSpy.mock.calls.map((c) => c[0])).toEqual(expect.arrayContaining(pending));
+		expect(cancelSpy.mock.calls.map((c: unknown[]) => c[0])).toEqual(expect.arrayContaining(pending));
 		flushFrames();
 		expect(focusSpy).not.toHaveBeenCalled();
 	});
