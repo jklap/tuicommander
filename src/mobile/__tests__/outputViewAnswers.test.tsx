@@ -112,7 +112,8 @@ it("a mobile CLI render test with an ego-style tinted message row that starts at
 			const style = getComputedStyle(rule!);
 			expect(style.position).toBe("absolute");
 			expect(Number.parseFloat(style.left) + Number.parseFloat(style.width)).toBeLessThan(0);
-			expect(getComputedStyle(row).paddingLeft).toBe("0px");
+			// Happy-dom leaves the initial zero padding unresolved as an empty string.
+			expect(getComputedStyle(row).paddingLeft || "0px").toBe("0px");
 		}
 		expect(container.textContent).toContain("⏺\uFE0E Tool output");
 	} finally {
