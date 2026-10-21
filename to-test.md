@@ -1,3 +1,6 @@
+## Detached command peer isolation (2100-c249) — CLI update and backend restart required
+
+- [ ] After installing the rebuilt `tuic` CLI, verify a detached reviewer cannot set the foreground composer to awaiting through its progress report, and its BG DONE still arrives. Install both the rebuilt CLI and backend, then manually restart the backend: the ancestry boundary cannot load through frontend hot reload. No daily app restart was performed by this peer.
 ## Sidebar session identifiers (2112-8a79)
 
 - [x] Isolated `b6-session-menu` instance: a running Claude PTY menu exposes session ID, actual child PID, and session-list alias; browser reload preserves PID and alias. Evidence: `~/Gits/.tmp/results/b6-2112-visual-owned/` (DOM and screenshot, no session fixtures). Unknown-PID and absent-alias visibility is covered by the targeted sidebar component tests.

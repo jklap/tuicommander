@@ -585,6 +585,13 @@ pub(super) fn identity_from_client_ancestry(client_pid: &str) -> Option<String> 
         if pid <= 1 {
             return None;
         }
+        // A detached command is not its runner's foreground peer. Its agent
+        // may scrub the bridge environment, so check every ancestor before
+        // accepting identity or walking up to the caller-bound runner.
+        if crate::process_env::read_process_env_var(pid, "TUIC_BG_COMMAND").as_deref() == Some("1")
+        {
+            return None;
+        }
         if let Some(identity) = crate::process_env::read_process_env_var(pid, "TUIC_SESSION")
             && is_valid_uuid(&identity)
         {

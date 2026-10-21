@@ -2539,6 +2539,7 @@ TUICommander aggregates upstream MCP servers and exposes them through its own `/
 - tmux key name translation (Enter, C-c, Space, etc.)
 
 ### 21.4 Agent Orchestration
+- `tuic bg <log> -- <cmd>` — run a detached command without inheriting the foreground `TUIC_SESSION` or `TUIC_PARENT`; the runner retains caller-bound completion wake and mail routing
 - `tuic agent spawn <type> <prompt> [--repo <path>]` — spawn AI agent on an initial prompt
 - `tuic agent ls` — list running agents
 - `tuic agent send <peer-uuid> <message>` — deliver to a registered peer's inbox through the registry, the same path as the MCP `agent action=send` tool. Reports `Delivered` only when something surfaced the message; an `inbox_only` route reads `Buffered`

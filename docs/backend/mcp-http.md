@@ -2875,3 +2875,14 @@ The recorded client names and localhost-only capture script are in `src-tauri/sr
 ### Remote session closure
 
 MCP `session action=close` accepts a remote `connection_id` or connection-qualified session reference. The host resolves aliases on the owning daemon and sends authenticated `DELETE /sessions/{id}`. The caller's own PTY remains protected from self-close, and non-loopback MCP callers cannot invoke destructive close actions. A disconnected connection reports an error; it never falls back to a local session. HTTP DELETE and local MCP close use the same teardown, session-closed events and retained output tombstone. Repeating a close of a retained tombstone succeeds. Explicit close remains user-directed and is not limited to abandoned shells.
+
+### Detached command identity boundary
+
+Native `tuic bg` removes `TUIC_SESSION` and `TUIC_PARENT` from the command
+environment and sets `TUIC_BG_COMMAND=1`. Headerless MCP identity recovery
+checks each process up to its 16-hop bound and stops at this marker before
+reading an identity or reaching the foreground runner. This also covers a
+bridge whose agent removed the marker from the bridge environment. Ordinary
+foreground ego ancestry recovery and explicit identity headers are unchanged.
+The detached runner keeps its caller identity for completion queueing and mail.
+This is an identity boundary, not a security sandbox or a delivery-policy bypass.
