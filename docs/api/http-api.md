@@ -298,6 +298,9 @@ handler, which is what the technique avoids.
 GET /sessions
 ```
 
+Session rows include optional `child_pid`: the live PTY child PID, not the foreground agent leaf. It is omitted when unavailable or exited. `list_active_sessions` returns the same field over desktop IPC; mirrored rows retain their owning `connection_id`.
+
+
 Returns array of active session info (ID, cwd, worktree path, branch,
 `display_name`, `display_name_is_custom`, `display_name_from_spawn`,
 `is_remote`, optional `pty_description`, optional terminal `alias`, optional

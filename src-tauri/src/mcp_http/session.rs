@@ -137,6 +137,11 @@ pub(crate) fn local_session_rows(state: &AppState) -> Vec<SessionInfo> {
                 .get(&session_id)
                 .and_then(|peer| super::session_placement::declared_worktree(&repositories, peer));
             let mut row = SessionInfo {
+                child_pid: if state.session_maps.exit_codes.contains_key(&session_id) {
+                    None
+                } else {
+                    session._child.process_id()
+                },
                 cwd: session.cwd.clone(),
                 worktree_path: declared.as_ref().map(|(path, _)| path.clone()).or_else(|| {
                     session
@@ -5146,6 +5151,26 @@ mod tests {
             .find(|row| row.session_id == session_id)
             .expect("the spawned session is listed");
         assert_eq!(row.alias.as_deref(), Some("tu-7"));
+        // Catches: the session list publishes an agent leaf PID instead of the PTY child.
+        let child_pid = state
+            .session_maps
+            .sessions
+            .get(&session_id)
+            .unwrap()
+            .lock()
+            ._child
+            .process_id();
+        assert_eq!(row.child_pid, child_pid);
+        assert!(row.child_pid.is_some());
+        state.session_maps.exit_codes.insert(session_id.clone(), 0);
+        let ended = super::local_session_rows(&state)
+            .into_iter()
+            .find(|row| row.session_id == session_id)
+            .unwrap();
+        assert_eq!(
+            ended.child_pid, None,
+            "an exited child must not remain copyable"
+        );
     }
 
     #[tokio::test]

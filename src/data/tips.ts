@@ -10,6 +10,11 @@ const mod = isMacOS() ? "Cmd" : "Ctrl";
 
 export const TIPS: Tip[] = [
 	{
+		feature: "Session identifiers",
+		description: "Right-click a sidebar session row to copy its PTY session ID or live child process ID.",
+		shortcut: null,
+	},
+	{
 		feature: "Mobile font sizes",
 		description:
 			"Use the Terminal and Chat controls in mobile Settings → Appearance to set each reading size independently. The choices stay on this device; composers and UI controls do not change.",

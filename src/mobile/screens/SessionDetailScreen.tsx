@@ -5,6 +5,7 @@ import { appLogger } from "../../stores/appLogger";
 import type { ChatViewWake } from "../../stores/chatView";
 import { toastsStore } from "../../stores/toasts";
 import { rpc } from "../../transport";
+import { writeClipboard } from "../../utils/clipboard";
 import { CommandInput } from "../components/CommandInput";
 import { CommandWidget } from "../components/CommandWidget";
 import { IdeasOverlay } from "../components/IdeasOverlay";
@@ -132,7 +133,7 @@ export function SessionDetailScreen(props: SessionDetailScreenProps) {
 	async function copySessionId() {
 		setMoreOpen(false);
 		try {
-			await navigator.clipboard.writeText(props.session.session_id);
+			await writeClipboard(props.session.session_id);
 			toastsStore.add(
 				"Session ID copied",
 				props.session.session_id,
