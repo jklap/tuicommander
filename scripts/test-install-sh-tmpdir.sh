@@ -18,8 +18,9 @@ fail() {
 
 # run_case <manager> <asset-suffix>
 run_case() {
-  local manager="$1" suffix="$2"
-  local bin="${work}/${manager}/bin" tmp="${work}/${manager}/tmp" record="${work}/${manager}/record"
+  local manager="$1" suffix="$2" fail="${3:-}"
+  local dir="${work}/${manager}${fail:+-fail}"
+  local bin="${dir}/bin" tmp="${dir}/tmp" record="${dir}/record"
   mkdir -p "${bin}" "${tmp}"
   for tool in grep head mktemp rm mkdir dirname chmod cat ls cut; do
     ln -s "$(command -v "${tool}")" "${bin}/${tool}"
@@ -42,9 +43,21 @@ for last; do :; done
 [ "\$(cat "\${last}")" = PKG ] || exit 3
 echo "\${last}" >'${record}'
 ls -ld "\$(dirname "\${last}")" | cut -c1-10 >>'${record}'
+${fail:+exit 1}
 EOF
   chmod +x "${bin}"/*
 
+  if [ -n "${fail}" ]; then
+    # The package manager fails: the installer aborts (set -e) but must still
+    # remove the scratch dir holding the downloaded package.
+    if env -i PATH="${bin}" HOME="${work}/home" TMPDIR="${tmp}" /bin/sh "${installer}" >"${work}/${manager}.log" 2>&1; then
+      fail "${manager}: installer should have failed"
+    fi
+    [ -f "${record}" ] || fail "${manager} was never called"
+    [ -z "$(ls -A "${tmp}")" ] || fail "${manager} (failing install): scratch left behind: $(ls -A "${tmp}")"
+    echo "ok: ${manager} cleans its scratch dir when the install fails"
+    return
+  fi
   env -i PATH="${bin}" HOME="${work}/home" TMPDIR="${tmp}" /bin/sh "${installer}" >"${work}/${manager}.log" 2>&1 ||
     fail "${manager}: installer failed: $(cat "${work}/${manager}.log")"
 
@@ -63,3 +76,6 @@ EOF
 
 run_case dpkg 'amd64.deb'
 run_case rpm 'x86_64.rpm'
+run_case dpkg 'amd64.deb' fail
+run_case rpm 'x86_64.rpm' fail
+
