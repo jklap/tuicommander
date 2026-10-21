@@ -9950,7 +9950,12 @@ branch refs/heads/feat
                 .remove(&branches[0])
                 .unwrap()
         };
+        let workspace = resolve_any_workspace(&repo, "snapshot-feature").unwrap();
+        let status = || {
+            inspect_workspace_monitoring_with_pr(&repo, &workspace, |_, _, _| false).commit_status
+        };
         let initial = key();
+        assert_eq!(status(), WorkspaceCommitStatus::Unmerged);
         git_cmd(&repo)
             .args(["pack-refs", "--all", "--prune"])
             .run()
@@ -9969,12 +9974,24 @@ branch refs/heads/feat
             .run()
             .unwrap();
         let remote = key();
+        assert_eq!(status(), WorkspaceCommitStatus::PushedUnmerged);
         assert_ne!(
             initial, remote,
             "a remote containment proof must invalidate the key"
         );
         commit_file(&repo, "default.txt", "main moved\n");
+        git_cmd(&repo)
+            .args([
+                "merge",
+                "--no-ff",
+                "snapshot-feature",
+                "-m",
+                "integrate feature",
+            ])
+            .run()
+            .unwrap();
         let main = key();
+        assert_eq!(status(), WorkspaceCommitStatus::Merged);
         assert_ne!(
             remote, main,
             "main checkout ancestry must invalidate the key"
@@ -9984,6 +10001,7 @@ branch refs/heads/feat
             .run()
             .unwrap();
         assert_ne!(main, key(), "configuration must invalidate the key");
+        assert_eq!(status(), WorkspaceCommitStatus::Merged);
         assert!(monitoring_ref_keys(&repo, &[]).unwrap().is_empty());
     }
 
