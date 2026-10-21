@@ -198,6 +198,36 @@ impl CachedRepository {
             }
         }
         let config = repo.config_snapshot();
+        // Status semantics also depend on out-of-tree ignore/attribute sources.
+        // Keep their cheap signatures beside config provenance; no content polling.
+        let xdg = std::env::var_os("XDG_CONFIG_HOME")
+            .map(PathBuf::from)
+            .or_else(|| home.as_ref().map(|home| home.join(".config")));
+        if let Some(xdg) = xdg {
+            paths.insert(xdg.join("git/attributes"));
+            paths.insert(xdg.join("git/ignore"));
+        }
+        paths.insert(repo.common_dir().join("info/attributes"));
+        paths.insert(repo.common_dir().join("info/exclude"));
+        for name in ["core.attributesFile", "core.excludesFile"] {
+            if let Some(value) = config.string(name) {
+                let path = gix::path::from_bstr(&value).map_err(|e| e.to_string())?;
+                let resolved = if let Ok(relative) = path.strip_prefix("~") {
+                    home.as_ref().map(|home| home.join(relative))
+                } else if path.is_absolute() {
+                    Some(path.into_owned())
+                } else {
+                    Some(path.as_ref().to_path_buf())
+                };
+                if let Some(path) = resolved {
+                    paths.insert(if path.is_absolute() {
+                        path
+                    } else {
+                        repo.workdir().unwrap_or(repo.git_dir()).join(path)
+                    });
+                }
+            }
+        }
         paths.extend(
             config
                 .sections()
@@ -1208,19 +1238,31 @@ impl GitReadsRouter {
 
     /// Both status-derived values used by one sidebar monitoring refresh.
     pub fn monitoring_status(&self, repo: &Path) -> (DiffStats, Result<usize, String>) {
+        let (diff, dirty, _) = self.monitoring_status_with_cacheability(repo);
+        (diff, dirty)
+    }
+
+    /// Only a complete supported gix pass may become a reusable monitoring snapshot.
+    pub fn monitoring_status_with_cacheability(
+        &self,
+        repo: &Path,
+    ) -> (DiffStats, Result<usize, String>, bool) {
         if matches!(self.backend.diff_stats, Backend::Gix)
             && let Some((diff, dirty)) = self.gix.gix_monitoring_status_worktree(repo)
         {
+            let complete = dirty.is_some();
             return (
                 diff,
                 dirty
                     .map(Ok)
                     .unwrap_or_else(|| crate::worktree::dirty_files_at(repo)),
+                complete,
             );
         }
         (
             self.diff_stats(repo, None),
             crate::worktree::dirty_files_at(repo),
+            false,
         )
     }
 
@@ -1237,6 +1279,27 @@ static ROUTER: OnceLock<GitReadsRouter> = OnceLock::new();
 /// Reuse the process-wide handle cache for monitoring and lifecycle reads too.
 pub(crate) fn cached_repo(repo: &Path) -> Result<gix::Repository, String> {
     git_reads().gix.repo(repo)
+}
+
+/// Cheap status dependencies; unsupported repositories never authorize snapshot reuse.
+pub fn monitoring_status_signature(path: &Path) -> Option<u64> {
+    use std::hash::{Hash, Hasher};
+    let router = git_reads();
+    let repo = router.gix.repo(path).ok()?;
+    if GixGitReads::gix_repo_unsupported(&repo) {
+        return None;
+    }
+    let cached = router.gix.handles.get(path)?;
+    if !cached.stable {
+        return None;
+    }
+    let mut hash = std::collections::hash_map::DefaultHasher::new();
+    cached.config_files.hash(&mut hash);
+    config_signature(&repo.git_dir().join("index")).hash(&mut hash);
+    config_signature(&repo.git_dir().join("HEAD")).hash(&mut hash);
+    // Replacement is not watch identity; creation time survives ordinary directory edits.
+    std::fs::metadata(path).ok()?.created().ok().hash(&mut hash);
+    Some(hash.finish())
 }
 
 /// Global read-ops router. All git read call sites go through this.

@@ -539,7 +539,7 @@ fn repo_git_fingerprint(repo_root: &Path, git_dir: &Path) -> u64 {
         .unwrap_or(0);
     let head_target = resolve_head_target(git_dir).unwrap_or_default();
     let porcelain = crate::git_cli::git_cmd(repo_root)
-        .args(["status", "--porcelain"])
+        .args(["--no-optional-locks", "status", "--porcelain"])
         .run_silent()
         .map(|o| o.stdout)
         .unwrap_or_default();
@@ -625,6 +625,7 @@ pub(crate) struct RepoWatchHandle {
     /// Lock-cheap copy of the registered roots for `classify_path`, shared with
     /// the event callback. Refreshed at the end of each sync.
     worktree_snapshot: Arc<parking_lot::RwLock<Vec<PathBuf>>>,
+    status_watch_complete: Arc<std::sync::atomic::AtomicBool>,
 }
 
 /// Register the watches for one working-tree root: the main checkout at startup,
@@ -722,10 +723,26 @@ fn sync_worktree_watches(state: &Arc<AppState>, repo_path: &str, git_dir: &Path)
         let mut watcher = handle.watcher.lock();
         for root in desired.difference(&registered) {
             tracing::debug!(source = "repo_watcher", repo = %repo_path, path = %root.display(), "Watching linked worktree");
-            watch_working_tree_root(&mut watcher, root, &mut watched);
+            let failures = watch_working_tree_root(&mut watcher, root, &mut watched);
+            crate::monitoring_status::CACHE.set_watching(
+                Path::new(repo_path),
+                root,
+                failures == 0
+                    && handle
+                        .status_watch_complete
+                        .load(std::sync::atomic::Ordering::Acquire),
+            );
+            if !handle
+                .status_watch_complete
+                .load(std::sync::atomic::Ordering::Acquire)
+            {
+                crate::monitoring_status::CACHE.stop(Path::new(repo_path));
+            }
         }
         for root in registered.difference(&desired) {
             tracing::debug!(source = "repo_watcher", repo = %repo_path, path = %root.display(), "Dropping linked-worktree watch");
+            crate::monitoring_status::CACHE.invalidate_checkout(root);
+            crate::monitoring_status::CACHE.set_watching(Path::new(repo_path), root, false);
             unwatch_working_tree_root(&mut watcher, root, &mut watched);
         }
     }
@@ -824,6 +841,8 @@ pub(crate) fn start_watching(repo_path: &str, state: &Arc<AppState>) -> Result<(
     // one pending bit across the debounce rather than reading every checkout.
     let shared_git_changed = Arc::new(std::sync::atomic::AtomicBool::new(false));
 
+    let status_watch_complete = Arc::new(std::sync::atomic::AtomicBool::new(true));
+    let status_complete_cb = Arc::clone(&status_watch_complete);
     let repo_for_cb = repo.clone();
     let git_dir_for_cb = git_dir.clone();
     let gitignore_cb = Arc::clone(&gitignore);
@@ -835,12 +854,16 @@ pub(crate) fn start_watching(repo_path: &str, state: &Arc<AppState>) -> Result<(
                 Ok(e) => e,
                 Err(err) => {
                     tracing::warn!(source = "repo_watcher", path = %repo_path_owned, "Watcher error: {err}");
+                    status_complete_cb.store(false, std::sync::atomic::Ordering::Release);
+                    crate::monitoring_status::CACHE.stop(&repo_for_cb);
                     tuic_git::worktree::set_monitoring_watch_active(&repo_for_cb, false);
                     return;
                 }
             };
 
-            crate::monitoring_status::CACHE.event(&repo_for_cb, &event);
+            if !crate::monitoring_status::CACHE.event(&repo_for_cb, &event) {
+                status_complete_cb.store(false, std::sync::atomic::Ordering::Release);
+            }
 
             // Drop read-only access events (open/read/close-nowrite) before any
             // work: file reads spray thousands per second per repo and pinned a
@@ -1007,7 +1030,7 @@ pub(crate) fn start_watching(repo_path: &str, state: &Arc<AppState>) -> Result<(
                     // always lands here — catch its watches up before emitting.
                     sync_worktree_watches(&st, &repo_path, &git_dir);
                     tracing::debug!(source = "repo_watcher", path = %repo_path, "Emit repo-changed (git-state)");
-                    st.invalidate_repo_caches(&repo_path);
+                    st.invalidate_repo_caches_from_watch(&repo_path);
                     // Dedupe: a pending working-tree emit would send this exact
                     // event again in another second. `git add`, `git commit` and
                     // `git checkout` all write `.git` *and* the working tree, so
@@ -1052,7 +1075,7 @@ pub(crate) fn start_watching(repo_path: &str, state: &Arc<AppState>) -> Result<(
                 };
                 emitter.trigger_with_delay(&EventCategory::WorkingTree, wt_delay, move || {
                     tracing::debug!(source = "repo_watcher", path = %repo_path, "Emit repo-changed (working-tree)");
-                    st.invalidate_repo_caches(&repo_path);
+                    st.invalidate_repo_caches_from_watch(&repo_path);
                     let _ = bus.send(AppEvent::RepoChanged {
                         repo_path: repo_path.clone(),
                         kind: RepoChangeKind::WorkingTree,
@@ -1134,12 +1157,31 @@ pub(crate) fn start_watching(repo_path: &str, state: &Arc<AppState>) -> Result<(
         }
     }
 
+    // DEFERRED (2026-10-21) — Linux prunes ignored/excluded directories, which
+    // can contain tracked files. Keep status fresh there; do not widen watches
+    // for this macOS Defender fix.
+    let status_complete = status_watch_supported(monitoring_watch_complete);
+    if !status_complete {
+        status_watch_complete.store(false, std::sync::atomic::Ordering::Release);
+    }
+    crate::monitoring_status::CACHE.set_watching(
+        &repo,
+        &repo,
+        status_watch_complete.load(std::sync::atomic::Ordering::Acquire),
+    );
     let handle = RepoWatchHandle {
         watcher: Mutex::new(watcher),
         watched_dirs: Mutex::new(watched_dirs),
         worktree_roots: Mutex::new(std::collections::HashSet::new()),
         worktree_snapshot,
+        status_watch_complete,
     };
+    if !handle
+        .status_watch_complete
+        .load(std::sync::atomic::Ordering::Acquire)
+    {
+        crate::monitoring_status::CACHE.stop(&repo);
+    }
     state
         .repo_watchers
         .insert(repo_path.to_string(), Arc::new(handle));
@@ -1148,6 +1190,10 @@ pub(crate) fn start_watching(repo_path: &str, state: &Arc<AppState>) -> Result<(
     sync_worktree_watches(state, repo_path, &git_dir);
     tuic_git::worktree::set_monitoring_watch_active(&repo, monitoring_watch_complete);
     Ok(())
+}
+
+fn status_watch_supported(complete: bool) -> bool {
+    complete && !cfg!(target_os = "linux")
 }
 
 /// Stop watching a repository and retire its repo-local semantic caches, so a
@@ -1212,6 +1258,13 @@ mod tests {
         IgnoreSet {
             layers: vec![(PathBuf::new(), builder.build().unwrap())],
         }
+    }
+
+    /// Catches enabling snapshot reuse on Linux's status-incomplete pruned watches.
+    #[test]
+    fn monitoring_status_requires_complete_platform_watches() {
+        assert!(!status_watch_supported(false));
+        assert_eq!(status_watch_supported(true), !cfg!(target_os = "linux"));
     }
 
     #[test]
