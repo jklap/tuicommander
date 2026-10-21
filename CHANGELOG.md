@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+- Remove inherited foreground peer identity from detached `tuic bg` commands so background progress cannot block the parent composer and strand its completion wake; preserve runner wake and mail routing (#2100-c249).
+
 - Keep the mobile CLI green answer bar in its own gutter so column-zero ego text stays clear without adding a second Claude text margin (#2110-734c).
 
 - Distinguish TUIC MCP protocol names from client-callable Claude Code and Codex tool names, including native Agent versus TUIC agent (#2108-465b).
