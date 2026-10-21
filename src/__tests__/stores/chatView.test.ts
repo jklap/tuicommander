@@ -30,13 +30,13 @@ beforeEach(() => {
 });
 
 describe("chatViewAvailability", () => {
-	// Catches: ego's exact discovered binding being rejected despite an installed adapter.
-	it("offers ego Chat only after session discovery and reports unbound/remote reasons", () => {
-		const ego = { agentType: "ego", agentSessionId: "ego-session", sessionId: "terminal", isRemote: false } as const;
+	// Catches: a second frontend binding rule disabling a backend-readable ego transcript after reload.
+	it("defers ego binding to the backend but still rejects remote and missing PTYs", () => {
+		const ego = { agentType: "ego", agentSessionId: null, sessionId: "terminal", isRemote: false } as const;
 		expect(chatViewAvailability(ego)).toEqual({ available: true });
 		for (const term of [
-			{ ...ego, agentSessionId: null },
 			{ ...ego, isRemote: true },
+			{ ...ego, sessionId: null },
 		]) {
 			const result = chatViewAvailability(term);
 			expect(result.available).toBe(false);
