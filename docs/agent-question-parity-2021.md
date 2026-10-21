@@ -100,3 +100,28 @@ The coordinator authorized an isolated ego user config with its sole writable ro
 A launch-scoped `-c roots=[{path="/Users/stefano.straus/Gits/.tmp/results/live-2021b/scratch/ego",access="read-write"}]` attempt, without changing Boss's saved configuration, failed validation before startup: `the command line: invalid config in flags layer: roots in project/local layers may only restrict read access` (`r3-startup.json`). Thus the tested installed CLI does not permit this alternative writable-root override. The available `ego auth login [--device] openai-codex` command requires a new login to the isolated store. No login was started. The remaining prerequisite is isolated-store authentication or an approved way to select a separate user configuration while using the existing credential provider; neither is a parity pass.
 
 All retry sessions were deleted (`r2-sessions-after-cleanup.json` is `[]`), the owned `live-2021b-r2` browser tab and daemon closed, and backend PID 26557 plus Vite PID 26559 were stopped. No production code changed and criterion 2 remains unchecked.
+
+## Awaiting badge investigation (2105-f1e5, 2026-10-21)
+
+The earlier `desk-2021b` browser transcript records tab classes that disagree with the session API. It does not retain the event or store-update sequence needed to locate the loss. Its temporary `.tmp/parity-vite.config.ts` was removed after the audit. The observation alone does not prove either a native IPC defect or a proxy defect.
+
+A fresh check used source revision `f9a028f990`, `make agent-test AGENT_TEST_INSTANCE=at-2105 AGENT_TEST_PORT=19945`, and a worktree Vite page on port 19946. The proxy used only the isolated instance's Unix socket. The required stealth wrapper controlled one owned browser tab. One real Claude PTY ran under `~/Gits/.tmp/results/fix-2105-evidence/scratch/parity-claude`. The native startup import-consent dialog was answered with its selected **No, disable external imports** option; no credential store was read. No Boss session or desktop window was inspected.
+
+Before spawning Claude, browser diagnostics recorded an independent `session-state-changed` SSE stream, calls to the existing terminal store's `update` method, and tab class changes through `MutationObserver`. These diagnostics did not inject a lifecycle state or call the awaiting handler. The native question then produced this sequence without navigation or reload:
+
+| Observation | Browser timestamp (Unix ms) |
+| --- | --- |
+| Tab becomes `shellBusy` | 1792555628227 |
+| Independent SSE receives authoritative `awaiting_input=true` | 1792555638063 |
+| Application writes `awaitingInput="question"` to `term-1` | 1792555638063 |
+| Tab has `awaitingInput` and `awaitingQuestion`, without `shellBusy` | 1792555638066 |
+
+The observed SSE-to-DOM interval was 3 ms. A later same-page API read and DOM read also showed `awaiting_input=true` and the awaiting classes together. This is a passing fresh transition, not a reproduction or a fix of the earlier mismatch. There was no independent API polling timestamp for the first instant that the backend became awaiting; the transition timing above uses its authoritative SSE snapshot. The capture does not establish native WebView pixels or IPC delivery.
+
+The inspected path is `state.rs:4926-4975` (accumulator publishes a deduplicated snapshot to both transports), `mcp_http/sse_routes.rs:562-565` (shared payload), `useAgentPolling.ts:123-129,80-101` (session routing and store update), and `TabViews.tsx:133-135` (awaiting excludes the busy class). The proxy recorded successful HTTP 204 responses to `/events/types`, including the late subscription after the terminal appeared. `transport/sse.ts:132-168` shows why that route is relevant to a late consumer; its failure in the original audit is **not** established.
+
+Evidence is retained under `~/Gits/.tmp/results/fix-2105-evidence/`: `transition-proof.json`, `api-awaiting.json`, `browser-transcript.txt`, `proxy.ndjson`, `claude-awaiting.png`, the launch/proxy/probe scripts, and cleanup receipts. The native agent-test build passed through build-slot/mbx. No Rust or frontend test suite ran, no regression test was invented for an unproven cause, and no product code or capture corpus changed. The original loss boundary remains unresolved; story criterion 1 must stay open until its event/store trace or an equivalent failing reproduction is available.
+
+Cleanup deleted the owned Claude PTY (`sessions-after-cleanup.json` is `[]`), closed the owned browser tab and named daemon, stopped Vite, and requested `make agent-test-stop AGENT_TEST_INSTANCE=at-2105 AGENT_TEST_PORT=19945`. The shared Chrome and Boss's instance were left running.
+
+Suggested memory: `$wiz:remember` can retain the verified distinction between a passing fresh SSE transition and attribution of the earlier browser-only mismatch.
