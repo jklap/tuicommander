@@ -270,6 +270,10 @@ async fn supervision_loop(
         // forever — the child never exits and the status stays stuck at
         // Connected even though ssh is effectively hung.
         let stderr_tail = child.stderr.take().map(spawn_stderr_drainer);
+        // `child.id()` is `None` once the child has been waited on, so keep the
+        // group id (== the leader's PID, see `process_group(0)`) for the
+        // exit-on-its-own paths below.
+        let pgid = child.id();
 
         // A running SSH process needs a brief survival window, and its -L
         // sockets may take longer to listen across a WAN. Require both.
@@ -293,6 +297,7 @@ async fn supervision_loop(
 
         if let Some(wait_result) = ready {
             // Process died before its forwards were ready.
+            reap_process_group(pgid).await;
             let stderr = stderr_tail_snapshot(&stderr_tail);
             let code = wait_result.ok().and_then(|s| s.code());
             let reason = classify_exit(&stderr, code);
@@ -335,6 +340,9 @@ async fn supervision_loop(
             }
         };
 
+        // ssh exited on its own (network drop, auth failure): its leader is
+        // gone but a `ProxyCommand` descendant may not be.
+        reap_process_group(pgid).await;
         let stderr = stderr_tail_snapshot(&stderr_tail);
         let code = wait_result.ok().and_then(|s| s.code());
         let reason = classify_exit(&stderr, code);
@@ -471,6 +479,44 @@ fn stderr_tail_snapshot(tail: &Option<Arc<Mutex<Vec<u8>>>>) -> String {
         Some(tail) => String::from_utf8_lossy(&tail.lock()).into_owned(),
         None => String::new(),
     }
+}
+
+/// After the group leader (ssh) has exited on its own, make sure no member of
+/// its dedicated process group outlives it.
+///
+/// A process group persists until its last member exits, and `kill(-pgid, ..)`
+/// keeps working for as long as any member lives, so a `ProxyCommand`
+/// descendant that survived its parent is still reachable here. The common
+/// case (no survivors) costs one `kill` that returns ESRCH. Otherwise SIGTERM,
+/// poll up to 5s (same grace as `graceful_kill`), then SIGKILL. Must run
+/// before the exit is acted on (status, retry/backoff) so a retry never
+/// overlaps stale descendants and `Stopped` implies the group is gone.
+async fn reap_process_group(pgid: Option<u32>) {
+    #[cfg(unix)]
+    {
+        let Some(pgid) = pgid.and_then(|id| i32::try_from(id).ok()) else {
+            return;
+        };
+        // SAFETY: `pgid` was the PID of a child we spawned into its own group
+        // via `process_group(0)`; signalling `-pgid` only reaches that group,
+        // and ESRCH (no members left) is the expected no-op.
+        if unsafe { libc::kill(-pgid, libc::SIGTERM) } != 0 {
+            return;
+        }
+        for _ in 0..100 {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+            // SAFETY: signal 0 only probes for existence.
+            if unsafe { libc::kill(-pgid, 0) } != 0 {
+                return;
+            }
+        }
+        // SAFETY: as above.
+        unsafe {
+            libc::kill(-pgid, libc::SIGKILL);
+        }
+    }
+    #[cfg(not(unix))]
+    let _ = pgid;
 }
 
 /// Send SIGTERM, wait 5s, escalate to SIGKILL.
@@ -900,6 +946,52 @@ mod tests {
             unsafe { libc::kill(grandchild, libc::SIGKILL) };
         }
         assert!(!alive, "forked grandchild {grandchild} survived shutdown");
+    }
+
+    /// Catches: ssh exiting on its own (network drop, auth failure) leaving a
+    /// forked descendant (a `ProxyCommand`) alive in the dedicated process
+    /// group. The fake ssh forks `sleep` and exits; once the supervisor has
+    /// settled on `Stopped` the sleeper must already be gone.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn ssh_exiting_on_its_own_does_not_leave_a_group_descendant() {
+        let root = crate::test_support::test_temp_root();
+        let child_marker = root.join("self_exit_ssh_child.pid");
+        let _ = std::fs::remove_file(&child_marker);
+        let posix = format!(
+            "sleep 3600 &\necho $! > '{}'\nexit 0",
+            child_marker.display()
+        );
+        let script = fake_ssh_script("self_exit_group", &posix, "exit /b 0");
+        let (cb, _statuses) = status_collector();
+
+        let mut sup =
+            TunnelSupervisor::start_with_binary(test_profile(), script.to_path_buf(), cb).await;
+        assert!(matches!(
+            wait_for_stopped(&sup).await,
+            TunnelStatus::Stopped { .. }
+        ));
+        let sleeper: i32 = std::fs::read_to_string(&child_marker)
+            .expect("fake SSH forked its descendant")
+            .trim()
+            .parse()
+            .unwrap();
+
+        // Allow only for init reaping the orphan; the group signal has
+        // already been delivered before `Stopped` was published.
+        let mut alive = true;
+        for _ in 0..40 {
+            alive = unsafe { libc::kill(sleeper, 0) } == 0;
+            if !alive {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        if alive {
+            unsafe { libc::kill(sleeper, libc::SIGKILL) };
+        }
+        sup.stop();
+        assert!(!alive, "descendant {sleeper} survived ssh's own exit");
     }
 
     #[tokio::test]
