@@ -273,6 +273,10 @@ pub enum AppEvent {
     /// [`crate::pty::ACTIVITY_PULSE_WINDOW`] for why dropping pulses is sound.
     #[serde(rename = "pty-activity")]
     PtyActivity { session_id: String },
+    ShellAbandoned {
+        session_id: String,
+        since_ms: Option<u64>,
+    },
     /// Assembled PTY lines for the plugin OutputWatchers, carrying the ids Rust
     /// already matched. The frontend re-runs the real `RegExp` on the cleaned
     /// text to hand the plugin a genuine `RegExpExecArray`, and scans the line
@@ -588,6 +592,7 @@ impl AppEvent {
             | AppEvent::PluginWatcherLines { session_id, .. }
             | AppEvent::PtyExit { session_id }
             | AppEvent::PtyActivity { session_id }
+            | AppEvent::ShellAbandoned { session_id, .. }
             | AppEvent::PtyTitle { session_id, .. }
             | AppEvent::PtyBell { session_id }
             | AppEvent::PtyOsc133 { session_id, .. }
@@ -659,6 +664,9 @@ pub(crate) struct SessionState {
     /// are excluded by the PTY process-tree classifier.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub background_work: bool,
+    /// Last I/O time of a freshly verified abandoned shell.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub abandoned_since_ms: Option<u64>,
     /// Turn whose confirmed-ready observation is waiting for a process snapshot
     /// newer than `background_probe_after_generation`.
     #[serde(skip)]
@@ -904,6 +912,7 @@ impl PartialEq for SessionState {
             && self.shell_state == other.shell_state
             && self.agent_state == other.agent_state
             && self.background_work == other.background_work
+            && self.abandoned_since_ms == other.abandoned_since_ms
             && self.agent_type == other.agent_type
             && self.codex_binding == other.codex_binding
             && self.last_error == other.last_error
@@ -4749,6 +4758,11 @@ impl AppState {
         } else {
             Some("starting".to_string())
         };
+        if state.agent_type.is_some()
+            || crate::idle_close::shell_last_io_ms(self, session_id) != state.abandoned_since_ms
+        {
+            state.abandoned_since_ms = None;
+        }
         Some(state)
     }
 
@@ -5088,6 +5102,11 @@ impl AppState {
                         session.seed_configured_agent(agent_type.clone());
                         session
                     });
+            }
+            AppEvent::ShellAbandoned { session_id, since_ms } => {
+                if let Some(mut session) = state.session_maps.session_states.get_mut(session_id) {
+                    session.abandoned_since_ms = *since_ms;
+                }
             }
             AppEvent::PtyDescriptionChanged { .. } => {}
             AppEvent::ChatViewChanged { .. } => {}

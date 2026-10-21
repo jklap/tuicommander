@@ -421,6 +421,7 @@ export type AgentHookState = "installed" | "outdated" | "notInstalled" | "unsupp
 export interface AgentsConfig {
 	launch_additions_migrated?: boolean;
 	hibernate_idle_minutes?: number;
+	abandoned_shell_hours?: number;
 	hibernate_scope?: "background_only" | "always";
 	agents: Record<string, AgentSettingsConfig>;
 	/** Which agent CLI to use for headless prompt execution when no agent is in the active terminal */
