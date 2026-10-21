@@ -6,6 +6,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+- Keep the terminal mobile composer's bottom safe-area inset inside its painted surface, above the Home Indicator; the separately reported iPhone shell-height band still needs device evidence (#2116-0213).
 - Remove the unused command-knowledge recorder, xterm-only watcher clear injection, orphan desktop commands and git panel-context endpoint. Removed MCP action and workspace-parameter migration hints now use ordinary input errors; no compatibility aliases remain (#2115-1333).
 
 - Add opt-in `agent send urgency=interrupt`: Esc for safe working Claude/Codex/ego sessions, a ten-second confirmed-idle wait, then complete message submission, with explicit urgent fallback receipts (#2113-c419).
