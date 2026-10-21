@@ -957,6 +957,21 @@ apply `agent_type` immediately, including removal when the shell returns; the
 
 Coalesced scrolling uses one atomic latest-wins slot for both transports. `terminal_scroll_to_anchor` encodes an all-time row anchor in that slot; the ticker resolves it under the VT lock after pending output. Null follows output. Evicted anchors clamp to the oldest retained row. Offset commands share the slot, so mixed clients retain request order.
 
+### Codex rollout discovery
+
+Heuristic Codex session discovery shares a watched candidate index per `CODEX_HOME`
+(up to 16 stores). It scans only today's and yesterday's rollout directories on
+initialization. Later lookups use the index; file events refresh changed rollout
+paths. Date changes, directory events and lost-event notifications rebuild the
+recent-day snapshot. Watches cover only the recent day trees and their shallow
+parent boundaries, not the lifetime session tree. Watch failure falls back to
+fresh recent-day scans rather than serving stale entries. A replaced watched day or parent directory invalidates the index so the next lookup re-arms its watches, even when the date paths do not change.
+
+Candidates still require a readable recorded cwd, an age of at most five minutes
+and an unclaimed session ID. Age and claimed IDs are checked for each lookup.
+Replacement and deletion events revoke prior candidates. This optimization does
+not make heuristic discovery an exact PID binding or change native Chat binding.
+
 ### Codex Chat: exact native hook binding
 
 The Rust `chat_view::codex::CodexAdapter` maps Codex 0.162.1

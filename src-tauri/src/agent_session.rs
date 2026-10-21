@@ -597,22 +597,26 @@ fn discover_codex_session(
     claimed_ids: &[String],
     codex_home: Option<&str>,
 ) -> Option<String> {
+    discover_codex_session_at(cwd, claimed_ids, codex_home, SystemTime::now())
+}
+
+fn discover_codex_session_at(
+    cwd: &str,
+    claimed_ids: &[String],
+    codex_home: Option<&str>,
+    now: SystemTime,
+) -> Option<String> {
     let sessions_root = codex_sessions_dir(codex_home)?;
 
     if !sessions_root.exists() {
         return None;
     }
 
-    // Walk only today's/yesterday's YYYY/MM/DD subtrees — a session younger than
-    // SESSION_MAX_AGE can only live there. This prunes the entire historical tree
-    // by date before walking, so cost stays bounded regardless of how much
-    // lifetime history has accumulated.
-    let now = SystemTime::now();
     let wanted_cwd = normalize_cwd(cwd);
-    let mut candidates: Vec<(SystemTime, String)> = Vec::new();
-    for day_dir in codex_recent_day_dirs(&sessions_root, chrono::Local::now()) {
-        collect_codex_files(&day_dir, now, &wanted_cwd, &mut candidates);
-    }
+    let index = CODEX_INDEXES.get_with(sessions_root.clone(), || {
+        std::sync::Arc::new(CodexIndex::new(&sessions_root))
+    });
+    let mut candidates = index.candidates(&sessions_root, now, &wanted_cwd);
 
     // Sort newest first
     candidates.sort_by_key(|a| std::cmp::Reverse(a.0));
@@ -655,38 +659,221 @@ fn read_codex_rollout_cwd(path: &Path) -> Option<PathBuf> {
     Some(normalize_cwd(cwd))
 }
 
-fn collect_codex_files(
-    dir: &PathBuf,
+#[cfg(test)]
+static CODEX_ROLLOUT_STATS: std::sync::LazyLock<dashmap::DashMap<PathBuf, usize>> =
+    std::sync::LazyLock::new(dashmap::DashMap::new);
+
+fn codex_rollout_metadata(path: &Path) -> std::io::Result<std::fs::Metadata> {
+    #[cfg(test)]
+    {
+        *CODEX_ROLLOUT_STATS.entry(path.to_path_buf()).or_insert(0) += 1;
+    }
+    std::fs::metadata(path)
+}
+
+/// Shared per-store index: discovery polls inspect memory, while filesystem
+/// events update only the rollout paths that moved. This remains heuristic
+/// discovery, not a PID/session binding.
+static CODEX_INDEXES: std::sync::LazyLock<moka::sync::Cache<PathBuf, std::sync::Arc<CodexIndex>>> =
+    std::sync::LazyLock::new(|| moka::sync::Cache::builder().max_capacity(16).build());
+
+#[derive(Default)]
+struct CodexUpdates {
+    paths: std::collections::HashSet<PathBuf>,
+    rescan: bool,
+}
+
+struct CodexCandidate {
+    modified: SystemTime,
+    id: String,
+    cwd: PathBuf,
+}
+
+#[derive(Default)]
+struct CodexCandidates {
+    days: Vec<PathBuf>,
+    files: HashMap<PathBuf, CodexCandidate>,
+    initialized: bool,
+}
+
+struct CodexIndex {
+    watcher: std::sync::Mutex<Option<notify::RecommendedWatcher>>,
+    updates: std::sync::Arc<std::sync::Mutex<CodexUpdates>>,
+    state: std::sync::Mutex<CodexCandidates>,
+}
+
+impl CodexIndex {
+    fn new(root: &Path) -> Self {
+        use notify::Watcher;
+        let updates = std::sync::Arc::new(std::sync::Mutex::new(CodexUpdates::default()));
+        let pending = updates.clone();
+        let watcher = notify::recommended_watcher(move |event: notify::Result<notify::Event>| {
+            if let Ok(event) = &event
+                && matches!(event.kind, notify::EventKind::Access(_))
+            {
+                return;
+            }
+            let mut updates = pending.lock().unwrap_or_else(|e| e.into_inner());
+            match event {
+                Ok(event) if !event.need_rescan() => {
+                    for path in event.paths {
+                        if updates.paths.len() >= 4096 {
+                            updates.paths.clear();
+                            updates.rescan = true;
+                            break;
+                        }
+                        updates.paths.insert(path);
+                    }
+                }
+                _ => updates.rescan = true,
+            }
+        })
+        .and_then(|mut watcher| {
+            watcher.watch(root, notify::RecursiveMode::NonRecursive)?;
+            Ok(watcher)
+        })
+        .map_err(|error| tracing::warn!(%error, "Codex discovery watcher unavailable; using fresh scans"))
+        .ok();
+        Self {
+            watcher: std::sync::Mutex::new(watcher),
+            updates,
+            state: std::sync::Mutex::new(CodexCandidates::default()),
+        }
+    }
+
+    fn candidates(&self, root: &Path, now: SystemTime, cwd: &Path) -> Vec<(SystemTime, String)> {
+        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        // Drain before reading: events arriving during the refresh remain queued
+        // for the next lookup rather than being erased by this snapshot.
+        let updates = std::mem::take(&mut *self.updates.lock().unwrap_or_else(|e| e.into_inner()));
+        // Removing/replacing a watched directory invalidates its inode watch on
+        // platforms such as inotify, even when the date paths stay identical.
+        // Recreate the bounded watch set through the existing next-lookup path.
+        if updates.rescan
+            || updates.paths.contains(root)
+            || state.days.iter().any(|day| {
+                day.ancestors()
+                    .take(3)
+                    .any(|directory| updates.paths.contains(directory))
+            })
+        {
+            CODEX_INDEXES.invalidate(root);
+        }
+        let days = codex_recent_day_dirs(root, chrono::Local::now());
+        let mut watcher = self.watcher.lock().unwrap_or_else(|e| e.into_inner());
+        if state.days != days && watcher.is_some() {
+            use notify::Watcher;
+            let active = watcher.as_mut().unwrap();
+            // Never recursively watch the lifetime session tree: watch only the
+            // two recent date subtrees and their shallow creation boundaries.
+            let old_parents: std::collections::HashSet<_> = state
+                .days
+                .iter()
+                .flat_map(|day| day.ancestors().skip(1).take(2))
+                .collect();
+            for day in &state.days {
+                let _ = active.unwatch(day);
+            }
+            for parent in old_parents {
+                let _ = active.unwatch(parent);
+            }
+            let parents: std::collections::HashSet<_> = days
+                .iter()
+                .flat_map(|day| day.ancestors().skip(1).take(2))
+                .collect();
+            let armed = parents
+                .into_iter()
+                .try_for_each(|parent| active.watch(parent, notify::RecursiveMode::NonRecursive))
+                .and_then(|_| {
+                    days.iter()
+                        .try_for_each(|day| active.watch(day, notify::RecursiveMode::Recursive))
+                });
+            if let Err(error) = armed {
+                tracing::warn!(%error, "Codex discovery date watch failed; using fresh scans");
+                *watcher = None;
+            }
+        }
+        let directory_changed = updates.paths.iter().any(|path| {
+            path.file_name()
+                .and_then(|n| n.to_str())
+                .and_then(extract_codex_uuid)
+                .is_none()
+        });
+        if !state.initialized
+            || watcher.is_none()
+            || updates.rescan
+            || state.days != days
+            || directory_changed
+        {
+            state.files.clear();
+            for day in &days {
+                collect_codex_candidates(day, now, &mut state.files);
+            }
+            state.days = days;
+            state.initialized = true;
+        } else {
+            for path in updates.paths {
+                if state.days.iter().any(|day| path.starts_with(day)) {
+                    update_codex_candidate(&path, now, &mut state.files);
+                }
+            }
+        }
+        state.files.retain(|_, candidate| {
+            now.duration_since(candidate.modified).unwrap_or_default() <= SESSION_MAX_AGE
+        });
+        state
+            .files
+            .values()
+            .filter(|candidate| candidate.cwd == cwd)
+            .map(|candidate| (candidate.modified, candidate.id.clone()))
+            .collect()
+    }
+}
+
+fn update_codex_candidate(
+    path: &Path,
     now: SystemTime,
-    wanted_cwd: &Path,
-    out: &mut Vec<(SystemTime, String)>,
+    out: &mut HashMap<PathBuf, CodexCandidate>,
+) {
+    // Replacement, deletion and unreadable/truncated headers all revoke the old
+    // candidate before a fresh record can be accepted.
+    out.remove(path);
+    let Some(id) = path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .and_then(extract_codex_uuid)
+    else {
+        return;
+    };
+    let Some(modified) = codex_rollout_metadata(path)
+        .ok()
+        .and_then(|m| m.modified().ok())
+    else {
+        return;
+    };
+    if now.duration_since(modified).unwrap_or_default() > SESSION_MAX_AGE {
+        return;
+    }
+    let Some(cwd) = read_codex_rollout_cwd(path) else {
+        return;
+    };
+    out.insert(path.to_path_buf(), CodexCandidate { modified, id, cwd });
+}
+
+fn collect_codex_candidates(
+    dir: &Path,
+    now: SystemTime,
+    out: &mut HashMap<PathBuf, CodexCandidate>,
 ) {
     let Ok(entries) = std::fs::read_dir(dir) else {
         return;
     };
-
-    for entry in entries.filter_map(|e| e.ok()) {
+    for entry in entries.filter_map(Result::ok) {
         let path = entry.path();
-        if path.is_dir() {
-            collect_codex_files(&path, now, wanted_cwd, out);
-        } else if let Some(name) = path.file_name().map(|n| n.to_string_lossy().to_string())
-            && let Some(uuid) = extract_codex_uuid(&name)
-            && let Ok(meta) = entry.metadata()
-            && let Ok(mtime) = meta.modified()
-        {
-            // Age first: it is a stat we already have, and it rejects almost
-            // everything before any file is opened.
-            if now.duration_since(mtime).unwrap_or_default() > SESSION_MAX_AGE {
-                continue;
-            }
-            // A rollout whose cwd cannot be read is REJECTED, not accepted. If Codex
-            // ever moves the field, resume-after-restart quietly stops working —
-            // annoying but obvious. Accepting instead would silently reinstate
-            // cross-project binding, which resumes the wrong history.
-            if read_codex_rollout_cwd(&path).as_deref() != Some(wanted_cwd) {
-                continue;
-            }
-            out.push((mtime, uuid));
+        if entry.file_type().is_ok_and(|kind| kind.is_dir()) {
+            collect_codex_candidates(&path, now, out);
+        } else {
+            update_codex_candidate(&path, now, out);
         }
     }
 }
@@ -2352,6 +2539,196 @@ mod tests {
             !dirs.contains(&codex_day_dir(root.path(), 2020, 1, 1)),
             "stale date subtree must be pruned before walking"
         );
+    }
+
+    // Catches re-statting every historical rollout on each idle/busy discovery.
+    #[test]
+    fn codex_warm_discovery_does_not_restat_historical_rollouts() {
+        let root = TempDir::new().unwrap();
+        let sessions = root.path().join("sessions");
+        let day = codex_recent_day_dirs_for_test(&sessions);
+        fs::create_dir_all(&day).unwrap();
+        let cwd = root.path().to_str().unwrap();
+        let current = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb";
+        for n in 0..64 {
+            let id = format!("aaaaaaaa-aaaa-aaaa-aaaa-{n:012x}");
+            let path = make_codex_rollout(&day, &format!("rollout-test-{id}.jsonl"), cwd);
+            fs::File::options()
+                .write(true)
+                .open(path)
+                .unwrap()
+                .set_modified(SystemTime::now() - Duration::from_secs(3600))
+                .unwrap();
+        }
+        make_codex_rollout(&day, &format!("rollout-test-{current}.jsonl"), cwd);
+        let discover = || discover_codex_session(cwd, &[], Some(cwd));
+        assert_eq!(discover().as_deref(), Some(current));
+        let count = || {
+            CODEX_ROLLOUT_STATS
+                .iter()
+                .filter(|entry| entry.key().starts_with(root.path()))
+                .map(|entry| *entry.value())
+                .sum::<usize>()
+        };
+        let before = count();
+        for _ in 0..10 {
+            assert_eq!(discover().as_deref(), Some(current));
+        }
+        assert_eq!(
+            count() - before,
+            0,
+            "unchanged discovery must not stat rollouts again"
+        );
+    }
+
+    // Catches a cached candidate hiding a replacement session, stale claimed-ID
+    // filtering, and a deleted or atomically replaced file remaining resumable.
+    #[test]
+    fn codex_watched_discovery_observes_replacement_and_deletion() {
+        let root = TempDir::new().unwrap();
+        let sessions = root.path().join("sessions");
+        let day = codex_recent_day_dirs_for_test(&sessions);
+        fs::create_dir_all(&day).unwrap();
+        let cwd = root.path().to_str().unwrap();
+        let first = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb";
+        let second = "cccccccc-cccc-cccc-cccc-cccccccccccc";
+        make_codex_rollout(&day, &format!("rollout-test-{first}.jsonl"), cwd);
+        assert_eq!(
+            discover_codex_session(cwd, &[], Some(cwd)).as_deref(),
+            Some(first)
+        );
+        let index = CODEX_INDEXES.get(&sessions).unwrap();
+        assert!(
+            index.watcher.lock().unwrap().is_some(),
+            "real filesystem watcher must be available"
+        );
+        let wait_for = |expected: Option<&str>| {
+            let deadline = std::time::Instant::now() + Duration::from_secs(30);
+            loop {
+                let actual = discover_codex_session(cwd, &[], Some(cwd));
+                if actual.as_deref() == expected {
+                    break;
+                }
+                assert!(
+                    std::time::Instant::now() < deadline,
+                    "Codex watcher did not publish {expected:?}; got {actual:?}"
+                );
+                std::thread::sleep(Duration::from_millis(20));
+            }
+        };
+        let path = make_codex_rollout(&day, &format!("rollout-test-{second}.jsonl"), cwd);
+        fs::File::options()
+            .write(true)
+            .open(&path)
+            .unwrap()
+            .set_modified(SystemTime::now() + Duration::from_secs(1))
+            .unwrap();
+        wait_for(Some(second));
+        assert_eq!(
+            discover_codex_session(cwd, &[second.to_string()], Some(cwd)).as_deref(),
+            Some(first)
+        );
+        fs::remove_file(&path).unwrap();
+        wait_for(Some(first));
+        // Replace the remaining file with another cwd at the same path. Cached
+        // cwd metadata must not let the original project keep the candidate.
+        let other = root.path().join("other");
+        fs::create_dir_all(&other).unwrap();
+        let temporary = make_codex_rollout(&day, "replacement.tmp", other.to_str().unwrap());
+        fs::rename(temporary, day.join(format!("rollout-test-{first}.jsonl"))).unwrap();
+        wait_for(None);
+    }
+
+    // Catches: replacing a date directory leaves discovery attached to its deleted inode.
+    #[test]
+    fn codex_replaced_day_directory_keeps_observing_new_rollouts() {
+        let root = TempDir::new().unwrap();
+        let sessions = root.path().join("sessions");
+        let day = codex_recent_day_dirs_for_test(&sessions);
+        fs::create_dir_all(&day).unwrap();
+        let cwd = root.path().to_str().unwrap();
+        let first = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb";
+        let second = "cccccccc-cccc-cccc-cccc-cccccccccccc";
+        let third = "dddddddd-dddd-dddd-dddd-dddddddddddd";
+        make_codex_rollout(&day, &format!("rollout-test-{first}.jsonl"), cwd);
+        assert_eq!(
+            discover_codex_session(cwd, &[], Some(cwd)).as_deref(),
+            Some(first)
+        );
+        let index = CODEX_INDEXES.get(&sessions).unwrap();
+        assert!(
+            index.watcher.lock().unwrap().is_some(),
+            "real watcher must be available"
+        );
+        // No discovery call between removal and recreation: the date paths are equal.
+        fs::remove_dir_all(&day).unwrap();
+        fs::create_dir_all(&day).unwrap();
+        make_codex_rollout(&day, &format!("rollout-test-{second}.jsonl"), cwd);
+        let wait_for = |expected: &str| {
+            let deadline = std::time::Instant::now() + Duration::from_secs(30);
+            loop {
+                let actual = discover_codex_session(cwd, &[], Some(cwd));
+                if actual.as_deref() == Some(expected) {
+                    break;
+                }
+                assert!(
+                    std::time::Instant::now() < deadline,
+                    "replacement day watcher did not discover {expected}; got {actual:?}"
+                );
+                std::thread::sleep(Duration::from_millis(20));
+            }
+        };
+        wait_for(second);
+        // Drain the directory-creation burst before changing only a child file.
+        std::thread::sleep(Duration::from_millis(200));
+        assert_eq!(
+            discover_codex_session(cwd, &[], Some(cwd)).as_deref(),
+            Some(second)
+        );
+        let path = make_codex_rollout(&day, &format!("rollout-test-{third}.jsonl"), cwd);
+        fs::File::options()
+            .write(true)
+            .open(path)
+            .unwrap()
+            .set_modified(SystemTime::now() + Duration::from_secs(1))
+            .unwrap();
+        wait_for(third);
+    }
+
+    // Catches an unchanged in-memory candidate bypassing the five-minute age bound.
+    #[test]
+    fn codex_cached_candidate_still_expires_without_file_events() {
+        let root = TempDir::new().unwrap();
+        let sessions = root.path().join("sessions");
+        let day = codex_recent_day_dirs_for_test(&sessions);
+        fs::create_dir_all(&day).unwrap();
+        let cwd = root.path().to_str().unwrap();
+        make_codex_rollout(
+            &day,
+            "rollout-test-bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb.jsonl",
+            cwd,
+        );
+        let now = SystemTime::now();
+        assert_eq!(
+            discover_codex_session_at(cwd, &[], Some(cwd), now).as_deref(),
+            Some("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb")
+        );
+        assert_eq!(
+            discover_codex_session_at(
+                cwd,
+                &[],
+                Some(cwd),
+                now + SESSION_MAX_AGE + Duration::from_secs(1)
+            ),
+            None,
+            "discovery must not resume an expired cached session"
+        );
+    }
+
+    fn codex_recent_day_dirs_for_test(root: &Path) -> PathBuf {
+        use chrono::Datelike;
+        let today = chrono::Local::now().date_naive();
+        codex_day_dir(root, today.year(), today.month(), today.day())
     }
 
     #[test]

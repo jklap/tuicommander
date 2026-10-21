@@ -4522,11 +4522,18 @@ impl AppState {
     }
 
     pub(crate) fn clear_caches(&self) {
+        crate::monitoring_status::CACHE.clear();
         self.git_cache.clear_all();
     }
 
     /// Invalidate caches for a specific repo path.
     pub(crate) fn invalidate_repo_caches(&self, path: &str) {
+        crate::monitoring_status::CACHE.invalidate_checkout(std::path::Path::new(path));
+        self.invalidate_repo_caches_from_watch(path);
+    }
+
+    /// Raw watcher callbacks already invalidate only the checkout that changed.
+    pub(crate) fn invalidate_repo_caches_from_watch(&self, path: &str) {
         self.git_cache.invalidate_repo(path);
         crate::prompt::invalidate_repo_vars(path);
     }

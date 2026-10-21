@@ -160,6 +160,7 @@ pub(crate) mod push;
 pub(crate) use tuic_core::redaction;
 pub(crate) mod chat_view;
 mod codex_binding;
+mod monitoring_status;
 pub(crate) mod registry;
 pub(crate) mod relay_client;
 #[allow(dead_code)] // Constructors used by remote binary and future tests

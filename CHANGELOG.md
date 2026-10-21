@@ -6,6 +6,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+- Reuse unchanged checkout monitoring status on macOS/Windows with raw file-event invalidation, source signatures and a five-minute backstop; keep fresh reads on Linux and for unsupported repositories (#2098-98b2).
+
+- Share one Git status traversal between sidebar diff totals and dirty badges per checkout (#2098-98b2).
+
+- Index recent Codex rollouts with file-watch updates instead of re-statting the full recent-day history on every discovery poll (#2098-98b2).
+- Recover Telegram configuration watchers after pathless event-loss notifications, and re-arm Codex watches after date-directory replacement (#2098-98b2).
+- Stop reopening Telegram configuration on every idle tick and unrelated app event; use file events for runtime opt-in and setup changes (#2098-98b2).
+
+- Read shared Git ref state once per sidebar refresh instead of reopening and scanning it for every linked worktree (#2098-98b2).
+- Refresh monitoring ref targets and reflog hashes incrementally from Git paths; retain signature validation when complete file watching is unavailable (#2098-98b2).
+- Read worktree inventory from checkout HEAD files without reopening each checkout’s Git configuration and object store (#2098-98b2).
+- Reuse monitoring repository handles for dirty and lifecycle reads, with configuration-signature invalidation instead of reopening global Git configuration for every workspace (#2098-98b2).
 - Coalesce plugin reload discovery by changed ID and reuse unchanged payload-file hashes instead of repeatedly reading every installed plugin (#2099-8c87).
 
 - Use watcher-driven dirty transcript metadata checks for Claude Usage, serialize refreshes, and resolve specific projects without enumerating global history (#2099-8c87).

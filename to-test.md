@@ -1,3 +1,14 @@
+## Bounded repository file reads (2098-98b2) — Rust restart required
+
+- [ ] After a manual backend rebuild/restart, verify an external edit under an ignored directory containing a tracked file updates that checkout, unchanged siblings remain correct, and watcher restart returns fresh status. macOS/Windows monitoring snapshots require complete watches; Linux stays fresh. No daily app restart was performed.
+
+- [ ] After a manual backend rebuild/restart, verify one file staged then edited and a directory with two untracked files show unchanged diff totals and correct dirty counts; monitoring now shares one status traversal. No daily app restart was performed.
+
+- [ ] After Boss manually rebuilds and restarts the backend, commit twice in one linked worktree, fetch a remote, and pack refs. Confirm the changed row and integration badges update while sibling badges stay correct. This peer does not restart the daily app.
+
+- [ ] After loading the rebuilt backend, verify Codex session and same-path date-directory replacement in an isolated CODEX_HOME and unchanged discovery without historical rollout scans; watched-index and cwd/age/claimed-ID regressions run on rb, but macOS watcher behavior still needs the isolated instance.
+
+- [ ] After Boss manually restarts a rebuilt backend, commit in one disposable linked worktree and check current dirty/integration badges and unchanged sibling rows. This Rust change does not hot-reload into the daily app. The peer must not restart that app; isolated counter evidence is recorded in the story.
 ## Unchanged content-index events (2099-8c87) — Rust restart required
 
 - [ ] After Boss manually restarts a rebuilt backend, confirm repeated unchanged repository events do not schedule content-index validation within 60 seconds of a completed validation. Verify a later content edit remains searchable after the cooldown. This Rust change does not hot-reload; this peer does not restart the daily app.
