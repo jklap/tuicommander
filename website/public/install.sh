@@ -139,6 +139,8 @@ install_linux() {
     URL=$(get_download_url 'amd64\.deb')
     if [ -z "$URL" ]; then echo "Error: .deb asset not found in latest release"; exit 1; fi
     TMP_DIR=$(make_private_tmpdir)
+    # `set -e` aborts on a failed download or install; still drop the scratch dir.
+    trap 'rm -rf "$TMP_DIR"' EXIT
     TMP="$TMP_DIR/tuicommander.deb"
     curl -fsSL "$URL" -o "$TMP"
     sudo dpkg -i "$TMP"
@@ -148,6 +150,8 @@ install_linux() {
     URL=$(get_download_url 'x86_64\.rpm')
     if [ -z "$URL" ]; then echo "Error: .rpm asset not found in latest release"; exit 1; fi
     TMP_DIR=$(make_private_tmpdir)
+    # `set -e` aborts on a failed download or install; still drop the scratch dir.
+    trap 'rm -rf "$TMP_DIR"' EXIT
     TMP="$TMP_DIR/tuicommander.rpm"
     curl -fsSL "$URL" -o "$TMP"
     sudo rpm -i "$TMP"
