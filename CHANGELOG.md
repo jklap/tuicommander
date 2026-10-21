@@ -6,6 +6,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+- Coalesce plugin reload discovery by changed ID and reuse unchanged payload-file hashes instead of repeatedly reading every installed plugin (#2099-8c87).
+
+- Use watcher-driven dirty transcript metadata checks for Claude Usage, serialize refreshes, and resolve specific projects without enumerating global history (#2099-8c87).
+
+- Share filename-search inventories across queries instead of walking the repository again for each no-match search; invalidate on repository events and reconcile unwatched roots after 60 seconds (#2099-8c87).
+
+- Reuse unchanged Claude subagent metadata across Progress Flow refreshes, with signature-based invalidation and idle eviction (#2099-8c87).
+
+- Re-arm the content-index cooldown after an unchanged validation so repeated repository events do not each start another full metadata walk (#2099-8c87).
 - Preserve named and nested submodule history when force-removing a missing worktree checkout; refuse missing or malformed destination mappings before pruning (#2096-1d25).
 
 - Accept the recorded managed Claude startup trust dialog with No selected above Yes; send Down then Enter once and leave incomplete or unmanaged dialogs untouched (#2097-5739).
