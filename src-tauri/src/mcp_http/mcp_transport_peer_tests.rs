@@ -6738,3 +6738,63 @@ fn interrupt_mail_aborts_when_a_dialog_opens_after_escape() {
         "no text or second Esc may answer the new dialog"
     );
 }
+
+/// Catches the same interrupt payload being returned to a concurrent waiter and typed as a new turn.
+#[cfg(unix)]
+#[test]
+fn interrupt_mail_does_not_deliver_payload_to_waiter_and_composer() {
+    let state = test_state();
+    register_peer(&state, TEST_UUID_A, "sender", "mcp-sender");
+    register_peer(&state, TEST_UUID_B, "recipient", "mcp-recipient");
+    crate::test_support::agent_session(&state, TEST_UUID_B, crate::pty::SHELL_BUSY);
+    let bytes = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let (writes, input) = std::sync::mpsc::channel();
+    crate::test_support::insert_session_with_writer(
+        &state,
+        TEST_UUID_B,
+        Box::new(InterruptProbeWriter {
+            bytes: bytes.clone(),
+            writes,
+        }),
+        crate::test_support::TtyMode::Raw,
+    );
+    std::thread::scope(|scope| {
+        let send = scope.spawn(|| handle_messaging(
+            &state,
+            &serde_json::json!({"action":"send","to":TEST_UUID_B,"message":"change course exactly once","urgency":"interrupt"}),
+            Some("mcp-sender"),
+        ));
+        assert_eq!(
+            input
+                .recv_timeout(std::time::Duration::from_secs(3))
+                .unwrap(),
+            b"\x1b"
+        );
+        // The recipient's next MCP tool can enter wait while cancellation is
+        // settling. Drive the same registration/read/finish boundary as agent wait.
+        let lease = state.begin_agent_wait(TEST_UUID_B);
+        let fresh = state.waiter_fresh_message_count(TEST_UUID_B, 0);
+        let received = state.finish_agent_wait(TEST_UUID_B, lease, 0, fresh > 0);
+        state
+            .session_maps
+            .silence_states
+            .get(TEST_UUID_B)
+            .unwrap()
+            .lock()
+            .confirm_idle();
+        state
+            .session_maps
+            .shell_states
+            .get(TEST_UUID_B)
+            .unwrap()
+            .store(crate::pty::SHELL_IDLE, std::sync::atomic::Ordering::Release);
+        let sent = send.join().unwrap();
+        assert!(sent.get("error").is_none(), "{sent}");
+        let typed = String::from_utf8(bytes.lock().unwrap().clone()).unwrap();
+        assert!(
+            received.messages.is_empty() || !typed.contains("change course exactly once"),
+            "interrupt payload delivered twice: waiter returned {} message(s), composer={typed:?}; receipt={sent}",
+            received.messages.len(),
+        );
+    });
+}
