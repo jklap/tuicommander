@@ -3640,9 +3640,27 @@ pub fn list_local_branches(repo_path: String) -> Result<Vec<String>, String> {
     Ok(branches)
 }
 
+/// The branch `refs/remotes/<remote>/HEAD` points at, if that symref exists.
+///
+/// Strips the exact `refs/remotes/<remote>/` prefix rather than splitting on
+/// `/`, because remote names may themselves contain slashes (`my/fork`) and so
+/// may branch names (`release/1.x`).
+fn remote_head_branch(repo: &Path, remote: &str) -> Option<String> {
+    let out = git_cmd(repo)
+        .args(["symbolic-ref", &format!("refs/remotes/{remote}/HEAD")])
+        .run_silent()?;
+    out.stdout
+        .trim()
+        .strip_prefix(&format!("refs/remotes/{remote}/"))
+        .filter(|b| !b.is_empty())
+        .map(str::to_string)
+}
+
 /// Resolve a verified integration branch without network access.
-/// Prefer origin/HEAD, the main checkout's configured base, main/master, then
-/// the main checkout's attached HEAD (never a linked checkout's HEAD).
+/// Prefer a remote's HEAD (`origin`, then the current branch's tracked remote,
+/// then every other remote in `git remote` order), the main checkout's
+/// configured base, main/master, then the main checkout's attached HEAD (never
+/// a linked checkout's HEAD).
 pub fn get_remote_default_branch(repo_path: &str) -> Result<String, String> {
     let repo = Path::new(repo_path);
     let verified = |branch: &str| -> Option<String> {
@@ -3664,14 +3682,45 @@ pub fn get_remote_default_branch(repo_path: &str) -> Result<String, String> {
         }
         None
     };
-    if let Some(out) = git_cmd(repo)
-        .args(["symbolic-ref", "refs/remotes/origin/HEAD"])
+    let from_remote = |remote: &str| -> Option<String> {
+        let branch = remote_head_branch(repo, remote)?;
+        verified(&format!("refs/heads/{branch}"))
+            .or_else(|| verified(&format!("refs/remotes/{remote}/{branch}")))
+    };
+    if let Some(reference) = from_remote("origin") {
+        return Ok(reference);
+    }
+
+    let tracked_remote = git_cmd(repo)
+        .args(["symbolic-ref", "--short", "-q", "HEAD"])
         .run_silent()
-        && let Some(branch) = out.stdout.trim().strip_prefix("refs/remotes/origin/")
-        && let Some(reference) = verified(&format!("refs/heads/{branch}"))
-            .or_else(|| verified(&format!("refs/remotes/origin/{branch}")))
+        .map(|o| o.stdout.trim().to_string())
+        .filter(|b| !b.is_empty())
+        .and_then(|b| {
+            git_cmd(repo)
+                .args(["config", "--get", &format!("branch.{b}.remote")])
+                .run_silent()
+        })
+        .map(|o| o.stdout.trim().to_string())
+        // "." means "the local repo", not a remote.
+        .filter(|r| !r.is_empty() && r != ".");
+    if let Some(remote) = tracked_remote.as_deref()
+        && remote != "origin"
+        && let Some(reference) = from_remote(remote)
     {
         return Ok(reference);
+    }
+
+    let remotes = git_cmd(repo).args(["remote"]).run_silent();
+    for remote in remotes
+        .iter()
+        .flat_map(|o| o.stdout.lines())
+        .map(str::trim)
+        .filter(|r| !r.is_empty() && *r != "origin" && Some(*r) != tracked_remote.as_deref())
+    {
+        if let Some(reference) = from_remote(remote) {
+            return Ok(reference);
+        }
     }
 
     let worktrees = git_cmd(repo)
@@ -5940,6 +5989,118 @@ mod tests {
             branch == "main" || branch == "master",
             "Expected main or master, got: {branch}"
         );
+    }
+
+    // --- get_remote_default_branch with non-origin remotes ---
+
+    /// A repo (on a `main` branch with a `develop` branch) acting as the source
+    /// for remotes. Returns (source, clone) where the clone has no remotes
+    /// besides what each test adds.
+    fn remote_source() -> TempDir {
+        let src = setup_test_repo();
+        git_cmd(src.path())
+            .args(["branch", "-M", "main"])
+            .run()
+            .unwrap();
+        git_cmd(src.path())
+            .args(["branch", "develop"])
+            .run()
+            .unwrap();
+        src
+    }
+
+    /// Add `name` as a remote of `repo` pointing at `src`, fetch it, and (when
+    /// `head` is given) point `refs/remotes/<name>/HEAD` at that branch.
+    fn add_remote(repo: &Path, src: &Path, name: &str, head: Option<&str>) {
+        git_cmd(repo)
+            .args(["remote", "add", name, &src.to_string_lossy()])
+            .run()
+            .unwrap();
+        git_cmd(repo).args(["fetch", name]).run().unwrap();
+        match head {
+            Some(head) => git_cmd(repo)
+                .args(["remote", "set-head", name, head])
+                .run()
+                .unwrap(),
+            // Newer git sets `<remote>/HEAD` itself on fetch; drop it so
+            // "remote without HEAD" is really that.
+            None => git_cmd(repo)
+                .args(["remote", "set-head", name, "-d"])
+                .run()
+                .unwrap(),
+        };
+    }
+
+    #[test]
+    fn remote_default_branch_reads_a_remote_not_named_origin() {
+        let src = remote_source();
+        let repo = setup_test_repo();
+        add_remote(repo.path(), src.path(), "upstream", Some("develop"));
+        let got = get_remote_default_branch(&repo.path().to_string_lossy()).unwrap();
+        assert_eq!(got, "upstream/develop");
+    }
+
+    #[test]
+    fn remote_default_branch_prefers_origin_over_other_remotes() {
+        let src = remote_source();
+        let repo = setup_test_repo();
+        add_remote(repo.path(), src.path(), "upstream", Some("develop"));
+        add_remote(repo.path(), src.path(), "origin", Some("main"));
+        let got = get_remote_default_branch(&repo.path().to_string_lossy()).unwrap();
+        // origin/HEAD -> main wins over upstream/HEAD -> develop. The clone has
+        // its own `main`, and a verified local branch is preferred over the
+        // remote-tracking ref, so the answer is the bare local name.
+        assert_eq!(got, "main");
+    }
+
+    #[test]
+    fn remote_default_branch_skips_an_origin_without_head() {
+        let src = remote_source();
+        let repo = setup_test_repo();
+        add_remote(repo.path(), src.path(), "origin", None);
+        add_remote(repo.path(), src.path(), "upstream", Some("develop"));
+        let got = get_remote_default_branch(&repo.path().to_string_lossy()).unwrap();
+        assert_eq!(got, "upstream/develop");
+    }
+
+    #[test]
+    fn remote_default_branch_prefers_the_current_branchs_remote() {
+        let src = remote_source();
+        let repo = setup_test_repo();
+        let base = base_branch_of(repo.path());
+        // `aaa` sorts first in `git remote`, but the branch tracks `zzz`.
+        add_remote(repo.path(), src.path(), "aaa", Some("main"));
+        add_remote(repo.path(), src.path(), "zzz", Some("develop"));
+        git_cmd(repo.path())
+            .args(["config", &format!("branch.{base}.remote"), "zzz"])
+            .run()
+            .unwrap();
+        let got = get_remote_default_branch(&repo.path().to_string_lossy()).unwrap();
+        assert_eq!(got, "zzz/develop");
+    }
+
+    #[test]
+    fn remote_default_branch_handles_slashes_in_remote_and_branch_names() {
+        let src = remote_source();
+        git_cmd(src.path())
+            .args(["branch", "release/1.x"])
+            .run()
+            .unwrap();
+        let repo = setup_test_repo();
+        add_remote(repo.path(), src.path(), "my/fork", Some("release/1.x"));
+        let got = get_remote_default_branch(&repo.path().to_string_lossy()).unwrap();
+        assert_eq!(got, "my/fork/release/1.x");
+    }
+
+    #[test]
+    fn remote_default_branch_falls_back_locally_without_remotes() {
+        let repo = setup_test_repo();
+        git_cmd(repo.path())
+            .args(["branch", "-M", "master"])
+            .run()
+            .unwrap();
+        let got = get_remote_default_branch(&repo.path().to_string_lossy()).unwrap();
+        assert_eq!(got, "master");
     }
 
     #[test]
