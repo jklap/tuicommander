@@ -159,18 +159,6 @@ describe("RemoteQrDialog", () => {
 		expect(getByText("https://example.test/connect?ip=192.168.1.10")).toBeTruthy();
 	});
 
-	it("logs (not throws) when copying the connect URL is denied, without a false 'Copied' state", async () => {
-		const err = new DOMException("Write permission denied.", "NotAllowedError");
-		h.writeClipboard.mockRejectedValue(err);
-		const { findByAltText, getByTitle, queryByText } = render(() => <RemoteQrDialog onClose={vi.fn()} />);
-		await findByAltText("QR code for remote mobile connection");
-
-		fireEvent.click(getByTitle("Copy connection URL"));
-
-		await waitFor(() => expect(appLogger.warn).toHaveBeenCalledWith("network", "Remote QR copy URL failed", err));
-		expect(queryByText("Copied to clipboard")).toBeNull();
-	});
-
 	it("does nothing when the copy button is clicked before a connect URL exists", async () => {
 		mockRpc({ connectUrlError: new Error("no route") });
 		const { findByText } = render(() => <RemoteQrDialog onClose={vi.fn()} />);

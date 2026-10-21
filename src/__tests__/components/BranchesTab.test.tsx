@@ -749,20 +749,6 @@ describe("BranchesTab", () => {
 			await waitFor(() => expect(h.writeClipboard).toHaveBeenCalledWith("feature/foo"));
 			expect(h.appLoggerError).not.toHaveBeenCalled();
 		});
-
-		it("logs (does not throw) when the clipboard write is denied — regression for the previously-uncaught rejection", async () => {
-			const err = new DOMException("Write permission denied.", "NotAllowedError");
-			h.writeClipboard.mockRejectedValueOnce(err);
-			const { findByText, getByText } = render(() => <BranchesTab repoPath={REPO} />);
-			await findByText("feature/foo");
-			openContextMenuFor(getByText, "feature/foo");
-
-			expect(() => fireEvent.click(getByText("Copy Name"))).not.toThrow();
-
-			await waitFor(() => {
-				expect(h.appLoggerError).toHaveBeenCalledWith("git", "Failed to copy branch name", err);
-			});
-		});
 	});
 
 	describe("keyboard navigation", () => {

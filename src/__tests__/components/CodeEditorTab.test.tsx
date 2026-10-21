@@ -111,18 +111,18 @@ describe("CodeEditorTab", () => {
 
 	it("marks the tab dirty on edit and clears it on save", async () => {
 		const rendered = renderTab();
-		const { container, getByTitle, queryByTitle } = rendered;
+		const { container, getByTitle } = rendered;
 		await waitForLoaded(rendered);
 		expect(editorTabsStore.getHandle<{ isDirty: () => boolean }>("tab1")?.isDirty()).not.toBe(true);
 
 		typeIntoEditor(container, "changed content");
-		await waitFor(() => expect(queryByTitle(/Save/)).not.toBeNull());
+		await waitFor(() => expect((getByTitle(/Save/) as HTMLButtonElement).disabled).toBe(false));
 
 		fireEvent.click(getByTitle(/Save/));
 		await waitFor(() =>
 			expect(mockInvoke).toHaveBeenCalledWith("write_file", expect.objectContaining({ file: "src/index.ts" })),
 		);
-		await waitFor(() => expect(queryByTitle(/Save/)).toBeNull());
+		await waitFor(() => expect((getByTitle(/Save/) as HTMLButtonElement).disabled).toBe(true));
 	});
 
 	it("bumps the repo revision on a successful save so other panels refresh", async () => {
@@ -132,7 +132,7 @@ describe("CodeEditorTab", () => {
 		const before = repositoriesStore.getRevision("/repo");
 
 		typeIntoEditor(container, "changed content");
-		await waitFor(() => expect(getByTitle(/Save/)).toBeTruthy());
+		await waitFor(() => expect((getByTitle(/Save/) as HTMLButtonElement).disabled).toBe(false));
 		fireEvent.click(getByTitle(/Save/));
 
 		await waitFor(() => expect(repositoriesStore.getRevision("/repo")).toBeGreaterThan(before));
@@ -144,7 +144,7 @@ describe("CodeEditorTab", () => {
 		await waitForLoaded(rendered);
 
 		typeIntoEditor(container, "changed content");
-		await waitFor(() => expect(getByTitle(/Save/)).toBeTruthy());
+		await waitFor(() => expect((getByTitle(/Save/) as HTMLButtonElement).disabled).toBe(false));
 		fireEvent.click(getByTitle(/Save/));
 
 		await waitFor(() =>
@@ -164,7 +164,7 @@ describe("CodeEditorTab", () => {
 		);
 
 		typeIntoEditor(container, "changed content");
-		await waitFor(() => expect(getByTitle(/Save/)).toBeTruthy());
+		await waitFor(() => expect((getByTitle(/Save/) as HTMLButtonElement).disabled).toBe(false));
 		fireEvent.click(getByTitle(/Save/));
 
 		await waitFor(() => expect(appLogger.error).toHaveBeenCalledWith("app", "Failed to save file", expect.any(Error)));
@@ -179,7 +179,7 @@ describe("CodeEditorTab", () => {
 		const { container, getByTitle, queryByTitle } = rendered;
 		await waitForLoaded(rendered);
 		typeIntoEditor(container, "changed content");
-		await waitFor(() => expect(getByTitle(/Save/)).toBeTruthy());
+		await waitFor(() => expect((getByTitle(/Save/) as HTMLButtonElement).disabled).toBe(false));
 
 		fireEvent.click(getByTitle("Lock (read-only)"));
 
