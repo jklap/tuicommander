@@ -313,7 +313,7 @@ pub(super) fn foreground_group_at_prompt(root_pid: u32, processes: &[ProcessTree
 }
 
 /// The pid whose process tree represents this session's foreground work.
-fn session_foreground_pid(state: &AppState, session_id: &str) -> Option<u32> {
+pub(super) fn session_foreground_pid(state: &AppState, session_id: &str) -> Option<u32> {
     let entry = state.session_maps.sessions.get(session_id)?;
     let session = entry.value().lock();
     #[cfg(not(windows))]
@@ -843,7 +843,12 @@ pub(crate) fn spawn_process_snapshot_refresher(state: Arc<AppState>) {
             interval.tick().await;
             let refresh_state = Arc::clone(&state);
             let _ = tokio::task::spawn_blocking(move || {
-                refresh_process_snapshot_if_demanded(&refresh_state, process_tree_snapshot)
+                refresh_process_snapshot_if_demanded(&refresh_state, process_tree_snapshot);
+                super::bg_wake_diagnostics::capture_overdue_bg_wakes(
+                    &refresh_state,
+                    std::time::Instant::now(),
+                    process_tree_snapshot,
+                )
             })
             .await;
         }

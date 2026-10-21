@@ -19,6 +19,7 @@ use crate::worktree::{
     WorktreeConfig, WorktreeResult, create_worktree_with_stale_recovery, remove_worktree_internal,
 };
 
+mod bg_wake_diagnostics;
 pub(crate) mod frame_priority;
 mod injection;
 mod lifecycle;

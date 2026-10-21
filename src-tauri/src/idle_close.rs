@@ -50,7 +50,7 @@ impl IdleCloseTracker {
     }
 }
 
-fn live_bg_runner_for_session(commands: &[String], session_id: &str) -> bool {
+pub(crate) fn live_bg_runner_for_session(commands: &[String], session_id: &str) -> bool {
     commands.iter().any(|command| {
         let mut words = command.split_whitespace();
         words.any(|word| word == "__bg-runner")
