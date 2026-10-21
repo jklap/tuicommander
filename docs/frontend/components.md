@@ -37,7 +37,7 @@ picker and per-type fields with `SettingField` and `SettingMultiSelect`.
 request cancellation and stale-response fencing. Free labels keep raw text until
 collection; required-field messages sit beside their inputs.
 
-Slice F exposes `start_graph {target:{type:story|plan,id},expected_revision?,definition_id,definition_revision,request_id,limits?}` through the existing owning-daemon service. Story starts require the current native revision and pin the selected publication; the request ID is bound to its payload. Omitted limits use Rust defaults. Plan dispatch remains unavailable in this build and its start control says so. The `workflow_run` MCP tool uses an inline schema generated from `RunAction` and the public `RunCommand` variants; it returns the same scoped snapshots and cursor-ordered events as IPC/HTTP. Run history shows pinned activations, decisions/evidence, repair counters, pause targets and complete event payloads across pages. Graph recovery uses `resume_graph {execution_id,activation_id,resolution}` after answering pending input; pause and cancel use the existing sequence-fenced commands. Legacy runs offer inspection and cancellation in the UI. No new persistence or client scheduler is added.
+Slice F exposes `start_graph {target:{type:story|plan,id},expected_revision?,definition_id,definition_revision,request_id,limits?}` through the existing owning-daemon service. Story starts require the current native revision and pin the selected publication; the request ID is bound to its payload. Omitted limits use Rust defaults. Plan dispatch remains unavailable in this build and its start control says so. The `workflow action=run` MCP entry uses an inline schema generated from `RunAction` and the public `RunCommand` variants; it returns the same scoped snapshots and cursor-ordered events as IPC/HTTP. Run history shows pinned activations, decisions/evidence, repair counters, pause targets and complete event payloads across pages. Graph recovery uses `resume_graph {execution_id,activation_id,resolution}` after answering pending input; pause and cancel use the existing sequence-fenced commands. Legacy runs offer inspection and cancellation in the UI. No new persistence or client scheduler is added.
 
 All components are SolidJS functional components in `src/components/`.
 
@@ -241,7 +241,7 @@ The session composer has a 44 px paperclip in its existing row. It uploads a
 selected file and stages `@path` without Enter; the upload chip floats above
 the row. Mobile AI Chat uses the shared composer to stage images as ACP image
 blocks and other files as ACP resource links with a readable path in text.
-The mobile PWA opens on Sessions. Its five bottom tabs are Sessions, Chat,
+The mobile PWA opens on Sessions. Its bottom tabs are Sessions, Chat (only with ego configured),
 Files, Progress, and Activity; Settings opens from the app-bar overflow.
 The session detail screen loads after a session is selected (or opened from a
 deep link), keeping its terminal and attachment controls out of the Sessions
@@ -262,6 +262,12 @@ display name, repository/branch and elapsed state, tasks count, and overflow.
 The name, tasks, and session-scoped Progress open temporary sheets over the
 terminal; Commands, Files, output search, Ideas, usage, copy ID, and terminate
 remain reachable in overflow. No fixed intent/task rows reduce terminal space.
+
+`MobileApp` measures `visualViewport.height` and `offsetTop` into the fixed shell's
+CSS variables. Resize, viewport scroll, `pageshow`, foreground `visibilitychange`
+and document `resume` share one animation-frame measurement. Lifecycle listeners
+are removed on unmount. This prevents stale geometry after a restore without a
+viewport event; it does not establish the cause of the reported iPhone grey screen.
 
 `MobileApp` keeps `SessionDetailScreen` mounted while its overflow opens the shared
 `FilesScreen` at the session's worktree or containing registered repository.
@@ -877,3 +883,5 @@ Voice correction controls carry `corrections.replacements.{from}.from` and
 retain the existing TextCorrector workflow; export does not change settings.
 
 Desktop `TerminalChatView` renders active native questions from the existing session lifecycle store below the shared transcript. `ChoicePromptOverlay` has an embedded layout; desktop and mobile share `sendNativeChoice` for agent-specific PTY keys. Compose drafts and ACP interaction state are not involved.
+
+Mobile offers the **Chat** tab only when the host has a configured ego executable, using the same availability predicate as desktop. Host settings changes update the tab without reloading. Removing ego configuration returns an open Chat view to **Sessions**; unavailable saved Chat links also stay on **Sessions**.

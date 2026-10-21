@@ -72,6 +72,19 @@ nothing but discipline preventing a throwaway test repo from being persisted the
 (#763-d219). An invalid or already-selected id fails the process at startup rather
 than silently falling back to the default instance.
 
+`make agent-test` is the preset macOS agent verification target. It selects
+`instances/agent-test/` and loopback port 19876 with dedicated
+`AGENT_TEST_INSTANCE` / `AGENT_TEST_PORT` variables, and uses a distinct executable
+and Tauri identifier. It does not inherit the daily target's `TUIC_*` settings.
+Its dedicated entry point rejects default/empty instances, production port 9876,
+release builds and dictation-enabled builds before reading configuration.
+Runtime guards disable global input, Telegram, updater, global MCP writes and
+global CLI installation/update/removal. Hook enable/disable requests are rejected
+before saving instance flags or changing shared agent files. These are not merely
+editable configuration defaults. See
+[Development Setup](../guides/development-setup.md#isolated-agent-desktop-checks-macos)
+for the resource audit, dry-run and stop commands.
+
 Which target defaults to what is deliberate and guarded. `make test` is the
 throwaway verification launch and defaults to `instances/tuic-test/`; `make dev`
 is Boss's daily driver and carries **no** instance, because switching it looks
@@ -322,6 +335,7 @@ needs an app restart is what that costs.
 | `attachment_retention_days` | `u32` | `7` | Obsolete for uploads: attachment lifetime is now the session. This stored value has no effect on attachment cleanup. |
 | `mcp_server_enabled` | `bool` | `true` | Enable MCP HTTP server |
 | `mcp_port` | `u16` | `9876` | Fixed port for MCP server (0 = OS-assigned) |
+| `mcp_capabilities` | `object` | `{denied:["settings","diagnostics"],migration_unknown_tools:[]}` | Native capability denials. Old `disabled_native_tools` migrates once; unknown names remain visible. Parent denials cover grouped actions; member denials remain scoped. See MCP capability cutover documentation. |
 | `collapse_tools` | `bool` | `false` | Replace the full MCP tool list with 3 lazy-discovery meta-tools (`search_tools`, `get_tool_schema`, `call_tool`). Discovered native schemas are unchanged: managed commands still use one `call_tool` invocation of `session action=submit` and receive the bounded receipt in that response. Grok sessions use this surface automatically without changing the stored value — see [`mcp-http.md`](mcp-http.md#lazy-tool-discovery-collapse_tools). Size figures for both surfaces, and how to reproduce them, are in [Measuring the surfaces](mcp-http.md#measuring-the-surfaces) — the reduction is measured, never estimated |
 | `services` | `ServicesConfig` | `{}` | Nested remote-access config: `server`, `auth`, `tls`, `relay`, `push` (replaces the former flat `remote_access_*`/`push_enabled`/`relay_enabled` fields) |
 
@@ -369,6 +383,17 @@ cleartext copy does not survive on disk.
 | `scrollback_reflow` | `bool` | `true` | Re-wrap scrollback history on a column resize instead of truncating it. Backend-gated: `AppState::new_vt_log_buffer` applies it to a new grid and `commit_config_change` pushes a change to grids already open. Defaults `true` — including for a config.json written before the key existed — because the grid reflowed unconditionally before the flag had a consumer |
 | `index_strategy` | `String` | `"active_and_switch"` | Which repos get a BM25 content index: `"active_and_switch"` (the boot repo plus every repo switched to), `"active_only"` (boot repo only), `"all_sequential"`, `"disabled"`. Read from the in-memory config on every switch and every `RepoChanged` — never `load_app_config()`, which takes a cross-process file lock |
 | `index_memory_budget_mb` | `usize` | `1024` | Total heap the resident content indices may hold before `content_index::enforce_memory_budget` drops the least recently used. An ordinary repo indexes to 60–100 MB, so 1 GB holds 10–15 resident and only evicts for an outlier. An evicted index is snapshotted to `<data_dir>/content-index/` and reloaded on return, so eviction costs a stat walk rather than a rebuild. Configurable rather than a constant because the Rust backend does not hot-reload |
+
+On macOS, the desktop process always opts out of App Nap, even while hidden and
+with no busy agent. This process-lifetime activity permits idle system sleep;
+`prevent_sleep_when_busy` controls the separate sleep assertion. Hidden-idle
+backend work can therefore use more energy than an App-Napped process. See the
+[controlled replay and its limits](../../scripts/stall-workload/OCCLUDED-RESULTS.md).
+
+Content-index repository events share a 60-second cooldown after a build, an
+incremental update, or a completed unchanged-content validation. A no-op validation
+does not rebuild the search corpus. Snapshot restoration still reconciles disk
+state before publication.
 
 **Commands:** `load_app_config()`, `save_app_config(base, config)`
 
@@ -1056,6 +1081,15 @@ This request does not save config or rewrite launch files.
 
 ### Claude Usage Cache (`claude-usage-cache.json`)
 
+One app-owned watcher marks changed top-level JSONL transcripts dirty. Warm
+refreshes enumerate membership but do not stat unchanged transcript history.
+Specific-project scope resolves that project directly. Refreshes share one scan
+gate; watcher errors and overflow force reconciliation. A full metadata check
+also runs after 30 minutes, or on every refresh if watching is unavailable.
+Watcher delivery is asynchronous, so edits become visible after their event
+arrives. The persisted parse-cache format does not change.
+
+
 **Module:** `src-tauri/src/claude_usage.rs`
 
 Persistent cache for incremental JSONL parsing of Claude session transcripts. Stored in the config directory. The cache maps `project_slug -> (filename -> CachedFileStats)` and tracks per-file byte offsets so only newly appended data is parsed on subsequent scans.
@@ -1224,6 +1258,8 @@ Runtime reconciliation refreshes integrated dependency projections without inter
 ### Telegram setup files
 
 Telegram Settings uses `~/.config/tuic-telegram/`: `bot.token`, `allowed_chat_ids` (positive private-chat IDs, one per line), and `config.json` (`enabled`, `bot_alias`). TUIC creates the directory as 0700 and files as 0600 on Unix, refuses secret-file symlinks, and atomically replaces files. A separate `setup.lock` serializes cross-process setup and pairing writes. No token is serialized by the read API.
+
+The runtime keeps an opt-in snapshot and refreshes it on configuration or allowlist file events. Both configuration watchers also accept pathless lost-event rescan notifications before filtering access events or file names. Idle checks do not reopen those files. Setup and token changes use a nonrecursive file watcher instead of a one-second metadata poll. Actual send and delivery authorization still reads the current allowlist; a cached runtime opt-in is not an authorization grant. If a setup watcher cannot start, the adapter logs an error and waits for an explicit Settings change instead of polling.
 
 `pairing.json` holds the one-use six-character code and its absolute ten-minute expiry under the same private permissions, so desktop setup and daemon polling share the authorization credential. A valid private-chat update consumes it; a wrong/expired code or `/start` grants nothing. An explicitly empty allowlist permits polling for pairing, but no outbound sends. A missing or malformed allowlist still fails closed. Enable/target/token changes restart the single daemon adapter; desktop never polls. Status keeps only connectivity, an error category and the last accepted message timestamp.
 

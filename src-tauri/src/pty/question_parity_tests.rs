@@ -57,6 +57,119 @@ fn replay_native_question(
     }
 }
 
+/// Catches: retained Ink footer bytes re-arm awaiting after Claude exits to zsh.
+#[tokio::test]
+async fn question_not_rearmed_from_scrollback_after_agent_exit() {
+    let capture =
+        crate::pty_capture::decode_capture(&agent_prompt_fixture("claude-question-exit-2091.tcap"))
+            .unwrap();
+    let (rows, cols) = capture.geometry.unwrap();
+    let sid = "question-exit-2091";
+    let (state, silence) = chunk_trace_state(sid);
+    state.config.write().progress_tracking = false;
+    state
+        .grid
+        .vt_log_buffers
+        .get(sid)
+        .unwrap()
+        .lock()
+        .resize(rows, cols);
+    apply_foreground_agent_observation(
+        &state,
+        sid,
+        1,
+        Some("claude".into()),
+        false,
+        false,
+        "claude".into(),
+    );
+    let mut rx = state.event_bus.subscribe();
+    let mut processor = ChunkProcessor::new(None, None);
+    let mut utf8 = Utf8ReadBuffer::new();
+    let mut escapes = EscapeAwareBuffer::new();
+    let mut saw_question = false;
+    let mut shell_command = false;
+    let mut shell_result = false;
+    for record in capture.records {
+        if record.direction == crate::pty_capture::CaptureDirection::Input {
+            let input = std::str::from_utf8(&record.data).unwrap();
+            if input.contains("printf 'POST_EXIT_2091") {
+                assert!(saw_question, "the real question must precede agent exit");
+                // The recorded API snapshot proves the foreground is now zsh.
+                // TCAP records terminal I/O, not OS process observations.
+                apply_foreground_agent_observation(&state, sid, 2, None, true, false, "zsh".into());
+                shell_command = true;
+            }
+            crate::mcp_http::session::apply_input_bookkeeping(&state, sid, input);
+        } else {
+            let data = escapes.push(&utf8.push(&record.data));
+            let (clean, _) = crate::state::strip_kitty_sequences(&data);
+            processor.process_chunk(&clean, &silence, sid, &state);
+            shell_result |= shell_command && clean.contains("POST_EXIT_2091");
+        }
+        while let Ok(event) = rx.try_recv() {
+            crate::state::tests_support::apply_replay_event(&state, &event);
+        }
+        let session = state.session_maps.session_states.get(sid).unwrap();
+        saw_question |= session.awaiting_input && session.choice_prompt.is_some();
+    }
+    assert!(
+        shell_command && shell_result,
+        "captured shell command must run"
+    );
+    let screen = state
+        .grid
+        .vt_log_buffers
+        .get(sid)
+        .unwrap()
+        .lock()
+        .screen_rows();
+    assert!(
+        crate::output_parser::ink_dialog_footer(&screen).is_some(),
+        "stale footer remains visible above the shell"
+    );
+    let session = state.session_maps.session_states.get(sid).unwrap();
+    assert!(
+        session.agent_type.is_none(),
+        "foreground observation returned to shell"
+    );
+    assert!(
+        !session.awaiting_input,
+        "exited agent's retained footer must not re-arm awaiting: {:?}",
+        session.question_text
+    );
+    assert!(session.question_text.is_none());
+    assert!(session.choice_prompt.is_none());
+    drop(session);
+
+    // The live post-exit check also caught the silence timer resurrecting the
+    // retained title after the chunk recovery was fixed. Exercise that producer
+    // against this same recorded screen, not a hand-written question fixture.
+    {
+        let mut sl = silence.lock();
+        sl.startup_settled = true;
+        sl.note_explicit_state(SHELL_IDLE, true);
+        sl.last_output_at = std::time::Instant::now() - SILENCE_QUESTION_THRESHOLD;
+        assert!(sl.is_silent(), "the real quiet-shell timer path must run");
+    }
+    tokio::time::pause();
+    let running = Arc::new(AtomicBool::new(true));
+    spawn_silence_timer(silence, running.clone(), sid.into(), state.clone());
+    tokio::time::sleep(SILENCE_CHECK_INTERVAL * 2).await;
+    running.store(false, Ordering::Release);
+    while let Ok(event) = rx.try_recv() {
+        crate::state::tests_support::apply_replay_event(&state, &event);
+    }
+    let session = state.session_maps.session_states.get(sid).unwrap();
+    assert!(
+        !session.awaiting_input,
+        "silence must not revive the exited agent's title: {:?}",
+        session.question_text
+    );
+    assert!(session.question_text.is_none());
+    assert!(session.choice_prompt.is_none());
+}
+
 /// Catches: Codex 0.162 queued/open questions missing the shared answer controls.
 #[tokio::test]
 async fn captured_codex_0162_question_reaches_answer_controls() {

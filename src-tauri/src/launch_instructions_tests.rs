@@ -356,6 +356,7 @@ fn generated_modules_append_both_user_layers_and_obey_off() {
     assert!(!text.contains("## Waiting and long work"));
     assert!(!text.contains("## TUIC output markers"));
     assert!(text.contains("## Process safety"));
+    assert!(text.contains("except through `make agent-test`, which isolates port, config folder, binary name, shortcuts and microphone."));
     agents.launch_instructions_disabled = true;
     assert!(effective_text_for(&app, &agents, "ego", true).is_empty());
 }

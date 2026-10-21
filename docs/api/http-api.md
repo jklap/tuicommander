@@ -16,7 +16,7 @@ HTML GET navigation to `/` and `/mobile` uses `/mobile/login` when credentials a
 
 ## Workflow runs
 
-Slice F exposes `start_graph {target:{type:story|plan,id},expected_revision?,definition_id,definition_revision,request_id,limits?}` through the existing owning-daemon service. Story starts require the current native revision and pin the selected publication; the request ID is bound to its payload. Omitted limits use Rust defaults. Plan dispatch remains unavailable in this build and its start control says so. The `workflow_run` MCP tool uses an inline schema generated from `RunAction` and the public `RunCommand` variants; it returns the same scoped snapshots and cursor-ordered events as IPC/HTTP. Run history shows pinned activations, decisions/evidence, repair counters, pause targets and complete event payloads across pages. Graph recovery uses `resume_graph {execution_id,activation_id,resolution}` after answering pending input; pause and cancel use the existing sequence-fenced commands. Legacy runs offer inspection and cancellation in the UI. No new persistence or client scheduler is added.
+Slice F exposes `start_graph {target:{type:story|plan,id},expected_revision?,definition_id,definition_revision,request_id,limits?}` through the existing owning-daemon service. Story starts require the current native revision and pin the selected publication; the request ID is bound to its payload. Omitted limits use Rust defaults. Plan dispatch remains unavailable in this build and its start control says so. The `workflow action=run` MCP entry uses an inline schema generated from `RunAction` and the public `RunCommand` variants; it returns the same scoped snapshots and cursor-ordered events as IPC/HTTP. Run history shows pinned activations, decisions/evidence, repair counters, pause targets and complete event payloads across pages. Graph recovery uses `resume_graph {execution_id,activation_id,resolution}` after answering pending input; pause and cancel use the existing sequence-fenced commands. Legacy runs offer inspection and cancellation in the UI. No new persistence or client scheduler is added.
 
 `POST /workflows/run/action?path=<absolute-project>` accepts one tagged `RunAction` and returns `{type,value}`. Actions: `start_plan {plan_id,definition_id,definition_revision,limits}`, `get {run_id}`, `incidents {run_id}` (read-only causes and manual next steps), `list_plan_runs {plan_id,limit}`, `events {run_id,after_sequence,limit}`, `command {run_id,command_id,expected_sequence,command}`, `execute_check {run_id,story_id,check_id,command_id,expected_sequence}`, `record_integration {run_id,story_id,command_id,expected_sequence}`, and `recertify_canonical {run_id,command_id,expected_sequence}`. `list_plan_runs` returns newest first and accepts a limit of 1–100. Run commands include planning closure, agent attempt and effect bookkeeping, loop advancement, story acceptance, final verification, pause/resume, cancellation, and completion. The server checks canonical project ownership for every action and rejects a command whose expected sequence is stale. Event cursors start at zero and return up to 500 entries. A duplicate command ID returns its original receipt only when the payload matches. See [Workflow runs](../backend/workflows.md) for recovery and completion rules. Serial story graph execution is available through `start_graph`; `start_plan` remains the legacy record-only ledger.
 
@@ -2353,10 +2353,13 @@ Returns list of `{{var}}` placeholder names found in content.
 ### List Plugins
 
 ```
-GET /plugins/list
+GET /plugins/list[?plugin_ids=<URL-encoded JSON string array>]
 ```
 
-Returns array of valid plugin manifests.
+Returns an array of valid plugin manifests. Omit `plugin_ids` for full discovery;
+pass a JSON string array to read only those plugin IDs. An empty array returns no
+plugins. Invalid JSON returns 400. IPC uses the same optional `pluginIds` array.
+Payload digests reuse unchanged file hashes by modification time and size.
 
 ### Plugin Development Guide
 
@@ -3101,7 +3104,7 @@ Automation action `run` accepts `{id: "<run id>"}` and returns the canonical sav
 (and the existing authenticated remote transport). The native host uses this
 route; it introduces no TCP listener. Requests carry `id`, `action`, `version`
 (`2.x`) and `repoPath`. Replies are `{id, ok, result}` or `{id, ok:false, error}`.
-`heartbeat` records extension liveness and returns `{armed, reloadSeq, navigate: {seq, url?}, backendId?}`. The navigation sequence is included without a pending URL. `backendId` identifies the manager lifetime so the extension resets its navigation acknowledgement after a backend restart, even when a command arrives before an idle beat. It runs every five seconds; armed modes expire after 60 seconds without a beat, or 600 seconds from Start when no beat arrived. MCP `design_mode action=reload repo_path=<repoPath>` increments the sequence; unchanged replies do not repeat a successful reload.
+`heartbeat` records extension liveness and returns `{armed, reloadSeq, navigate: {seq, url?}, backendId?}`. The navigation sequence is included without a pending URL. `backendId` identifies the manager lifetime so the extension resets its navigation acknowledgement after a backend restart, even when a command arrives before an idle beat. It runs every five seconds; armed modes expire after 60 seconds without a beat, or 600 seconds from Start when no beat arrived. MCP `ui action=design_reload repo_path=<repoPath>` increments the sequence; unchanged replies do not repeat a successful reload.
 
 `hello` checks the major version. `pick` accepts `raw` DOM extraction and returns
 bounded, redacted, fenced evidence. Non-HTTP(S) page URLs are rejected. Page data
@@ -3288,6 +3291,8 @@ HTTP proposal identity uses the source IP, not the ephemeral TCP port; every req
 still requires local or authenticated access. MCP callers can continue to use
 `ui action=confirm proposalId=...` followed by an exact replay with `approval`.
 Tunnel forward lists, including empty replacements, require confirmation like tunnel ports.
+
+POST `/api/plugins/{plugin_id}/http` accepts optional `requestId` (UUID). POST `/api/plugins/{plugin_id}/http/cancel` accepts `{ "requestId": "<UUID>" }`; both use the shared IPC backend. Cancellation covers headers and body. Early cancellation markers expire after 60 seconds and the shared registry is capped at 4096 entries.
 
 ### Audio choice availability (#1908-c327, #1909-0d24)
 
@@ -3488,3 +3493,9 @@ Plugin catalogue entries returned by `fetch_plugin_registry` can include optiona
 `contentSha256`. Installed plugin discovery returns the same field computed from
 the installed payload, not from manifest input. Both transports use the same Rust
 manifest serialization and payload identity algorithm. See [Plugin Registry](../plugins.md#plugin-registry).
+
+Native question `choice_prompt.selection_mode` can be `navigate-only` for a
+clipped Claude form. Its `↑`, `↓`, and `↵` option keys denote previous, next,
+and select-highlighted controls, not native answer labels. Send one Up, Down, or
+Enter respectively; never append Enter to a navigation key. The same payload
+and semantics apply to desktop IPC state.

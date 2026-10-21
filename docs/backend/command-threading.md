@@ -109,7 +109,7 @@ and restart verification await without blocking the IPC main thread.
 
 ### Native stories (2026-09-25)
 
-`story_action_command` is `async fn` and offloads SQLite and ownership resolution with `spawn_blocking`. The headless-compatible `/stories/action` route offloads the same shared Rust service independently; the MCP `story` tool runs it through the existing blocking handler. This keeps disk I/O off the macOS IPC thread and Tokio workers.
+`story_action_command` is `async fn` and offloads SQLite and ownership resolution with `spawn_blocking`. The headless-compatible `/stories/action` route offloads the same shared Rust service independently; the MCP `workflow action=story` entry runs it through the existing blocking handler. This keeps disk I/O off the macOS IPC thread and Tokio workers.
 
 `workflow_definition_action` and its HTTP twin use `spawn_blocking` around graph validation and SQLite publication for the same reason.
 `workflow_run_action` and its HTTP twin also use `spawn_blocking` for SQLite run transitions and event paging.
@@ -355,6 +355,8 @@ snapshot and emits invalidation; it does no file I/O.
 The async `suspended_session_action` command and its HTTP route both call `suspended_routes::dispatch`, which owns `spawn_blocking`. Config locking, agent-store verification, process discovery and PTY creation run on the blocking pool. MCP suspend uses the same blocking Rust owner and never waits for a frontend verdict.
 
 `plugin_github_action` is async: it validates plugin/account identity, loads credentials off the main thread, then calls the existing async B6/B7 services. HTTP uses the same adapter.
+
+`plugin_http_cancel` is an async IPC command (not macOS-main-thread work). It updates the plugin-scoped request registry; fetch observes cancellation while awaiting its full request future.
 
 `force_retry_provider_recovery_command` is async and runs the shared input-lock
 transaction and agent command writer in `spawn_blocking`, not on the main thread.

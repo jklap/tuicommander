@@ -2877,11 +2877,15 @@ pub async fn start_server(
     // --- TCP listener (only for remote access with auth) ---
     // Supports dual-protocol (HTTP+HTTPS on same port) when TLS cert is available.
     let tcp_handle = if remote_enabled {
-        let base_port = std::env::var("TUIC_PORT")
-            .ok()
-            .and_then(|value| value.parse::<u16>().ok())
-            .unwrap_or(config.services.server.port);
-        let host = if config.services.server.ipv6_enabled {
+        let base_port = crate::agent_test::port().unwrap_or_else(|| {
+            std::env::var("TUIC_PORT")
+                .ok()
+                .and_then(|value| value.parse::<u16>().ok())
+                .unwrap_or(config.services.server.port)
+        });
+        let host = if crate::agent_test::active() {
+            "127.0.0.1"
+        } else if config.services.server.ipv6_enabled {
             "[::]"
         } else {
             "0.0.0.0"
@@ -2900,7 +2904,11 @@ pub async fn start_server(
 
         let mut listener_result: Option<std::net::TcpListener> = None;
         // Port 0 = OS-assigned, no retry needed
-        let attempts = if base_port == 0 { 1 } else { MAX_PORT_ATTEMPTS };
+        let attempts = if base_port == 0 || crate::agent_test::active() {
+            1
+        } else {
+            MAX_PORT_ATTEMPTS
+        };
         'bind: for round in 0..BIND_RETRY_ROUNDS {
             for attempt in 0..attempts {
                 let port = base_port + attempt;
@@ -3257,7 +3265,7 @@ mod tests {
         // documents and avoids (#678-9a75).
         let state = Arc::new(crate::state::tests_support::make_test_app_state());
         // This fixture opts into every native tool, including the settings facade.
-        state.config.write().disabled_native_tools = Vec::new();
+        state.config.write().mcp_capabilities.denied = Vec::new();
         state.config.write().settings_mcp_enabled = true;
         mcp_transport::rebuild_tool_search_index(&state);
         state
@@ -6503,14 +6511,8 @@ mod tests {
         "secret",
         "session",
         "agent",
-        "task",
         "repo",
-        "story",
         "workflow",
-        "workflow_run",
-        "workflow_story_create",
-        "workflow_report",
-        "workflow_launch",
         "progress",
         "ui",
         "plugin_dev_guide",
@@ -6528,7 +6530,7 @@ mod tests {
         let state = test_state();
         {
             let mut config = state.config.write();
-            config.disabled_native_tools.clear();
+            config.mcp_capabilities.denied.clear();
             config.settings_mcp_enabled = true;
             config.progress_tracking = true;
             config.collapse_tools = false;
@@ -6542,7 +6544,8 @@ mod tests {
             let name = tool["name"].as_str().unwrap();
             {
                 let mut cfg = state.config.write();
-                cfg.disabled_native_tools = vec![name.to_owned()];
+                cfg.mcp_capabilities =
+                    crate::mcp_capabilities::McpCapabilities::from_legacy(&[name.to_owned()]);
                 cfg.collapse_tools = true;
                 cfg.progress_tracking = false;
             }
@@ -6564,6 +6567,7 @@ mod tests {
                     &entry["description"],
                     recorded
                         .get(definition["name"].as_str().unwrap())
+                        .filter(|_| definition["name"] != "workflow")
                         .unwrap_or(&definition["description"])
                 );
                 // Catches: HTTP status retaining description prefixes while Settings
@@ -6627,7 +6631,7 @@ mod tests {
     #[tokio::test]
     async fn disabled_critical_native_tools_cannot_bypass_settings_through_dispatch() {
         let state = test_state();
-        state.config.write().disabled_native_tools =
+        state.config.write().mcp_capabilities.denied =
             vec!["session".into(), "agent".into(), "progress".into()];
         let app = build_router(state.clone(), false, true);
         for collapse in [false, true] {
@@ -6685,12 +6689,12 @@ mod tests {
         let state = test_state();
         {
             let mut config = state.config.write();
-            config.disabled_native_tools.clear();
+            config.mcp_capabilities.denied.clear();
             config.settings_mcp_enabled = true;
             config.progress_tracking = true;
             config.collapse_tools = false;
         }
-        state.config.write().disabled_native_tools = vec!["debug".to_string()];
+        state.config.write().mcp_capabilities.denied = vec!["diagnostics".to_string()];
         let app = build_router(state, false, true);
         let body = serde_json::json!({
             "jsonrpc": "2.0",
@@ -6733,7 +6737,6 @@ mod tests {
         for core in [
             "session",
             "agent",
-            "task",
             "repo",
             "progress",
             "ui",
@@ -8199,18 +8202,15 @@ mod tests {
             .output();
     }
 
+    // Catches: unknown-tool errors lose the rejected name or advertise a stale tool inventory.
     #[tokio::test]
     async fn test_unknown_tool() {
         let state = test_state();
         let result = call_mcp_tool(&state, "nonexistent_tool", serde_json::json!({})).await;
-        assert!(result["error"].as_str().unwrap().contains("Unknown tool"));
-        assert!(
-            result["error"]
-                .as_str()
-                .unwrap()
-                .contains("story, progress, ui")
+        assert_eq!(
+            result,
+            serde_json::json!({"error": "Unknown tool 'nonexistent_tool'"})
         );
-        assert!(result["error"].as_str().unwrap().contains("search_tools"));
     }
 
     // --- isError flag tests ---
@@ -9151,7 +9151,7 @@ mod tests {
         let state = test_state();
         {
             let mut config = state.config.write();
-            config.disabled_native_tools.clear();
+            config.mcp_capabilities.denied.clear();
             config.settings_mcp_enabled = true;
             config.progress_tracking = true;
             config.collapse_tools = false;
@@ -9266,7 +9266,7 @@ mod tests {
         // Save config with a disabled tool
         let base = state.config.read().clone();
         let mut config = base.clone();
-        config.disabled_native_tools = vec!["session".to_string()];
+        config.mcp_capabilities.denied = vec!["session".to_string()];
         let app = build_router(state.clone(), false, true);
         let addr = std::net::SocketAddr::from(([127, 0, 0, 1], 0));
         let resp = app

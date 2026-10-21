@@ -481,8 +481,8 @@
   },
   {
     "page": "mcp",
-    "label": "Native tools",
-    "text": "When to change: Disable a tool only when agents should not call it.\n\nIf wrong: A disabled tool disappears from discovery and cannot be called; progress also needs global tracking.\n\nDefault: [\"config\",\"debug\"]."
+    "label": "Capabilities",
+    "text": "When to change: Disable a capability when agents should not use that domain or action group.\n\nIf wrong: Denied actions disappear from discovery and cannot be called. Additional restrictions preserve migrated denials; a parent denial also blocks its grouped actions.\n\nDefault: Settings access and Diagnostics / JS inspection are denied."
   },
   {
     "page": "mcp",

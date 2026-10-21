@@ -655,7 +655,7 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
 		expert: true,
 		configKey: "app.collapse_tools",
 	},
-	{ tab: "mcp", section: "TUIC Tools", label: "Native tools" },
+	{ tab: "mcp", section: "TUIC Tools", label: "Capabilities" },
 	{ tab: "mcp", section: "Upstream MCP Servers", label: "Upstreams on" },
 	{ tab: "mcp", section: "Upstream MCP Servers", label: "Authentication" },
 	{ tab: "mcp", section: "Upstream MCP Servers", label: "Timeout (s):" },

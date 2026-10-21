@@ -146,7 +146,7 @@ unambiguous permission or approval wording. Claude's generic `is waiting for
 your input` body also appears after a completed turn at the ready composer, so
 it cannot set awaiting by itself.
 
-The full-screen Ink-footer recovery also applies with hooks enabled. A later
+The full-screen Ink-footer recovery requires an active agent identity: retained dialog rows above a returned shell prompt do not establish a wait. Silence-timer chat-question heuristics enforce the same identity boundary, so a retained title cannot restore a low-confidence wait later. It also applies with hooks enabled. A later
 busy hook can clear awaiting while the dialog is still open. Before recovery,
 the reader evaluates the last pending Question/UserInput event in the current
 chunk: a Question followed by UserInput is a clear, not an existing question.
@@ -480,6 +480,8 @@ ParsedEvent::ChoicePrompt {
 
 **Destructive flag:** labels matching `"no"`, `"cancel"`, `"reject"`, `"abort"`, `"deny"`, or the prefixes `"don't"` / `"do not"` are flagged so the PWA overlay and plugins can style them as destructive.
 
+**Claude native titles:** `parse_claude_ask_user_question` uses the nearest nonblank title row above option 1 of the active form, not a question-mark suffix. Imperative titles such as `Pick a colour` export the same ordered choices and `navigate-enter` contract as question-mark titles. The column-zero Ink footer remains mandatory outside the Submit review; indented quoted footers do not establish a form. The authentic `claude-imperative-title-2074.tcap` captures the title, option descriptions, native Green answer and return to the composer.
+
 **Claude multi-question forms:** every tab (`← ☒ Lista  ☐ Branch  ✔ Submit →`) parses as its own prompt. The closing Submit review has no `Enter to select` footer, so `parse_claude_ask_user_question` anchors on the column-zero tab bar and ends at the next separator row (`claude-askuser-multi-question-20261012.tcap`). The mobile choice buttons re-arm whenever the prompt title or labels change, not only when the prompt disappears.
 
 **Flow:** the payload is stored on `SessionState.choice_prompt` and dispatched via `pluginRegistry.dispatchStructuredEvent("choice-prompt", …)`. Animated status-line updates preserve the prompt and its `awaiting_input` lifecycle; resolution, disappearance, replacement, and PTY exit clear it. A disappearing or resolved dialog emits `choice-cleared` so frontend and plugin consumers do not retain stale state. Single-key replies should go through `sendPtyKey()` in `src/utils/sendCommand.ts`, never raw `text + \r`.
@@ -495,7 +497,10 @@ Observed Codex prompt forms and evidence:
 
 The distinct `/plan` form uses `Question N/M (K unanswered)` above the title and
 `tab to add notes | enter to submit answer | esc to interrupt` below its options.
-Both anchors and contiguous keys starting at 1 are required. Descriptions in the
+The footer can also use three native rows (tab, enter, esc), with an optional
+`option N/M |` prefix on the notes row. Both anchors and contiguous keys starting
+at 1 are required. Only the complete final footer enables continuation rows;
+wrapped answers and descriptions keep their separate native columns. Descriptions in the
 second column become option hints, not answer labels. Numeric answers submit
 immediately; Tab opens notes and Escape interrupts. The retained real PTY bytes
 are in `codex-plan-question-20261019.json`; this retained snapshot has no original
@@ -503,7 +508,16 @@ geometry/timing. A fresh isolated headless recording,
 `codex-plan-question-20261019-real.tcap`, preserves real 41×128 geometry and
 ordered input/output. Parser and shared-accumulator regressions replay the open
 question before its recorded Ctrl+C. Neither fixture proves authenticated mobile
-rendering. Codex 0.162.1 accepts `/plan <question prompt>` in one submission.
+rendering. `codex-first-plan-narrow-2094.tcap` records the first Codex
+0.163.0 question at 41×36: the narrow layout changes the footer and wraps both
+option columns. The shared accumulator regression asserts Input state and all
+four clean labels from those ordered chunks. Resizing the same unanswered live
+question to 128 columns exported controls without a new question, which isolates
+one failure to layout recognition. The same capture also includes a delayed
+`state=idle` after the question opens. The completion guard applies to the same
+active native dialog, not only enforced command approvals; answer input still
+retires its controls and permits normal completion.
+Codex 0.162.1 accepts `/plan <question prompt>` in one submission.
 
 ### Grok native questions and enforced approvals
 
@@ -674,7 +688,13 @@ The terminal ego CLI reports human-question waits with OSC 7770 awaiting and res
 
 Selector and free-text title extraction share boundaries at `εgo:` diagnostics, submitted composer rows and native working rows. Wrapped question text below the boundary remains intact. Default-mode CLI approvals use a separate strict surface: an `Allow …?` title, a `Risk:` row and the native `y/a/n/e/d` controls. Refusing with `n` replaces the buttons with the CLI explanation prompt; Enter then settles the wait. Real captures cover selector titles and the refusal path, not edit/details or persistent approval actions.
 
+Default-mode approval titles can contain explicit CRLF continuation rows. The parser joins the contiguous `Allow` title immediately before `Risk:` without crossing a question boundary, and still requires the exact native controls. Each empty-title ego OSC awaiting marker establishes a fresh wait; content dedup must not depend on whether an earlier approval produced a choice prompt or changed rows. The `ego-mcp-questions-2088-2089.tcap` recording covers three MCP approvals, including both bare-key and key-plus-Enter answers.
+
+Approval controls can span more than two physical rows, including explicit newlines inside a remembered-rule label. The parser finds the last `Risk:` row and reads the complete footer below it, instead of assuming a fixed height. It still requires the ordered `y/a/n/e/d` controls and a final `[d] details` control, so newer output after an approval does not expose historical buttons. `ego-wrapped-approval-2102.tcap` records a wrapped printf approval answered through the mobile question card, followed by native busy and successful command output.
+
 Ego enforced-approval buttons also send only their native key. In particular, `n` opens the refusal explanation without an appended Enter that would immediately settle it.
+
+Selector and free-text title extraction share the same boundary rules. In addition to native diagnostics, working/composer and help rows, TUIC connection acknowledgements, column-zero `intent:` rows and ego finished-tool outcome rows (`✓` / `✗`) end preceding output. A contiguous receipt must not become part of the next question. The unchanged `ego-mcp-questions-2088-2089.tcap` records a successful MCP receipt directly above `Pick a colour?`; its accumulator replay checks both `choice_prompt.title` and `question_text`. Wrapped genuine question rows remain part of the title.
 
 ### ego terminal provider recovery (1902)
 
@@ -754,3 +774,16 @@ cell, including when the title wraps; mobile keeps trailing spans and links outs
 the tint. The CONTEXT header receives only the parsed description. Source evidence
 for 2060-0ebe is the recorded ego assistant message in `ego-intent-2060.json`:
 the model itself emitted `)Criteri`, not two lines joined by the terminal renderer.
+
+### Clipped Claude questions
+
+A native column-zero scroll arrow on a numbered option, together with the Ink
+footer, identifies a clipped AskUserQuestion. A numbering gap before the separate
+`5. Chat about this` row also identifies clipping when the scroll arrow disappears
+at the last visible answer. Generic numbering gaps still fail closed. The parser exports `navigate-only`
+with `↑` (previous option), `↓` (next option), and `↵` (select highlighted option).
+These are native navigation controls, not a partial list presented as complete.
+Clients send exactly one corresponding arrow or Enter key; navigation does not
+clear awaiting. No hidden option label or cursor offset is inferred. A complete
+form keeps its existing ordered `navigate-enter` choices. The geometry-preserving
+`claude-narrow-2093.tcap` fixture records the original narrow failure.

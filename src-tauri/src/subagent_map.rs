@@ -298,6 +298,16 @@ impl LaneSummary {
 pub(crate) struct MapCache {
     lanes: HashMap<PathBuf, LaneCursor>,
     parents: HashMap<PathBuf, SpawnCursor>,
+    metas: HashMap<PathBuf, MetaCursor>,
+    #[cfg(test)]
+    meta_reads: usize,
+}
+
+struct MetaCursor {
+    modified: std::time::SystemTime,
+    len: u64,
+    lane: Option<Lane>,
+    last_used: Instant,
 }
 
 #[derive(Default)]
@@ -317,6 +327,40 @@ struct SpawnCursor {
 }
 
 impl MapCache {
+    /// Metas are mutable (a teammate may acquire a name), so cache by the file
+    /// signature rather than assuming a finished lane's description is final.
+    fn lane_meta(&mut self, agent_id: &str, path: &Path) -> Option<Lane> {
+        let metadata = std::fs::metadata(path).ok()?;
+        let modified = metadata.modified().ok();
+        if let Some(cached) = self.metas.get_mut(path)
+            && modified == Some(cached.modified)
+            && metadata.len() == cached.len
+        {
+            cached.last_used = Instant::now();
+            return cached.lane.clone();
+        }
+        #[cfg(test)]
+        {
+            self.meta_reads += 1;
+        }
+        let meta = std::fs::read_to_string(path).ok()?;
+        let lane = parse_lane_meta(agent_id, &meta);
+        // Without a usable modification time, always read rather than let a
+        // same-length edit remain invisible for the lifetime of the cache.
+        if let Some(modified) = modified {
+            self.metas.insert(
+                path.to_path_buf(),
+                MetaCursor {
+                    modified,
+                    len: metadata.len(),
+                    lane: lane.clone(),
+                    last_used: Instant::now(),
+                },
+            );
+        }
+        lane
+    }
+
     /// Read whatever has been appended to a subagent transcript since the last
     /// call. Returns how many rows were newly parsed — 0 when the file has not
     /// moved.
@@ -362,6 +406,7 @@ impl MapCache {
         let fresh = |used: Option<Instant>| used.is_some_and(|t| t >= cutoff);
         self.lanes.retain(|_, c| fresh(c.last_used));
         self.parents.retain(|_, c| fresh(c.last_used));
+        self.metas.retain(|_, c| c.last_used >= cutoff);
     }
 
     /// Every `Agent` call read from a parent transcript so far.
@@ -576,10 +621,7 @@ fn collect_lanes(
 
     let mut lanes: Vec<LaneData> = Vec::new();
     for (agent_id, meta_path, jsonl_path) in found {
-        let Ok(meta) = std::fs::read_to_string(&meta_path) else {
-            continue;
-        };
-        let Some(lane) = parse_lane_meta(&agent_id, &meta) else {
+        let Some(lane) = cache.lane_meta(&agent_id, &meta_path) else {
             continue;
         };
         // A meta appears a moment before the transcript it describes, so a
@@ -1319,6 +1361,52 @@ mod tests {
         let transcript = tmp.join("parent.jsonl");
         std::fs::write(&transcript, parent).expect("write the parent transcript");
         (dir, transcript)
+    }
+
+    /// Catches unchanged meta files being reopened on every Flow refresh even
+    /// though transcript byte cursors already skip unchanged contents.
+    #[test]
+    fn subagent_map_unchanged_flow_does_not_reread_meta() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let (dir, parent) = session_tree(tmp.path(), PARENT_JSONL);
+        let mut cache = MapCache::default();
+        let first = subagent_flows(&mut cache, &dir, &parent);
+        let reads = cache.meta_reads;
+        let second = subagent_flows(&mut cache, &dir, &parent);
+        assert_eq!(first, second);
+        assert_eq!(reads, 1, "the initial refresh must actually read the meta");
+        assert_eq!(
+            cache.meta_reads, reads,
+            "unchanged metas must not be reopened"
+        );
+    }
+
+    /// Catches a signature cache retaining stale titles, deleted lanes, or
+    /// evicted meta payloads when a session's files change between refreshes.
+    #[test]
+    fn subagent_map_meta_cache_tracks_edits_deletions_and_eviction() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let (dir, parent) = session_tree(tmp.path(), PARENT_JSONL);
+        let meta = dir.join("agent-alane-fixture.meta.json");
+        let mut cache = MapCache::default();
+        subagent_flows(&mut cache, &dir, &parent);
+        let mut changed: serde_json::Value = serde_json::from_str(fixture("teammate")).unwrap();
+        changed["name"] = serde_json::json!("renamed reviewer with a longer title");
+        std::fs::write(&meta, changed.to_string()).unwrap();
+        let updated = subagent_flows(&mut cache, &dir, &parent);
+        assert_eq!(updated[0].title, "renamed reviewer with a longer title");
+        assert_eq!(cache.meta_reads, 2);
+
+        let cutoff = Instant::now();
+        cache.evict_idle_before(cutoff);
+        assert!(
+            cache.metas.is_empty(),
+            "idle meta payloads must be evicted too"
+        );
+        subagent_flows(&mut cache, &dir, &parent);
+        assert_eq!(cache.meta_reads, 3, "an evicted meta must be reread");
+        std::fs::remove_file(&meta).unwrap();
+        assert!(subagent_flows(&mut cache, &dir, &parent).is_empty());
     }
 
     fn flows(dir: &Path, parent: &Path) -> Vec<SubagentFlow> {

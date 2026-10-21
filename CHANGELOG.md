@@ -6,6 +6,58 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+- Keep macOS App Nap off for the whole desktop process while still allowing idle system sleep. A controlled hidden-window replay under CPU contention reduced the maximum WebView callback gap from 36.753 s to 2.561 s with the activity alone; this does not attribute the historical backend outage to App Nap (#1638-c94c).
+- Export ego approval titles and all five native choices when the footer spans three or more rows, including newline-bearing printf rules (#2102-98ab).
+- Bind Grok Chat to the registered native process behind the npm launcher without guessing another terminal's transcript (#2104-0523).
+- Keep desktop ego Chat available after reload while a native question or permission prompt is pending; validate the transcript through the backend live-process binding (#2103-60e4).
+
+- Reuse unchanged checkout monitoring status on macOS/Windows with raw file-event invalidation, source signatures and a five-minute backstop; keep fresh reads on Linux and for unsupported repositories (#2098-98b2).
+
+- Share one Git status traversal between sidebar diff totals and dirty badges per checkout (#2098-98b2).
+
+- Index recent Codex rollouts with file-watch updates instead of re-statting the full recent-day history on every discovery poll (#2098-98b2).
+- Recover Telegram configuration watchers after pathless event-loss notifications, and re-arm Codex watches after date-directory replacement (#2098-98b2).
+- Stop reopening Telegram configuration on every idle tick and unrelated app event; use file events for runtime opt-in and setup changes (#2098-98b2).
+
+- Read shared Git ref state once per sidebar refresh instead of reopening and scanning it for every linked worktree (#2098-98b2).
+- Refresh monitoring ref targets and reflog hashes incrementally from Git paths; retain signature validation when complete file watching is unavailable (#2098-98b2).
+- Read worktree inventory from checkout HEAD files without reopening each checkout’s Git configuration and object store (#2098-98b2).
+- Reuse monitoring repository handles for dirty and lifecycle reads, with configuration-signature invalidation instead of reopening global Git configuration for every workspace (#2098-98b2).
+- Coalesce plugin reload discovery by changed ID and reuse unchanged payload-file hashes instead of repeatedly reading every installed plugin (#2099-8c87).
+
+- Use watcher-driven dirty transcript metadata checks for Claude Usage, serialize refreshes, and resolve specific projects without enumerating global history (#2099-8c87).
+
+- Share filename-search inventories across queries instead of walking the repository again for each no-match search; invalidate on repository events and reconcile unwatched roots after 60 seconds (#2099-8c87).
+
+- Reuse unchanged Claude subagent metadata across Progress Flow refreshes, with signature-based invalidation and idle eviction (#2099-8c87).
+
+- Re-arm the content-index cooldown after an unchanged validation so repeated repository events do not each start another full metadata walk (#2099-8c87).
+- Preserve named and nested submodule history when force-removing a missing worktree checkout; refuse missing or malformed destination mappings before pruning (#2096-1d25).
+
+- Accept the recorded managed Claude startup trust dialog with No selected above Yes; send Down then Enter once and leave incomplete or unmanaged dialogs untouched (#2097-5739).
+
+- Keep clipped Claude native questions answerable with explicit previous/next/select controls instead of generic Yes/No or guessed hidden choices (#2093-0be6).
+- Export the first Codex /plan question in narrow terminals, including the split footer and independently wrapped answer labels and descriptions; keep its controls active through a delayed idle hook (#2094-da19).
+- Give reader-applied terminal input output bounded priority over animation frame floors on desktop and HTTP/PWA, using the existing gated serializer (#2040-16b2).
+- Re-measure mobile shell height and top on page restore, foreground visibility and document resume so stale viewport geometry is not retained (#1900-5ff6).
+
+- Keep the agent-test document visible under covering windows, prevent App Nap during live checks, and prohibit test-application activation; add a covered-window regression observer without changing the daily app (#2095-0106).
+- Keep the agent-test WebView visible and painting in a compact bottom-right floating window without activating the application or taking keyboard focus; add an opt-in native visibility observer and leave the daily window profile unchanged (#2090-cf8a).
+- Prevent a retained question footer from restoring Input state after the agent exits to the shell (#2091-ba03).
+- Restore awaiting state and native answer controls for repeated ego MCP approvals, including hard-wrapped approval titles (#2089-aafb).
+
+- Keep connection, intent and finished tool rows out of ego selector titles shared by desktop and mobile (#2088-98ea).
+
+- Add `make agent-test` for isolated macOS desktop checks with a distinct binary, preset instance and loopback port, disabled machine-wide integrations (including global CLI and agent-hook writes), dry-run plan and instance-only stop target (#2086-269b).
+- Hide mobile AI Chat when ego is not configured on the host, refresh availability on settings changes, and return unavailable Chat views to Sessions (#2087-07bf).
+
+- **BREAKING:** replace native per-tool MCP switches with capability switches. Migrate saved denials without widening access and retain unknown-name diagnostics. Remove task, story, workflow_run/workflow_story_create/workflow_report/workflow_launch and design_mode aliases: use agent task_*, workflow actions and ui design_*. Reconnect cached clients and review external allow rules for the expanded groups (#2068-63b9).
+
+- Populate mobile New Session from installed registry agents, including ego; show detection failures and select the first installed agent (#2083-149c).
+
+- Export Claude native question titles without a question mark, including `Pick a colour`, with ordered desktop and mobile answer choices (#2074-b0dc).
+- Show mobile report suggestions instead of generic Yes/No confirmations while an agent is blocked; keep native dialog choices and the Input state (#2082-f782).
+
 - Keep unanswered Codex enforced command approvals and all three native answer controls active when a delayed idle hook arrives (#2075-aa2f).
 - Bind native Codex hooks for HTTP/MCP-spawned agents and generic HTTP terminals using their live inherited session identity; preserve exact owner validation and prevent bound-session listing deadlocks (#2081-ac1f).
 - Share browser event subscriptions across session, Chat, Markdown, dictation and speech consumers so two mobile tabs leave HTTP/1.1 capacity for state reads and permission answers (#2078-464b).

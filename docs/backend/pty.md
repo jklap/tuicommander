@@ -208,7 +208,7 @@ character budget, then reads hard-wrap continuations only above the input-box
 chrome cutoff. A capped history scroll keeps the open intent's anchor stable;
 repainting its unchanged anchor does not close it as replaced prose.
 
-For a managed Claude child with workspace trust acceptance enabled, the rendered screen is also checked for its exact startup safety question, both choices, and **No, exit** selected. Only then does the reader send Up followed by Enter under the PTY writer lock, once for that session. Other dialogs and user-opened terminals are never answered by this path; session cleanup removes an unused allowance.
+For a managed Claude child with workspace trust acceptance enabled, the rendered screen is also checked for its exact startup safety question, both choices, and **No, exit** selected above **Yes, I trust this folder**, as recorded in the Claude startup capture. Only then does the reader send Down followed by Enter under the PTY writer lock, once for that session. Other dialogs and user-opened terminals are never answered by this path; session cleanup removes an unused allowance.
 
 **ANSI anomaly detection** — The `detect_anomalous_sequences()` function scans PTY output for unusual escape sequences (screen clears, cursor home, alt-screen toggles, scrollback clears) and logs them at warn level. This is a diagnostic tool for investigating scroll-jump issues.
 
@@ -293,9 +293,21 @@ a cleaned line can carry a bare CR.
 Frame emission is decoupled from PTY reading via a per-session **frame ticker** thread (display-link style pacing):
 
 1. **Reader thread**: processes PTY data into the alacritty VT grid, sets a `grid_frame_dirty` AtomicBool flag
-2. **Ticker thread**: every 16ms, checks the dirty flag → if set, serializes dirty rows via `serialize_dirty_rows()` → sends frame via `send_grid_frame()` (respects the `GridGate` backpressure)
+2. **Ticker thread**: on its 16ms maintenance tick or a bounded input wake, checks the dirty flag → if set, serializes dirty rows via `serialize_dirty_rows()` → sends frame via `send_grid_frame()` (respects the `GridGate` backpressure)
 3. **Frontend**: coalesces paint triggers via `requestAnimationFrame` (~60fps)
 4. **Ack handler**: credits the gate; the ticker sends any dirty rows accumulated while the prior frame was in flight
+
+**Bounded input priority.** Desktop and HTTP/PWA input arm a 100ms window before
+writing to the PTY. Only output applied by the reader after that input can wake
+the same ticker early. A priority frame waits at least 8ms after the previous
+frame; at most two priority bypasses are allowed in any rolling 100ms, even if
+input continues. Other output retains the sustained-animation 33ms floor and
+the typing-under-saturation 50ms floor. The desktop receipt gate, synchronized
+output buffering, frame ordering and shared-damage repair are unchanged.
+A generic PTY stream does not identify application echo: the second credit can
+serve later output if unrelated post-input output used the first. This is not a
+guarantee that every transient glyph survives viewport scrolling or that native
+compositor presentation meets a deadline.
 
 **Cell text fidelity.** Text extraction and binary serialization retain each
 cell's base scalar plus its zero-width scalars. A separately received combining
@@ -669,6 +681,10 @@ Goose appends its reply below the submitted `> prompt`, so the reader does not a
 
 **Signal precedence and confirmation:** Explicit hook busy > current Claude/Codex/Grok semantic Working marker > movement (real output / animated spinner) > silence. A ready prompt visible from the previous turn cannot cancel a newly submitted prompt until real activity has been observed; after activity, a stable ready composer can repair a missed hook idle. A current-turn completion marker prevents a stale static Codex Working row from relatching BUSY; movement of that exact semantic row can reopen a Codex internal continuation that starts without PTY input. Claude's current live phase marker can supersede a premature completion from a blocking Stop hook. A pending process probe or confirmed meaningful descendant still owns the task lifecycle. Hook-based question suppression activates only after an OSC 7770 state marker is actually received.
 
+**Ego native approval lifecycle:** Each empty-title OSC 7770 awaiting marker is authoritative independently of selector repaint bookkeeping. A hard-wrapped MCP approval may not yet have a parsed title when its marker arrives. Screen-text dedup must not swallow the next marker after protocol busy clears the prior wait. The full-screen approval parser joins contiguous hard title rows before `Risk:` and publishes the native controls through the shared session-state accumulator.
+
+**Post-exit dialog history:** full-screen Ink dialog recovery and silence-timer chat-question heuristics require an active agent identity. A shell can retain the old footer above its prompt after an agent exits; shell output must not turn those historical rows into a new confident question. `claude-question-exit-2091.tcap` and its accumulator replay cover the real question, exit and successful shell command.
+
 **OSC 777 notification classification:** OSC 777 `notify` is a desktop-notification transport, not an awaiting-state protocol. Raw-stream parsing promotes only unambiguous permission or approval wording (`needs your permission`, `approval required`) to a confident question. Claude's `is waiting for your input` body also arrives after a normal reply at the ready composer; promoting it flashed Waiting input until the silence timer retracted it. Ink pickers use their visible footer and full-screen presence recovery, including hook-instrumented sessions. A debug trace at the session-state setter records the confidence, turn epoch, hook configuration and whether a generic Claude notification reached it, without logging the question text.
 
 **State-regression capture:** Enable `POST /diagnostics/capture` before reproducing (`{"enabled":true,"session_id":"<id>"}`), stop it afterward, and copy the exact `<config dir>/captures/<id>.tcap` file into `src-tauri/src/fixtures/agent_prompts/`. Set `TUIC_CAPTURE_DIR` to an absolute path before launch when captures must go elsewhere; a relative value rejects activation. `GET /diagnostics/capture` reports the selected directory and bytes written. The desktop equivalents are the `get_pty_capture` / `set_pty_capture` commands, surfaced as **Capture Session** in the tab context menu whenever `isPerfDebug()` is on (dev by default). TUICCAP2 records the initial terminal rows/columns and preserves input/output ordering, original chunk boundaries, and monotonic timestamps. The decoder still accepts geometry-less TUICCAP1 and legacy output-only `.raw` fixtures; replay code must provide independently observed dimensions for those files. Do not build fixtures from `/sessions/:id/output`: the bounded ring can overwrite the signal and its JSON string is lossy UTF-8.
@@ -861,9 +877,11 @@ A Grok terminal is tailed through the same `chat_view::View`, with `GrokAdapter`
 `compaction_meta` becomes a notice card. Reasoning summaries become thoughts,
 tool calls and results become folded cards (orphan results dropped), and
 server-side `backend_tool_call` rows become finished cards. The binding is
-`agent_session::grok_chat_history_for_pid`: the pid must have an
-`active_sessions.json` entry for the terminal's cwd and its session directory
-must exist. The newest-session fallback of `discover_grok_session` never feeds
+`agent_session::grok_chat_history_for_pid`: a unique `active_sessions.json`
+entry must match the terminal's cwd and PID. On Unix, a live native child in the
+terminal's foreground process group also matches: the supported npm Node
+launcher owns that group but Grok registers the native child's PID. Multiple
+matching registrations fail closed. The session directory must exist. The newest-session fallback of `discover_grok_session` never feeds
 Chat; without an exact entry the snapshot answers `not_bound`. A tab whose agent
 changes between Claude and Grok restarts the view. Fixture:
 `fixtures/chat_view/grok_chat_history.jsonl` (real rows, payloads replaced).
@@ -940,6 +958,21 @@ apply `agent_type` immediately, including removal when the shell returns; the
 ### History-anchored viewport scrolling
 
 Coalesced scrolling uses one atomic latest-wins slot for both transports. `terminal_scroll_to_anchor` encodes an all-time row anchor in that slot; the ticker resolves it under the VT lock after pending output. Null follows output. Evicted anchors clamp to the oldest retained row. Offset commands share the slot, so mixed clients retain request order.
+
+### Codex rollout discovery
+
+Heuristic Codex session discovery shares a watched candidate index per `CODEX_HOME`
+(up to 16 stores). It scans only today's and yesterday's rollout directories on
+initialization. Later lookups use the index; file events refresh changed rollout
+paths. Date changes, directory events and lost-event notifications rebuild the
+recent-day snapshot. Watches cover only the recent day trees and their shallow
+parent boundaries, not the lifetime session tree. Watch failure falls back to
+fresh recent-day scans rather than serving stale entries. A replaced watched day or parent directory invalidates the index so the next lookup re-arms its watches, even when the date paths do not change.
+
+Candidates still require a readable recorded cwd, an age of at most five minutes
+and an unclaimed session ID. Age and claimed IDs are checked for each lookup.
+Replacement and deletion events revoke prior candidates. This optimization does
+not make heuristic discovery an exact PID binding or change native Chat binding.
 
 ### Codex Chat: exact native hook binding
 

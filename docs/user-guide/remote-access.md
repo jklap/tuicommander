@@ -94,6 +94,8 @@ At widths of 768 px or more, tap **Markdown** in the session top bar to open a d
 
 After you tick Markdown checkboxes, save source edits, or add block comments, use **Agent** and **Send** to request changes. The session you opened Files from is selected when available; you can choose another agent in the same repository. A transient toast says whether the request was delivered now or queued for the agent’s next idle window. Commented blocks use the same amber highlight as desktop Markdown. Failed requests keep the changes available to send again.
 
+In **Sessions → New session**, the Agent picker lists installed CLI agents from the shared registry, including ego. Git and direct API entries are excluded. The first installed agent is selected. Creation stays disabled while detection runs or when no agents are installed; detection failures show an error instead of a fallback list.
+
 ### Add to Home Screen
 
 The mobile UI supports PWA (Progressive Web App) installation:

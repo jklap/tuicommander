@@ -34,6 +34,7 @@ pub(crate) mod session_wake;
 pub(crate) mod suspended_sessions;
 pub mod work_items;
 pub use tuic_core::app_instance;
+mod agent_test;
 pub(crate) mod app_logger;
 pub(crate) mod changelog;
 mod frame_workload;
@@ -52,6 +53,7 @@ pub(crate) mod codex_usage;
 pub(crate) mod config;
 pub(crate) mod conflict_assist;
 pub(crate) mod content_index;
+pub(crate) mod mcp_capabilities;
 mod open_markdown_tabs;
 pub mod settings;
 pub(crate) use tuic_git::cow;
@@ -136,6 +138,8 @@ pub(crate) mod secrets;
 pub(crate) use tuic_terminal::output_parser;
 pub(crate) use tuic_terminal::output_watchers;
 #[cfg(feature = "desktop")]
+mod app_nap;
+#[cfg(feature = "desktop")]
 mod panel_window;
 mod plugin_content;
 pub(crate) mod plugin_credentials;
@@ -158,6 +162,7 @@ pub(crate) mod push;
 pub(crate) use tuic_core::redaction;
 pub(crate) mod chat_view;
 mod codex_binding;
+mod monitoring_status;
 pub(crate) mod registry;
 pub(crate) mod relay_client;
 #[allow(dead_code)] // Constructors used by remote binary and future tests
@@ -1118,6 +1123,7 @@ async fn get_mcp_status(state: State<'_, Arc<AppState>>) -> Result<serde_json::V
 
     Ok(serde_json::json!({
         "native_tools": mcp_http::mcp_transport::native_tool_catalog(),
+        "native_capabilities": mcp_capabilities::catalog(),
         "enabled": true,
         "running": running,
         "remote_port": if remote_enabled { Some(remote_port) } else { None },
@@ -1560,6 +1566,23 @@ fn release_webview_document_resources(state: &AppState, webview_label: &str) {
         .remove_webview(webview_label);
 }
 
+/// Isolated desktop entry point. Normal launches cannot enable this policy by env.
+#[cfg(feature = "desktop")]
+pub fn run_agent_test(mut context: tauri::Context<tauri::Wry>) {
+    // DEFERRED (2026-10-20) — coordinator owns simultaneous desktop/TCC proof;
+    // the implementation-only peer must not launch another desktop instance.
+    if let Err(error) = agent_test::enable() {
+        eprintln!("agent-test: {error}");
+        std::process::exit(1);
+    }
+    context.config_mut().identifier = "com.tuic.commander.agent-test".into();
+    context.config_mut().product_name = Some("TUICommander Agent Test".into());
+    for window in &mut context.config_mut().app.windows {
+        window.title = "TUICommander Agent Test".into();
+    }
+    run(context);
+}
+
 #[cfg(feature = "desktop")]
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run(mut context: tauri::Context<tauri::Wry>) {
@@ -1600,6 +1623,9 @@ pub fn run(mut context: tauri::Context<tauri::Wry>) {
     let worktrees_dir = config::config_dir().join("worktrees");
 
     let mut config = config::load_app_config();
+    if let Some(port) = agent_test::port() {
+        agent_test::apply_config(&mut config, port);
+    }
 
     // Auto-generate VAPID keys and session token on first run
     let mut config_dirty = false;
@@ -1662,10 +1688,12 @@ pub fn run(mut context: tauri::Context<tauri::Wry>) {
                 spawn_background_tasks(&server_state);
                 telegram::start(&server_state);
 
-                tokio::spawn(relay_client::supervise(server_state.clone(), relay_rx));
+                if !agent_test::active() {
+                    tokio::spawn(relay_client::supervise(server_state.clone(), relay_rx));
+                }
 
                 // Detect Tailscale and provision TLS cert (async, doesn't block window render)
-                let tls_config = if remote_enabled {
+                let tls_config = if remote_enabled && !agent_test::active() {
                     let ts_state = detect_tailscale_bounded(async {
                         tokio::task::spawn_blocking(tailscale::detect)
                             .await
@@ -1738,7 +1766,9 @@ pub fn run(mut context: tauri::Context<tauri::Wry>) {
     // Skips agents the user explicitly disabled via Settings > Agents.
     agent_mcp::ensure_mcp_configs(&config.disabled_mcp_agents);
 
-    sanitize_window_state();
+    if !agent_test::active() {
+        sanitize_window_state();
+    }
 
     let themes_dir = config::config_dir().join("themes");
     if let Err(e) = themes::seed_builtin_themes(&themes_dir) {
@@ -1756,6 +1786,8 @@ pub fn run(mut context: tauri::Context<tauri::Wry>) {
     }
     let index_strategy = config.index_strategy.clone();
     let builder = tauri::Builder::default();
+    #[cfg(target_os = "macos")]
+    let builder = builder.activate_ignoring_other_apps(!agent_test::active());
     let builder = plugins::register_plugin_protocol(builder);
     let builder = builder
         .plugin(tauri_plugin_opener::init())
@@ -1817,6 +1849,7 @@ pub fn run(mut context: tauri::Context<tauri::Wry>) {
         .plugin(tauri_plugin_process::init())
         .plugin(
             tauri_plugin_window_state::Builder::new()
+                .with_filter(|_| !agent_test::active())
                 .with_state_flags(
                     // Exclude SIZE to prevent progressive shrinking with titleBarStyle Overlay
                     tauri_plugin_window_state::StateFlags::POSITION
@@ -1856,8 +1889,12 @@ pub fn run(mut context: tauri::Context<tauri::Wry>) {
                 release_webview_document_resources(state.inner(), window.label());
             }
         })
-        .plugin(tauri_plugin_deep_link::init())
         .manage(native_clipboard::NativeClipboard::default());
+    let builder = if agent_test::active() {
+        builder
+    } else {
+        builder.plugin(tauri_plugin_deep_link::init())
+    };
 
     #[cfg(feature = "desktop")]
     let builder = builder.manage(sleep_prevention::SleepBlocker::new());
@@ -1875,8 +1912,10 @@ pub fn run(mut context: tauri::Context<tauri::Wry>) {
     builder
         .setup(move |app| {
             #[cfg(desktop)]
-            app.handle()
-                .plugin(tauri_plugin_updater::Builder::new().build())?;
+            if !agent_test::active() {
+                app.handle()
+                    .plugin(tauri_plugin_updater::Builder::new().build())?;
+            }
 
             #[cfg(feature = "desktop")]
             {
@@ -1896,7 +1935,7 @@ pub fn run(mut context: tauri::Context<tauri::Wry>) {
                 });
             }
 
-            {
+            if !agent_test::active() {
                 use tauri_plugin_deep_link::DeepLinkExt;
                 let handle = app.handle().clone();
                 app.deep_link().on_open_url(move |_| background_mode::desktop::leave_background(&handle));
@@ -1978,6 +2017,10 @@ pub fn run(mut context: tauri::Context<tauri::Wry>) {
                 // Disable macOS press-and-hold accent popup so held keys repeat
                 // in the terminal's hidden input (vim j/l/i — issue #79)
                 press_and_hold::disable();
+
+                // An occluded window must not nap the backend: PTYs, the local
+                // API and the heartbeat share this process (story 1638-c94c).
+                app_nap::disable();
             }
 
             // Themes are seeded before window creation so the first paint uses
@@ -2594,6 +2637,7 @@ pub fn run(mut context: tauri::Context<tauri::Wry>) {
             ego_cli::ego_set_default_model
         ])
         .build(context)
+        .map(agent_test::without_launch_activation)
         .expect("error while building tauri application")
         .run(|app_handle, event| {
             match &event {
@@ -2607,7 +2651,14 @@ pub fn run(mut context: tauri::Context<tauri::Wry>) {
                 // not in setup() which fires before the plugin applies its state.
                 tauri::RunEvent::Ready => {
                     if let Some(window) = app_handle.get_webview_window("main") {
-                        ensure_window_visible(&window);
+                        if agent_test::active() {
+                            #[cfg(target_os = "macos")]
+                            if let Err(error) = agent_test::present_without_focus(&window) {
+                                tracing::warn!(%error, "Failed to present agent-test window");
+                            }
+                        } else {
+                            ensure_window_visible(&window);
+                        }
                     }
                 }
                 // Dock-icon click (applicationShouldHandleReopen). macOS suppresses

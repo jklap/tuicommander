@@ -2495,7 +2495,8 @@ async fn workflow_denials_preserve_members_and_leave_automations_independent() {
         ("report", "workflow_report"),
         ("launch", "workflow_launch"),
     ] {
-        state.config.write().disabled_native_tools = vec![member.into()];
+        state.config.write().mcp_capabilities =
+            crate::mcp_capabilities::McpCapabilities::from_legacy(&[member.into()]);
         let result = handle_mcp_tool_call(
             &state,
             addr,
@@ -2521,7 +2522,7 @@ async fn workflow_denials_preserve_members_and_leave_automations_independent() {
                 .any(|advertised| advertised == action)
         );
     }
-    state.config.write().disabled_native_tools = vec!["workflow".into()];
+    state.config.write().mcp_capabilities.denied = vec!["workflow".into()];
     let tools = filtered_native_tools(&state);
     assert!(!tools.iter().any(|tool| tool["name"] == "workflow"));
     assert!(tools.iter().any(|tool| tool["name"] == "automations"));

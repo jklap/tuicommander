@@ -469,6 +469,8 @@ export function CommandInput(props: CommandInputProps) {
 				setCodexNotesMode(true);
 				textareaEl?.focus();
 			});
+			// Navigation reveals native rows; it does not submit the question.
+			if (prompt?.selection_mode === "navigate-only" && key !== "↵") setChoiceSending(false);
 		} catch (err) {
 			setChoiceSending(false);
 			appLogger.warn("terminal", "ChoicePrompt sendPtyKey failed", { error: err });

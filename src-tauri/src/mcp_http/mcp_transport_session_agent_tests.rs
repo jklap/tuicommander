@@ -1208,7 +1208,12 @@ fn task_call(
     args: serde_json::Value,
     mcp_sid: Option<&str>,
 ) -> serde_json::Value {
-    handle_task(state, addr.parse().unwrap(), &args, mcp_sid)
+    super::super::mcp_transport_session_agent::handle_task(
+        state,
+        addr.parse().unwrap(),
+        &args,
+        mcp_sid,
+    )
 }
 
 // ── blocking wait tests (Step 3) ────────────────────────────────
@@ -1725,6 +1730,51 @@ fn session_output_redacts_a_secret_on_the_terminal() {
         assert!(
             data.contains("[REDACTED]"),
             "{format} output must say it redacted something: {data}"
+        );
+    }
+}
+
+/// Catches: an inverted ring-cache generation check reuses the pre-write
+/// secret list, leaking a newly appended token through a fragment-only tail.
+#[test]
+fn session_output_raw_redacts_new_secret_fragment_after_cache_warmup() {
+    use crate::OutputRingBuffer;
+
+    let state = test_state();
+    let sid = "raw-secret-cache-session";
+    let mut ring = OutputRingBuffer::new(4096);
+    ring.write(b"ready\n");
+    state
+        .session_maps
+        .output_buffers
+        .insert(sid.to_string(), parking_lot::Mutex::new(ring));
+    let args = serde_json::json!({
+        "action": "output", "session_id": sid, "format": "raw", "limit": 13
+    });
+
+    // Warm the cache through the consumer path, including an unchanged poll.
+    for _ in 0..2 {
+        let response = handle_session(&state, &args, None);
+        assert_eq!(response["data"], "ready\n");
+    }
+
+    // Match the PTY writer: append to the existing ring, with no VT grid to
+    // independently supply the secret and conceal a stale ring cache.
+    state
+        .session_maps
+        .output_buffers
+        .get(sid)
+        .unwrap()
+        .lock()
+        .write(b"ghp_0123456789abcdefghijklmnopqrstuvwxyzAB\n");
+
+    // Only the suffix qrstuvwxyzAB is in the requested window. It cannot be
+    // recognized as a token without the updated whole-ring secret context.
+    for _ in 0..2 {
+        let response = handle_session(&state, &args, None);
+        assert_eq!(
+            response["data"], "[REDACTED]\n",
+            "a new secret's tail must stay redacted on every poll: {response}"
         );
     }
 }
@@ -3958,6 +4008,22 @@ async fn managed_codex_wrapper_opt_out_leaves_trust_prompt() {
 }
 
 #[cfg(unix)]
+fn recorded_claude_trust_output(path: &std::path::Path) -> (u16, u16) {
+    let capture = crate::pty_capture::decode_capture(include_bytes!(
+        "../fixtures/agent_prompts/claude-mobile-startup-1987.tcap"
+    ))
+    .unwrap();
+    let output: Vec<u8> = capture
+        .records
+        .into_iter()
+        .take_while(|record| record.direction != crate::pty_capture::CaptureDirection::Input)
+        .flat_map(|record| record.data)
+        .collect();
+    std::fs::write(path, output).unwrap();
+    capture.geometry.unwrap()
+}
+
+#[cfg(unix)]
 #[tokio::test]
 async fn managed_claude_spawn_accepts_only_its_startup_trust_dialog() {
     use std::os::unix::fs::PermissionsExt;
@@ -3967,10 +4033,12 @@ async fn managed_claude_spawn_accepts_only_its_startup_trust_dialog() {
         .unwrap();
     let cwd = root.path().join("never-trusted");
     std::fs::create_dir(&cwd).unwrap();
+    let dialog = root.path().join("dialog.bin");
+    let (rows, cols) = recorded_claude_trust_output(&dialog);
     let script = root.path().join("claude");
     let accepted = root.path().join("accepted");
     let observed_keys = root.path().join("keys");
-    std::fs::write(&script, format!("#!/bin/sh\nif [ \"$1\" = --version ]; then exit 0; fi\nwhile [ \"$#\" -gt 0 ]; do\n  case \"$1\" in\n    --add-dir=*|--settings=*) shift;;\n    --add-dir|--settings|--append-system-prompt-file|--model) shift 2;;\n    --) shift; break;;\n    -*) shift;;\n    *) break;;\n  esac\ndone\nstty -echo -icanon -icrnl min 1 time 0\nprintf 'Quick safety check: Is this a project you created or one you trust?\\n  Yes, I trust this folder\\n❯ No, exit\\n'\nkeys=$(dd bs=1 count=4 2>/dev/null | od -An -tx1 | tr -d ' \\n')\nprintf '%s' \"$keys\" > '{}'\nif [ \"$keys\" = 1b5b410d ]; then printf '%s' \"$1\" > '{}'; fi\nexec cat >/dev/null\n", observed_keys.display(), accepted.display())).unwrap();
+    std::fs::write(&script, format!("#!/bin/sh\nif [ \"$1\" = --version ]; then exit 0; fi\nwhile [ \"$#\" -gt 0 ]; do\n  case \"$1\" in\n    --add-dir=*|--settings=*) shift;;\n    --add-dir|--settings|--append-system-prompt-file|--model) shift 2;;\n    --) shift; break;;\n    -*) shift;;\n    *) break;;\n  esac\ndone\nstty -echo -icanon -icrnl min 1 time 0\ncat '{}'\nkeys=$(dd bs=1 count=4 2>/dev/null | od -An -tx1 | tr -d ' \\n')\nprintf '%s' \"$keys\" > '{}'\nif [ \"$keys\" = 1b5b420d ]; then printf '%s' \"$1\" > '{}'; fi\nexec cat >/dev/null\n", dialog.display(), observed_keys.display(), accepted.display())).unwrap();
     std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o700)).unwrap();
     assert!(
         std::process::Command::new(&script)
@@ -3986,7 +4054,7 @@ async fn managed_claude_spawn_accepts_only_its_startup_trust_dialog() {
         "127.0.0.1:1".parse().unwrap(),
         &serde_json::json!({
             "action": "spawn", "agent_type": "claude", "binary_path": script,
-            "cwd": cwd, "prompt": "say READY", "cols": 120,
+            "cwd": cwd, "prompt": "say READY", "cols": cols, "rows": rows,
         }),
         None,
     );
@@ -4025,6 +4093,8 @@ async fn managed_claude_trust_opt_out_leaves_dialog_waiting() {
         .unwrap();
     let cwd = root.path().join("never-trusted");
     std::fs::create_dir(&cwd).unwrap();
+    let dialog = root.path().join("dialog.bin");
+    let (rows, cols) = recorded_claude_trust_output(&dialog);
     let script = root.path().join("claude");
     let observed_keys = root.path().join("keys");
     let help = root.path().join("claude-help.txt");
@@ -4033,7 +4103,7 @@ async fn managed_claude_trust_opt_out_leaves_dialog_waiting() {
         include_str!("../../tests/fixtures/agent-help/claude-2026-10-04.txt"),
     )
     .unwrap();
-    std::fs::write(&script, format!("#!/bin/sh\nif [ \"$1\" = --version ]; then exit 0; fi\nif [ \"$1\" = --help ]; then cat '{}'; exit 0; fi\nstty -echo -icanon -icrnl min 0 time 10\nprintf 'Quick safety check: Is this a project you created or one you trust?\\n  Yes, I trust this folder\\n❯ No, exit\\n'\nkeys=$(dd bs=1 count=1 2>/dev/null | od -An -tx1 | tr -d ' \\n')\nprintf '%s' \"$keys\" > '{}'\nexec cat >/dev/null\n", help.display(), observed_keys.display())).unwrap();
+    std::fs::write(&script, format!("#!/bin/sh\nif [ \"$1\" = --version ]; then exit 0; fi\nif [ \"$1\" = --help ]; then cat '{}'; exit 0; fi\nstty -echo -icanon -icrnl min 0 time 10\ncat '{}'\nkeys=$(dd bs=1 count=1 2>/dev/null | od -An -tx1 | tr -d ' \\n')\nprintf '%s' \"$keys\" > '{}'\nexec cat >/dev/null\n", help.display(), dialog.display(), observed_keys.display())).unwrap();
     std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o700)).unwrap();
     assert!(
         std::process::Command::new(&script)
@@ -4056,7 +4126,7 @@ async fn managed_claude_trust_opt_out_leaves_dialog_waiting() {
     let spawned = handle_agent(
         &state,
         "127.0.0.1:1".parse().unwrap(),
-        &serde_json::json!({"action":"spawn", "agent_type":"claude", "binary_path":script, "cwd":cwd, "prompt":"say READY", "cols":120}),
+        &serde_json::json!({"action":"spawn", "agent_type":"claude", "binary_path":script, "cwd":cwd, "prompt":"say READY", "cols":cols, "rows":rows}),
         None,
     );
     assert!(spawned.get("error").is_none(), "spawn failed: {spawned}");
@@ -4173,7 +4243,7 @@ async fn literal_codex_default_does_not_ignore_settings_or_restore_removed_bypas
         let binary = root.path().join("codex");
         std::fs::write(
             &binary,
-            "#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$ARGV_OUTPUT\"\n",
+            "#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$ARGV_OUTPUT\"\nread -r hold\n",
         )
         .unwrap();
         std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o700)).unwrap();
@@ -4214,6 +4284,7 @@ async fn literal_codex_default_does_not_ignore_settings_or_restore_removed_bypas
             "perform the task"
         );
         let actual = wait_for_file_content_async(&output, std::time::Duration::from_secs(60)).await;
+        kill_test_session(&state, session);
         let mut expected = vec!["-c", "check_for_update_on_startup=false"];
         expected.extend(args);
         assert_eq!(actual, expected.join("\n") + "\n");

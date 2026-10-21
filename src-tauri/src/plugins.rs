@@ -572,7 +572,20 @@ fn plugin_asset_mime(path: &Path) -> &'static str {
 /// Scan the user plugins directory and return all valid manifests.
 /// Invalid manifests are logged and skipped — never cause an error.
 #[cfg_attr(feature = "desktop", tauri::command)]
-pub fn list_user_plugins() -> Vec<PluginManifest> {
+pub fn list_user_plugins(plugin_ids: Option<Vec<String>>) -> Vec<PluginManifest> {
+    if let Some(plugin_ids) = plugin_ids {
+        let mut seen = std::collections::HashSet::new();
+        return plugin_ids
+            .into_iter()
+            .filter(|id| !id.starts_with('.') && seen.insert(id.clone()))
+            .filter_map(|id| {
+                let mut manifest = read_single_manifest(&id).ok()?;
+                manifest.content_digest =
+                    crate::plugin_content::digest(&plugins_dir().join(&id)).ok();
+                Some(manifest)
+            })
+            .collect();
+    }
     let dir = plugins_dir();
     if !dir.exists() {
         return Vec::new();
@@ -1170,7 +1183,10 @@ fn extract_zip_entries(
 fn find_manifest_in_zip(archive: &zip::ZipArchive<std::fs::File>) -> Result<String, String> {
     // Try root-level first
     for i in 0..archive.len() {
-        let name = archive.name_for_index(i).unwrap_or("");
+        let name = archive
+            .name_for_index(i)
+            .and_then(Result::ok)
+            .unwrap_or_default();
         if name == "manifest.json" {
             return Ok("manifest.json".to_string());
         }
@@ -1179,9 +1195,12 @@ fn find_manifest_in_zip(archive: &zip::ZipArchive<std::fs::File>) -> Result<Stri
     // Try single top-level dir: <dirname>/manifest.json
     let mut top_dirs = std::collections::HashSet::new();
     for i in 0..archive.len() {
-        let name = archive.name_for_index(i).unwrap_or("");
+        let name = archive
+            .name_for_index(i)
+            .and_then(Result::ok)
+            .unwrap_or_default();
         if let Some(slash) = name.find('/') {
-            top_dirs.insert(&name[..=slash]);
+            top_dirs.insert(name[..=slash].to_string());
         }
     }
 
@@ -1189,7 +1208,11 @@ fn find_manifest_in_zip(archive: &zip::ZipArchive<std::fs::File>) -> Result<Stri
         let dir = top_dirs.into_iter().next().unwrap();
         let candidate = format!("{dir}manifest.json");
         for i in 0..archive.len() {
-            if archive.name_for_index(i).unwrap_or("") == candidate {
+            if archive
+                .name_for_index(i)
+                .and_then(Result::ok)
+                .is_some_and(|name| name == candidate)
+            {
                 return Ok(candidate);
             }
         }
@@ -1923,7 +1946,7 @@ mod tests {
         // just returns an empty vec when the dir doesn't exist.
         // We can't easily override plugins_dir() in tests, but we can verify
         // the function doesn't panic
-        let _ = list_user_plugins();
+        let _ = list_user_plugins(None);
     }
 
     // -- Plugin data path resolution --

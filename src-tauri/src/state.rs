@@ -1939,6 +1939,9 @@ pub(crate) struct GridState {
     /// Dirty flag: set by PTY reader when new data is processed, cleared by frame ticker.
     /// Decouples read() from frame serialization to coalesce rapid writes (spinners).
     pub(crate) frame_dirty: DashMap<String, Arc<AtomicBool>>,
+    /// Bounded input wake hint; owned and removed by the reader/ticker lifecycle.
+    pub(crate) input_frame_priority:
+        DashMap<String, Arc<crate::pty::frame_priority::InputFramePriority>>,
     /// Hint: true while a DEC 2026 synchronized update is open on this session.
     /// Written by the PTY reader after each `process()`, read by the frame ticker
     /// so an idle tick only takes the vt lock for sessions that can actually have
@@ -2202,6 +2205,7 @@ pub struct AppState {
     /// NOT desktop-gated: `/claude/usage/timeline` is mounted unconditionally in
     /// `build_router`, so `tuic-remote` needs this field to compile at all.
     pub(crate) claude_usage_cache: Mutex<crate::claude_usage::SessionStatsCache>,
+    pub(crate) claude_usage_scan: Mutex<crate::claude_usage::UsageScan>,
     /// Centralized application log ring buffer (1000 entries).
     /// Frontend pushes via push_log, reads via get_logs.
     /// Wrapped in Arc so the tracing subscriber layer can share the same buffer.
@@ -3762,6 +3766,7 @@ impl AppState {
             ansi_colors: parking_lot::RwLock::new(None),
             grid: GridState::default(),
             claude_usage_cache: parking_lot::Mutex::new(crate::claude_usage::load_cache_from_disk()),
+            claude_usage_scan: Default::default(),
             log_buffer,
             event_bus: tokio::sync::broadcast::channel(256).0,
             remote_survive_secs: None,
@@ -4517,11 +4522,18 @@ impl AppState {
     }
 
     pub(crate) fn clear_caches(&self) {
+        crate::monitoring_status::CACHE.clear();
         self.git_cache.clear_all();
     }
 
     /// Invalidate caches for a specific repo path.
     pub(crate) fn invalidate_repo_caches(&self, path: &str) {
+        crate::monitoring_status::CACHE.invalidate_checkout(std::path::Path::new(path));
+        self.invalidate_repo_caches_from_watch(path);
+    }
+
+    /// Raw watcher callbacks already invalidate only the checkout that changed.
+    pub(crate) fn invalidate_repo_caches_from_watch(&self, path: &str) {
         self.git_cache.invalidate_repo(path);
         crate::prompt::invalidate_repo_vars(path);
     }

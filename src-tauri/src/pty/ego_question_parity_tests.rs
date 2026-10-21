@@ -1,3 +1,86 @@
+/// Catches: a hard-wrapped approval footer losing mobile controls or latching after answer.
+#[tokio::test]
+async fn captured_ego_wrapped_approval_reaches_mobile_answer_controls() {
+    let mut answered = false;
+    let mut resumed = false;
+    replay_native_question(
+        "ego-wrapped-approval-2102.tcap",
+        "ego",
+        |record, session| {
+            if record.direction == crate::pty_capture::CaptureDirection::Input
+                && record.data == b"y"
+            {
+                assert!(session.awaiting_input && session.question_confident);
+                let prompt = session
+                    .choice_prompt
+                    .as_ref()
+                    .expect("wrapped native approval controls");
+                assert_eq!(prompt.title, "Allow run printf 'PARITY_P_OK\\n'?");
+                assert_eq!(
+                    session.question_text.as_deref(),
+                    Some(prompt.title.as_str())
+                );
+                assert_eq!(
+                    prompt
+                        .options
+                        .iter()
+                        .map(|option| option.key.as_str())
+                        .collect::<Vec<_>>(),
+                    ["y", "a", "n", "e", "d"]
+                );
+                assert_eq!(prompt.options[1].label, "yes, remember rule (details: d)");
+                answered = true;
+            }
+            if answered
+                && record.direction == crate::pty_capture::CaptureDirection::Output
+                && record
+                    .data
+                    .windows(b"7770;state=busy".len())
+                    .any(|bytes| bytes == b"7770;state=busy")
+            {
+                assert!(!session.awaiting_input && session.choice_prompt.is_none());
+                resumed = true;
+            }
+        },
+    );
+    assert!(
+        answered && resumed,
+        "mobile approval must reach the native CLI and resume it"
+    );
+}
+
+/// Catches: a successful tool receipt leaking into the shared native selector title.
+#[tokio::test]
+async fn captured_ego_selector_title_excludes_tool_receipts() {
+    let mut saw_selector = false;
+    replay_native_question("ego-mcp-questions-2088-2089.tcap", "ego", |_, session| {
+        let Some(prompt) = session.choice_prompt.as_ref() else {
+            return;
+        };
+        if prompt
+            .options
+            .iter()
+            .map(|option| option.label.as_str())
+            .collect::<Vec<_>>()
+            != ["Red", "Green", "Blue"]
+        {
+            return;
+        }
+        saw_selector = true;
+        assert_eq!(prompt.title, "Pick a colour?");
+        assert_eq!(session.question_text.as_deref(), Some("Pick a colour?"));
+        assert!(session.awaiting_input && session.question_confident);
+        assert_eq!(
+            prompt.selection_mode,
+            Some(crate::output_parser::ChoiceSelectionMode::NavigateEnter)
+        );
+    });
+    assert!(
+        saw_selector,
+        "recorded selector must reach shared client state"
+    );
+}
+
 /// Catches: real ego diagnostics/submitted history contaminating selector titles.
 #[tokio::test]
 async fn captured_ego_selector_title_excludes_diagnostics() {
@@ -179,4 +262,93 @@ async fn captured_ego_enforced_approval_reaches_answer_controls() {
     );
     assert!(refused && settled);
     assert!(!final_awaiting);
+}
+
+/// Catches: empty native awaiting dedup swallowing the second MCP approval.
+#[tokio::test]
+async fn captured_ego_second_mcp_approval_rearms_awaiting() {
+    let mut approvals = 0;
+    let mut first_controls = false;
+    replay_native_question(
+        "ego-mcp-questions-2088-2089.tcap",
+        "ego",
+        |record, session| {
+            if record.direction == crate::pty_capture::CaptureDirection::Input
+                && matches!(record.data.as_slice(), b"y" | b"y\r")
+            {
+                approvals += 1;
+                assert!(
+                    session.awaiting_input,
+                    "approval {approvals} must await an answer"
+                );
+                // The first approval's OSC already worked before this regression.
+                // Check the second first so RED identifies the lost wait, not the
+                // separate hard-wrapped approval-title parsing failure.
+                if approvals == 1 {
+                    first_controls = session.choice_prompt.is_some();
+                }
+                if approvals >= 2 {
+                    let prompt = session
+                        .choice_prompt
+                        .as_ref()
+                        .expect("native approval controls");
+                    let target = if approvals == 2 {
+                        "call_tool; call tuic/session; run"
+                    } else {
+                        "progress; run"
+                    };
+                    assert!(
+                        prompt
+                            .title
+                            .starts_with(&format!("Allow call tuic/{target} /"))
+                    );
+                    assert!(
+                        prompt
+                            .title
+                            .ends_with("/src-tauri/binaries/tuic-bridge-aarch64-app?")
+                    );
+                    assert!(session.question_confident);
+                    assert_eq!(
+                        session.question_text.as_deref(),
+                        Some(prompt.title.as_str())
+                    );
+                    assert_eq!(
+                        prompt
+                            .options
+                            .iter()
+                            .map(|o| o.key.as_str())
+                            .collect::<Vec<_>>(),
+                        ["y", "a", "n", "e", "d"]
+                    );
+                }
+            }
+            if record.direction == crate::pty_capture::CaptureDirection::Output
+                && record
+                    .data
+                    .windows(b"7770;state=awaiting".len())
+                    .any(|s| s == b"7770;state=awaiting")
+            {
+                assert!(
+                    session.awaiting_input,
+                    "fresh native awaiting must not depend on a parsed title"
+                );
+            }
+            if record.direction == crate::pty_capture::CaptureDirection::Output
+                && record
+                    .data
+                    .windows(b"7770;state=busy".len())
+                    .any(|s| s == b"7770;state=busy")
+            {
+                assert!(
+                    !session.awaiting_input && session.choice_prompt.is_none(),
+                    "busy must retire answered approval"
+                );
+            }
+        },
+    );
+    assert_eq!(approvals, 3, "all recorded approvals must be exercised");
+    assert!(
+        first_controls,
+        "the first hard-wrapped approval also needs native controls"
+    );
 }
