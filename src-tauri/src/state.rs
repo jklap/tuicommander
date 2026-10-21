@@ -39,7 +39,12 @@ pub(crate) enum PendingInjection {
     InitialPrompt { id: u64, text: String },
     /// The id is what the Compose panel deletes by: a queue position would shift
     /// under the caller as the FIFO drains on the next idle window.
-    UserCommand { id: u64, text: String },
+    UserCommand {
+        id: u64,
+        text: String,
+        queued_at: std::time::Instant,
+        overdue_reported: bool,
+    },
 }
 
 /// Ids are unique per process, not per session — a Compose delete carries both.
@@ -68,7 +73,28 @@ impl PendingInjection {
         Self::UserCommand {
             id: next_injection_id(),
             text: text.into(),
+            queued_at: std::time::Instant::now(),
+            overdue_reported: false,
         }
+    }
+
+    /// Claim diagnostic ownership, never delivery ownership. Requeue keeps this metadata.
+    pub(crate) fn claim_overdue_bg_wake(&mut self, now: std::time::Instant) -> Option<u64> {
+        let Self::UserCommand {
+            text,
+            queued_at,
+            overdue_reported,
+            ..
+        } = self
+        else {
+            return None;
+        };
+        let age = now.saturating_duration_since(*queued_at);
+        if *overdue_reported || !text.starts_with("BG DONE exit=") || age.as_secs() < 60 {
+            return None;
+        }
+        *overdue_reported = true;
+        Some(age.as_secs())
     }
 
     pub(crate) fn id(&self) -> u64 {
