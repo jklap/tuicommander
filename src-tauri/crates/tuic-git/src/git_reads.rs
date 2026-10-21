@@ -104,6 +104,7 @@ fn git_spelling(path: &str) -> String {
 
 #[cfg(test)]
 thread_local! {
+    static MONITORING_STATUS_TRAVERSALS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     static REPOSITORY_OPENS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
@@ -265,6 +266,8 @@ impl GixGitReads {
         if Self::gix_repo_unsupported(&grepo) {
             return None;
         }
+        #[cfg(test)]
+        MONITORING_STATUS_TRAVERSALS.with(|count| count.set(count.get() + 1));
         let iter = grepo
             .status(gix::progress::Discard)
             .ok()?
@@ -411,6 +414,8 @@ impl GixGitReads {
             return None;
         }
 
+        #[cfg(test)]
+        MONITORING_STATUS_TRAVERSALS.with(|count| count.set(count.get() + 1));
         let platform = grepo.status(gix::progress::Discard).ok()?;
         let iter = platform
             .into_iter(std::iter::empty::<gix::bstr::BString>())
@@ -1172,6 +1177,15 @@ impl GitReadsRouter {
         }
     }
 
+    /// Both status-derived values used by one sidebar monitoring refresh.
+    pub fn monitoring_status(&self, repo: &Path) -> (DiffStats, Result<usize, String>) {
+        let diff = self.diff_stats(repo, None);
+        let dirty = GixGitReads::dirty_files(repo)
+            .map(Ok)
+            .unwrap_or_else(|| crate::worktree::dirty_files_at(repo));
+        (diff, dirty)
+    }
+
     pub fn blame(&self, repo: &Path, file: &str) -> Result<Vec<BlameLine>, String> {
         match self.backend.blame {
             Backend::Cli => self.cli.blame(repo, file),
@@ -1592,6 +1606,31 @@ mod tests {
 
     // Catches config snapshots remaining frozen after an optional include appears,
     // changes or disappears, including branch-conditional include selection.
+    /// Catches the two independent status walks used for one monitoring refresh.
+    #[test]
+    fn monitoring_status_uses_one_traversal_with_cli_equivalent_results() {
+        let (_guard, repo) = fixture_repo();
+        // One path staged and then modified must count once, not twice, as dirty.
+        run_git(&repo, &["add", "a.txt"]);
+        std::fs::write(repo.join("a.txt"), "staged then modified\n").unwrap();
+        let expected_diff = CliGitReads.diff_stats(&repo, None);
+        let expected_dirty = run_git(&repo, &["status", "--porcelain", "--untracked-files=all"])
+            .lines()
+            .count();
+        let before = MONITORING_STATUS_TRAVERSALS.with(std::cell::Cell::get);
+        let (diff, dirty) = git_reads().monitoring_status(&repo);
+        assert_eq!(
+            serde_json::to_value(&diff).unwrap(),
+            serde_json::to_value(&expected_diff).unwrap()
+        );
+        assert_eq!(dirty.unwrap(), expected_dirty);
+        assert_eq!(
+            MONITORING_STATUS_TRAVERSALS.with(std::cell::Cell::get) - before,
+            1,
+            "one monitoring refresh repeated the tracked-file status traversal"
+        );
+    }
+
     #[test]
     fn cached_repository_observes_included_configuration_changes() {
         let (_guard, repo) = clean_repo();

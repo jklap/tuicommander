@@ -505,7 +505,7 @@ fn rev_at(path: &Path, spec: &str) -> Result<String, String> {
         .map_err(|e| format!("could not resolve {spec}: {e}"))
 }
 
-fn dirty_files_at(path: &Path) -> Result<usize, String> {
+pub(crate) fn dirty_files_at(path: &Path) -> Result<usize, String> {
     git_cmd(path)
         .args([
             "status",
@@ -1684,12 +1684,23 @@ pub fn inspect_workspace_monitoring_with_key(
     ref_key: Result<&str, &str>,
     pr_proves_tip: impl Fn(&Path, &str, &str) -> bool,
 ) -> WorkspaceLifecycleStatus {
+    let path = Path::new(&workspace.path);
+    let dirty = crate::git_reads::GixGitReads::dirty_files(path)
+        .map(Ok)
+        .unwrap_or_else(|| dirty_files_at(path));
+    inspect_workspace_monitoring_with_status(base_repo, workspace, ref_key, dirty, pr_proves_tip)
+}
+
+/// Monitoring alone may supply a shared status result; removal preflights stay fresh.
+pub fn inspect_workspace_monitoring_with_status(
+    base_repo: &Path,
+    workspace: &WorkspaceWorktree,
+    ref_key: Result<&str, &str>,
+    dirty: Result<usize, String>,
+    pr_proves_tip: impl Fn(&Path, &str, &str) -> bool,
+) -> WorkspaceLifecycleStatus {
     let result = (|| -> Result<WorkspaceLifecycleStatus, String> {
-        let path = Path::new(&workspace.path);
-        let dirty_files = match crate::git_reads::GixGitReads::dirty_files(path) {
-            Some(count) => count,
-            None => dirty_files_at(path)?,
-        };
+        let dirty_files = dirty?;
         let ref_key = ref_key.map_err(str::to_owned)?;
         let (commit_status, merge_proof) =
             monitoring_branch_merge(base_repo, &workspace.branch, ref_key, true, pr_proves_tip)?;
