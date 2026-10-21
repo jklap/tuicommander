@@ -45,6 +45,11 @@ pub struct InputLineBuffer {
     esc_state: EscState,
     /// Accumulator for CSI parameter bytes (digits and semicolons).
     csi_params: Vec<u8>,
+    /// True once the current CSI sequence has seen an intermediate byte
+    /// (ECMA-48 0x20..=0x2F, e.g. the `$` in a DEC mode report `ESC [ ? 6 ; 1 $ y`).
+    /// Such a sequence is not one of the editing keys we interpret, so its final
+    /// byte is consumed without being executed.
+    csi_intermediate: bool,
 }
 
 /// Escape sequence parser state.
@@ -76,6 +81,7 @@ impl InputLineBuffer {
             cursor: 0,
             esc_state: EscState::Normal,
             csi_params: Vec::new(),
+            csi_intermediate: false,
         }
     }
 
@@ -251,6 +257,7 @@ impl InputLineBuffer {
             '[' => {
                 self.esc_state = EscState::Csi;
                 self.csi_params.clear();
+                self.csi_intermediate = false;
                 None
             }
             // ESC O — SS3 sequence (application cursor mode)
@@ -299,8 +306,8 @@ impl InputLineBuffer {
 
     fn handle_csi(&mut self, ch: char) -> Option<InputAction> {
         match ch {
-            // Parameter bytes: digits, semicolon, and the CSI private-marker /
-            // intermediate bytes ':' '<' '=' '>' '?' (ECMA-48 0x3A, 0x3C-0x3F).
+            // Parameter bytes (ECMA-48 0x30..=0x3F): digits, ':' ';' and the
+            // private-marker bytes '<' '=' '>' '?'.
             // SGR mouse reports forwarded from the frontend wheel/click handlers
             // (`ESC [ < Cb ; Cx ; Cy M`, see CanvasTerminal.tsx sgrMouseSequence)
             // use '<' as a private parameter prefix. Without this, '<' was
@@ -318,10 +325,21 @@ impl InputLineBuffer {
                 }
                 None
             }
-            // Final byte — execute CSI command
+            // Intermediate bytes (ECMA-48 0x20..=0x2F), e.g. the `$` in a DEC
+            // mode report reply `ESC [ ? 6 ; 1 $ y`. They are not final bytes:
+            // treating `$` as one would leak the real final byte `y` into the
+            // line being reconstructed.
+            ' '..='/' => {
+                self.csi_intermediate = true;
+                None
+            }
+            // Final byte (0x40..=0x7E), or an unexpected byte that aborts the
+            // sequence — execute CSI command
             _ => {
                 self.esc_state = EscState::Normal;
-                self.execute_csi(ch);
+                if !self.csi_intermediate {
+                    self.execute_csi(ch);
+                }
                 None
             }
         }
@@ -2009,5 +2027,28 @@ mod tests {
         buf.feed("\x1b[1;5D");
         buf.feed("X");
         assert_eq!(buf.content(), "one Xtwo");
+    }
+
+    #[test]
+    fn csi_intermediate_bytes_do_not_leak_the_final_byte() {
+        // DEC mode report reply (DECRPM): `ESC [ ? 6 ; 1 $ y`. `$` is an
+        // intermediate byte, `y` the final byte; neither may reach the line.
+        let mut buf = InputLineBuffer::new();
+        buf.feed("ab");
+        buf.feed("\x1b[?6;1$y");
+        buf.feed("c");
+        assert_eq!(buf.content(), "abc");
+
+        // The intermediate-bearing sequence is consumed, not executed: rxvt's
+        // `ESC [ 3 $ ~` must not act as a plain Delete.
+        let mut buf = InputLineBuffer::new();
+        buf.feed("abc");
+        buf.feed("\x1b[D\x1b[3$~");
+        assert_eq!(buf.content(), "abc");
+
+        // A normal sequence after it still works.
+        buf.feed("\x1b[1;5D");
+        buf.feed("X");
+        assert_eq!(buf.content(), "Xabc");
     }
 }

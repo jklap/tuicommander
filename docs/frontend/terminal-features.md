@@ -46,14 +46,21 @@ tracking without switching to the alt screen). Hold **Shift** to force scrollbac
 scrolling regardless of mouse mode (consistent with Shift bypassing mouse reporting
 for clicks/selection). The scrollbar thumb always moves TUIC history.
 
-**Quantization.** A physical wheel notch or trackpad flick delivers a burst of many
-small-delta DOM wheel events (macOS reports the whole momentum decay, not just the
-initial motion). Both the forwarded and the scrollback path accumulate those pixel
-deltas and only act once a full line height has been crossed — one SGR notch, or one
-line of scrollback, per line height — capped at 3 notches per event to match native
-terminal behavior for a single discrete mouse click. `deltaMode` (line/page-reporting
-devices) is normalized the same way, so non-pixel-reporting mice and touchpads track
-correctly too.
+**Quantization (forwarded to an app).** A physical wheel notch or trackpad flick
+delivers a burst of many small-delta DOM wheel events (macOS reports the whole
+momentum decay, not just the initial motion). The forwarded path accumulates those
+pixel deltas and emits one SGR notch per full line height crossed, capped at 3 notches
+per event in pixel mode (to match native terminal behavior for a single discrete mouse
+click); the residual resets on direction reversal and when the gesture goes idle
+(200 ms). Line-mode devices (`deltaMode` 1) are rounded to whole lines and clamped to
+the viewport row count; page-mode devices (`deltaMode` 2) emit `viewportRows - 1`
+notches per event.
+
+**Scrollback scrolling.** The scrollback path (no mouse reporting, or Shift held) is
+not quantized: pixel deltas, normalized from line/page mode, drive smooth fractional
+scrolling. Gesture acceleration ramps from 0.5x (first screenful of travel) to 1.0x
+(after 2 screens) and is capped at 2.0x (after 4 screens); it resets on direction
+reversal and when the gesture ends.
 
 ### Split Panes
 
