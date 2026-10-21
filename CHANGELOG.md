@@ -6,6 +6,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+- Bind Grok Chat to the registered native process behind the npm launcher without guessing another terminal's transcript (#2104-0523).
 - Keep desktop ego Chat available after reload while a native question or permission prompt is pending; validate the transcript through the backend live-process binding (#2103-60e4).
 
 - Reuse unchanged checkout monitoring status on macOS/Windows with raw file-event invalidation, source signatures and a five-minute backstop; keep fresh reads on Linux and for unsupported repositories (#2098-98b2).

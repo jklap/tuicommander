@@ -1088,15 +1088,34 @@ fn select_grok_session_for_pid(contents: &str, pid: u32, cwd: &str) -> Option<St
     let entries: serde_json::Value = serde_json::from_str(contents).ok()?;
     let wanted_cwd = normalize_cwd(cwd);
 
-    entries.as_array()?.iter().find_map(|entry| {
-        if entry.get("pid")?.as_u64()? != u64::from(pid) {
-            return None;
-        }
-        if normalize_cwd(entry.get("cwd")?.as_str()?) != wanted_cwd {
+    let mut matches = entries.as_array()?.iter().filter_map(|entry| {
+        let registered_pid = u32::try_from(entry.get("pid")?.as_u64()?).ok()?;
+        let owns_terminal = registered_pid == pid || {
+            #[cfg(unix)]
+            {
+                // npm's Node bootstrap retains the foreground process group while
+                // the native child publishes its own PID. Do not guess by CWD.
+                match (i32::try_from(registered_pid), i32::try_from(pid)) {
+                    (Ok(registered_pid), Ok(group)) if registered_pid > 0 && group > 0 => {
+                        // SAFETY: getpgid only queries the OS.
+                        (unsafe { libc::getpgid(registered_pid) }) == group
+                    }
+                    _ => false,
+                }
+            }
+            #[cfg(not(unix))]
+            {
+                false
+            }
+        };
+        if !owns_terminal || normalize_cwd(entry.get("cwd")?.as_str()?) != wanted_cwd {
             return None;
         }
         Some(entry.get("session_id")?.as_str()?.to_string())
-    })
+    });
+    let session = matches.next()?;
+    // A nested Grok in the same process group is not an exact binding.
+    matches.next().is_none().then_some(session)
 }
 
 /// Read the session id grok registered for `pid`, rejecting a stale entry whose
@@ -1901,6 +1920,86 @@ mod tests {
         )
         .unwrap();
         home
+    }
+
+    // Catches: npm's Node launcher owns the terminal process group, but Grok
+    // registers its native child PID, leaving Chat unable to read its transcript.
+    #[cfg(unix)]
+    #[test]
+    fn test_grok_chat_history_binds_registered_native_child_of_npm_launcher() {
+        use std::io::{BufRead, BufReader};
+        use std::os::unix::process::CommandExt;
+        use std::process::{Command, Stdio};
+
+        struct Launcher(std::process::Child);
+        impl Drop for Launcher {
+            fn drop(&mut self) {
+                // Only this test's newly created process group is signalled.
+                unsafe { libc::kill(-(self.0.id() as i32), libc::SIGKILL) };
+                let _ = self.0.wait();
+            }
+        }
+        let mut launcher = Launcher(
+            Command::new("sh")
+                .args(["-c", "sleep 600 & first=$!; sleep 600 & second=$!; printf '%s %s\\n' \"$first\" \"$second\"; wait"])
+                .process_group(0)
+                .stdout(Stdio::piped())
+                .spawn()
+                .unwrap(),
+        );
+        let mut line = String::new();
+        BufReader::new(launcher.0.stdout.take().unwrap())
+            .read_line(&mut line)
+            .unwrap();
+        let pids: Vec<u32> = line
+            .split_whitespace()
+            .map(|s| s.parse().unwrap())
+            .collect();
+        let home = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+        let cwd = home.path().to_str().unwrap();
+        let mut registry: serde_json::Value = serde_json::from_str(include_str!(
+            "fixtures/chat_view/grok_npm_active_sessions.json"
+        ))
+        .unwrap();
+        registry[0]["pid"] = pids[0].into();
+        registry[0]["cwd"] = cwd.into();
+        let id = registry[0]["session_id"].as_str().unwrap().to_owned();
+        let transcript = home
+            .path()
+            .join(".grok/sessions")
+            .join(grok_path_encode(cwd))
+            .join(id)
+            .join("chat_history.jsonl");
+        std::fs::create_dir_all(transcript.parent().unwrap()).unwrap();
+        std::fs::write(&transcript, "registered native Grok transcript").unwrap();
+        let registry_path = home.path().join(".grok/active_sessions.json");
+        std::fs::write(&registry_path, registry.to_string()).unwrap();
+        let bound = grok_chat_history_for_pid(home.path(), launcher.0.id(), cwd);
+        assert_eq!(
+            bound
+                .as_ref()
+                .and_then(|p| std::fs::read_to_string(p).ok())
+                .as_deref(),
+            Some("registered native Grok transcript")
+        );
+        assert_eq!(
+            grok_chat_history_for_pid(home.path(), std::process::id(), cwd),
+            None,
+            "another process group must not claim this session"
+        );
+        assert_eq!(
+            grok_chat_history_for_pid(home.path(), launcher.0.id(), "/other/project"),
+            None
+        );
+        let mut second = registry[0].clone();
+        second["pid"] = pids[1].into();
+        registry.as_array_mut().unwrap().push(second);
+        std::fs::write(&registry_path, registry.to_string()).unwrap();
+        assert_eq!(
+            grok_chat_history_for_pid(home.path(), launcher.0.id(), cwd),
+            None,
+            "multiple native registrations in one group are ambiguous"
+        );
     }
 
     // Catches: two grok tabs in one folder showing each other's conversation, or a
