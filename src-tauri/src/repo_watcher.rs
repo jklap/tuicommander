@@ -762,7 +762,7 @@ fn is_new_watchable_dir(kind: &notify::EventKind, category: EventCategory) -> bo
 /// `Access(Close(Write))` is kept: it signals a *completed write*. Real
 /// modifications also arrive as `Modify`/`Create`/`Remove`, which are never
 /// dropped, so no change is missed.
-fn is_ignorable_access(kind: &notify::EventKind) -> bool {
+pub(crate) fn is_ignorable_access(kind: &notify::EventKind) -> bool {
     use notify::event::{AccessKind, AccessMode};
     match kind {
         notify::EventKind::Access(AccessKind::Close(AccessMode::Write)) => false,
@@ -839,6 +839,8 @@ pub(crate) fn start_watching(repo_path: &str, state: &Arc<AppState>) -> Result<(
                     return;
                 }
             };
+
+            crate::monitoring_status::CACHE.event(&repo_for_cb, &event);
 
             // Drop read-only access events (open/read/close-nowrite) before any
             // work: file reads spray thousands per second per repo and pinned a
@@ -1157,6 +1159,7 @@ pub(crate) fn start_watching(repo_path: &str, state: &Arc<AppState>) -> Result<(
 /// removed the repo, parked it, or the refresh coordinator retired it. An
 /// in-flight build keeps its own `Arc` and simply writes into an orphan.
 pub(crate) fn stop_watching(repo_path: &str, state: &Arc<AppState>) {
+    crate::monitoring_status::CACHE.stop(Path::new(repo_path));
     tuic_git::worktree::set_monitoring_watch_active(Path::new(repo_path), false);
     if state.repo_watchers.remove(repo_path).is_some() {
         tracing::info!(source = "repo_watcher", path = %repo_path, "Stopping watcher");

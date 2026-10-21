@@ -370,7 +370,8 @@ pub(crate) async fn get_repo_diff_stats_impl(
             let branches: Vec<_> = worktree_paths.values().map(|w| w.branch.clone()).collect();
             let ref_keys = tuic_git::worktree::monitoring_ref_keys(Path::new(&path), &branches);
             for (id, workspace) in &worktree_paths {
-                let (diff, dirty) = git_reads().monitoring_status(Path::new(&workspace.path));
+                let (diff, dirty) =
+                    crate::monitoring_status::CACHE.read(Path::new(&workspace.path));
                 diff_stats.insert(workspace.path.clone(), diff);
                 workspace_statuses.insert(
                     id.clone(),
