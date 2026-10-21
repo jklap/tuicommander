@@ -368,7 +368,7 @@ gio = { version = "0.18", optional = true }
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = { version = "0.6", optional = true }
 mac-notification-sys = { version = "0.6.15", optional = true }
-objc2-foundation = { version = "0.3", features = ["NSUserDefaults", "NSDictionary", "NSString", "NSValue"], optional = true }
+objc2-foundation = { version = "0.3", features = ["NSUserDefaults", "NSDictionary", "NSString", "NSValue", "NSProcessInfo"], optional = true }
 objc2-app-kit = { version = "0.3", features = ["NSEvent", "block2"], optional = true }
 block2 = { version = "0.6", optional = true }
 

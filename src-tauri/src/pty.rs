@@ -1234,7 +1234,7 @@ fn managed_claude_trust_dialog(screen: &[String]) -> bool {
             .or_else(|| row.strip_prefix('>'));
         choice.is_some_and(|choice| choice.trim_start().contains("No, exit"))
     });
-    matches!((yes, selected_no), (Some(yes), Some(no)) if yes < no)
+    matches!((yes, selected_no), (Some(yes), Some(no)) if no < yes)
 }
 
 #[cfg(test)]
@@ -1253,7 +1253,6 @@ mod managed_claude_trust_tests {
             vec![
                 "Quick safety check: Is this a project you created or one you trust?",
                 "❯ No, exit",
-                "  Yes, I trust this folder",
             ],
         ] {
             assert!(
@@ -1273,7 +1272,7 @@ fn accept_managed_claude_trust_dialog(state: &AppState, session_id: &str) -> Res
     let mut writer = writer.lock();
     state.retire_turn_interrupt(session_id);
     writer
-        .write_all(b"\x1b[A")
+        .write_all(b"\x1b[B")
         .and_then(|()| writer.flush())
         .map_err(|error| format!("Trust selection failed: {error}"))?;
     std::thread::sleep(INJECT_ENTER_GAP);

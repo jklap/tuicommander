@@ -2403,17 +2403,47 @@ fn preserve_missing_worktree_modules(
         base_repo: &Path,
         worktree: &Path,
         path: &Path,
+        owner: &Path,
         names: &mut Vec<String>,
-        inside_repo: bool,
     ) -> Result<(), String> {
         if !path.is_dir() {
             return Ok(());
         }
         let is_repo = path.join("HEAD").is_file() && path.join("objects").is_dir();
         if is_repo {
-            let relative = names.join("/");
-            let destination = base_repo.join(&relative);
-            if !initialized_main_submodule(base_repo, &destination) {
+            let name = names.join("/");
+            let mapping = git_cmd(owner)
+                .args([
+                    "config",
+                    "--file",
+                    ".gitmodules",
+                    "--get-all",
+                    &format!("submodule.{name}.path"),
+                ])
+                .run()
+                .map_err(|error| {
+                    format!(
+                        "Cannot resolve missing worktree submodule {name} path from .gitmodules: {error}"
+                    )
+                })?;
+            let paths = mapping.stdout.lines().collect::<Vec<_>>();
+            let [relative] = paths.as_slice() else {
+                return Err(format!(
+                    "Cannot resolve missing worktree submodule {name}: expected one .gitmodules path"
+                ));
+            };
+            if relative.is_empty()
+                || tuic_core::path_spelling::is_absolute_on_any_platform(relative)
+                || !Path::new(relative)
+                    .components()
+                    .all(|component| matches!(component, Component::Normal(_)))
+            {
+                return Err(format!(
+                    "Cannot resolve missing worktree submodule {name}: invalid .gitmodules path {relative:?}"
+                ));
+            }
+            let destination = owner.join(relative);
+            if !initialized_main_submodule(owner, &destination) {
                 return Err(format!(
                     "Cannot preserve missing worktree submodule {relative}: main module is not initialized"
                 ));
@@ -2517,33 +2547,26 @@ fn preserve_missing_worktree_modules(
                 .timeout(Duration::from_secs(60))
                 .run()
                 .map_err(|e| format!("Cannot preserve missing submodule {relative}: {e}"))?;
+            // Nested modules have their own declarations and admin namespace.
+            // Never interpret Git's objects/refs/logs directories as module names.
+            return visit(
+                base_repo,
+                worktree,
+                &path.join("modules"),
+                &destination,
+                &mut Vec::new(),
+            );
         }
         for entry in std::fs::read_dir(path)
             .map_err(|e| format!("Cannot inspect module admin directory: {e}"))?
         {
             let entry = entry.map_err(|e| format!("Cannot inspect module admin entry: {e}"))?;
-            if !entry.path().is_dir()
-                || entry.file_name() == "objects"
-                || entry.file_name() == "refs"
-                || entry.file_name() == "logs"
-            {
+            if !entry.path().is_dir() {
                 continue;
             }
-            let component = entry.file_name().to_string_lossy().into_owned();
-            let structural_modules = component == "modules" && (inside_repo || is_repo);
-            if !structural_modules {
-                names.push(component.clone());
-            }
-            visit(
-                base_repo,
-                worktree,
-                &entry.path(),
-                names,
-                inside_repo || is_repo,
-            )?;
-            if !structural_modules {
-                names.pop();
-            }
+            names.push(entry.file_name().to_string_lossy().into_owned());
+            visit(base_repo, worktree, &entry.path(), owner, names)?;
+            names.pop();
         }
         Ok(())
     }
@@ -2551,8 +2574,8 @@ fn preserve_missing_worktree_modules(
         base_repo,
         worktree,
         &admin.join("modules"),
+        base_repo,
         &mut Vec::new(),
-        false,
     )
 }
 
@@ -4732,6 +4755,200 @@ mod tests {
             std::fs::read_to_string(allocation_marker(repo.path(), &first.path).unwrap()).unwrap(),
             "finished"
         );
+    }
+
+    // Catches: a bare Git entry with neither a branch nor detached marker is accepted as an orphan.
+    #[test]
+    fn orphan_validation_refuses_a_bare_repository_entry() {
+        let (_temp, repo, _workspaces) = workspace_fixture();
+        let bare = repo.parent().unwrap().join("bare.git");
+        git_cmd(&repo)
+            .args([
+                "clone",
+                "--bare",
+                &repo.to_string_lossy(),
+                &bare.to_string_lossy(),
+            ])
+            .run()
+            .unwrap();
+        let porcelain = git_cmd(&bare)
+            .args(["worktree", "list", "--porcelain"])
+            .run()
+            .unwrap();
+        assert!(
+            porcelain.stdout.lines().any(|line| line == "bare"),
+            "{}",
+            porcelain.stdout
+        );
+        let error =
+            validate_worktree_path(&bare.to_string_lossy(), &bare.to_string_lossy()).unwrap_err();
+        assert!(error.contains("not detached"), "{error}");
+        git_cmd(&bare)
+            .args(["cat-file", "-e", "HEAD"])
+            .run()
+            .unwrap();
+    }
+
+    // Catches: an unreadable allocation marker is treated as absent and the checkout is moved.
+    #[test]
+    fn archive_refuses_an_allocation_marker_that_is_a_directory() {
+        // DEFERRED (2026-10-20) — rollback remove_file failures need a deterministic real filesystem reproducer; this covers the initial read refusal only.
+        let (_temp, repo, _workspaces) = workspace_fixture();
+        let path = add_worktree(&repo, "marker-directory");
+        let marker = allocation_marker(&repo, &path).unwrap();
+        assert!(!marker.exists());
+        fs::create_dir(&marker).unwrap();
+        let error = archive_worktree(&repo, "marker-directory", None).unwrap_err();
+        assert!(error.contains("Cannot read allocation marker"), "{error}");
+        assert!(path.join(".git").exists());
+        assert_eq!(
+            get_worktree_paths_raw(&repo.to_string_lossy()).unwrap()["marker-directory"].path,
+            path.to_string_lossy()
+        );
+    }
+
+    // Catches: a valid dirty-file confirmation is inverted or force is reinterpreted as non-force.
+    #[test]
+    fn confirmed_force_removal_discards_only_the_confirmed_dirty_checkout() {
+        let (_temp, repo, _workspaces) = workspace_fixture();
+        let path = add_worktree(&repo, "confirmed-dirty");
+        fs::write(path.join("untracked.txt"), "confirmed discard\n").unwrap();
+        let lifecycle = inspect_workspace_lifecycle(&repo, "confirmed-dirty");
+        assert_eq!(lifecycle.dirty_files, Some(1));
+        remove_worktree_by_workspace_id_with_missing_confirmation_and_pr(
+            &repo.to_string_lossy(),
+            "confirmed-dirty",
+            false,
+            None,
+            true,
+            false,
+            lifecycle.dirty_fingerprint.as_deref(),
+            Some(false),
+            |_, _, _| false,
+        )
+        .unwrap();
+        assert!(!path.exists());
+        assert!(rev_at(&repo, "refs/heads/confirmed-dirty").is_ok());
+    }
+
+    // Catches: the final removal boundary accepts a stale fingerprint or refuses an unchanged one.
+    #[test]
+    fn removal_boundary_rechecks_the_confirmed_fingerprint() {
+        for changed in [false, true] {
+            let (_temp, repo, _workspaces) = workspace_fixture();
+            let path = add_worktree(&repo, "boundary-fingerprint");
+            let confirmed = dirty_fingerprint_at(&path).unwrap().0;
+            if changed {
+                fs::write(path.join("new.txt"), "not confirmed\n").unwrap();
+            }
+            let worktree = WorktreeInfo {
+                name: "boundary-fingerprint".into(),
+                path: path.clone(),
+                branch: Some("boundary-fingerprint".into()),
+                base_repo: repo,
+            };
+            let result = remove_worktree_internal_with_lock(
+                &worktree,
+                true,
+                false,
+                Some(&confirmed),
+                Some(false),
+            );
+            if changed {
+                let error = result.unwrap_err();
+                assert!(error.contains("changed since confirmation"), "{error}");
+                assert_eq!(
+                    fs::read_to_string(path.join("new.txt")).unwrap(),
+                    "not confirmed\n"
+                );
+            } else {
+                result.unwrap();
+                assert!(!path.exists());
+            }
+        }
+    }
+
+    // Catches: generic Git deletion errors are reported as lock/main-worktree errors or cleanup success.
+    #[cfg(unix)]
+    #[test]
+    fn removal_keeps_a_generic_admin_permission_failure_distinct_from_confirmation_errors() {
+        // DEFERRED (2026-10-20) — late unregister/delete races and alternate Git error wording remain mutation survivors; do not synthesize stderr to claim coverage.
+        use std::os::unix::fs::PermissionsExt;
+        let (_temp, repo, _workspaces) = workspace_fixture();
+        let path = add_worktree(&repo, "admin-permissions");
+        let admin = registered_worktree_admin_dir(&repo, &path)
+            .unwrap()
+            .unwrap();
+        let worktree = WorktreeInfo {
+            name: "admin-permissions".into(),
+            path: path.clone(),
+            branch: Some("admin-permissions".into()),
+            base_repo: repo.clone(),
+        };
+        let original = fs::metadata(&admin).unwrap().permissions();
+        fs::set_permissions(&admin, fs::Permissions::from_mode(0o500)).unwrap();
+        let result = remove_worktree_internal(&worktree, true);
+        fs::set_permissions(&admin, original).unwrap();
+        let error = result.unwrap_err();
+        assert!(error.starts_with("Git worktree remove failed:"), "{error}");
+        assert!(
+            admin.exists(),
+            "Git failure must not silently prune the registration"
+        );
+    }
+
+    // Catches: force incorrectly refuses a changed submodule HEAD before preserving its local-only commit.
+    #[test]
+    fn forced_removal_preserves_a_changed_submodule_head() {
+        let (_temp, repo, _workspaces) = workspace_fixture();
+        add_populated_submodule(&repo);
+        let path = add_worktree(&repo, "ignored-submodule-dirt");
+        git_cmd(&path)
+            .args([
+                "-c",
+                "protocol.file.allow=always",
+                "submodule",
+                "update",
+                "--init",
+            ])
+            .run()
+            .unwrap();
+        let module = path.join("modules/local");
+        git_cmd(&module)
+            .args(["config", "user.email", "test@test.com"])
+            .run()
+            .unwrap();
+        git_cmd(&module)
+            .args(["config", "user.name", "Test"])
+            .run()
+            .unwrap();
+        commit_file(&module, "only-here.txt", "preserve this commit\n");
+        let oid = rev_at(&module, "HEAD").unwrap();
+        let status = git_cmd(&path).args(["submodule", "status"]).run().unwrap();
+        assert!(status.stdout.starts_with('+'), "{}", status.stdout);
+        let worktree = WorktreeInfo {
+            name: "ignored-submodule-dirt".into(),
+            path: path.clone(),
+            branch: Some("ignored-submodule-dirt".into()),
+            base_repo: repo.clone(),
+        };
+        remove_worktree_internal(&worktree, true).unwrap();
+        assert!(!path.exists());
+        git_cmd(&repo.join("modules/local"))
+            .args(["cat-file", "-e", &oid])
+            .run()
+            .unwrap();
+        let refs = git_cmd(&repo.join("modules/local"))
+            .args([
+                "for-each-ref",
+                "--format=%(refname)",
+                "--points-at",
+                &oid,
+                "refs/tuic/preserved",
+            ])
+            .run()
+            .unwrap();
+        assert!(!refs.stdout.trim().is_empty());
     }
 
     // Catches: archive errors leave the sidebar and registry pointing at a moved checkout.
@@ -9258,6 +9475,330 @@ branch refs/heads/feat
             git_cmd(&repo).args(["cat-file", "-e", &oid]).run().is_err(),
             "the module-only commit must not be fetched into the superproject"
         );
+    }
+
+    // Catches: an absent or malformed declaration falls back to an unrelated admin-name path.
+    #[test]
+    fn missing_checkout_refuses_missing_or_malformed_submodule_path_mapping() {
+        for mapping in [
+            None,
+            Some(""),
+            Some("../outside"),
+            Some("/outside"),
+            Some(r"C:\outside"),
+        ] {
+            let (_temp, repo, _workspaces) = workspace_fixture();
+            add_populated_submodule(&repo);
+            let path = add_worktree(&repo, "invalid-missing-module");
+            git_cmd(&path)
+                .args([
+                    "-c",
+                    "protocol.file.allow=always",
+                    "submodule",
+                    "update",
+                    "--init",
+                ])
+                .run()
+                .unwrap();
+            let module = path.join("modules/local");
+            let module_gitdir = PathBuf::from(rev_at(&module, "--absolute-git-dir").unwrap());
+            let oid = rev_at(&module, "HEAD").unwrap();
+            let admin = registered_worktree_admin_dir(&repo, &path)
+                .unwrap()
+                .unwrap();
+            let worktree = WorktreeInfo {
+                name: "invalid-missing-module".into(),
+                path: path.clone(),
+                branch: Some("invalid-missing-module".into()),
+                base_repo: repo.clone(),
+            };
+            fs::remove_dir_all(&path).unwrap();
+            if let Some(mapping) = mapping {
+                git_cmd(&repo)
+                    .args([
+                        "config",
+                        "--file",
+                        ".gitmodules",
+                        "submodule.modules/local.path",
+                        mapping,
+                    ])
+                    .run()
+                    .unwrap();
+            } else {
+                fs::remove_file(repo.join(".gitmodules")).unwrap();
+            }
+            let error = remove_worktree_internal(&worktree, true).unwrap_err();
+            assert!(
+                error.contains("Cannot resolve missing worktree submodule")
+                    && error.contains(".gitmodules"),
+                "{mapping:?}: {error}"
+            );
+            assert!(
+                admin.is_dir(),
+                "{mapping:?}: refusal must retain registration"
+            );
+            git_cmd(&repo)
+                .args([
+                    "--git-dir",
+                    &module_gitdir.to_string_lossy(),
+                    "--work-tree",
+                    &repo.to_string_lossy(),
+                    "cat-file",
+                    "-e",
+                    &oid,
+                ])
+                .run()
+                .expect("refusal must retain source module objects");
+        }
+    }
+
+    // Catches: nested module names are resolved against the root instead of their owning module.
+    #[test]
+    fn missing_checkout_preserves_nested_named_module_objects() {
+        let (_temp, repo, _workspaces) = workspace_fixture();
+        let leaf = repo.parent().unwrap().join("nested-leaf-source");
+        fs::create_dir(&leaf).unwrap();
+        git_cmd(&leaf).args(["init"]).run().unwrap();
+        git_cmd(&leaf)
+            .args(["config", "user.email", "test@test.com"])
+            .run()
+            .unwrap();
+        git_cmd(&leaf)
+            .args(["config", "user.name", "Test"])
+            .run()
+            .unwrap();
+        commit_file(&leaf, "leaf.txt", "base leaf\n");
+        let outer = repo.parent().unwrap().join("nested-outer-source");
+        fs::create_dir(&outer).unwrap();
+        git_cmd(&outer).args(["init"]).run().unwrap();
+        git_cmd(&outer)
+            .args(["config", "user.email", "test@test.com"])
+            .run()
+            .unwrap();
+        git_cmd(&outer)
+            .args(["config", "user.name", "Test"])
+            .run()
+            .unwrap();
+        commit_file(&outer, "outer.txt", "base outer\n");
+        git_cmd(&outer)
+            .args([
+                "-c",
+                "protocol.file.allow=always",
+                "submodule",
+                "add",
+                "--name",
+                "nested-git-name",
+                &leaf.to_string_lossy(),
+                "nested/checkout-path",
+            ])
+            .run()
+            .unwrap();
+        git_cmd(&outer).args(["add", "."]).run().unwrap();
+        git_cmd(&outer)
+            .args(["commit", "-m", "add leaf"])
+            .run()
+            .unwrap();
+        git_cmd(&repo)
+            .args([
+                "-c",
+                "protocol.file.allow=always",
+                "submodule",
+                "add",
+                "--name",
+                "outer-git-name",
+                &outer.to_string_lossy(),
+                "modules/outer-path",
+            ])
+            .run()
+            .unwrap();
+        git_cmd(&repo).args(["add", "."]).run().unwrap();
+        git_cmd(&repo)
+            .args(["commit", "-m", "add outer"])
+            .run()
+            .unwrap();
+
+        let path = add_worktree(&repo, "missing-nested-module");
+        git_cmd(&path)
+            .args([
+                "-c",
+                "protocol.file.allow=always",
+                "submodule",
+                "update",
+                "--init",
+                "--recursive",
+            ])
+            .run()
+            .unwrap();
+        let outer_module = path.join("modules/outer-path");
+        let nested = outer_module.join("nested/checkout-path");
+        git_cmd(&nested)
+            .args(["config", "user.email", "test@test.com"])
+            .run()
+            .unwrap();
+        git_cmd(&nested)
+            .args(["config", "user.name", "Test"])
+            .run()
+            .unwrap();
+        commit_file(&nested, "local-only.txt", "nested local commit\n");
+        let oid = rev_at(&nested, "HEAD").unwrap();
+        let nested_gitdir = PathBuf::from(rev_at(&nested, "--absolute-git-dir").unwrap());
+        git_cmd(&repo)
+            .args([
+                "-c",
+                "protocol.file.allow=always",
+                "submodule",
+                "update",
+                "--init",
+                "--recursive",
+            ])
+            .run()
+            .unwrap();
+        let destination = repo.join("modules/outer-path/nested/checkout-path");
+        assert!(
+            git_cmd(&destination)
+                .args(["cat-file", "-e", &oid])
+                .run()
+                .is_err()
+        );
+        let admin = registered_worktree_admin_dir(&repo, &path)
+            .unwrap()
+            .unwrap();
+        let worktree = WorktreeInfo {
+            name: "missing-nested-module".into(),
+            path: path.clone(),
+            branch: Some("missing-nested-module".into()),
+            base_repo: repo.clone(),
+        };
+        fs::remove_dir_all(&path).unwrap();
+        remove_worktree_internal(&worktree, true).unwrap();
+        assert!(!admin.exists());
+        assert!(!nested_gitdir.exists());
+        git_cmd(&destination)
+            .args(["cat-file", "-e", &oid])
+            .run()
+            .unwrap();
+        let refs = git_cmd(&destination)
+            .args([
+                "for-each-ref",
+                "--format=%(refname)",
+                "--points-at",
+                &oid,
+                "refs/tuic/preserved",
+            ])
+            .run()
+            .unwrap();
+        assert!(
+            !refs.stdout.trim().is_empty(),
+            "nested module-only commit needs a durable ref"
+        );
+    }
+
+    // Catches: missing-checkout cleanup treats a submodule admin name as its checkout path.
+    #[test]
+    fn missing_checkout_preserves_named_submodule_before_pruning() {
+        // Catches: an admin-name container called objects is mistaken for a Git repository.
+        for module_name in ["git-module-name", "bucket/objects/git-module-name"] {
+            let (_temp, repo, _workspaces) = workspace_fixture();
+            let source = repo.parent().unwrap().join("named-missing-module-source");
+            fs::create_dir(&source).unwrap();
+            git_cmd(&source).args(["init"]).run().unwrap();
+            git_cmd(&source)
+                .args(["config", "user.email", "test@test.com"])
+                .run()
+                .unwrap();
+            git_cmd(&source)
+                .args(["config", "user.name", "Test"])
+                .run()
+                .unwrap();
+            commit_file(&source, "module.txt", "base commit\n");
+            git_cmd(&repo)
+                .args([
+                    "-c",
+                    "protocol.file.allow=always",
+                    "submodule",
+                    "add",
+                    "--name",
+                    module_name,
+                    &source.to_string_lossy(),
+                    "modules/checkout-path",
+                ])
+                .run()
+                .unwrap();
+            git_cmd(&repo).args(["add", "."]).run().unwrap();
+            git_cmd(&repo)
+                .args(["commit", "-m", "add named submodule"])
+                .run()
+                .unwrap();
+            let path = add_worktree(&repo, "missing-named-module");
+            git_cmd(&path)
+                .args([
+                    "-c",
+                    "protocol.file.allow=always",
+                    "submodule",
+                    "update",
+                    "--init",
+                ])
+                .run()
+                .unwrap();
+            let module = path.join("modules/checkout-path");
+            git_cmd(&module)
+                .args(["config", "user.email", "test@test.com"])
+                .run()
+                .unwrap();
+            git_cmd(&module)
+                .args(["config", "user.name", "Test"])
+                .run()
+                .unwrap();
+            commit_file(&module, "local-only.txt", "worktree-only commit\n");
+            let local_oid = rev_at(&module, "HEAD").unwrap();
+            let module_gitdir = PathBuf::from(rev_at(&module, "--absolute-git-dir").unwrap());
+            assert_eq!(module_gitdir.file_name().unwrap(), "git-module-name");
+            let destination = repo.join("modules/checkout-path");
+            assert!(initialized_main_submodule(&repo, &destination));
+            assert!(!repo.join("git-module-name").exists());
+            assert!(
+                git_cmd(&destination)
+                    .args(["cat-file", "-e", &local_oid])
+                    .run()
+                    .is_err()
+            );
+            let worktree = WorktreeInfo {
+                name: "missing-named-module".into(),
+                path: path.clone(),
+                branch: Some("missing-named-module".into()),
+                base_repo: repo.clone(),
+            };
+            let admin = registered_worktree_admin_dir(&repo, &path)
+                .unwrap()
+                .unwrap();
+            fs::remove_dir_all(&path).unwrap();
+            assert!(module_gitdir.is_dir());
+            remove_worktree_internal(&worktree, true).expect(
+                "initialized named destination must receive the missing checkout's objects",
+            );
+            assert!(
+                !admin.exists(),
+                "successful preservation permits registration pruning"
+            );
+            git_cmd(&destination)
+                .args(["cat-file", "-e", &local_oid])
+                .run()
+                .unwrap();
+            let refs = git_cmd(&destination)
+                .args([
+                    "for-each-ref",
+                    "--format=%(refname)",
+                    "--points-at",
+                    &local_oid,
+                    "refs/tuic/preserved",
+                ])
+                .run()
+                .unwrap();
+            assert!(
+                !refs.stdout.trim().is_empty(),
+                "the local-only commit needs a durable ref"
+            );
+        }
     }
 
     #[test]

@@ -5,6 +5,18 @@
 - [ ] After loading the rebuilt backend, verify Codex session and same-path date-directory replacement in an isolated CODEX_HOME and unchanged discovery without historical rollout scans; watched-index and cwd/age/claimed-ID regressions run on rb, but macOS watcher behavior still needs the isolated instance.
 
 - [ ] After Boss manually restarts a rebuilt backend, commit in one disposable linked worktree and check current dirty/integration badges and unchanged sibling rows. This Rust change does not hot-reload into the daily app. The peer must not restart that app; isolated counter evidence is recorded in the story.
+## Unchanged content-index events (2099-8c87) — Rust restart required
+
+- [ ] After Boss manually restarts a rebuilt backend, confirm repeated unchanged repository events do not schedule content-index validation within 60 seconds of a completed validation. Verify a later content edit remains searchable after the cooldown. This Rust change does not hot-reload; this peer does not restart the daily app.
+## Missing-checkout named submodule preservation (2096-1d25) — Rust restart required
+
+- [ ] After Boss manually restarts a rebuilt backend, verify forced cleanup of a disposable missing worktree with a named submodule preserves its local-only commit in the initialized main module before pruning registration. No running desktop backend was restarted by this peer. Automated Git boundary evidence is recorded in the gate report.
+## Managed Claude default-No trust dialog (2097-5739) — Rust restart required
+
+- [ ] After Boss manually restarts a rebuilt `make dev` or installs `make build`, spawn a managed Claude child in a disposable untrusted folder. Check that the startup dialog selects Yes with Down then Enter once; an unmanaged terminal and trust opt-out must remain unanswered. The recorded 1987 capture is covered by automated replay; this Rust change does not hot-reload into the daily app. No daily app restart was performed.
+## Covered agent-test presentation (2095-0106) — isolated native check verified
+
+- [x] The recovered native observer passed a 300-second covered-window run: document/native visibility stayed true, rAF advanced with a 319 ms maximum gap, no focus or activation, and stable compact geometry. Evidence: `reports/tuicommander/2095-covered-observation/`. The dedicated agent-test binary must be rebuilt to load this Rust policy; the daily app is unchanged and needs no restart for this fix. This peer did not restart or replace Boss's running app.
 
 ## First narrow Codex /plan question (2094-da19) — Rust restart required
 

@@ -14,12 +14,25 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Refresh monitoring ref targets and reflog hashes incrementally from Git paths; retain signature validation when complete file watching is unavailable (#2098-98b2).
 - Read worktree inventory from checkout HEAD files without reopening each checkout’s Git configuration and object store (#2098-98b2).
 - Reuse monitoring repository handles for dirty and lifecycle reads, with configuration-signature invalidation instead of reopening global Git configuration for every workspace (#2098-98b2).
+- Coalesce plugin reload discovery by changed ID and reuse unchanged payload-file hashes instead of repeatedly reading every installed plugin (#2099-8c87).
+
+- Use watcher-driven dirty transcript metadata checks for Claude Usage, serialize refreshes, and resolve specific projects without enumerating global history (#2099-8c87).
+
+- Share filename-search inventories across queries instead of walking the repository again for each no-match search; invalidate on repository events and reconcile unwatched roots after 60 seconds (#2099-8c87).
+
+- Reuse unchanged Claude subagent metadata across Progress Flow refreshes, with signature-based invalidation and idle eviction (#2099-8c87).
+
+- Re-arm the content-index cooldown after an unchanged validation so repeated repository events do not each start another full metadata walk (#2099-8c87).
+- Preserve named and nested submodule history when force-removing a missing worktree checkout; refuse missing or malformed destination mappings before pruning (#2096-1d25).
+
+- Accept the recorded managed Claude startup trust dialog with No selected above Yes; send Down then Enter once and leave incomplete or unmanaged dialogs untouched (#2097-5739).
 
 - Keep clipped Claude native questions answerable with explicit previous/next/select controls instead of generic Yes/No or guessed hidden choices (#2093-0be6).
 - Export the first Codex /plan question in narrow terminals, including the split footer and independently wrapped answer labels and descriptions; keep its controls active through a delayed idle hook (#2094-da19).
 - Give reader-applied terminal input output bounded priority over animation frame floors on desktop and HTTP/PWA, using the existing gated serializer (#2040-16b2).
 - Re-measure mobile shell height and top on page restore, foreground visibility and document resume so stale viewport geometry is not retained (#1900-5ff6).
 
+- Keep the agent-test document visible under covering windows, prevent App Nap during live checks, and prohibit test-application activation; add a covered-window regression observer without changing the daily app (#2095-0106).
 - Keep the agent-test WebView visible and painting in a compact bottom-right floating window without activating the application or taking keyboard focus; add an opt-in native visibility observer and leave the daily window profile unchanged (#2090-cf8a).
 - Prevent a retained question footer from restoring Input state after the agent exits to the shell (#2091-ba03).
 - Restore awaiting state and native answer controls for repeated ego MCP approvals, including hard-wrapped approval titles (#2089-aafb).

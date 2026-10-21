@@ -3,6 +3,16 @@ import { join } from "node:path";
 import * as ts from "@typescript/typescript6";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+// Catches: browser reload dropping the changed-ID filter and scanning every plugin.
+it("maps targeted plugin discovery with the same ID array as IPC", () => {
+	const ids = ["plugin-a", "odd,id"];
+	const mapping = mapCommandToHttp("list_user_plugins", { pluginIds: ids });
+	const url = new URL(mapping!.path, "http://localhost");
+	expect(url.pathname).toBe("/plugins/list");
+	expect(JSON.parse(url.searchParams.get("plugin_ids")!)).toEqual(ids);
+	expect(mapCommandToHttp("list_user_plugins", {})?.path).toBe("/plugins/list");
+});
+
 // Catches: browser clients losing the provider bridge while desktop IPC works.
 it("maps scoped plugin settings actions without adding host authority", () => {
 	const action = { action: "get", paths: ["/retryDelayMs"] };

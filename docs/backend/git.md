@@ -243,7 +243,10 @@ uninitialized module or a misplaced `.git` file stops removal without deleting
 the source checkout. Every stash and
 reflog tip also gets a durable preserved ref, including older stash entries and
 commits that have fallen off a branch. A missing checkout's module bundle
-includes reflog objects before Git removes its registration. If preservation
+includes reflog objects before Git removes its registration. Missing-checkout
+module destinations are resolved from each owning main module's `.gitmodules`
+name-to-path mapping, including nested modules. Missing, duplicate, empty, absolute,
+or parent-traversing paths stop cleanup before pruning; admin names are not a fallback. If preservation
 fails, removal stops. For a deinitialized module, the leftover Git directory is
 located by its configured `.gitmodules` name, including nested names that
 differ from checkout paths; any retained admin state stops removal. The checkout is checked again after preservation,
