@@ -9409,14 +9409,14 @@ checksum = "e421abadd41a4225275504ea4d6566923418b7f05506fbc9c0fe86ba7396114b"
 
 [[package]]
 name = "tuic-ansi"
-version = "2.0.0"
+version = "2.0.0-beta.1"
 dependencies = [
  "vte",
 ]
 
 [[package]]
 name = "tuic-bridge"
-version = "2.0.0"
+version = "2.0.0-beta.1"
 dependencies = [
  "dirs",
  "serde_json",
@@ -9428,7 +9428,7 @@ dependencies = [
 
 [[package]]
 name = "tuic-cli"
-version = "2.0.0"
+version = "2.0.0-beta.1"
 dependencies = [
  "clap",
  "dirs",
@@ -9441,7 +9441,7 @@ dependencies = [
 
 [[package]]
 name = "tuic-core"
-version = "2.0.0"
+version = "2.0.0-beta.1"
 dependencies = [
  "bm25",
  "dirs",
@@ -9464,7 +9464,7 @@ dependencies = [
 
 [[package]]
 name = "tuic-dictation"
-version = "2.0.0"
+version = "2.0.0-beta.1"
 dependencies = [
  "block2",
  "cpal",
@@ -9495,7 +9495,7 @@ dependencies = [
 
 [[package]]
 name = "tuic-git"
-version = "2.0.0"
+version = "2.0.0-beta.1"
 dependencies = [
  "dashmap",
  "gix",
@@ -9518,7 +9518,7 @@ dependencies = [
 
 [[package]]
 name = "tuic-ipc"
-version = "2.0.0"
+version = "2.0.0-beta.1"
 dependencies = [
  "serde_json",
  "sha2 0.11.0",
@@ -9527,7 +9527,7 @@ dependencies = [
 
 [[package]]
 name = "tuic-terminal"
-version = "2.0.0"
+version = "2.0.0-beta.1"
 dependencies = [
  "alacritty_terminal",
  "dirs",
@@ -9545,7 +9545,7 @@ dependencies = [
 
 [[package]]
 name = "tuic-test-support"
-version = "2.0.0"
+version = "2.0.0-beta.1"
 dependencies = [
  "ctor 0.8.0",
  "portable-pty",
@@ -9554,7 +9554,7 @@ dependencies = [
 
 [[package]]
 name = "tuicommander"
-version = "2.0.0"
+version = "2.0.0-beta.1"
 dependencies = [
  "agent-client-protocol",
  "alacritty_terminal",

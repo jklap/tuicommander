@@ -238,5 +238,18 @@
       "Windows is exercised by the suite now, fixing tilde expansion, plugin ZIP installs, child environment inheritance and the progress store there.",
       "The TLS stack takes rustls 0.23.45 for RUSTSEC-2026-0285, covering remote access, the relay and tunnel HTTPS calls."
     ]
+  },
+  "2.0.0-beta.1": {
+    "highlights": [
+      "Agents can now interrupt a busy Claude, Codex or ego session with urgent mail that is delivered once the agent is idle.",
+      "Abandoned shells show how long they have been idle, and an optional setting closes them after a set number of hours.",
+      "Sidebar session menus can copy a session's alias, ID or live process ID.",
+      "Claude, Codex, Grok and ego questions and approvals are detected more reliably, with correct answer buttons everywhere.",
+      "Mobile gains Codex and Grok Chat views, a New Session list of installed agents, and fixes to layout and safe areas.",
+      "Sidebar Git status, worktree lists and plugin reloads do much less repeated disk work, so the app stays light on resources.",
+      "macOS no longer puts TUICommander into App Nap, so hidden windows keep updating without long stalls.",
+      "BREAKING: MCP per-tool switches are now capability groups and old tool aliases are gone, so reconnect clients after updating."
+    ],
+    "date": "2026-10-22"
   }
 }
