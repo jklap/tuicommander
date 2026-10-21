@@ -7,7 +7,7 @@ import { terminalsStore } from "../stores/terminals";
 /**
  * Whether `tab`'s underlying content still exists in its owning store. A tab
  * whose store entry is gone renders nothing (no tab strip entry, no close
- * button) — see `src/AGENTS.md`'s "`paneLayoutStore` Ghost Tabs..." section.
+ * button).
  * Used to decide whether a pane still has anything worth keeping open, rather
  * than trusting a raw `tabs.length` count that a dead entry can never let
  * reach zero.
@@ -33,8 +33,7 @@ export function isPaneTabLive(tab: PaneTab): boolean {
 // outside the normal close route) has no live sibling tab to ever trigger a
 // close, so it stays wedged open until something unrelated happens to close a
 // tab in that same group. This mirrors globalWorkspace.ts's own
-// terminalsStore.onRemove wiring for the identical reason. See
-// src/AGENTS.md's "paneLayoutStore Ghost Tabs..." section.
+// terminalsStore.onRemove wiring for the identical reason.
 //
 // Registered HERE (imported by the desktop-only useTerminalLifecycle.ts), not
 // in paneLayout.ts: paneLayout.ts is statically reachable from the mobile
