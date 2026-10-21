@@ -155,7 +155,7 @@ A file whose starting content can't be determined, or that's changed outside the
 
 If the tab isn't the one you're currently looking at, a small dot appears on its icon when a watched session changes — it clears the moment you switch to it.
 
-**Auto-open.** Settings → General → Diffs has an "Auto-open Session Diff Review" option (an expert setting; the default is **Ask**): **Off** never opens it automatically; **Ask** adds a notice to the notification bell, with an "Open Session Diff" action, the moment TUICommander notices a Claude Code session editing files; **Auto** opens the tab in the background without switching to it. Either way, it's skipped if a tab for that session is already open.
+**Auto-open.** Settings → General → Diffs has an "Auto-open Session Diff Review" option (an expert setting; the default is **Ask**): **Off** never opens it automatically; **Ask** shows a brief toast and adds a notice to the notification bell, both with an "Open Session Diff" action, the moment TUICommander notices a Claude Code session editing files; **Auto** opens the tab in the background without switching to it. Either way, it's skipped if a tab for that session is already open.
 
 **Diff display.** The toolbar's diff-options button (also in Settings → General → Diffs) controls ignore-whitespace/case options, soft-wrap, and a per-change line-count truncation threshold — the same settings the [Diff Scroll](#diff-scroll) view uses.
 
