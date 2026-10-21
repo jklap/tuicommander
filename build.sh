@@ -69,7 +69,7 @@ if [ -n "$BUILD" ]; then
     fi
 
     # TODO: make sure tuic is actually pointing to the running version?
-    RUNNING_VER=$(tuic --version | awk '{print $2}')
+    RUNNING_VER=$(tuic --version 2> /dev/null | awk '{print $2}')
     # 1.7.7-nightly.20260930.2c3bda965-dirty
     if [[ "$RUNNING_VER" =~ nightly\.([0-9]{4})([0-9]{2})([0-9]{2})\.([a-z0-9]{9})(-dirty)? ]]; then
         HASH_OLDER="${BASH_REMATCH[4]}"
@@ -81,25 +81,36 @@ if [ -n "$BUILD" ]; then
     # Append nightly timestamp to current version (strip any existing -nightly suffix first)
     RAW_VERSION=$(jq -r '.version' "src-tauri/tauri.conf.json")
     VERSION="${RAW_VERSION%%-nightly*}"
-    #NIGHTLY="${VERSION}-nightly.$(date -u +%Y%m%d).t$(date -u +%H%M)c"
-    NIGHTLY="${VERSION}-nightly.$(date -u +%Y%m%d).${HASH}${DIRTY}"
+    #NIGHTLY="${VERSION}-nightly.$(date '+%Y%m%d').t$(date '+%H%M')c"
+    NIGHTLY="${VERSION}-nightly.$(date '+%Y%m%d').${HASH}${DIRTY}"
     echo -e "${GREEN}Nightly version: ${NIGHTLY} (from ${RAW_VERSION})${OFF}"
 
+    # Snapshot the files we patch, before (orig) and after (patched), so we can
+    # tell post-build whether anything besides our own patch touched them
+    BACKUP_DIR="$(mktemp -d)" || { echo -e "  ${BOLD_RED}Unable to create backup dir${OFF}"; exit 1; }
+    mkdir -p "${BACKUP_DIR}/orig" "${BACKUP_DIR}/patched"
+    PATCHED_FILES=("src-tauri/tauri.conf.json" "src-tauri/Cargo.toml")
+    for f in "${PATCHED_FILES[@]}"; do
+        cp -p "$f" "${BACKUP_DIR}/orig/$(basename "$f")"
+    done
+
     # Patch tauri.conf.json: version + add nightly updater endpoint
-    python3 -c "
-    import json
-    c = json.load(open('src-tauri/tauri.conf.json'))
-    c['version'] = '${NIGHTLY}'
-    nightly_ep = 'https://github.com/sstraus/tuicommander/releases/download/nightly/latest.json'
-    ep = c['plugins']['updater']['endpoints']
-    if nightly_ep not in ep:
-        ep.insert(0, nightly_ep)
-    json.dump(c, open('src-tauri/tauri.conf.json','w'), indent=2)
-    print('Patched tauri.conf.json')
-    "
+    NIGHTLY="${NIGHTLY}" \
+    NIGHTLY_EP="https://github.com/sstraus/tuicommander/releases/download/nightly/latest.json" \
+    yq -i -o=json -P '
+        .version = strenv(NIGHTLY) |
+        .plugins.updater.endpoints |= (
+            select(contains([strenv(NIGHTLY_EP)])) // ([strenv(NIGHTLY_EP)] + .)
+        )
+    ' src-tauri/tauri.conf.json
+    echo "Patched tauri.conf.json"
 
     # Patch Cargo.toml version
     sed -I '' "s/^version = \"${VERSION}\"/version = \"${NIGHTLY}\"/" "src-tauri/Cargo.toml"
+
+    for f in "${PATCHED_FILES[@]}"; do
+        cp -p "$f" "${BACKUP_DIR}/patched/$(basename "$f")"
+    done
 
     export RUSTC_WRAPPER="sccache"
     export CMAKE_C_COMPILER_LAUNCHER="sccache"
@@ -108,18 +119,25 @@ if [ -n "$BUILD" ]; then
     # do a local signing of the app (and the sidecars)
     export APPLE_SIGNING_IDENTITY="${APPLE_SIGNING_IDENTITY:--}"
 
-    make build-dmg
+    # Note: we can't build the dmg while under a sandbox unless we use CI=true
+    # but CI=true also:
+    # sets frozen-lockfile=true
+    # Suppresses UI Progress Bars
+    # Skips AppleScript UI Styling
+    # Bypasses Prompts
+    # Treats Warnings as Errors
+    # Terminal Color Striping
+    # Reason: build_dmg.sh uses Finder applescript to pretty up the dmg which isn't allowed via the sandbox
+    make build
     if [ $? -ne 0 ]; then
         echo -e "  ${BOLD_RED}Build failed${OFF}"
         exit 1
     fi
+    (cd src-tauri && cargo clean)
 
     if [ -n "$HASH_OLDER" ] && [ -n "$HASH" ]; then
         # TODO: can we inject into the app???
         git log --pretty=format:'%C(auto)%h%Creset %Cred%cr%Creset %cn %Cgreen%s%Creset %d' "$HASH_OLDER" "$HASH" > "$APP_PATH/Contents/Resources/git.log"
-
-        # output log
-        git log --pretty=format:'%C(auto)%h%Creset %Cred%cr%Creset %cn %Cgreen%s%Creset %d' "$HASH_OLDER" "$HASH"
     fi
 
     # enable debug level logging in the app's Info.plist
@@ -129,6 +147,26 @@ if [ -n "$BUILD" ]; then
         "$APP_PATH/Contents/Info.plist"
 
     echo -e "${GREEN}Restoring version files${OFF}"
+
+    # Files we patched ourselves: if the build left them byte-identical to our
+    # patched snapshot, put the pre-patch original back. Anything else means
+    # the build changed them too, so leave them for review.
+    restore_if_unchanged() {
+        local FILE="$1" NAME
+        NAME="$(basename "$FILE")"
+        if cmp -s "$FILE" "${BACKUP_DIR}/patched/${NAME}"; then
+            cp -p "${BACKUP_DIR}/orig/${NAME}" "$FILE"
+        else
+            echo -e "  ${BOLD_RED}${FILE} changed during the build beyond the version patch, leaving it${OFF}"
+        fi
+    }
+
+    restore_if_unchanged "src-tauri/tauri.conf.json"
+    restore_if_unchanged "src-tauri/Cargo.toml"
+    rm -rf "$BACKUP_DIR"
+
+    # Cargo.lock isn't patched by us (cargo rewrites its version), so keep the
+    # textual check: restore only if every changed line is a version line
     diff_check() {
         local FILE="$1"
         git diff --quiet \
@@ -142,8 +180,6 @@ if [ -n "$BUILD" ]; then
     }
 
     diff_check "src-tauri/Cargo.lock"
-    diff_check "src-tauri/Cargo.toml"
-    diff_check "src-tauri/tauri.conf.json"
 fi
 
 if [ -n "$SIGN" ]; then
@@ -225,7 +261,8 @@ fi
 
 if [ -n "$UPDATE_PLUGINS" ]; then
     echo -e "${GREEN}Updating plugins${OFF}"
-    rsync -aPvF \
+    rsync -ahhF \
+        --info=flist,progress2,stats3 \
         --delete \
         plugins/build-cleaner \
         plugins/md-kanban \
@@ -246,11 +283,15 @@ if [ -n "$UPDATE_PLUGINS" ]; then
 fi
 
 if [ -n "$BUILD" ]; then
-    open "src-tauri/target/release/bundle/"
+    #open "src-tauri/target/release/bundle/"
 
     # rename the app itself for reference
     mv "$APP_PATH" "$BUILD_PATH/TUICommander_${NIGHTLY}.app"
     #mv "$DMG_PATH/TUICommander_${NIGHTLY}_aarch64.dmg" .
+    mv "$BUILD_PATH/TUICommander_${NIGHTLY}.app" "$HOME/Applications/"
+    rm -f "$HOME/Applications/TUICommander.app"
+    ln -s "$HOME/Applications/TUICommander_${NIGHTLY}.app" "$HOME/Applications/TUICommander.app"
+    # TODO: prune old versions
 
     if [ -n "$HASH_OLDER" ] && [ -n "$HASH" ]; then
         # TODO: can we inject into the app???

@@ -92,6 +92,7 @@ check_folder "$HOME/Desktop"
 # TODO: network access
 # ping??
 
+echo "Full Disk Access"
 # TODO: full disk support -- do we want this actually since we are running agents?
 # x-apple.systempreferences:com.apple.settings.PrivacySecurity.extension?Privacy_AllFiles
 check_folder "$HOME/Library/Safari"
