@@ -8,7 +8,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
-- Ghost pane tabs (a tab whose terminal/diff/markdown/editor entry is gone) can no longer wedge a split open or defeat Reset Panel Sizes; Reset now rebuilds the active Global Workspace layout, and switching workspace scope reconciles the active terminal.
+- A ghost terminal tab (its terminal entry is gone) no longer keeps a split pane open: the pane collapses when the terminal is removed, and closing a sibling tab ignores ghost terminal, diff, Markdown and editor tabs when deciding whether a pane is empty. A pane whose only tab is a ghost diff, Markdown or editor tab is still not swept until another tab in it closes. Reset Panel Sizes now also rebuilds the active Global Workspace layout (keeping the focused terminal), and switching workspace scope reconciles the active terminal without stealing selection from a docked non-terminal tab.
 
 - Correct Settings accent-action text, compact navigation, wrapped help badges, shortcut groups, and workspace path presentation; hide the desktop-only Local tools card in browser mode (#1945).
 

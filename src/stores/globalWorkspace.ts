@@ -97,6 +97,24 @@ function removeTerminalFromLayout(current: PaneLayoutState, termId: string): Pan
 	};
 }
 
+/**
+ * Point terminalsStore.activeId at the terminal a workspace layout shows, after
+ * the layout was pushed live. A docked NON-terminal active tab (markdown/diff/
+ * editor dragged into a workspace pane) owns the selection, so it is left alone:
+ * setActive() on a terminal would deactivate that pane (activatePaneExclusively).
+ * Otherwise the active tab if it is a promoted terminal, else the first member.
+ */
+function reconcileTerminalFocus(layout: PaneLayoutState | null, members: Set<string>): void {
+	const activeGroup = layout?.activeGroupId ? layout.groups[layout.activeGroupId] : undefined;
+	const activeTab = activeGroup?.activeTabId;
+	if (activeTab && !members.has(activeTab)) {
+		const entry = activeGroup?.tabs.find((t) => t.id === activeTab);
+		if (entry && entry.type !== "terminal") return;
+	}
+	const target = activeTab && members.has(activeTab) ? activeTab : [...members][0];
+	if (target) terminalsStore.setActive(target);
+}
+
 function createGlobalWorkspaceStore() {
 	const [isActive, setIsActive] = createSignal(false);
 	const [promotedVersion, setPromotedVersion] = createSignal(0);
@@ -193,11 +211,7 @@ function createGlobalWorkspaceStore() {
 				// shows no terminal until the user clicks a tab — e.g. after a repo
 				// round-trip, which reset activeId to a repo terminal. Mirrors
 				// handleBranchSelect, which setActive()s after restoring a layout.
-				const activeGroup = current.activeGroupId ? current.groups[current.activeGroupId] : undefined;
-				const activeTab = activeGroup?.activeTabId;
-				const members = workspace().promoted;
-				const target = activeTab && members.has(activeTab) ? activeTab : [...members][0];
-				if (target) terminalsStore.setActive(target);
+				reconcileTerminalFocus(current, workspace().promoted);
 			} else {
 				paneLayoutStore.reset();
 			}
@@ -315,6 +329,14 @@ function createGlobalWorkspaceStore() {
 			for (const id of ws.promoted) {
 				rebuilt = addTerminalToLayout(rebuilt, id);
 			}
+			// Keep the terminal the user already had focused when it is still a
+			// member: addTerminalToLayout leaves the LAST folded id active, which
+			// would otherwise move focus on every reset.
+			const focused = terminalsStore.state.activeId;
+			if (rebuilt?.activeGroupId && focused && ws.promoted.has(focused)) {
+				const g = rebuilt.groups[rebuilt.activeGroupId];
+				if (g) rebuilt.groups[rebuilt.activeGroupId] = { ...g, activeTabId: focused };
+			}
 			ws.layout = rebuilt;
 			syncToPaneStore();
 
@@ -399,11 +421,7 @@ function createGlobalWorkspaceStore() {
 			// inactive on purpose.
 			if (isActive()) {
 				const current = workspace().layout;
-				const activeGroup = current?.activeGroupId ? current.groups[current.activeGroupId] : undefined;
-				const activeTab = activeGroup?.activeTabId;
-				const members = workspace().promoted;
-				const target = activeTab && members.has(activeTab) ? activeTab : [...members][0];
-				if (target) terminalsStore.setActive(target);
+				reconcileTerminalFocus(current, workspace().promoted);
 			}
 		},
 
