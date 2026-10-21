@@ -79,3 +79,38 @@ fn unix_socket_path_check_is_exact_at_the_boundary_and_names_the_way_out() {
         tuic_ipc::named_alternate_socket_path("ipc-cli-regression", Path::new(&sandbox), 4242);
     assert!(tuic_ipc::check_unix_socket_path(&alternate).is_err());
 }
+
+// Catches: the length being measured in chars (or lossy UTF-8) instead of the
+// raw bytes sun_path holds, which would let a multi-byte or non-UTF-8 TMPDIR
+// slip past the check and fail at bind().
+#[cfg(unix)]
+#[test]
+fn unix_socket_path_check_counts_raw_bytes_including_non_utf8() {
+    use std::ffi::OsString;
+    use std::os::unix::ffi::OsStringExt;
+    // 52 two-byte chars = 104 bytes but only 52 chars.
+    let multibyte = format!("/{}", "é".repeat(51));
+    assert_eq!(multibyte.len(), 103);
+    assert!(tuic_ipc::check_unix_socket_path(Path::new(&multibyte)).is_ok());
+    let multibyte_over = format!("/{}", "é".repeat(52));
+    assert_eq!(multibyte_over.len(), 105);
+    assert!(tuic_ipc::check_unix_socket_path(Path::new(&multibyte_over)).is_err());
+    // 0xFF is invalid UTF-8; a lossy conversion would turn it into a 3-byte U+FFFD.
+    let mut raw = vec![b'/'];
+    raw.extend(std::iter::repeat_n(0xFFu8, 103));
+    let raw = OsString::from_vec(raw);
+    assert_eq!(raw.len(), 104);
+    assert!(tuic_ipc::check_unix_socket_path(Path::new(&raw)).is_err());
+    let mut ok = vec![b'/'];
+    ok.extend(std::iter::repeat_n(0xFFu8, 102));
+    assert!(tuic_ipc::check_unix_socket_path(Path::new(&OsString::from_vec(ok))).is_ok());
+}
+
+// Catches: a path with no file name (or a name longer than the whole budget)
+// panicking or underflowing the "longest TMPDIR" hint.
+#[test]
+fn unix_socket_path_check_hint_saturates_for_degenerate_paths() {
+    let huge = format!("/{}", "n".repeat(200));
+    let message = tuic_ipc::check_unix_socket_path(Path::new(&huge)).unwrap_err();
+    assert!(message.contains("at most 0 bytes"), "{message}");
+}
