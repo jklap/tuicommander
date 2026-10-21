@@ -1409,10 +1409,7 @@ impl MonitoringRefs {
         for (path, is_dir) in entries {
             if is_dir {
                 self.loose_files(&path, files)?;
-            } else if !path
-                .extension()
-                .is_some_and(|extension| extension == "lock")
-            {
+            } else if path.extension().is_none_or(|extension| extension != "lock") {
                 files.push(path);
             }
         }
@@ -1439,9 +1436,7 @@ impl MonitoringRefs {
                     .iter()
                     .filter(|path| {
                         path.starts_with(&refs)
-                            && !path
-                                .extension()
-                                .is_some_and(|extension| extension == "lock")
+                            && path.extension().is_none_or(|extension| extension != "lock")
                     })
                     .cloned()
                     .collect();
@@ -1579,7 +1574,7 @@ pub fn monitoring_ref_keys(
         .and_then(|name| name.strip_prefix("refs/remotes/origin/"));
     let mut defaults = vec!["main", "master"];
     defaults.extend(origin_default);
-    defaults.sort();
+    defaults.sort_unstable();
     defaults.dedup();
     for branch in defaults {
         let name = format!("refs/heads/{branch}");
