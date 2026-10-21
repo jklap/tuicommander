@@ -1133,3 +1133,21 @@ mode. A single filtered command is a valid menu. A previously published menu
 gets one empty `SlashMenu` event when the menu disappears or slash mode ends,
 so the shared session state cannot retain an older list. Empty-menu retraction
 is not emitted repeatedly during busy output. No mobile-only filter is used.
+
+### Overdue background wake evidence
+
+The process snapshot refresher checks queued BG DONE user-command entries once
+per second on its blocking worker. After 60 seconds in the queue, each entry
+claims one diagnostic report. The report uses source `bg-wake` in the normal
+bounded application log ring. It snapshots all injection gates, the cached
+screen activity, background-work/probe state, and a fresh OS process inventory.
+No extra enumeration occurs when no BG DONE entry is overdue. An overdue batch
+shares one fresh enumeration. Relevant foreground and detached-runner trees
+are limited to 128 rows per session, with a total and truncation flag. Process
+rows contain only PID, parent PID, executable basename (64 characters), age and
+a matching-runner flag. Queue text, argv and environment are not logged.
+
+This observer is independent of busy/idle edges. It does not change queue order,
+claims, retry rules or process reconciliation. A `queued` CLI receipt remains
+an acceptance receipt even after delivery. Missing inventory is reported as
+unavailable, never as proof that work stopped.

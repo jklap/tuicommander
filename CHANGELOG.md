@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+- Capture held injection gates and a bounded fresh process tree when a BG DONE wake remains queued for 60 seconds, without changing delivery policy (#2100-c249).
+
 - Align the native macOS Rust and CMake deployment targets with the bundle minimum of 12.0, overriding older shell defaults and removing Make's separate target (#2106-e647).
 
 - Keep macOS App Nap off for the whole desktop process while still allowing idle system sleep. A controlled hidden-window replay under CPU contention reduced the maximum WebView callback gap from 36.753 s to 2.561 s with the activity alone; this does not attribute the historical backend outage to App Nap (#1638-c94c).

@@ -198,6 +198,17 @@ has drained. If every queue receipt is lost and mail also fails, the wake file
 reports `uncertain`, not a proven delivery failure; inspect backend state before
 retrying manually. `uncertain` also prevents automatic child closure.
 
+If a BG DONE entry remains in the backend queue for 60 seconds, the backend
+records one warning under source `bg-wake`. Read `/logs?source=bg-wake` on the
+owning instance. Its JSON data reports the composer, question, uncertainty and
+foreground gates, process-probe generations, and a fresh process tree for the
+foreground group and matching detached runner. It records at most 128 process
+rows, marks truncation, and distinguishes an unavailable inventory from an empty
+tree. It excludes argv, prompt text and environment values. This warning uses
+the normal bounded log ring, not durable delivery storage; collect it before
+ring overflow or restart. It does not retry a possibly submitted message or
+clear `background_work`.
+
 `TUIC_SESSION` is required; without it, `tuic bg` exits 2 before starting a
 command. The launcher prints the wake-status path and removes stale `.exit`
 and `.wake` files before detaching. If no `BG DONE` arrives, inspect `.exit`

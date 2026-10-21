@@ -1,3 +1,7 @@
+## Queued BG DONE diagnostics (2100-c249) — Rust restart required
+
+- [ ] After Boss manually rebuilds and restarts the backend, leave a BG DONE wake queued behind a retained draft for more than 60 seconds. Check `/logs?source=bg-wake` on that instance for one warning with `partial_composer=true` and the bounded process tree. Clear the draft and check that the existing delivery path submits the wake. No daily app restart was performed by this peer.
+
 ## App Nap opt-out (1638-c94c) — Rust restart required
 
 - [ ] After Boss manually restarts a rebuilt backend, check the log line `App Nap disabled for the process lifetime` (source `app-nap`). Cover the TUIC window with a full-screen app while no agent is busy, wait two minutes, and check that `/logs` contains no `Sleep-wake detected` or `Frontend unresponsive` line for that period and that remote clients stay live. This Rust change does not hot-reload into the daily app.
