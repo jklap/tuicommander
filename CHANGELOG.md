@@ -6,6 +6,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+- Mark verified abandoned shells with their idle age on desktop and mobile. Add an optional machine-owned idle-hours close setting, disabled by default (#2111-131f).
+
+### Fixed
+- Route MCP remote session close to the owning daemon, with self-close protection and retained final output (#2111-131f).
+
+
 - Keep the mobile CLI green answer bar in its own gutter so column-zero ego text stays clear without adding a second Claude text margin (#2110-734c).
 
 - Distinguish TUIC MCP protocol names from client-callable Claude Code and Codex tool names, including native Agent versus TUIC agent (#2108-465b).

@@ -629,12 +629,22 @@ async fn dispatch_mcp_tool_call_with_context(
             if action != "list"
                 && let Some(remote) = super::remote_mcp_sessions::resolve(state, args)
             {
-                if matches!(action, "submit" | "force_retry") && !addr.ip().is_loopback() {
+                if matches!(action, "submit" | "force_retry" | "close") && !addr.ip().is_loopback()
+                {
                     return serde_json::json!({"error":"This session action is restricted to localhost connections"});
                 }
                 return match remote {
                     Ok((host, id)) => {
-                        super::remote_mcp_sessions::call(state, &host, &id, args).await
+                        let own_pty = mcp_session_id
+                            .and_then(|sid| state.mcp.to_session.get(sid).map(|v| v.clone()));
+                        super::remote_mcp_sessions::call_with_caller(
+                            state,
+                            &host,
+                            &id,
+                            args,
+                            own_pty.as_deref(),
+                        )
+                        .await
                     }
                     Err(error) => error,
                 };

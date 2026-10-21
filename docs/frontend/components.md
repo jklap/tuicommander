@@ -887,3 +887,5 @@ retain the existing TextCorrector workflow; export does not change settings.
 Desktop `TerminalChatView` renders active native questions from the existing session lifecycle store below the shared transcript. `ChoicePromptOverlay` has an embedded layout; desktop and mobile share `sendNativeChoice` for agent-specific PTY keys. Compose drafts and ACP interaction state are not involved.
 
 Mobile offers the **Chat** tab only when the host has a configured ego executable, using the same availability predicate as desktop. Host settings changes update the tab without reloading. Removing ego configuration returns an open Chat view to **Sessions**; unavailable saved Chat links also stay on **Sessions**.
+
+Abandoned-shell markers in desktop sidebar session rows and mobile SessionCard render the same backend `state.abandoned_since_ms` timestamp. A missing field retracts the marker; the frontend does not infer abandonment from silence.

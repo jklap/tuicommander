@@ -768,6 +768,14 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
 	{
 		tab: "agents",
 		section: "Idle agent hibernation",
+		label: "Close abandoned shells after (hours)",
+		labelKey: "settings.agents.abandonedHours",
+		expert: true,
+		configKey: "agents.abandoned_shell_hours",
+	},
+	{
+		tab: "agents",
+		section: "Idle agent hibernation",
 		label: "Hibernate idle agents after",
 		labelKey: "settings.agents.hibernateMinutes",
 		expert: true,
