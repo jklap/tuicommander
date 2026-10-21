@@ -2623,6 +2623,62 @@ mod tests {
         wait_for(None);
     }
 
+    // Catches: replacing a date directory leaves discovery attached to its deleted inode.
+    #[test]
+    fn codex_replaced_day_directory_keeps_observing_new_rollouts() {
+        let root = TempDir::new().unwrap();
+        let sessions = root.path().join("sessions");
+        let day = codex_recent_day_dirs_for_test(&sessions);
+        fs::create_dir_all(&day).unwrap();
+        let cwd = root.path().to_str().unwrap();
+        let first = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb";
+        let second = "cccccccc-cccc-cccc-cccc-cccccccccccc";
+        let third = "dddddddd-dddd-dddd-dddd-dddddddddddd";
+        make_codex_rollout(&day, &format!("rollout-test-{first}.jsonl"), cwd);
+        assert_eq!(
+            discover_codex_session(cwd, &[], Some(cwd)).as_deref(),
+            Some(first)
+        );
+        let index = CODEX_INDEXES.get(&sessions).unwrap();
+        assert!(
+            index.watcher.lock().unwrap().is_some(),
+            "real watcher must be available"
+        );
+        // No discovery call between removal and recreation: the date paths are equal.
+        fs::remove_dir_all(&day).unwrap();
+        fs::create_dir_all(&day).unwrap();
+        make_codex_rollout(&day, &format!("rollout-test-{second}.jsonl"), cwd);
+        let wait_for = |expected: &str| {
+            let deadline = std::time::Instant::now() + Duration::from_secs(30);
+            loop {
+                let actual = discover_codex_session(cwd, &[], Some(cwd));
+                if actual.as_deref() == Some(expected) {
+                    break;
+                }
+                assert!(
+                    std::time::Instant::now() < deadline,
+                    "replacement day watcher did not discover {expected}; got {actual:?}"
+                );
+                std::thread::sleep(Duration::from_millis(20));
+            }
+        };
+        wait_for(second);
+        // Drain the directory-creation burst before changing only a child file.
+        std::thread::sleep(Duration::from_millis(200));
+        assert_eq!(
+            discover_codex_session(cwd, &[], Some(cwd)).as_deref(),
+            Some(second)
+        );
+        let path = make_codex_rollout(&day, &format!("rollout-test-{third}.jsonl"), cwd);
+        fs::File::options()
+            .write(true)
+            .open(path)
+            .unwrap()
+            .set_modified(SystemTime::now() + Duration::from_secs(1))
+            .unwrap();
+        wait_for(third);
+    }
+
     // Catches an unchanged in-memory candidate bypassing the five-minute age bound.
     #[test]
     fn codex_cached_candidate_still_expires_without_file_events() {
