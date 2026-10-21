@@ -13,7 +13,8 @@ const { getDiff, getInfo, listBaseRefOptions } = vi.hoisted(() => ({
 vi.mock("../../hooks/useRepository", () => ({
 	useRepository: () => ({ getDiff, getInfo, listBaseRefOptions }),
 }));
-vi.mock("../../components/shared/DiffFileList", () => ({
+vi.mock("../../components/shared/DiffFileList", async (importOriginal) => ({
+	...(await importOriginal<typeof import("../../components/shared/DiffFileList")>()),
 	DiffFileList: (props: { header: unknown; files: { path: string }[] }) => (
 		<div>
 			{props.header as never}
@@ -59,7 +60,7 @@ it("keeps showing the selected commit after a newer commit arrives", async () =>
 	fireEvent.click(view.getByRole("tab", { name: "Commit / range" }));
 	await waitFor(() => expect(view.getByText("subject c1")).toBeInTheDocument());
 	fireEvent.click(view.getByText("subject c1"));
-	await waitFor(() => expect(getDiff).toHaveBeenLastCalledWith(repoPath, entry("c1").hash));
+	await waitFor(() => expect(getDiff).toHaveBeenLastCalledWith(repoPath, entry("c1").hash, expect.anything()));
 
 	log = [entry("c9"), ...log];
 	getDiff.mockClear();
