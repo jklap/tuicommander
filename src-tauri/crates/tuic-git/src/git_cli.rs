@@ -934,7 +934,8 @@ mod tests {
     #[test]
     fn merge_ff_override_only_fires_for_ff_only() {
         let (_dir, path) = setup_test_repo();
-        assert_eq!(merge_ff_override(&path, Some("main")), None, "unset");
+        // Each case sets merge.ff repo-locally, which outranks the machine's
+        // global config (a developer's own merge.ff=only would otherwise leak in).
         for (value, want) in [
             ("only", Some("--ff")),
             ("ONLY", Some("--ff")),
@@ -949,6 +950,9 @@ mod tests {
     #[test]
     fn merge_ff_override_honours_branch_merge_options() {
         let (_dir, path) = setup_test_repo();
+        // Pin a neutral repo-local merge.ff so the "no mergeOptions" cases do
+        // not pick up a developer's global merge.ff=only.
+        git_in(&path, &["config", "merge.ff", "true"]);
         git_in(&path, &["config", "branch.dev.mergeOptions", "--ff-only"]);
         assert_eq!(merge_ff_override(&path, Some("dev")), Some("--ff"));
         assert_eq!(merge_ff_override(&path, Some("other")), None);
