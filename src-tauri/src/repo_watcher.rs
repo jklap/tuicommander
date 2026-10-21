@@ -884,7 +884,7 @@ pub(crate) fn start_watching(repo_path: &str, state: &Arc<AppState>) -> Result<(
                 path == &git_dir_for_cb.join("packed-refs")
                     || path == &git_dir_for_cb.join("config")
                     || (path.starts_with(git_dir_for_cb.join("refs"))
-                        && !path.extension().is_some_and(|extension| extension == "lock"))
+                        && path.extension().is_none_or(|extension| extension != "lock"))
                     || (path.starts_with(git_dir_for_cb.join("worktrees"))
                         && path.file_name().is_some_and(|name| name == "HEAD"))
             }) {

@@ -24,7 +24,7 @@ The existing repo watcher owns checkout/admin-path mapping and emits **invalidat
 | Checkout index, HEAD, operation sentinels, own local branch target | Owning checkout; map linked admin paths to their checkout |
 | Common refs to another branch / remote / packed-refs | Refresh integration proofs, not dirty snapshots; invalidate checkouts whose own tip changed |
 | Shared config, include/config.worktree, attributes, global excludes/ignore sources | Affected checkout, or all owned checkouts when scope cannot be proved; retain cheap source-signature validation for sources outside watched roots |
-| Inventory change, unknown/unmapped relevant path, pathless `need_rescan`, watcher error, partial registration, root/day-equivalent directory replacement | Invalidate affected group (all if unknown); disable reuse and use existing fresh path until complete watches are re-armed |
+| Unknown working-tree path outside mapped roots, pathless `need_rescan`, watcher error, partial registration, root/day-equivalent directory replacement | Invalidate affected group (all if unknown); disable reuse and use existing fresh path until complete watches are re-armed |
 
 Read-only access and unrelated object/log writes do not invalidate dirty state. Git commands that alter status explicitly invalidate their checkout as well as relying on filesystem events. An empty commit can invalidate its own checkout, never every sibling.
 
@@ -37,3 +37,5 @@ RED names: sibling commit rescans unchanged checkout status; external edit/renam
 ## Platform coverage decision
 
 Snapshot reuse is disabled in Linux production. Its pruned directory watches cannot prove coverage of tracked paths inside ignored/excluded directories. This change does not widen those watches. macOS/Windows require a canonical main checkout, a successful recursive main watch and successful recursive registration of each linked root. Watch loss revokes authority until restart; refreshing the inventory does not re-arm existing untrusted roots. Tests may use fully recursive watches over their small Linux fixtures without enabling the production cache there.
+
+Normal new linked-admin inventory paths do not revoke existing watches. A new checkout cannot affect existing siblings' dirty snapshots, and its first read is fresh until inventory sync arms its own watch. Do not infer watch loss merely because the bounded cache evicted its main entry: while main is present, its admin prefix masks that over-conservative predicate, so the regression must also exercise main-entry eviction.

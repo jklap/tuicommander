@@ -127,11 +127,9 @@ impl StatusCache {
                     && !entries
                         .iter()
                         .any(|(root, _)| path.starts_with(root.as_path())));
-            let unmapped_admin = path
-                .strip_prefix(common.join("worktrees"))
-                .ok()
-                .is_some_and(|_| !entries.iter().any(|(_, e)| path.starts_with(&e.admin)));
-            if lost || unmapped_admin {
+            // New admin directories belong to inventory growth, not watch loss.
+            // Their checkout has no snapshot until sync arms its recursive watch.
+            if lost {
                 self.stop(base);
                 return false;
             }
