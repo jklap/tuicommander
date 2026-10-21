@@ -1,6 +1,6 @@
-## Detached command peer isolation (2100-c249) — CLI update required
+## Detached command peer isolation (2100-c249) — CLI update and backend restart required
 
-- [ ] After installing the rebuilt `tuic` CLI, verify a detached reviewer cannot set the foreground composer to awaiting through its progress report, and its BG DONE still arrives. This change is in the CLI only; it does not require a backend restart to load. The separate queued-wake diagnostics below do require a backend restart.
+- [ ] After installing the rebuilt `tuic` CLI, verify a detached reviewer cannot set the foreground composer to awaiting through its progress report, and its BG DONE still arrives. Install both the rebuilt CLI and backend, then manually restart the backend: the ancestry boundary cannot load through frontend hot reload. No daily app restart was performed by this peer.
 
 ## Queued BG DONE diagnostics (2100-c249) — Rust restart required
 

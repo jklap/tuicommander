@@ -189,7 +189,8 @@ tuic bg "$HOME/Gits/.tmp/build.log" -- make check
 ```
 
 The detached command does not inherit `TUIC_SESSION` or `TUIC_PARENT`. It is
-not the foreground peer: its progress reports and agent hooks must not change
+not the foreground peer: `TUIC_BG_COMMAND=1` marks the command tree as an
+ancestry boundary, including when an agent scrubs its bridge environment. Its progress reports and agent hooks must not change
 the foreground composer state. The runner retains the original caller identity
 for completion queueing and mail. Socket, app-instance and other environment
 settings remain inherited. A command that needs a peer identity must establish

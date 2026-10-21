@@ -218,6 +218,7 @@ fn bg_command_drops_parent_peer_identity_but_runner_still_wakes_caller_2100() {
             .lines()
             .any(|line| line == format!("TUIC_SOCKET={}", socket.display()))
     );
+    assert!(contents.lines().any(|line| line == "TUIC_BG_COMMAND=1"));
     for key in ["TUIC_SESSION=", "TUIC_PARENT="] {
         assert!(
             !contents.lines().any(|line| line.starts_with(key)),
