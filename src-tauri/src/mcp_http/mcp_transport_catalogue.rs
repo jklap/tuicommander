@@ -229,6 +229,12 @@ pub(super) fn render_mcp_instructions(
         out.push('\n');
     }
 
+    // Tool identity belongs to the connecting client's namespace, not the
+    // case-sensitive protocol name. In particular native Agent is not ours.
+    if ctx.native_tools.iter().any(|name| name == "agent") {
+        out.push_str("**Tool identity:** Names below are TUIC MCP protocol names, not the native `Agent` tool. Use the callable name exposed by your client: Claude Code `mcp__tuicommander__agent`; Codex `mcp__tuicommander.agent` (namespace + member). The server alias may differ from `tuicommander`; use your actual tool list, never guess a name or change its case. Under lazy discovery, bare `tool_name=agent` is a target inside TUIC's `call_tool`, not a direct client tool call. The same qualification rule applies to every tool below.\n\n");
+    }
+
     // ── Capability map ───────────────────────────────────────────────
     out.push_str(&render_capability_map(
         ctx,

@@ -2,6 +2,10 @@
 
 The sidebar is your primary navigation for repositories, branches, and git operations.
 
+## Session identifiers
+
+Right-click a session row under any main or linked branch to open its menu. **Copy session ID** copies the PTY session ID. **Copy process ID** copies the live PTY child PID, not an agent tool subprocess. A toast confirms each copy. The process action is disabled when no live process is available. Left-click still selects the terminal.
+
 ## Toggle & Resize
 
 - **Toggle visibility:** `Cmd+[`

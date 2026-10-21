@@ -5,6 +5,8 @@ import { githubStore } from "../../stores/github";
 import type { RepositoryState, WorkspaceState } from "../../stores/repositories";
 import { repositoriesStore } from "../../stores/repositories";
 import { type TerminalState, terminalsStore } from "../../stores/terminals";
+import { toastsStore } from "../../stores/toasts";
+import { getSessionConnection } from "../../transportRuntime";
 import { writeClipboard } from "../../utils/clipboard";
 import { _resetMergedActivityAccum, activePrStatus } from "../../utils/mergedPrGrace";
 import { effectiveMergeMethod } from "../../utils/prMerge";
@@ -409,6 +411,88 @@ const CrossRepoChildren: Component<{ parent: TerminalState; repoPath: string }> 
 
 /** Collapsible activity card for the terminals attached to a branch. */
 const BranchTabList: Component<{ terminalIds: string[]; repoPath: string }> = (props) => {
+	const sessionMenu = createContextMenu();
+	const [menuTerminalId, setMenuTerminalId] = createSignal<string | null>(null);
+	const [childPid, setChildPid] = createSignal<number | null>(null);
+	const menuTerminal = () => terminalsStore.get(menuTerminalId() ?? "");
+	const liveSessionId = () => {
+		const term = menuTerminal();
+		return term && term.shellState !== "exited" && !term.suspended ? term.sessionId : null;
+	};
+	const readChildPid = async (sessionId: string) => {
+		const rows =
+			await invoke<Array<{ session_id: string; child_pid?: number; connection_id?: string }>>("list_active_sessions");
+		return (
+			rows.find((row) => row.session_id === sessionId && row.connection_id === getSessionConnection(sessionId))
+				?.child_pid ?? null
+		);
+	};
+	createEffect(() => {
+		setChildPid(null);
+		if (!sessionMenu.visible()) return;
+		const sessionId = liveSessionId();
+		if (!sessionId) return;
+		let cancelled = false;
+		onCleanup(() => {
+			cancelled = true;
+		});
+		void readChildPid(sessionId)
+			.then((pid) => {
+				if (!cancelled) setChildPid(pid);
+			})
+			.catch((error) => appLogger.warn("sidebar", "Could not read session process ID", error));
+	});
+	const copyId = async (process: boolean) => {
+		const sessionId = menuTerminal()?.sessionId;
+		if (!sessionId) return;
+		try {
+			const value = process ? (liveSessionId() === sessionId ? await readChildPid(sessionId) : null) : sessionId;
+			if (value == null) throw new Error(t("sidebar.noLiveProcess", "No live process"));
+			await writeClipboard(String(value));
+			toastsStore.add(
+				process ? t("sidebar.processIdCopied", "Process ID copied") : t("sidebar.sessionIdCopied", "Session ID copied"),
+				String(value),
+				"info",
+				false,
+				undefined,
+				undefined,
+				undefined,
+				undefined,
+				false,
+			);
+		} catch (error) {
+			toastsStore.add(
+				process
+					? t("sidebar.copyProcessIdFailed", "Could not copy process ID")
+					: t("sidebar.copySessionIdFailed", "Could not copy session ID"),
+				String(error),
+				"error",
+				false,
+				undefined,
+				undefined,
+				undefined,
+				undefined,
+				false,
+			);
+		}
+	};
+	const sessionMenuItems = (): ContextMenuItem[] => [
+		{
+			label: t("sidebar.copySessionId", "Copy session ID"),
+			disabled: !menuTerminal()?.sessionId,
+			action: () => {
+				void copyId(false);
+			},
+		},
+		{
+			label: t("sidebar.copyProcessId", "Copy process ID"),
+			disabled: !liveSessionId() || childPid() == null,
+			title: !liveSessionId() || childPid() == null ? t("sidebar.noLiveProcess", "No live process") : undefined,
+			action: () => {
+				void copyId(true);
+			},
+		},
+	];
 	const density = useSidebarDensity();
 	const rich = () => density() === "rich";
 	// Only rich ticks; compact reads the age once per render, as it always did.
@@ -526,6 +610,11 @@ const BranchTabList: Component<{ terminalIds: string[]; repoPath: string }> = (p
 								nested && s.branchTabNested,
 							)}
 							onClick={() => navigateToTerminal(id)}
+							onContextMenu={(event) => {
+								event.stopPropagation();
+								setMenuTerminalId(id);
+								sessionMenu.open(event);
+							}}
 							aria-label={accessibleLabel()}
 							data-tooltip={[
 								rich() ? accessibleLabel() : `${t().name} · ${agentTooltip(t())}`,
@@ -590,6 +679,13 @@ const BranchTabList: Component<{ terminalIds: string[]; repoPath: string }> = (p
 	};
 	return (
 		<div class={s.branchTabList} role="group" aria-label="Terminal tabs">
+			<ContextMenu
+				items={sessionMenuItems()}
+				x={sessionMenu.position().x}
+				y={sessionMenu.position().y}
+				visible={sessionMenu.visible()}
+				onClose={sessionMenu.close}
+			/>
 			<For each={topLevel()}>{(id) => renderTab(id, false)}</For>
 			<Show when={idleIds().length > 0}>
 				<button

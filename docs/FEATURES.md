@@ -391,6 +391,8 @@ A terminal tab can be suspended from its context menu (**Suspend Tab**) or with 
 
 ## 2. Sidebar
 
+- Right-click a session row to copy its PTY session ID or live PTY child PID, with clipboard confirmation and a disabled action when no process is available.
+
 Automatic repository refreshes start at least five seconds apart per repository. Event bursts retain one trailing refresh; badges can lag by five seconds plus backend read time. Explicit repository additions, branch checkouts and merge cleanup refresh the affected repository immediately, while still waiting for any active refresh to finish.
 
 ### 2.1 Repository List

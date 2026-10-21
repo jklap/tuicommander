@@ -2612,6 +2612,95 @@ describe("Sidebar", () => {
 			settingsStore.setTabTreeEnabled(true);
 		});
 
+		// Catches: right-click falling through to WebView chrome or using the active tab's IDs.
+		it("sidebar_session_row_context_menu_copies_ids", async () => {
+			mockTerminalsGet.mockImplementation((id) => ({
+				id,
+				name: id === "t1" ? "Agent" : "Shell",
+				sessionId: `pty-${id}`,
+				agentType: id === "t1" ? "ego" : null,
+				shellState: "idle",
+				unseen: false,
+			}));
+			mockInvoke.mockImplementation(async (command: string) =>
+				command === "list_active_sessions"
+					? [
+							{ session_id: "pty-t1", child_pid: 731 },
+							{ session_id: "pty-t2", child_pid: 947 },
+						]
+					: undefined,
+			);
+			setRepos({
+				"/repo1": makeRepo({
+					workspaces: {
+						main: {
+							workspaceId: "main",
+							branchName: "main",
+							isMain: true,
+							worktreePath: null,
+							terminals: ["t1"],
+							additions: 0,
+							deletions: 0,
+						},
+						feature: {
+							workspaceId: "feature",
+							branchName: "feature",
+							isMain: false,
+							worktreePath: "/wt/feature",
+							terminals: ["t2"],
+							additions: 0,
+							deletions: 0,
+						},
+					},
+				}),
+			});
+			const view = render(() => <Sidebar {...defaultProps()} />);
+			for (const [index, sessionId, pid] of [
+				[0, "pty-t1", "731"],
+				[1, "pty-t2", "947"],
+			] as const) {
+				const row = view.container.querySelectorAll(".branchTabItem")[index];
+				expect(fireEvent.contextMenu(row, { clientX: 100, clientY: 120 })).toBe(false);
+				await Promise.resolve();
+				await Promise.resolve();
+				fireEvent.click(view.getByText("Copy session ID"));
+				await Promise.resolve();
+				expect(mockInvoke).toHaveBeenCalledWith("write_clipboard_text", { text: sessionId });
+				fireEvent.contextMenu(row);
+				await Promise.resolve();
+				await Promise.resolve();
+				fireEvent.click(view.getByText("Copy process ID"));
+				for (let n = 0; n < 5; n++) await Promise.resolve();
+				expect(mockInvoke).toHaveBeenCalledWith("write_clipboard_text", { text: pid });
+			}
+			expect(mockNavigateToTerminal).not.toHaveBeenCalled();
+			mockInvoke.mockResolvedValue(undefined);
+		});
+
+		// Catches: retaining a previous live PID after opening an exited session's menu.
+		it("sidebar_session_row_context_menu_disables_missing_process", async () => {
+			mockTerminalsGet.mockReturnValue({ id: "t1", name: "Ended", sessionId: "ended", shellState: "exited" });
+			setRepos({
+				"/repo1": makeRepo({
+					workspaces: {
+						main: {
+							workspaceId: "main",
+							branchName: "main",
+							isMain: true,
+							worktreePath: null,
+							terminals: ["t1"],
+							additions: 0,
+							deletions: 0,
+						},
+					},
+				}),
+			});
+			const view = render(() => <Sidebar {...defaultProps()} />);
+			fireEvent.contextMenu(view.container.querySelector(".branchTabItem")!);
+			expect(view.getByText("Copy process ID").closest("button")).toBeDisabled();
+			expect(view.getByText("Copy process ID").closest("button")).toHaveAttribute("title", "No live process");
+		});
+
 		/** Find the .branchItem row whose name matches. */
 		function branchRow(container: HTMLElement, name: string): HTMLElement {
 			const label = Array.from(container.querySelectorAll(".branchName")).find((el) => el.textContent === name);

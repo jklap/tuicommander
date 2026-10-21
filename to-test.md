@@ -2757,3 +2757,7 @@ Needs an iPhone (iOS 16.4+, 18.4+ preferred), the desktop TUICommander running a
 - [ ] After Boss rebuilds/restarts the Rust backend, ask ego for a native selector immediately after a TUIC connection/intent or successful tool receipt. Desktop and mobile must show only the native question title, with the same choices (#2088-98ea). The running app does not hot-reload this parser change; do not restart it during agent work.
 
 - [ ] After the next normal Rust rebuild, check a narrow Claude AskUserQuestion: previous/next/select controls replace generic Yes/No, and widening restores all native choices (#2093-0be6).
+
+- [ ] #2107-bbda: After the next Rust rebuild/restart, right-click shell and agent rows on main and linked branches; confirm exact session/PID clipboard values and copy toasts, and disabled PID for a suspended tab. The new child_pid session metadata does not hot-reload.
+
+- [ ] #2108-465b: After rebuilding/restarting the Rust backend, reconnect Claude Code and Codex and confirm served instructions distinguish the TUIC agent tool from native Agent. Client qualification is recorded in tool-names-2108.json.

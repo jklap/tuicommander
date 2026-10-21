@@ -57,6 +57,8 @@ export interface ChoiceOption {
 
 /** Session info returned by GET /sessions (matches Rust SessionInfo) */
 export interface SessionInfo {
+	/** Live PTY child PID; omitted when unavailable or exited. */
+	child_pid?: number;
 	session_id: string;
 	/** A completion this phone has not opened yet; derived from agent_state. */
 	unseen?: boolean;
