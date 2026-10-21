@@ -341,7 +341,7 @@ input-listener cleanup. These controllers do not use reactive state.
 
 ### Sidebar (`Sidebar/`)
 
-Session rows use the shared ContextMenu and writeClipboard utility to copy their PTY session ID or child PID. The PID comes from an on-demand `list_active_sessions` snapshot, shared with `GET /sessions`; it is checked again before copying. An unavailable or exited process disables the action. Both desktop and mobile copy confirmation uses the toast store.
+Session rows use the shared ContextMenu and writeClipboard utility to copy their PTY session ID, child PID, or alias. PID and alias come from the owning row of an on-demand `list_active_sessions` snapshot, shared with `GET /sessions`; they are checked again before copying. Unknown PID and absent alias entries are hidden, including exited or suspended sessions. Both desktop and mobile copy confirmation uses the toast store.
 
 Repository tree with branch management. Touch branch rows reveal their existing
 actions in a full-height tray after a horizontal left swipe. A Sidebar-owned

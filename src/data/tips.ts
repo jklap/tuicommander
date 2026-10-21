@@ -12,12 +12,13 @@ export const TIPS: Tip[] = [
 	{
 		feature: "Abandoned shells",
 		description:
-			"Plain shells with no running processes are marked abandoned after one idle hour. Settings → Agents (Expert) can close them after a chosen number of hours; automatic closure is off by default.",
+			"Plain shells with no running processes are marked abandoned after one idle hour. Settings → Agents → Idle agent hibernation has an expert setting to close them after a chosen number of hours; automatic closure is off by default.",
 		shortcut: null,
 	},
 	{
 		feature: "Session identifiers",
-		description: "Right-click a sidebar session row to copy its PTY session ID or live child process ID.",
+		description:
+			"Right-click a sidebar session row to copy its PTY session ID, live child process ID, or MCP alias. Hover an entry to see its value.",
 		shortcut: null,
 	},
 	{

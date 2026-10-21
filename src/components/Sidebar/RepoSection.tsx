@@ -413,22 +413,25 @@ const CrossRepoChildren: Component<{ parent: TerminalState; repoPath: string }> 
 const BranchTabList: Component<{ terminalIds: string[]; repoPath: string }> = (props) => {
 	const sessionMenu = createContextMenu();
 	const [menuTerminalId, setMenuTerminalId] = createSignal<string | null>(null);
-	const [childPid, setChildPid] = createSignal<number | null>(null);
+	type SessionIdentity = {
+		session_id: string;
+		child_pid?: number | null;
+		alias?: string | null;
+		connection_id?: string;
+	};
+	const [identity, setIdentity] = createSignal<SessionIdentity | null>(null);
 	const menuTerminal = () => terminalsStore.get(menuTerminalId() ?? "");
 	const liveSessionId = () => {
 		const term = menuTerminal();
 		return term && term.shellState !== "exited" && !term.suspended ? term.sessionId : null;
 	};
-	const readChildPid = async (sessionId: string) => {
-		const rows =
-			await invoke<Array<{ session_id: string; child_pid?: number; connection_id?: string }>>("list_active_sessions");
-		return (
-			rows.find((row) => row.session_id === sessionId && row.connection_id === getSessionConnection(sessionId))
-				?.child_pid ?? null
-		);
+	const readIdentity = async (sessionId: string) => {
+		const connectionId = getSessionConnection(sessionId);
+		const rows = await invoke<SessionIdentity[]>("list_active_sessions");
+		return rows.find((row) => row.session_id === sessionId && row.connection_id === connectionId) ?? null;
 	};
 	createEffect(() => {
-		setChildPid(null);
+		setIdentity(null);
 		if (!sessionMenu.visible()) return;
 		const sessionId = liveSessionId();
 		if (!sessionId) return;
@@ -436,21 +439,27 @@ const BranchTabList: Component<{ terminalIds: string[]; repoPath: string }> = (p
 		onCleanup(() => {
 			cancelled = true;
 		});
-		void readChildPid(sessionId)
-			.then((pid) => {
-				if (!cancelled) setChildPid(pid);
+		void readIdentity(sessionId)
+			.then((row) => {
+				if (!cancelled) setIdentity(row);
 			})
-			.catch((error) => appLogger.warn("app", "Could not read session process ID", error));
+			.catch((error) => appLogger.warn("app", "Could not read session identifiers", error));
 	});
-	const copyId = async (process: boolean) => {
+	const copyId = async (kind: "session" | "process" | "alias") => {
 		const sessionId = menuTerminal()?.sessionId;
 		if (!sessionId) return;
 		try {
-			const value = process ? (liveSessionId() === sessionId ? await readChildPid(sessionId) : null) : sessionId;
-			if (value == null) throw new Error(t("sidebar.noLiveProcess", "No live process"));
+			const row = kind !== "session" && liveSessionId() === sessionId ? await readIdentity(sessionId) : null;
+			const value = kind === "session" ? sessionId : kind === "process" ? row?.child_pid : row?.alias;
+			if (value == null || value === "")
+				throw new Error(t("sidebar.identifierUnavailable", "Session identifier unavailable"));
 			await writeClipboard(String(value));
 			toastsStore.add(
-				process ? t("sidebar.processIdCopied", "Process ID copied") : t("sidebar.sessionIdCopied", "Session ID copied"),
+				kind === "process"
+					? t("sidebar.processIdCopied", "Process ID copied")
+					: kind === "alias"
+						? t("sidebar.aliasCopied", "Alias copied")
+						: t("sidebar.sessionIdCopied", "Session ID copied"),
 				String(value),
 				"info",
 				false,
@@ -462,9 +471,11 @@ const BranchTabList: Component<{ terminalIds: string[]; repoPath: string }> = (p
 			);
 		} catch (error) {
 			toastsStore.add(
-				process
+				kind === "process"
 					? t("sidebar.copyProcessIdFailed", "Could not copy process ID")
-					: t("sidebar.copySessionIdFailed", "Could not copy session ID"),
+					: kind === "alias"
+						? t("sidebar.copyAliasFailed", "Could not copy alias")
+						: t("sidebar.copySessionIdFailed", "Could not copy session ID"),
 				String(error),
 				"error",
 				false,
@@ -479,19 +490,34 @@ const BranchTabList: Component<{ terminalIds: string[]; repoPath: string }> = (p
 	const sessionMenuItems = (): ContextMenuItem[] => [
 		{
 			label: t("sidebar.copySessionId", "Copy session ID"),
+			title: menuTerminal()?.sessionId ?? undefined,
 			disabled: !menuTerminal()?.sessionId,
 			action: () => {
-				void copyId(false);
+				void copyId("session");
 			},
 		},
-		{
-			label: t("sidebar.copyProcessId", "Copy process ID"),
-			disabled: !liveSessionId() || childPid() == null,
-			title: !liveSessionId() || childPid() == null ? t("sidebar.noLiveProcess", "No live process") : undefined,
-			action: () => {
-				void copyId(true);
-			},
-		},
+		...(liveSessionId() && identity()?.child_pid != null
+			? [
+					{
+						label: t("sidebar.copyProcessId", "Copy process ID"),
+						title: String(identity()!.child_pid),
+						action: () => {
+							void copyId("process");
+						},
+					},
+				]
+			: []),
+		...(liveSessionId() && identity()?.alias
+			? [
+					{
+						label: t("sidebar.copyAlias", "Copy alias"),
+						title: identity()!.alias!,
+						action: () => {
+							void copyId("alias");
+						},
+					},
+				]
+			: []),
 	];
 	const density = useSidebarDensity();
 	const rich = () => density() === "rich";
