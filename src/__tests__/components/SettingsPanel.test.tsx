@@ -262,7 +262,11 @@ describe("SettingsPanel", () => {
 		// services split into MCP / Remote Access / Remote Machines, and providers
 		// became AI Chat; an old tuic://settings?tab=… link must land on a page.
 		vi.mocked(settingsStore.isAiChatEnabled).mockReturnValue(true);
-		mockInvoke.mockImplementation((command: string) => Promise.resolve(command === "load_config" ? {} : undefined));
+		mockInvoke.mockImplementation((command: string) =>
+			Promise.resolve(
+				command === "load_config" ? { mcp_capabilities: { denied: [], migration_unknown_tools: [] } } : undefined,
+			),
+		);
 		try {
 			for (const [retired, label] of [
 				["services", "MCP"],
@@ -273,7 +277,7 @@ describe("SettingsPanel", () => {
 				));
 				expect(container.querySelector(".navItem.active")?.textContent, retired).toBe(label);
 				// Catches: unmounting the MCP page while its load_config continuation is pending.
-				if (retired === "services") await vi.waitFor(() => expect(container.textContent).toContain("Native tools"));
+				if (retired === "services") await vi.waitFor(() => expect(container.textContent).toContain("Capabilities"));
 				unmount();
 			}
 		} finally {
