@@ -99,6 +99,27 @@ impl Config {
     }
 }
 
+/// One event relevance contract for both configuration watchers. A watched
+/// ancestor is relevant while setup waits for its private directory to appear.
+pub(super) fn watch_event_relevant(
+    event: &notify::Result<notify::Event>,
+    directory: &Path,
+    names: &[&str],
+    ancestors: bool,
+) -> bool {
+    match event {
+        Ok(event) if matches!(event.kind, notify::EventKind::Access(_)) => false,
+        Ok(event) => event.paths.iter().any(|path| {
+            path == directory
+                || (ancestors && directory.starts_with(path))
+                || path
+                    .file_name()
+                    .is_some_and(|name| names.iter().any(|expected| name == *expected))
+        }),
+        Err(_) => true,
+    }
+}
+
 /// The runtime's opt-in snapshot changes only after a configuration event.
 /// Authorization at actual send/delivery boundaries still reads the allowlist.
 pub(super) struct WatchedConfig {
@@ -114,16 +135,12 @@ impl WatchedConfig {
         let watched_paths = paths.clone();
         let mut watcher =
             notify::recommended_watcher(move |event: notify::Result<notify::Event>| {
-                let relevant = match &event {
-                    Ok(event) if matches!(event.kind, notify::EventKind::Access(_)) => false,
-                    Ok(event) => event.paths.iter().any(|path| {
-                        path == &watched_paths.directory
-                            || path.file_name().is_some_and(|name| {
-                                name == "config.json" || name == "allowed_chat_ids"
-                            })
-                    }),
-                    Err(_) => true,
-                };
+                let relevant = watch_event_relevant(
+                    &event,
+                    &watched_paths.directory,
+                    &["config.json", "allowed_chat_ids"],
+                    false,
+                );
                 if relevant {
                     let mut current = target.lock().unwrap_or_else(|e| e.into_inner());
                     *current = match event {
@@ -254,6 +271,24 @@ static PRIVATE_FILE_OPENS: std::sync::LazyLock<dashmap::DashMap<PathBuf, usize>>
 #[cfg(test)]
 mod file_read_tests {
     use super::*;
+
+    // Catches: inotify overflow is pathless, so both watchers discard lost-state recovery.
+    #[test]
+    fn telegram_pathless_rescan_wakes_both_configuration_watchers() {
+        // Recorded from notify 8.2.0 src/inotify.rs:212-214, Q_OVERFLOW arm.
+        let event =
+            Ok(notify::Event::new(notify::EventKind::Other).set_flag(notify::event::Flag::Rescan));
+        let directory = Path::new("telegram");
+        for (names, ancestors) in [
+            (&["config.json", "allowed_chat_ids"][..], false),
+            (&["config.json", "bot.token"][..], true),
+        ] {
+            assert!(
+                watch_event_relevant(&event, directory, names, ancestors),
+                "pathless rescan must wake watcher for {names:?}"
+            );
+        }
+    }
 
     // Catches: a cached opt-in survives disable, atomic replacement or allowlist revocation.
     #[tokio::test]

@@ -42,16 +42,12 @@ pub(super) async fn changed(paths: &Paths, previous: &[Option<std::time::SystemT
     let directory = paths.directory.clone();
     let watched_directory = directory.clone();
     let watcher = notify::recommended_watcher(move |event: notify::Result<notify::Event>| {
-        let relevant = match event {
-            Ok(event) if matches!(event.kind, notify::EventKind::Access(_)) => false,
-            Ok(event) => event.paths.iter().any(|path| {
-                watched_directory.starts_with(path)
-                    || path
-                        .file_name()
-                        .is_some_and(|name| name == "config.json" || name == "bot.token")
-            }),
-            Err(_) => true,
-        };
+        let relevant = super::config::watch_event_relevant(
+            &event,
+            &watched_directory,
+            &["config.json", "bot.token"],
+            true,
+        );
         if relevant {
             let _ = send.try_send(());
         }
