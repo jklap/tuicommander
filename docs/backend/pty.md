@@ -877,9 +877,11 @@ A Grok terminal is tailed through the same `chat_view::View`, with `GrokAdapter`
 `compaction_meta` becomes a notice card. Reasoning summaries become thoughts,
 tool calls and results become folded cards (orphan results dropped), and
 server-side `backend_tool_call` rows become finished cards. The binding is
-`agent_session::grok_chat_history_for_pid`: the pid must have an
-`active_sessions.json` entry for the terminal's cwd and its session directory
-must exist. The newest-session fallback of `discover_grok_session` never feeds
+`agent_session::grok_chat_history_for_pid`: a unique `active_sessions.json`
+entry must match the terminal's cwd and PID. On Unix, a live native child in the
+terminal's foreground process group also matches: the supported npm Node
+launcher owns that group but Grok registers the native child's PID. Multiple
+matching registrations fail closed. The session directory must exist. The newest-session fallback of `discover_grok_session` never feeds
 Chat; without an exact entry the snapshot answers `not_bound`. A tab whose agent
 changes between Claude and Grok restarts the view. Fixture:
 `fixtures/chat_view/grok_chat_history.jsonl` (real rows, payloads replaced).
