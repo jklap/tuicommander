@@ -3866,7 +3866,7 @@ fn urgent_mail_rejects_invalid_urgency_without_buffering_a_message() {
         Some("mcp-sender"),
     );
     assert_eq!(
-        sent["error"], "urgency must be 'normal' or 'urgent'",
+        sent["error"], "urgency must be 'normal', 'urgent' or 'interrupt'",
         "{sent}"
     );
     assert!(state.agent_inbox.get(TEST_UUID_B).is_none());
@@ -6563,4 +6563,291 @@ fn actionable_subscription_filtered_ack_keeps_unobserved_wake_gap() {
     assert!(notice.contains("agent action=inbox"), "{notice:?}");
     let unread = invoke(serde_json::json!({"action":"inbox"}));
     assert_eq!(unread["messages"][0]["id"], "unmatched-mail");
+}
+
+#[cfg(unix)]
+struct InterruptProbeWriter {
+    bytes: std::sync::Arc<std::sync::Mutex<Vec<u8>>>,
+    writes: std::sync::mpsc::Sender<Vec<u8>>,
+}
+
+#[cfg(unix)]
+impl std::io::Write for InterruptProbeWriter {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        self.bytes.lock().unwrap().extend_from_slice(bytes);
+        let _ = self.writes.send(bytes.to_vec());
+        Ok(bytes.len())
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+/// Catches payload typed before idle, or an interrupt request that never sends Esc.
+#[cfg(unix)]
+#[test]
+fn interrupt_mail_sends_escape_before_payload_and_waits_for_idle() {
+    for agent_type in ["claude", "codex", "ego"] {
+        let state = test_state();
+        register_peer(&state, TEST_UUID_A, "sender", "mcp-sender");
+        register_peer(&state, TEST_UUID_B, "recipient", "mcp-recipient");
+        crate::test_support::agent_session(&state, TEST_UUID_B, crate::pty::SHELL_BUSY);
+        state
+            .session_maps
+            .session_states
+            .get_mut(TEST_UUID_B)
+            .unwrap()
+            .agent_type = Some(agent_type.into());
+        let bytes = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let (writes, input) = std::sync::mpsc::channel();
+        crate::test_support::insert_session_with_writer(
+            &state,
+            TEST_UUID_B,
+            Box::new(InterruptProbeWriter {
+                bytes: bytes.clone(),
+                writes,
+            }),
+            crate::test_support::TtyMode::Raw,
+        );
+        std::thread::scope(|scope| {
+            let send = scope.spawn(|| handle_messaging(
+                &state,
+                &serde_json::json!({"action":"send","to":TEST_UUID_B,"message":"STOP the old task\nAnswer with ACK-2113","urgency":"interrupt"}),
+                Some("mcp-sender"),
+            ));
+            // This is the fake agent's input side. It remains working until it has
+            // observed Esc; no payload may arrive in that state.
+            assert_eq!(
+                input
+                    .recv_timeout(std::time::Duration::from_secs(3))
+                    .expect("fake agent must receive Esc"),
+                b"\x1b"
+            );
+            assert!(
+                input
+                    .recv_timeout(std::time::Duration::from_millis(150))
+                    .is_err(),
+                "payload must wait for confirmed idle"
+            );
+            assert_eq!(
+                *bytes.lock().unwrap(),
+                b"\x1b",
+                "{agent_type}: Esc must be the only busy input"
+            );
+            // Fake agent publishes the same confirmed-idle state used by the
+            // production hook/ready-screen paths, only after observing Esc.
+            state
+                .session_maps
+                .silence_states
+                .get(TEST_UUID_B)
+                .unwrap()
+                .lock()
+                .confirm_idle();
+            state
+                .session_maps
+                .shell_states
+                .get(TEST_UUID_B)
+                .unwrap()
+                .store(crate::pty::SHELL_IDLE, std::sync::atomic::Ordering::Release);
+            let sent = send.join().unwrap();
+            assert_eq!(sent["interrupt_delivered"], true, "{agent_type}: {sent}");
+            assert_eq!(sent["delivery_path"], "interrupt_payload_and_inbox");
+        });
+        let typed = String::from_utf8(bytes.lock().unwrap().clone()).unwrap();
+        assert!(typed.starts_with('\x1b'), "{typed:?}");
+        assert!(
+            typed.contains("STOP the old task\nAnswer with ACK-2113"),
+            "{typed:?}"
+        );
+        assert!(typed.ends_with('\r'), "{typed:?}");
+        assert_eq!(
+            state.agent_inbox.get(TEST_UUID_B).unwrap()[0].content,
+            "STOP the old task\nAnswer with ACK-2113"
+        );
+    }
+}
+
+/// Catches Esc dismissing an approval, clearing a draft, or reaching an unknown CLI.
+#[cfg(unix)]
+#[test]
+fn interrupt_mail_preserves_dialogs_drafts_and_unsupported_agents() {
+    for (agent, dialog, draft, reason) in [
+        ("claude", true, false, "dialog_open"),
+        ("codex", false, true, "composer_has_user_text"),
+        ("grok", false, false, "unknown_agent_type"),
+    ] {
+        let state = test_state();
+        register_peer(&state, TEST_UUID_A, "sender", "mcp-sender");
+        register_peer(&state, TEST_UUID_B, "recipient", "mcp-recipient");
+        crate::test_support::agent_session(&state, TEST_UUID_B, crate::pty::SHELL_BUSY);
+        {
+            let mut session = state
+                .session_maps
+                .session_states
+                .get_mut(TEST_UUID_B)
+                .unwrap();
+            session.agent_type = Some(agent.into());
+            session.question_confident = dialog;
+            session.awaiting_input = dialog;
+        }
+        if draft {
+            let mut buffer = crate::input_line_buffer::InputLineBuffer::new();
+            buffer.feed("unfinished draft");
+            state
+                .session_maps
+                .input_buffers
+                .insert(TEST_UUID_B.into(), parking_lot::Mutex::new(buffer));
+        }
+        let bytes = crate::test_support::insert_recording_session(&state, TEST_UUID_B);
+        let sent = handle_messaging(
+            &state,
+            &serde_json::json!({"action":"send","to":TEST_UUID_B,"message":"never type this payload","urgency":"interrupt"}),
+            Some("mcp-sender"),
+        );
+        assert_eq!(sent["interrupt_delivered"], false, "{sent}");
+        assert_eq!(sent["interrupt_fallback_reason"], reason, "{sent}");
+        assert!(
+            bytes.lock().unwrap().is_empty(),
+            "{agent}: unsafe composer must stay untouched"
+        );
+        assert_eq!(
+            state.agent_inbox.get(TEST_UUID_B).unwrap()[0].content,
+            "never type this payload"
+        );
+    }
+}
+
+/// Catches a timed-out interrupt typing into a busy tool or stranding its inbox delivery lease.
+#[cfg(unix)]
+#[test]
+fn interrupt_mail_timeout_falls_back_to_urgent_notice_without_payload() {
+    let state = test_state();
+    register_peer(&state, TEST_UUID_A, "sender", "mcp-sender");
+    register_peer(&state, TEST_UUID_B, "recipient", "mcp-recipient");
+    crate::test_support::agent_session(&state, TEST_UUID_B, crate::pty::SHELL_BUSY);
+    let bytes = crate::test_support::insert_recording_session(&state, TEST_UUID_B);
+    let sent = handle_messaging(
+        &state,
+        &serde_json::json!({"action":"send","to":TEST_UUID_B,"message":"do not type while busy","urgency":"interrupt"}),
+        Some("mcp-sender"),
+    );
+    assert_eq!(sent["interrupt_delivered"], false, "{sent}");
+    assert_eq!(sent["interrupt_fallback_reason"], "idle_timeout", "{sent}");
+    assert_eq!(sent["delivery_path"], "urgent_notice_and_inbox", "{sent}");
+    let typed = String::from_utf8(bytes.lock().unwrap().clone()).unwrap();
+    assert!(typed.starts_with('\x1b'), "{typed:?}");
+    assert!(typed.contains("agent action=inbox"), "{typed:?}");
+    assert!(!typed.contains("do not type while busy"), "{typed:?}");
+    let lease = state.begin_agent_wait(TEST_UUID_B);
+    let fresh = state.waiter_fresh_message_count(TEST_UUID_B, 0);
+    let received = state.finish_agent_wait(TEST_UUID_B, lease, 0, fresh > 0);
+    assert_eq!(
+        received.messages.len(),
+        1,
+        "fallback must release the payload"
+    );
+    assert_eq!(received.messages[0].content, "do not type while busy");
+}
+
+/// Catches an approval opened during cancellation being answered by the mail body.
+#[cfg(unix)]
+#[test]
+fn interrupt_mail_aborts_when_a_dialog_opens_after_escape() {
+    let state = test_state();
+    register_peer(&state, TEST_UUID_A, "sender", "mcp-sender");
+    register_peer(&state, TEST_UUID_B, "recipient", "mcp-recipient");
+    crate::test_support::agent_session(&state, TEST_UUID_B, crate::pty::SHELL_BUSY);
+    let bytes = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let (writes, input) = std::sync::mpsc::channel();
+    crate::test_support::insert_session_with_writer(
+        &state,
+        TEST_UUID_B,
+        Box::new(InterruptProbeWriter {
+            bytes: bytes.clone(),
+            writes,
+        }),
+        crate::test_support::TtyMode::Raw,
+    );
+    std::thread::scope(|scope| {
+        let send = scope.spawn(|| handle_messaging(&state, &serde_json::json!({"action":"send","to":TEST_UUID_B,"message":"never answer approval","urgency":"interrupt"}), Some("mcp-sender")));
+        assert_eq!(
+            input
+                .recv_timeout(std::time::Duration::from_secs(3))
+                .unwrap(),
+            b"\x1b"
+        );
+        state
+            .session_maps
+            .session_states
+            .get_mut(TEST_UUID_B)
+            .unwrap()
+            .question_confident = true;
+        let sent = send.join().unwrap();
+        assert_eq!(sent["interrupt_fallback_reason"], "dialog_open", "{sent}");
+    });
+    assert_eq!(
+        *bytes.lock().unwrap(),
+        b"\x1b",
+        "no text or second Esc may answer the new dialog"
+    );
+}
+
+/// Catches the same interrupt payload being returned to a concurrent waiter and typed as a new turn.
+#[cfg(unix)]
+#[test]
+fn interrupt_mail_does_not_deliver_payload_to_waiter_and_composer() {
+    let state = test_state();
+    register_peer(&state, TEST_UUID_A, "sender", "mcp-sender");
+    register_peer(&state, TEST_UUID_B, "recipient", "mcp-recipient");
+    crate::test_support::agent_session(&state, TEST_UUID_B, crate::pty::SHELL_BUSY);
+    let bytes = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let (writes, input) = std::sync::mpsc::channel();
+    crate::test_support::insert_session_with_writer(
+        &state,
+        TEST_UUID_B,
+        Box::new(InterruptProbeWriter {
+            bytes: bytes.clone(),
+            writes,
+        }),
+        crate::test_support::TtyMode::Raw,
+    );
+    std::thread::scope(|scope| {
+        let send = scope.spawn(|| handle_messaging(
+            &state,
+            &serde_json::json!({"action":"send","to":TEST_UUID_B,"message":"change course exactly once","urgency":"interrupt"}),
+            Some("mcp-sender"),
+        ));
+        assert_eq!(
+            input
+                .recv_timeout(std::time::Duration::from_secs(3))
+                .unwrap(),
+            b"\x1b"
+        );
+        // The recipient's next MCP tool can enter wait while cancellation is
+        // settling. Drive the same registration/read/finish boundary as agent wait.
+        let lease = state.begin_agent_wait(TEST_UUID_B);
+        let fresh = state.waiter_fresh_message_count(TEST_UUID_B, 0);
+        let received = state.finish_agent_wait(TEST_UUID_B, lease, 0, fresh > 0);
+        state
+            .session_maps
+            .silence_states
+            .get(TEST_UUID_B)
+            .unwrap()
+            .lock()
+            .confirm_idle();
+        state
+            .session_maps
+            .shell_states
+            .get(TEST_UUID_B)
+            .unwrap()
+            .store(crate::pty::SHELL_IDLE, std::sync::atomic::Ordering::Release);
+        let sent = send.join().unwrap();
+        assert!(sent.get("error").is_none(), "{sent}");
+        let typed = String::from_utf8(bytes.lock().unwrap().clone()).unwrap();
+        assert!(
+            received.messages.is_empty() || !typed.contains("change course exactly once"),
+            "interrupt payload delivered twice: waiter returned {} message(s), composer={typed:?}; receipt={sent}",
+            received.messages.len(),
+        );
+    });
 }

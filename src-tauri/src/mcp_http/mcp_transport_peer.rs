@@ -1499,7 +1499,7 @@ fn handle_messaging_with_message_id(
                     "spawn_isolated": "repo action=worktree_create path=<repo> branch=<name> spawn_session=true — worktree + PTY in one call.",
                     "monitor": "Use blocking waits instead of polling: agent action=wait (wakes on new mail; the cursor is kept server-side) or session action=wait session_id=<id> until=idle|exited. Task results arrive through agent send/inbox. Use session output only as an anomaly fallback when a child failed to send.",
                     "auto_state_change": "Spawned peers auto-post state only: {type:state_change, state:idle|completed|exited|awaiting_input, session_id, exit_code?, prompt?}. This is not task output. awaiting_input means the child hit an interactive prompt and is parked with nobody at its keyboard — it will NOT progress until you answer it with session action=input (the `prompt` field carries the question). Every child must report its result or blocker with agent action=send; use session output only when a child anomalously failed to send.",
-                    "send": "agent action=send to=<peer tuic_session | its registered name | its PTY id | that terminal's alias, e.g. tu-1> message=<text, max 64KB> [urgency=normal|urgent]. Normal is the default; urgent writes only a payload-free inbox notice to a safe busy Claude/Codex/ego composer for its next tool boundary and returns urgent_delivered or urgent_fallback_reason. The message is always buffered in the inbox. A peer explicitly registered with orchestrator=true keeps payloads out of its active turn and composer; managed idle/completed lifecycle, or a confirmed-ready empty composer held working only by background work, may submit one coalesced, payload-free wake instructing `agent action=inbox`. Busy, questioning, partially typed, external without a subscribed ACP inbox, or unknown state stays inbox-only. An active agent wait owns delivery and suppresses that wake. Check `delivered` and `delivery_path` (the only route field); a message reaching the inbox is not delivery.",
+                    "send": "agent action=send to=<peer tuic_session | its registered name | its PTY id | that terminal's alias, e.g. tu-1> message=<text, max 64KB> [urgency=normal|urgent|interrupt]. Normal is the default; urgent writes only a payload-free inbox notice to a safe busy Claude/Codex/ego composer for its next tool boundary and returns urgent_delivered or urgent_fallback_reason. The message is always buffered in the inbox. Opt-in urgency=interrupt sends Esc to a safe working Claude Code, Codex or ego, waits up to 10 seconds for confirmed idle, then submits the full message as one new input (including for an orchestrator). An already idle recipient needs no Esc. A dialog/approval or draft blocks both Esc and payload. Unsupported agents, no PTY and idle timeout use the existing urgent notice/inbox fallback. The result adds interrupt_delivered and interrupt_fallback_reason; delivery_path=interrupt_payload_and_inbox means the full input was written, not that the model acted. Interrupted tools can leave partial work; child processes may continue. An active waiter owns delivery and needs no interrupt. A peer explicitly registered with orchestrator=true keeps payloads out of its active turn and composer; managed idle/completed lifecycle, or a confirmed-ready empty composer held working only by background work, may submit one coalesced, payload-free wake instructing `agent action=inbox`. Busy, questioning, partially typed, external without a subscribed ACP inbox, or unknown state stays inbox-only. An active agent wait owns delivery and suppresses that wake. Check `delivered` and `delivery_path` (the only route field); a message reaching the inbox is not delivery.",
                     "list_peers": "agent action=list_peers path=<optional filter> — see who else is connected.",
                     "conflict_control": "Use send/inbox to serialize shared-file edits: child sends 'claim <path>', orchestrator replies 'ack'/'deny'; child sends 'release <path>' on commit. Orchestrator is the arbiter — children never ack each other directly.",
                     "cleanup": "On MCP session close, peer routes and inbox are drained. Managed PTY lifecycle remains separate; an MCP-scoped external identity has no PTY to reap."
@@ -1649,12 +1649,17 @@ fn handle_messaging_with_message_id(
                     "Message exceeds 64 KB limit ({} bytes)", message.len()
                 )});
             }
+            let interrupt = args["urgency"].as_str() == Some("interrupt");
             let urgent = match args.get("urgency") {
                 None => false,
                 Some(serde_json::Value::String(value)) if value == "normal" => false,
-                Some(serde_json::Value::String(value)) if value == "urgent" => true,
+                Some(serde_json::Value::String(value))
+                    if value == "urgent" || value == "interrupt" =>
+                {
+                    true
+                }
                 _ => {
-                    return serde_json::json!({"error": "urgency must be 'normal' or 'urgent'"});
+                    return serde_json::json!({"error": "urgency must be 'normal', 'urgent' or 'interrupt'"});
                 }
             };
             // Resolve sender via O(1) mcp_to_session reverse map (RUST-3/PERF-2).
@@ -1761,15 +1766,48 @@ fn handle_messaging_with_message_id(
                 let mut urgent_delivered = false;
                 let mut delivery_path = "inbox_only";
                 let mut fallback_reason = None;
-                // A blocking wait already owns the newly buffered message and
-                // returns it inside the recipient's current turn.
-                if state.assign_agent_delivery(to, &msg_id, false)
+                let mut interrupt_fallback_reason = if interrupt {
+                    Some("recipient_exited")
+                } else {
+                    None
+                };
+                // Reserve interrupt payload delivery before cancellation so a
+                // waiter arriving during the idle wait cannot also consume it.
+                // An already active waiter still wins under the same gate.
+                if state.assign_agent_delivery(to, &msg_id, interrupt && managed_recipient)
                     == AgentDeliveryAssignment::Waiter
                 {
                     delivered = true;
                     urgent_delivered = true;
                     delivery_path = "waiter_and_inbox";
+                    if interrupt {
+                        interrupt_fallback_reason = Some("waiter_owns_delivery");
+                    }
                 } else if let Some(pty_session) = live_pty.as_deref() {
+                    if interrupt {
+                        match crate::pty::deliver_interrupting_mail(state, pty_session, message) {
+                            Ok(()) => {
+                                state.mark_terminal_delivery_dispatched(to, &msg_id);
+                                return serde_json::json!({
+                                    "message_id": msg_id,
+                                    "delivered": true,
+                                    "delivery_path": "interrupt_payload_and_inbox",
+                                    "urgent_delivered": true,
+                                    "interrupt_delivered": true,
+                                    "recipient_state": managed_recipient_state(state, pty_session),
+                                });
+                            }
+                            Err(reason) => {
+                                state.release_terminal_delivery(to, &msg_id);
+                                interrupt_fallback_reason = Some(reason);
+                                // A partial payload must never be followed by another
+                                // write or queued retry into that same composer.
+                                if reason == "write_uncertain" {
+                                    return serde_json::json!({"message_id":msg_id,"delivered":false,"delivery_path":"inbox_only","urgent_delivered":false,"interrupt_delivered":false,"interrupt_fallback_reason":reason});
+                                }
+                            }
+                        }
+                    }
                     match state.reserve_urgent_notice(to, &sender_tuic, message_timestamp) {
                         UrgentNoticeReservation::AlreadyRead => {
                             delivered = true;
@@ -1881,6 +1919,11 @@ fn handle_messaging_with_message_id(
                 });
                 if let Some(reason) = fallback_reason {
                     response["urgent_fallback_reason"] = serde_json::json!(reason);
+                }
+                if interrupt {
+                    response["interrupt_delivered"] = serde_json::json!(false);
+                    response["interrupt_fallback_reason"] =
+                        serde_json::json!(interrupt_fallback_reason);
                 }
                 apply_acp_inbox_receipt(&mut response, acp_inbox_subscriber);
                 tracing::info!(

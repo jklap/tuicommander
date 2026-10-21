@@ -1349,7 +1349,7 @@ fn run_claimed_injection(
     apply_claimed_injection_outcome(state, session_id, text, claim, outcome, kind)
 }
 
-/// The only thing a peer `send` is ever allowed to put on a recipient's screen.
+/// The notice used by normal and urgent peer mail (not opt-in interrupt mail).
 ///
 /// It is a pointer, not the message. Typing the payload itself was the whole
 /// defect: a recipient's TUI cannot tell an injected line from something its
@@ -1433,6 +1433,105 @@ pub(crate) fn deliver_urgent_mail_notice(
         InjectionOutcome::NotStarted(_) => Err("write_not_started"),
         InjectionOutcome::Uncertain(_) => Err("write_uncertain"),
     }
+}
+
+/// Explicit opt-in only: interrupt a working CLI, then submit mail as a new turn.
+/// Never infer idle from a successful Esc write. Hooks/ready-screen detection must
+/// independently confirm it within ten seconds; a dialog or draft aborts the wait.
+pub(crate) fn deliver_interrupting_mail(
+    state: &AppState,
+    session_id: &str,
+    text: &str,
+) -> Result<(), &'static str> {
+    let transaction = state.input_transaction(session_id);
+    {
+        let Some(_input) = transaction.try_lock() else {
+            return Err("composer_in_flight");
+        };
+        interrupt_mail_safety(state, session_id)?;
+        if !should_inject_now(state, session_id) {
+            if state
+                .session_state_with_shell(session_id)
+                .is_none_or(|session| session.agent_state.as_deref() != Some("working"))
+            {
+                return Err("recipient_not_ready");
+            }
+            let Some(claim) = claim_composer_for_human_input(state, session_id) else {
+                return Err("composer_in_flight");
+            };
+            if let Err(reason) = interrupt_mail_safety(state, session_id) {
+                rollback_injection_claim(state, session_id, claim);
+                return Err(reason);
+            }
+            // Arm intent before the child can repaint its interrupted screen.
+            if let Some(silence) = state.session_maps.silence_states.get(session_id) {
+                silence.lock().note_interrupt_requested();
+            }
+            let written = state.write_pty_parts(session_id, &[b"\x1b"]);
+            rollback_injection_claim(state, session_id, claim);
+            written.map_err(|_| "interrupt_write_failed")?;
+        }
+    }
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    loop {
+        // Do not hold the input transaction across the wait: the user must still
+        // be able to answer a newly opened dialog or take control of the terminal.
+        {
+            let Some(_input) = transaction.try_lock() else {
+                return Err("composer_in_flight");
+            };
+            interrupt_mail_safety(state, session_id)?;
+            if let Some(claim) = claim_idle_for_injection(state, session_id) {
+                if let Err(reason) = interrupt_mail_safety(state, session_id) {
+                    rollback_injection_claim(state, session_id, claim);
+                    return Err(reason);
+                }
+                return match run_claimed_injection(
+                    state,
+                    session_id,
+                    text,
+                    claim,
+                    ClaimedInjectionKind::Message,
+                ) {
+                    InjectionOutcome::Submitted => Ok(()),
+                    InjectionOutcome::NotStarted(_) => Err("write_not_started"),
+                    InjectionOutcome::Uncertain(_) => Err("write_uncertain"),
+                };
+            }
+        }
+        if std::time::Instant::now() >= deadline {
+            return Err("idle_timeout");
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+}
+
+fn interrupt_mail_safety(state: &AppState, session_id: &str) -> Result<(), &'static str> {
+    if !state.session_maps.sessions.contains_key(session_id) {
+        return Err("recipient_exited");
+    }
+    let Some(session) = state.session_maps.session_states.get(session_id) else {
+        return Err("recipient_not_ready");
+    };
+    if !matches!(
+        session.agent_type.as_deref(),
+        Some("claude" | "codex" | "ego")
+    ) {
+        return Err("unknown_agent_type");
+    }
+    if session.question_confident {
+        return Err("dialog_open");
+    }
+    if session.foreground_input_blocked
+        || session.spawn_root_role == crate::state::SpawnRootRole::Unknown
+    {
+        return Err("recipient_not_ready");
+    }
+    drop(session);
+    if has_partial_user_input(state, session_id) {
+        return Err("composer_has_user_text");
+    }
+    Ok(())
 }
 
 /// Longest self-acknowledging summary we are willing to type into a composer.

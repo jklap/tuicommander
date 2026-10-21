@@ -2771,4 +2771,5 @@ Needs an iPhone (iOS 16.4+, 18.4+ preferred), the desktop TUICommander running a
 
 - [ ] Mobile CLI answer gutter (#2110-734c): on a phone, verify the green bar stays left of the first ego glyph, Claude keeps its existing margin, and blank paragraphs, wrapped links and tables keep their bars.
 
+- [ ] After rebuilding, verify `agent send urgency=interrupt` with an isolated Claude or ego child: the running tool stops and the full message starts a new turn; normal/urgent remain non-interrupting (#2113-c419). Rust changes require a manual `make dev` restart or release rebuild to reach the daily app.
 - [ ] After a manual Rust restart/rebuild, check abandoned-shell markers on desktop/mobile after one idle hour; optional close hours default to zero. Running foreground/background work must remain open. Check remote MCP close against the owning daemon (#2111-131f).
