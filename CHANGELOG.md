@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+- Share one Git status traversal between sidebar diff totals and dirty badges per checkout (#2098-98b2).
+
 - Index recent Codex rollouts with file-watch updates instead of re-statting the full recent-day history on every discovery poll (#2098-98b2).
 - Recover Telegram configuration watchers after pathless event-loss notifications, and re-arm Codex watches after date-directory replacement (#2098-98b2).
 - Stop reopening Telegram configuration on every idle tick and unrelated app event; use file events for runtime opt-in and setup changes (#2098-98b2).

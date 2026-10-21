@@ -113,6 +113,41 @@ fn record_repository_open() {
     REPOSITORY_OPENS.with(|count| count.set(count.get() + 1));
 }
 
+/// One porcelain dirty record per tracked path, even when both staged and edited.
+#[derive(Default)]
+struct DirtyStatus {
+    paths: std::collections::HashSet<gix::bstr::BString>,
+    untracked: usize,
+}
+
+impl DirtyStatus {
+    fn record(&mut self, item: &gix::status::Item) {
+        use gix::status::Item;
+        use gix::status::index_worktree::Item as IwItem;
+        use gix::status::plumbing::index_as_worktree::EntryStatus;
+        let changed = match item {
+            Item::TreeIndex(_) => true,
+            Item::IndexWorktree(IwItem::Modification { status, .. }) => {
+                !matches!(status, EntryStatus::NeedsUpdate(_))
+            }
+            Item::IndexWorktree(IwItem::DirectoryContents { entry, .. }) => {
+                if matches!(entry.status, gix::dir::entry::Status::Untracked) {
+                    self.untracked += 1;
+                }
+                false
+            }
+            Item::IndexWorktree(IwItem::Rewrite { .. }) => true,
+        };
+        if changed {
+            self.paths.insert(item.location().to_owned());
+        }
+    }
+
+    fn count(&self) -> usize {
+        self.paths.len() + self.untracked
+    }
+}
+
 /// In-process gix adapter. Implements the same port as the CLI adapter; ops are
 /// flipped to gix one at a time in later steps, each gated by a parity test.
 ///
@@ -258,10 +293,6 @@ impl GixGitReads {
     /// and modified count once; untracked records count separately.
     /// Unsupported repos use the CLI caller.
     pub(crate) fn dirty_files(repo: &Path) -> Option<usize> {
-        use gix::status::Item;
-        use gix::status::index_worktree::Item as IwItem;
-        use gix::status::plumbing::index_as_worktree::EntryStatus;
-
         let grepo = cached_repo(repo).ok()?;
         if Self::gix_repo_unsupported(&grepo) {
             return None;
@@ -274,28 +305,11 @@ impl GixGitReads {
             .untracked_files(gix::status::UntrackedFiles::Files)
             .into_iter(std::iter::empty::<gix::bstr::BString>())
             .ok()?;
-        let mut paths = std::collections::HashSet::new();
-        let mut untracked = 0;
+        let mut dirty = DirtyStatus::default();
         for item in iter {
-            let item = item.ok()?;
-            let changed = match &item {
-                Item::TreeIndex(_) => true,
-                Item::IndexWorktree(IwItem::Modification { status, .. }) => {
-                    !matches!(status, EntryStatus::NeedsUpdate(_))
-                }
-                Item::IndexWorktree(IwItem::DirectoryContents { entry, .. }) => {
-                    if matches!(entry.status, gix::dir::entry::Status::Untracked) {
-                        untracked += 1;
-                    }
-                    false
-                }
-                Item::IndexWorktree(IwItem::Rewrite { .. }) => true,
-            };
-            if changed {
-                paths.insert(item.location().to_owned());
-            }
+            dirty.record(&item.ok()?);
         }
-        Some(paths.len() + untracked)
+        Some(dirty.count())
     }
 
     /// Compute staged / changed counts via gix `status`, mapped onto the same
@@ -404,6 +418,11 @@ impl GixGitReads {
     /// sparse-checkout / submodule repos or on any gix error. Binary files are
     /// excluded from the line totals, matching git.
     fn gix_diff_stats_worktree(&self, repo: &Path) -> Option<DiffStats> {
+        self.gix_monitoring_status_worktree(repo)
+            .map(|(diff, _)| diff)
+    }
+
+    fn gix_monitoring_status_worktree(&self, repo: &Path) -> Option<(DiffStats, Option<usize>)> {
         use gix::bstr::ByteSlice;
         use gix::status::Item;
         use gix::status::index_worktree::Item as IwItem;
@@ -418,11 +437,14 @@ impl GixGitReads {
         MONITORING_STATUS_TRAVERSALS.with(|count| count.set(count.get() + 1));
         let platform = grepo.status(gix::progress::Discard).ok()?;
         let iter = platform
+            .untracked_files(gix::status::UntrackedFiles::Files)
             .into_iter(std::iter::empty::<gix::bstr::BString>())
             .ok()?;
 
         let mut added = 0i64;
         let mut removed = 0i64;
+        let mut dirty = DirtyStatus::default();
+        let mut any_error = false;
         for item in iter {
             // One unreadable status entry must not abort the whole diff pass —
             // skip it (and warn) rather than discarding accumulated counts.
@@ -433,8 +455,10 @@ impl GixGitReads {
                     "gix diff_stats: skipping unreadable status entry"
                 );
             }) else {
+                any_error = true;
                 continue;
             };
+            dirty.record(&item);
             // Only unstaged changes to tracked files (git diff, no --cached);
             // untracked entries and purely-staged files are not counted.
             let Item::IndexWorktree(IwItem::Modification {
@@ -459,6 +483,7 @@ impl GixGitReads {
                         error = %e,
                         "gix diff_stats: skipping entry with unreadable index blob"
                     );
+                    any_error = true;
                     continue;
                 }
             };
@@ -477,6 +502,7 @@ impl GixGitReads {
                         error = %e,
                         "gix diff_stats: skipping entry with unreadable worktree file"
                     );
+                    any_error = true;
                     continue;
                 }
             };
@@ -485,9 +511,12 @@ impl GixGitReads {
                 removed += i64::from(r);
             }
         }
-        Some(crate::git::DiffStats::from_counts(
-            added.min(i64::from(i32::MAX)) as i32,
-            removed.min(i64::from(i32::MAX)) as i32,
+        Some((
+            crate::git::DiffStats::from_counts(
+                added.min(i64::from(i32::MAX)) as i32,
+                removed.min(i64::from(i32::MAX)) as i32,
+            ),
+            (!any_error).then(|| dirty.count()),
         ))
     }
 }
@@ -1179,11 +1208,20 @@ impl GitReadsRouter {
 
     /// Both status-derived values used by one sidebar monitoring refresh.
     pub fn monitoring_status(&self, repo: &Path) -> (DiffStats, Result<usize, String>) {
-        let diff = self.diff_stats(repo, None);
-        let dirty = GixGitReads::dirty_files(repo)
-            .map(Ok)
-            .unwrap_or_else(|| crate::worktree::dirty_files_at(repo));
-        (diff, dirty)
+        if matches!(self.backend.diff_stats, Backend::Gix)
+            && let Some((diff, dirty)) = self.gix.gix_monitoring_status_worktree(repo)
+        {
+            return (
+                diff,
+                dirty
+                    .map(Ok)
+                    .unwrap_or_else(|| crate::worktree::dirty_files_at(repo)),
+            );
+        }
+        (
+            self.diff_stats(repo, None),
+            crate::worktree::dirty_files_at(repo),
+        )
     }
 
     pub fn blame(&self, repo: &Path, file: &str) -> Result<Vec<BlameLine>, String> {
@@ -1613,6 +1651,9 @@ mod tests {
         // One path staged and then modified must count once, not twice, as dirty.
         run_git(&repo, &["add", "a.txt"]);
         std::fs::write(repo.join("a.txt"), "staged then modified\n").unwrap();
+        std::fs::create_dir(repo.join("untracked-dir")).unwrap();
+        std::fs::write(repo.join("untracked-dir/one.txt"), "one\n").unwrap();
+        std::fs::write(repo.join("untracked-dir/two.txt"), "two\n").unwrap();
         let expected_diff = CliGitReads.diff_stats(&repo, None);
         let expected_dirty = run_git(&repo, &["status", "--porcelain", "--untracked-files=all"])
             .lines()
@@ -1628,6 +1669,24 @@ mod tests {
             MONITORING_STATUS_TRAVERSALS.with(std::cell::Cell::get) - before,
             1,
             "one monitoring refresh repeated the tracked-file status traversal"
+        );
+    }
+
+    /// Catches a combined status read replacing the sparse-checkout CLI fallback.
+    #[test]
+    fn monitoring_status_keeps_unsupported_repository_cli_results() {
+        let (_guard, repo) = fixture_repo();
+        run_git(&repo, &["config", "core.sparseCheckout", "true"]);
+        let (diff, dirty) = git_reads().monitoring_status(&repo);
+        assert_eq!(
+            serde_json::to_value(diff).unwrap(),
+            serde_json::to_value(CliGitReads.diff_stats(&repo, None)).unwrap()
+        );
+        assert_eq!(
+            dirty.unwrap(),
+            run_git(&repo, &["status", "--porcelain", "--untracked-files=all"])
+                .lines()
+                .count()
         );
     }
 

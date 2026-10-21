@@ -1,5 +1,7 @@
 ## Bounded repository file reads (2098-98b2) — Rust restart required
 
+- [ ] After a manual backend rebuild/restart, verify one file staged then edited and a directory with two untracked files show unchanged diff totals and correct dirty counts; monitoring now shares one status traversal. No daily app restart was performed.
+
 - [ ] After Boss manually rebuilds and restarts the backend, commit twice in one linked worktree, fetch a remote, and pack refs. Confirm the changed row and integration badges update while sibling badges stay correct. This peer does not restart the daily app.
 
 - [ ] After loading the rebuilt backend, verify Codex session and same-path date-directory replacement in an isolated CODEX_HOME and unchanged discovery without historical rollout scans; watched-index and cwd/age/claimed-ID regressions run on rb, but macOS watcher behavior still needs the isolated instance.
