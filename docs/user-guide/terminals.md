@@ -461,3 +461,9 @@ Terminal selection copy, AI Chat answer buttons (desktop and mobile), and the An
 Mobile CLI output and session text reads preserve spaces when text wraps at the terminal margin. A word split across two terminal rows remains one word. Explicit line breaks remain separate. The mobile client uses exact wrap information from current backends; older backends retain the previous text reflow behavior. Chat reads the agent transcript separately and does not rebuild text from terminal rows.
 
 On mobile, scroll back in CLI or Chat to show the floating down-arrow at the bottom-right of output, above the key bar. Tap it to return to the latest output without sending terminal input. The button hides at the bottom and stays outside the composer.
+
+### Abandoned shells
+
+Desktop sidebar session rows and mobile session cards mark a parentless plain shell as **Abandoned** after one idle hour and show its idle age. The five-second backend sweep requires a fresh OS process inventory: the PTY child must be an interactive shell with no child processes. An unknown inventory, script, foreground command, background child, detached TUIC job, managed identity, live child session, pending input or keep-open hold prevents closure. Unsupported or incomplete OS process observations fail closed.
+
+Settings → Agents → Idle agent hibernation (Expert Mode) includes **Close abandoned shells after (hours)** (`agents.abandoned_shell_hours`). The machine-owned value defaults to **0 (off)**; whole hours from 1 to 65535 enable closure. Idle age is measured from the most recent input, output or semantic activity, including elapsed time while the machine sleeps. Closure rechecks the process inventory and activity at the destructive boundary, and uses the normal session close/tombstone path. The sweep can lag the threshold by one five-second tick. A remote daemon applies its own setting, not the desktop host's value.

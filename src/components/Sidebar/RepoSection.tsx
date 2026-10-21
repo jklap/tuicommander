@@ -440,7 +440,7 @@ const BranchTabList: Component<{ terminalIds: string[]; repoPath: string }> = (p
 			.then((pid) => {
 				if (!cancelled) setChildPid(pid);
 			})
-			.catch((error) => appLogger.warn("sidebar", "Could not read session process ID", error));
+			.catch((error) => appLogger.warn("app", "Could not read session process ID", error));
 	});
 	const copyId = async (process: boolean) => {
 		const sessionId = menuTerminal()?.sessionId;
@@ -647,7 +647,12 @@ const BranchTabList: Component<{ terminalIds: string[]; repoPath: string }> = (p
 									<SubAgentIcon parent={parent()} class={s.branchSubAgentTag} iconClass={s.branchSubAgentIcon} />
 								)}
 							</Show>
-							<span class={s.branchAgentTime}>{compactActivityAge(t().lastActivityAt, clock())}</span>
+							<Show when={t().abandonedSinceMs}>
+								<span class={s.branchAgentActivity}>Abandoned</span>
+							</Show>
+							<span class={s.branchAgentTime}>
+								{compactActivityAge(t().abandonedSinceMs ?? t().lastActivityAt, clock())}
+							</span>
 							{/* Rich: what the agent is doing, in words, under the tab title. */}
 							<Show when={rich() && agentRow(t()).state === "working" ? agentRow(t()) : null}>
 								{(facts) => (

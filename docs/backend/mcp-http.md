@@ -2871,3 +2871,7 @@ Managed `agent action=launch` uses the same private pre-dispatch static contract
 Server instructions use TUIC protocol names as shorthand. Claude Code exposes the configured `tuicommander` server tool as `mcp__tuicommander__agent`; Codex 0.163.0 exposes namespace member `mcp__tuicommander.agent`. A different configured server alias changes that prefix. These are not the client native `Agent` tool. Use the actual exposed schema; a bare `tool_name=agent` is valid inside TUIC lazy `call_tool`, not as a guessed direct client call.
 
 The recorded client names and localhost-only capture script are in `src-tauri/src/mcp_http/fixtures/tool-names-2108.*`. The probe advertises one MCP tool and captures only outgoing tool names, with isolated homes and dummy keys; it rejects the model request without a vendor call. This records client qualification, not a production TUIC server handshake.
+
+### Remote session closure
+
+MCP `session action=close` accepts a remote `connection_id` or connection-qualified session reference. The host resolves aliases on the owning daemon and sends authenticated `DELETE /sessions/{id}`. The caller's own PTY remains protected from self-close, and non-loopback MCP callers cannot invoke destructive close actions. A disconnected connection reports an error; it never falls back to a local session. HTTP DELETE and local MCP close use the same teardown, session-closed events and retained output tombstone. Repeating a close of a retained tombstone succeeds. Explicit close remains user-directed and is not limited to abandoned shells.
