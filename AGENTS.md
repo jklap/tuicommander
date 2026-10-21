@@ -291,7 +291,7 @@ When enabled, emits health snapshots every 30s and alerts on FD/thread growth tr
 Frontend unresponsive: no heartbeat for 30s — the WebView main thread is blocked or gone.
 ```
 
-**Whole-process silence is not a frontend block.** When the heartbeat gap coincides with an empty backend log and `Sleep-wake detected` lines while the Mac is awake, every thread was starved. On 2026-10-20 an occluded agent-test instance without a power assertion was App-Napped: `ps -M -p <pid>` showed ~100 threads at priority 4, and a sync IPC command was blocked 40 s in `rename(2)`. `app_nap.rs` now keeps App Nap off for the process lifetime (story 1638-c94c).
+**Whole-process silence is not proof of a frontend-only block.** On 2026-10-20 an occluded agent-test instance without a power assertion showed a 41.6 s callback gap, 40 s backend-log silence, `Sleep-wake detected` lines, ~100 threads at priority 4, and a sync IPC command sampled in `rename(2)` over the gap. Historical attribution remains open. A controlled replay with normal-priority CPU contention reproduced a 36.753 s callback gap; adding the `app_nap.rs` process-lifetime activity alone reduced the maximum to 2.561 s. Independent backend requests still completed in that RED, so it does not reproduce the original backend outage. See `scripts/stall-workload/OCCLUDED-RESULTS.md` (story 1638-c94c).
 
 **Persistent stall evidence:** selected numeric slow-event metadata survives ring overflow and graceful restart in a bounded journal. See `docs/backend/stall-journal.md` for retention, replay inputs and limits; this is not proof of historical stall attribution.
 

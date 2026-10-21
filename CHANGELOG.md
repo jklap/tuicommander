@@ -6,7 +6,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
-- Keep macOS App Nap off for the whole desktop process. An occluded window without a busy agent no longer demotes PTY readers, the local API and the heartbeat to the background band; measured 41.6 s heartbeat and 40 s backend stalls before the change (#1638-c94c).
+- Keep macOS App Nap off for the whole desktop process while still allowing idle system sleep. A controlled hidden-window replay under CPU contention reduced the maximum WebView callback gap from 36.753 s to 2.561 s with the activity alone; this does not attribute the historical backend outage to App Nap (#1638-c94c).
 - Reuse unchanged checkout monitoring status on macOS/Windows with raw file-event invalidation, source signatures and a five-minute backstop; keep fresh reads on Linux and for unsupported repositories (#2098-98b2).
 
 - Share one Git status traversal between sidebar diff totals and dirty badges per checkout (#2098-98b2).

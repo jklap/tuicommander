@@ -99,16 +99,6 @@ pub(crate) fn present_without_focus(window: &tauri::WebviewWindow) -> tauri::Res
             }
         }
     })?;
-    // A covered, inactive test run showed multi-second rAF gaps even after the
-    // document stayed visible (story 2095). Prevent App Nap during live checks;
-    // the observation alone does not attribute those gaps to App Nap.
-    // The activity is held until the test instance exits; system sleep stays allowed.
-    std::mem::forget(
-        objc2_foundation::NSProcessInfo::processInfo().beginActivityWithOptions_reason(
-            objc2_foundation::NSActivityOptions::UserInitiatedAllowingIdleSystemSleep,
-            &objc2_foundation::NSString::from_str("agent-test live latency checks"),
-        ),
-    );
     let pointer = window.ns_window()?;
     // SAFETY: Tauri returns this live window's NSWindow; Ready is on AppKit's
     // main thread and the borrowed native window cannot outlive the Tauri window.
