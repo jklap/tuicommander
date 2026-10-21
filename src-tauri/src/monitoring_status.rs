@@ -622,4 +622,115 @@ mod tests {
             &["worktree", "remove", "--force", sibling.to_str().unwrap()],
         );
     }
+    #[test]
+    fn monitoring_status_inventory_add_keeps_unchanged_sibling_reusable() {
+        inventory_add_reuses_sibling(false);
+    }
+
+    /// Catches treating a new admin path as watcher loss after a bounded-cache eviction.
+    #[test]
+    fn monitoring_status_inventory_add_after_main_entry_eviction_keeps_sibling_reusable() {
+        inventory_add_reuses_sibling(true);
+    }
+
+    fn inventory_add_reuses_sibling(evict_main: bool) {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        let (_guard, repo) = setup_test_repo_with_commit();
+        let repo = repo.canonicalize().unwrap();
+        run_git(&repo, &["branch", "-M", "main"]);
+        let holder_guard = tempfile::tempdir().unwrap();
+        let holder = holder_guard.path().canonicalize().unwrap();
+        let sibling = holder.join("existing");
+        let added = holder.join("added");
+        run_git(
+            &repo,
+            &[
+                "worktree",
+                "add",
+                "-b",
+                "inventory-existing",
+                sibling.to_str().unwrap(),
+            ],
+        );
+        let cache = Arc::new(StatusCache::default());
+        let complete = Arc::new(AtomicBool::new(true));
+        let (tx, rx) = std::sync::mpsc::channel();
+        let callback_cache = Arc::clone(&cache);
+        let callback_complete = Arc::clone(&complete);
+        let callback_repo = repo.clone();
+        let mut watcher =
+            notify::recommended_watcher(move |event: Result<notify::Event, notify::Error>| {
+                let event = event.unwrap();
+                // Same authority revocation as the production callback.
+                if !callback_cache.event(&callback_repo, &event) {
+                    callback_complete.store(false, Ordering::Release);
+                }
+                let _ = tx.send(event);
+            })
+            .unwrap();
+        watcher
+            .watch(&repo, notify::RecursiveMode::Recursive)
+            .unwrap();
+        watcher
+            .watch(&sibling, notify::RecursiveMode::Recursive)
+            .unwrap();
+        cache.set_watching(&repo, &repo, true);
+        cache.set_watching(&repo, &sibling, true);
+        assert_eq!(cache.read(&sibling).1.unwrap(), 0);
+        let before = computations(&cache, &sibling);
+        if evict_main {
+            // Exercise the same absence that max_capacity eviction permits.
+            // Retiring a snapshot entry does not retire its OS watch.
+            cache.entries.invalidate(&repo);
+        }
+        run_git(
+            &repo,
+            &[
+                "worktree",
+                "add",
+                "-b",
+                "inventory-added",
+                added.to_str().unwrap(),
+            ],
+        );
+        let new_admin = crate::git::resolve_git_dir(&added).unwrap();
+        let wait_for = |path: &Path| {
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+            loop {
+                let event = rx
+                    .recv_timeout(deadline.saturating_duration_since(std::time::Instant::now()))
+                    .unwrap_or_else(|error| {
+                        panic!("no mutating event for {}: {error}", path.display())
+                    });
+                if !crate::repo_watcher::is_ignorable_access(&event.kind)
+                    && event.paths.iter().any(|p| p == path)
+                {
+                    break;
+                }
+            }
+        };
+        // The existing worktrees parent is already watched. Newly created
+        // children may predate inotify's recursive-watch installation, so the
+        // authoritative inventory signal is creation of the admin directory.
+        wait_for(&new_admin);
+        // Inventory sync arms only the newly discovered root, never re-arms old ones.
+        watcher
+            .watch(&added, notify::RecursiveMode::Recursive)
+            .unwrap();
+        cache.set_watching(&repo, &added, complete.load(Ordering::Acquire));
+        run_git(
+            &repo,
+            &["commit", "--allow-empty", "-m", "after inventory growth"],
+        );
+        wait_for(&repo.join(".git/refs/heads/main"));
+        assert_eq!(cache.read(&sibling).1.unwrap(), 0);
+        let after = computations(&cache, &sibling);
+        run_git(&repo, &["worktree", "remove", added.to_str().unwrap()]);
+        run_git(&repo, &["worktree", "remove", sibling.to_str().unwrap()]);
+        assert_eq!(
+            after - before,
+            0,
+            "inventory addition retired unchanged sibling watching"
+        );
+    }
 }
