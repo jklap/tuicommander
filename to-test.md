@@ -1,6 +1,13 @@
 ## App Nap opt-out (1638-c94c) — Rust restart required
 
 - [ ] After Boss manually restarts a rebuilt backend, check the log line `App Nap disabled for the process lifetime` (source `app-nap`). Cover the TUIC window with a full-screen app while no agent is busy, wait two minutes, and check that `/logs` contains no `Sleep-wake detected` or `Frontend unresponsive` line for that period and that remote clients stay live. This Rust change does not hot-reload into the daily app.
+## Wrapped ego approval controls (2102-98ab) — Rust restart required
+
+- [x] An isolated `at-2102` worktree build exported a wrapped printf approval with all five native keys. The mobile header question card sent `y` and the command exited 0 with `PARITY_P_OK`. Evidence: `~/Gits/.tmp/results/fix-2102-live/`. The daily backend still requires Boss's manual `make dev` restart or `make build` installation to load this Rust fix; no daily app restart was performed.
+## Grok npm launcher Chat binding (2104-0523) — Rust restart required
+
+- [ ] After Boss manually rebuilds and restarts the daily backend, verify a Grok terminal launched through npm opens its own Chat transcript. The isolated instance evidence does not load this Rust change into Boss's running app; no daily restart is performed by the peer.
+
 ## Bounded repository file reads (2098-98b2) — Rust restart required
 
 - [ ] After a manual backend rebuild/restart, verify an external edit under an ignored directory containing a tracked file updates that checkout, unchanged siblings remain correct, and watcher restart returns fresh status. macOS/Windows monitoring snapshots require complete watches; Linux stays fresh. No daily app restart was performed.
