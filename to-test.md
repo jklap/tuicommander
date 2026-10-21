@@ -347,6 +347,8 @@
 - [x] Recorded Codex paragraphs form one CLI and Chat tint with no visible answer glyphs. _(verified: worktree CanvasTerminal and Transcript screenshots in ~/Gits/.tmp/results/1872/before-grid-chat.png and after-grid-chat.png; real Codex VT replayed with the Rust grid.)_
 # To Test
 
+- [ ] [HUMAN] Mobile composer safe area (#2116-0213): in the next guided iPhone session, check the installed PWA with keyboard closed/open/reopened. Controls must stay above the Home Indicator and the composer background must reach the bottom. If the separate shell-height band remains, capture a full-screen screenshot, device/iOS, orientation and keyboard state before reloading. The bottom-inset change is not proof that this band is fixed.
+
 ## Work-item page total (1845-66f6) — Rust restart required
 
 - [ ] After Boss manually restarts `make dev` or installs `make build`, `WorkItemPage.total` / `WorkItemGroupedPage.total` are accepted by the Rust DTOs (optional, defaulted). Targeted `plugin_docs` and `work_items` tests pass; the Tasks list shows "N of total" once a loaded GitLab plugin build that sends `x-total` is installed (plugin branch parked, see story worklog). _(triage 2026-10-14: WAITS — Needs the named integration/plugin release to land and load before the consumer check.)_
