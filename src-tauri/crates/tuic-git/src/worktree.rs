@@ -3846,8 +3846,10 @@ pub fn list_base_ref_options(repo_path: String) -> Result<Vec<BaseRefOption>, St
                 });
             }
         } else if full_ref.starts_with("refs/remotes/") {
-            // Skip origin/HEAD (synthetic ref)
-            if short_name.ends_with("/HEAD") {
+            // Skip a remote's HEAD symref. Judge by the FULL refname: git's
+            // %(refname:short) collapses refs/remotes/<remote>/HEAD to just the
+            // remote name ("origin"), so a short-name `/HEAD` check never matches.
+            if full_ref.ends_with("/HEAD") {
                 continue;
             }
             if short_name == default_branch {
@@ -7722,6 +7724,63 @@ branch refs/heads/feat
             names.contains(&"origin/remote-only"),
             "origin/remote-only should be in refs, got: {:?}",
             names
+        );
+    }
+
+    #[test]
+    fn list_base_ref_options_skips_remote_head_symrefs_in_a_real_clone() {
+        let repo = setup_test_repo();
+        let bare = tempfile::tempdir().unwrap();
+        git_cmd(bare.path())
+            .args(["clone", "--bare", &repo.path().to_string_lossy(), "."])
+            .run()
+            .unwrap();
+        let work = tempfile::tempdir().unwrap();
+        let w = work.path();
+        git_cmd(w)
+            .args(["clone", &bare.path().to_string_lossy(), "."])
+            .run()
+            .unwrap();
+        for name in ["upstream", "nohead"] {
+            git_cmd(w)
+                .args(["remote", "add", name, &bare.path().to_string_lossy()])
+                .run()
+                .unwrap();
+            git_cmd(w).args(["fetch", name]).run().unwrap();
+            git_cmd(w)
+                .args(["remote", "set-head", name, "-a"])
+                .run()
+                .unwrap();
+        }
+        // A remote with no HEAD symref at all.
+        git_cmd(w)
+            .args(["remote", "set-head", "nohead", "-d"])
+            .run()
+            .unwrap();
+        // A local branch whose name looks like a remote ref.
+        git_cmd(w)
+            .args(["branch", "origin-like/feature"])
+            .run()
+            .unwrap();
+        git_cmd(w).args(["branch", "feature/HEAD"]).run().unwrap();
+
+        let refs = list_base_ref_options(w.to_string_lossy().into_owned()).unwrap();
+        let names: Vec<&str> = refs.iter().map(|r| r.name.as_str()).collect();
+        for phantom in ["origin", "upstream", "nohead"] {
+            assert!(
+                !names.contains(&phantom),
+                "phantom {phantom} leaked: {names:?}"
+            );
+        }
+        assert!(
+            names.contains(&"upstream/main") || names.contains(&"upstream/master"),
+            "{names:?}"
+        );
+        assert!(names.contains(&"origin-like/feature"));
+        assert!(
+            refs.iter()
+                .any(|r| r.name == "feature/HEAD" && r.kind == "local"),
+            "{names:?}"
         );
     }
 

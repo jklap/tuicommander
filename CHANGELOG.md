@@ -8,6 +8,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- Stop a remote's `HEAD` symref (e.g. `refs/remotes/origin/HEAD`) leaking into branch lists as a phantom branch named after the remote, and classify `is_remote` from the full refname so remotes not named `origin` and local branches such as `origin/foo` or `feature/HEAD` are reported correctly (branch switcher, Git Panel Branches tab, base-ref picker, graph decorations).
+
 - Correct Settings accent-action text, compact navigation, wrapped help badges, shortcut groups, and workspace path presentation; hide the desktop-only Local tools card in browser mode (#1945).
 
 - Keep marker-projected terminal frames incremental: repaint dirty display rows and changed projection slots instead of clearing the whole canvas (#2003-f218).
