@@ -5931,12 +5931,29 @@ async fn an_auto_bound_peer_is_named_after_its_alias() {
 #[cfg(unix)]
 #[tokio::test]
 async fn ego_child_without_session_header_binds_through_process_ancestry() {
+    assert_scrubbed_bridge_ancestry(false).await;
+}
+
+// Catches: ancestry recovery crosses a detached command and impersonates its
+// foreground runner even after the bridge scrubs the command boundary marker.
+#[cfg(unix)]
+#[tokio::test]
+async fn bg_command_boundary_stops_scrubbed_bridge_parent_identity_recovery_2100() {
+    assert_scrubbed_bridge_ancestry(true).await;
+}
+
+#[cfg(unix)]
+async fn assert_scrubbed_bridge_ancestry(background: bool) {
     use std::io::{BufRead, BufReader};
     // A platform binary's environment is unreadable on macOS, and ego is not one:
     // run the identity holder from a copy (macOS /bin/sh stays unreadable even
     // so, dash does not). Its `sleep` child (the stand-in bridge) has the variable
     // removed.
-    let holder = crate::test_support::test_temp_root().join("ego-holder-sh");
+    let holder = crate::test_support::test_temp_root().join(if background {
+        "bg-holder-sh-2100"
+    } else {
+        "ego-holder-sh"
+    });
     let shell = if cfg!(target_os = "macos") {
         "/bin/dash"
     } else {
@@ -5953,14 +5970,18 @@ async fn ego_child_without_session_header_binds_through_process_ancestry() {
             .expect("codesign")
             .success()
     );
+    let command = if background {
+        // The unmarked grandchild models an agent that scrubs its MCP bridge.
+        r#"env -u TUIC_SESSION TUIC_BG_COMMAND=1 "$0" -c 'env -u TUIC_BG_COMMAND "$0" -c "$1" & wait' "$0" 'echo "$$ $PPID"; exec sleep 60' & wait"#
+    } else {
+        r#"env -u TUIC_SESSION "$0" -c 'echo "$$ $PPID"; exec sleep 60' & wait"#
+    };
     let mut parent = std::process::Command::new(&holder)
         // Publish the PIDs from the scrubbed child, after `env` has exec'd it.
         // An absent environment during exec is not proof that scrubbing finished.
-        .args([
-            "-c",
-            "env -u TUIC_SESSION \"$0\" -c 'echo \"$$ $PPID\"; exec sleep 60' & wait",
-        ])
+        .args(["-c", command])
         .env("TUIC_SESSION", TEST_UUID_A)
+        .env_remove("TUIC_BG_COMMAND")
         .stdout(std::process::Stdio::piped())
         .spawn()
         .expect("spawn sh");
@@ -5971,7 +5992,7 @@ async fn ego_child_without_session_header_binds_through_process_ancestry() {
     let (bridge_pid, holder_pid) = line.trim().split_once(' ').expect("two pids");
     let bridge_pid = bridge_pid.to_string();
     assert_eq!(
-        crate::process_env::read_process_env_var(holder_pid.parse().unwrap(), "TUIC_SESSION"),
+        crate::process_env::read_process_env_var(parent.id(), "TUIC_SESSION"),
         Some(TEST_UUID_A.to_string()),
         "fixture: the launching process must hold the identity and be readable"
     );
@@ -5981,6 +6002,21 @@ async fn ego_child_without_session_header_binds_through_process_ancestry() {
         "fixture: the stand-in bridge must not hold the identity itself"
     );
 
+    assert_eq!(
+        crate::process_env::read_process_env_var(bridge_pid.parse().unwrap(), "TUIC_BG_COMMAND"),
+        None,
+        "fixture: the bridge must scrub the boundary too, requiring an ancestor check"
+    );
+    if background {
+        assert_eq!(
+            crate::process_env::read_process_env_var(
+                holder_pid.parse().unwrap(),
+                "TUIC_BG_COMMAND"
+            )
+            .as_deref(),
+            Some("1")
+        );
+    }
     let state = test_state();
     let mut headers = HeaderMap::new();
     headers.insert(CLIENT_PID_HEADER, bridge_pid.parse().unwrap());
@@ -6004,9 +6040,17 @@ async fn ego_child_without_session_header_binds_through_process_ancestry() {
         .map(|entry| entry.value().clone())
         .collect();
     let _ = std::process::Command::new("kill").arg(&bridge_pid).status();
+    if background {
+        let _ = std::process::Command::new("kill").arg(holder_pid).output();
+    }
     let _ = parent.kill();
     let _ = parent.wait();
-    assert_eq!(bound, vec![TEST_UUID_A.to_string()]);
+    let expected = if background {
+        vec![]
+    } else {
+        vec![TEST_UUID_A.to_string()]
+    };
+    assert_eq!(bound, expected);
 }
 
 // Catches: one oversized UTF-8 inbox item bypasses the byte bound or consumes unread text.

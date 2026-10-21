@@ -7,6 +7,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 - Add opt-in `agent send urgency=interrupt`: Esc for safe working Claude/Codex/ego sessions, a ten-second confirmed-idle wait, then complete message submission, with explicit urgent fallback receipts (#2113-c419).
+- Remove inherited foreground peer identity from detached `tuic bg` commands and stop MCP ancestry recovery at their command boundary so background progress cannot block the parent composer and strand its completion wake; preserve runner wake and mail routing (#2100-c249).
+### Added
+- Mark verified abandoned shells with their idle age on desktop and mobile. Add an optional machine-owned idle-hours close setting, disabled by default (#2111-131f).
+
+### Fixed
+- Add Copy alias to sidebar session menus using the owning session-list value, and hide unknown process IDs instead of offering an unavailable action (#2112-8a79).
+- Route MCP remote session close to the owning daemon, with self-close protection and retained final output (#2111-131f).
+
 
 - Keep the mobile CLI green answer bar in its own gutter so column-zero ego text stays clear without adding a second Claude text margin (#2110-734c).
 

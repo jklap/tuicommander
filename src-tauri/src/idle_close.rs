@@ -166,6 +166,7 @@ fn sweep_with_snapshot(
     now_ms: u64,
     mut snapshot: impl FnMut() -> Option<Vec<String>>,
 ) {
+    sweep_abandoned_shells(state);
     sweep_hibernation(state, tracker, now_ms, &mut snapshot);
     let children: Vec<String> = state
         .session_maps
@@ -230,6 +231,147 @@ fn sweep_with_snapshot(
         );
         crate::mcp_http::mcp_transport::close_idle_managed_session(state, &session_id);
         tracker.seen.remove(&session_id);
+    }
+}
+
+pub(crate) fn shell_last_io_ms(state: &AppState, id: &str) -> Option<u64> {
+    let output = state
+        .session_maps
+        .last_output_ms
+        .get(id)?
+        .load(Ordering::Acquire);
+    let input = state
+        .session_maps
+        .last_input_ms
+        .get(id)
+        .map(|v| v.load(Ordering::Acquire))
+        .unwrap_or(0);
+    let activity = state.session_maps.session_states.get(id)?.last_activity_ms;
+    let last = output.max(input).max(activity);
+    (last > 0).then_some(last)
+}
+
+fn shell_candidate(state: &AppState, id: &str) -> Option<(u32, u64)> {
+    if state.session_maps.session_parent.contains_key(id)
+        || state.peer_agents.contains_key(id)
+        || state.keep_open_sessions.contains(id)
+        || state
+            .session_maps
+            .session_parent
+            .iter()
+            .any(|p| p.value() == id)
+        || crate::pty::queued_command_count(state, id) > 0
+        || bg_wake_blocks_close(id)
+        || state
+            .session_maps
+            .input_buffers
+            .get(id)
+            .is_some_and(|b| !b.lock().is_empty())
+    {
+        return None;
+    }
+    // Managed identities can differ from the PTY UUID. Both ownership and
+    // children must be checked against the live binding, not just the tab key.
+    if state
+        .session_maps
+        .live_pty_by_tuic_session
+        .iter()
+        .any(|binding| {
+            binding.value() == id
+                && (state.peer_agents.contains_key(binding.key())
+                    || state
+                        .session_maps
+                        .session_parent
+                        .iter()
+                        .any(|p| p.value() == binding.key()))
+        })
+    {
+        return None;
+    }
+    let ss = state.session_state_with_shell(id)?;
+    if ss.agent_type.is_some()
+        || ss.background_work
+        || ss.awaiting_input
+        || ss.has_pending_background_probe()
+        || ss.shell_state.as_deref() != Some("idle")
+    {
+        return None;
+    }
+    let pid = state
+        .session_maps
+        .sessions
+        .get(id)?
+        .lock()
+        ._child
+        .process_id()?;
+    Some((pid, shell_last_io_ms(state, id)?))
+}
+
+fn sweep_abandoned_shells(state: &Arc<AppState>) {
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64;
+    sweep_abandoned_shells_at(
+        state,
+        now_ms,
+        crate::config::load_agents_config().abandoned_shell_hours,
+        crate::pty::process_tree_snapshot,
+    );
+}
+
+fn sweep_abandoned_shells_at(
+    state: &Arc<AppState>,
+    now_ms: u64,
+    hours: u16,
+    mut inventory: impl FnMut() -> Option<Vec<crate::pty::ProcessTreeEntry>>,
+) {
+    let ids: Vec<String> = state
+        .session_maps
+        .sessions
+        .iter()
+        .map(|s| s.key().clone())
+        .collect();
+    let mut processes = None;
+    for id in ids {
+        let candidate = shell_candidate(state, &id)
+            .filter(|(_, last)| now_ms.saturating_sub(*last) >= 3_600_000);
+        let eligible = candidate
+            .filter(|(pid, _)| {
+                processes
+                    .get_or_insert_with(&mut inventory)
+                    .as_ref()
+                    .is_some_and(|ps| {
+                        crate::pty::abandoned_shell_process(*pid, ps)
+                            && !live_bg_runner_for_session(
+                                &ps.iter().map(|p| p.command.clone()).collect::<Vec<_>>(),
+                                &id,
+                            )
+                    })
+            })
+            .filter(|observed| shell_candidate(state, &id).as_ref() == Some(observed));
+        let since_ms = eligible.map(|(_, last)| last);
+        let previous = state
+            .session_maps
+            .session_states
+            .get(&id)
+            .and_then(|s| s.abandoned_since_ms);
+        if previous != since_ms {
+            state.emit_pty_event(crate::state::AppEvent::ShellAbandoned {
+                session_id: id.clone(),
+                since_ms,
+            });
+        }
+        if let Some((pid, last)) = eligible
+            && hours > 0 && now_ms.saturating_sub(last) >= u64::from(hours) * 3_600_000
+            // A second fresh observation at the destructive boundary. A failed
+            // OS inventory, new child, queued input or activity cancels closure.
+            && inventory().is_some_and(|ps| crate::pty::abandoned_shell_process(pid, &ps)
+                && !live_bg_runner_for_session(&ps.iter().map(|p| p.command.clone()).collect::<Vec<_>>(), &id))
+            && shell_candidate(state, &id) == Some((pid, last))
+        {
+            crate::mcp_http::mcp_transport::close_idle_managed_session(state, &id);
+        }
     }
 }
 
@@ -456,7 +598,22 @@ mod tests {
 
     #[cfg(unix)]
     fn live_child(state: &Arc<AppState>, session_id: &str, worktree: std::path::PathBuf) {
-        use portable_pty::{CommandBuilder, PtySize, native_pty_system};
+        live_child_command(
+            state,
+            session_id,
+            worktree,
+            portable_pty::CommandBuilder::new("true"),
+        );
+    }
+
+    #[cfg(unix)]
+    fn live_child_command(
+        state: &Arc<AppState>,
+        session_id: &str,
+        worktree: std::path::PathBuf,
+        command: portable_pty::CommandBuilder,
+    ) {
+        use portable_pty::{PtySize, native_pty_system};
         let pair = native_pty_system()
             .openpty(PtySize {
                 rows: 24,
@@ -465,10 +622,7 @@ mod tests {
                 pixel_height: 0,
             })
             .expect("open PTY");
-        let child = pair
-            .slave
-            .spawn_command(CommandBuilder::new("true"))
-            .expect("start child");
+        let child = pair.slave.spawn_command(command).expect("start child");
         let writer = pair.master.take_writer().expect("PTY writer");
         state.session_maps.sessions.insert(
             session_id.into(),
@@ -501,6 +655,143 @@ mod tests {
                 ..Default::default()
             },
         );
+    }
+
+    #[cfg(unix)]
+    struct ShellFixture {
+        state: Arc<AppState>,
+        id: String,
+    }
+    #[cfg(unix)]
+    impl Drop for ShellFixture {
+        fn drop(&mut self) {
+            crate::pty::close_pty_core(&self.state, &self.id, false);
+        }
+    }
+    #[cfg(unix)]
+    fn abandoned_fixture(command: portable_pty::CommandBuilder) -> ShellFixture {
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+        let id = uuid::Uuid::new_v4().to_string();
+        live_child_command(&state, &id, crate::test_support::test_temp_root(), command);
+        state.session_maps.session_states.insert(
+            id.clone(),
+            crate::state::SessionState {
+                last_activity_ms: 1000,
+                ..Default::default()
+            },
+        );
+        state.session_maps.shell_states.insert(
+            id.clone(),
+            std::sync::atomic::AtomicU8::new(crate::pty::SHELL_IDLE),
+        );
+        state
+            .session_maps
+            .last_output_ms
+            .insert(id.clone(), std::sync::atomic::AtomicU64::new(1000));
+        ShellFixture { state, id }
+    }
+
+    // Catches: closure at the wrong threshold, default-on cleanup, or a marker
+    // that never reaches the same snapshot read by desktop and mobile.
+    #[cfg(unix)]
+    #[test]
+    fn abandoned_shell_marks_at_one_hour_and_closes_only_at_configured_threshold() {
+        let fixture = abandoned_fixture(portable_pty::CommandBuilder::new("/bin/sh"));
+        let (state, id) = (&fixture.state, &fixture.id);
+        let mut events = state.event_bus.subscribe();
+        for (now, hours, abandoned, live) in [
+            (3_600_999, 1, false, true),
+            (3_601_000, 0, true, true),
+            (7_200_999, 2, true, true),
+            (7_201_000, 2, true, false),
+        ] {
+            sweep_abandoned_shells_at(state, now, hours, crate::pty::process_tree_snapshot);
+            while let Ok(event) = events.try_recv() {
+                if matches!(event, crate::state::AppEvent::ShellAbandoned { .. }) {
+                    crate::state::tests_support::apply_replay_event(state, &event);
+                }
+            }
+            assert_eq!(
+                state.session_maps.sessions.contains_key(id),
+                live,
+                "now={now}"
+            );
+            if live {
+                assert_eq!(
+                    state
+                        .session_state_with_shell(id)
+                        .unwrap()
+                        .abandoned_since_ms,
+                    abandoned.then_some(1000),
+                    "now={now}"
+                );
+            }
+        }
+    }
+
+    // Catches: a long-silent foreground command being killed just because its
+    // agent label is absent. OS argv and descendants come from real processes.
+    #[cfg(unix)]
+    #[test]
+    fn abandoned_shell_never_closes_foreground_or_background_commands() {
+        for script in [
+            "sleep 600",
+            "sleep 600 & wait",
+            ":; while read line; do :; done",
+        ] {
+            let mut cmd = portable_pty::CommandBuilder::new("/bin/sh");
+            cmd.args(["-c", script]);
+            let fixture = abandoned_fixture(cmd);
+            sweep_abandoned_shells_at(
+                &fixture.state,
+                100_000_000,
+                1,
+                crate::pty::process_tree_snapshot,
+            );
+            assert!(
+                fixture
+                    .state
+                    .session_maps
+                    .sessions
+                    .contains_key(&fixture.id),
+                "{script}"
+            );
+        }
+    }
+
+    // Catches: failed inventory authorizing deletion, activity racing the probe,
+    // overflow at u16::MAX, or an identity-bound managed peer losing its shell.
+    #[cfg(unix)]
+    #[test]
+    fn abandoned_shell_fails_closed_on_unknown_activity_and_live_ownership() {
+        let fixture = abandoned_fixture(portable_pty::CommandBuilder::new("/bin/sh"));
+        let (state, id) = (&fixture.state, &fixture.id);
+        sweep_abandoned_shells_at(state, 100_000_000, 1, || None);
+        assert!(state.session_maps.sessions.contains_key(id));
+        sweep_abandoned_shells_at(
+            state,
+            100_000_000,
+            u16::MAX,
+            crate::pty::process_tree_snapshot,
+        );
+        assert!(state.session_maps.sessions.contains_key(id));
+        sweep_abandoned_shells_at(state, 100_000_000, 1, || {
+            let ps = crate::pty::process_tree_snapshot();
+            state
+                .session_maps
+                .last_input_ms
+                .insert(id.clone(), std::sync::atomic::AtomicU64::new(100_000_000));
+            ps
+        });
+        assert!(state.session_maps.sessions.contains_key(id));
+        state.session_maps.last_input_ms.remove(id);
+        state.bind_live_pty("owner-identity", id);
+        state
+            .session_maps
+            .session_parent
+            .insert("live-child".into(), "owner-identity".into());
+        sweep_abandoned_shells_at(state, 100_000_000, 1, crate::pty::process_tree_snapshot);
+        assert!(state.session_maps.sessions.contains_key(id));
     }
 
     /// The parent is an MCP peer without a PTY, as an orchestrator usually is.

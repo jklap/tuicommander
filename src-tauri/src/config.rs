@@ -2177,6 +2177,10 @@ pub(crate) struct AgentsConfig {
     #[serde(default = "default_hibernate_minutes")]
     #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Hibernates unattended resumable agents after awake idle minutes; zero disables.","operations":["get","set"],"confirmationClass":"ordinary"}))]
     pub(crate) hibernate_idle_minutes: u32,
+    /// Zero disables automatic closure; abandoned markers still appear after one hour.
+    #[serde(default)]
+    #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Closes verified abandoned shells after idle hours; zero disables.","operations":["get","set"],"confirmationClass":"ordinary"}))]
+    pub(crate) abandoned_shell_hours: u16,
     #[serde(default)]
     #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Selects whether idle agents hibernate only in background or always.","operations":["get","set"],"confirmationClass":"ordinary"}))]
     pub(crate) hibernate_scope: HibernateScope,
@@ -2255,6 +2259,7 @@ impl Default for AgentsConfig {
             launch_modules: HashMap::new(),
             launch_instructions_disabled: false,
             hibernate_idle_minutes: default_hibernate_minutes(),
+            abandoned_shell_hours: 0,
             hibernate_scope: HibernateScope::default(),
         }
     }

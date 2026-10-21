@@ -22,6 +22,13 @@ function makeSession(overrides: Partial<SessionState> = {}): SessionInfo {
 }
 
 describe("SessionCard sub-rows", () => {
+	// Catches: treating abandoned shells as ordinary idle agents or losing their idle age.
+	it("renders the backend abandoned marker and idle age", () => {
+		const view = render(() => (
+			<SessionCard session={makeSession({ abandoned_since_ms: Date.now() - 7_200_000 })} onSelect={() => {}} />
+		));
+		expect(view.getByTestId("abandoned-marker").textContent).toBe("Abandoned · idle since 2h ago");
+	});
 	it("provides a named kill button separate from the card action", async () => {
 		const onSelect = vi.fn();
 		const onKill = vi.fn();

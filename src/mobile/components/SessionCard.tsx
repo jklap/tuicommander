@@ -95,7 +95,9 @@ export function SessionCard(props: SessionCardProps) {
 							<SubAgentIcon parent={props.spawnedBy!} class={styles.subAgentTag} iconClass={styles.subAgentIcon} />
 						</Show>
 						<span class={styles.name}>{props.session.display_name || agentType() || "Terminal"}</span>
-						<StatusBadge status={status()} />
+						<Show when={!props.session.state?.abandoned_since_ms}>
+							<StatusBadge status={status()} />
+						</Show>
 					</div>
 					<div class={styles.meta}>
 						<span class={styles.project}>{projectName(props.session.cwd)}</span>
@@ -103,6 +105,13 @@ export function SessionCard(props: SessionCardProps) {
 							<span class={styles.branch}>{props.session.worktree_branch}</span>
 						</Show>
 					</div>
+					<Show when={props.session.state?.abandoned_since_ms}>
+						{(since) => (
+							<div class={styles.subRow} data-testid="abandoned-marker">
+								Abandoned · idle since {formatTime(since())}
+							</div>
+						)}
+					</Show>
 					<Show when={props.session.state?.question_text}>
 						<div class={styles.snippet}>{props.session.state!.question_text}</div>
 					</Show>

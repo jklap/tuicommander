@@ -690,7 +690,7 @@ Some frontend-only stores persist to localStorage:
 - [x] Split pane layout
 - [x] Touch branch action trays: left swipe reveals existing actions; vertical scrolling and desktop hover controls remain unchanged
 - [x] Multi-repository sidebar
-- [x] Sidebar session context menu copies the PTY session ID and live child PID through the shared clipboard path.
+- [x] Sidebar session context menu copies the PTY session ID, live child PID, and owning session-list alias through the shared clipboard path; unknown PID and absent alias entries are hidden.
 - [x] Rich parent-agent links reveal and select live children in other repositories without moving sessions
 - [x] Git diff panel
 - [x] Interactive agent prompts UI
@@ -1327,3 +1327,9 @@ Consumer retry enforcement remains a separate live ego verification requirement.
 Implemented (#2023-54c4): mobile Settings has separate Terminal and Chat controls with smaller/larger buttons and current values, without explanatory text. Each preference has its own localStorage key and 10–24 px range with 1 px steps. The existing defaults stay 14 px for CLI output and Chat body text. Chat changes apply only within Session Chat and AI Chat transcripts. Composers, UI chrome, desktop fonts and other devices are unchanged. CLI rows rewrap locally without resizing the shared PTY and keep the visible row when scrolled back.
 
 Mobile offers the **Chat** tab only when the host has a configured ego executable, using the same availability predicate as desktop. Host settings changes update the tab without reloading. Removing ego configuration returns an open Chat view to **Sessions**; unavailable saved Chat links also stay on **Sessions**.
+
+### Abandoned shells
+
+Desktop sidebar session rows and mobile session cards mark a parentless plain shell as **Abandoned** after one idle hour and show its idle age. The five-second backend sweep requires a fresh OS process inventory: the PTY child must be an interactive shell with no child processes. An unknown inventory, script, foreground command, background child, detached TUIC job, managed identity, live child session, pending input or keep-open hold prevents closure. Unsupported or incomplete OS process observations fail closed.
+
+Settings → Agents → Idle agent hibernation (Expert Mode) includes **Close abandoned shells after (hours)** (`agents.abandoned_shell_hours`). The machine-owned value defaults to **0 (off)**; whole hours from 1 to 65535 enable closure. Idle age is measured from the most recent input, output or semantic activity, including elapsed time while the machine sleeps. Closure rechecks the process inventory and activity at the destructive boundary, and uses the normal session close/tombstone path. The sweep can lag the threshold by one five-second tick. A remote daemon applies its own setting, not the desktop host's value.

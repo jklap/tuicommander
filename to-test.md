@@ -1,3 +1,10 @@
+## Detached command peer isolation (2100-c249) — CLI update and backend restart required
+
+- [ ] After installing the rebuilt `tuic` CLI, verify a detached reviewer cannot set the foreground composer to awaiting through its progress report, and its BG DONE still arrives. Install both the rebuilt CLI and backend, then manually restart the backend: the ancestry boundary cannot load through frontend hot reload. No daily app restart was performed by this peer.
+## Sidebar session identifiers (2112-8a79)
+
+- [x] Isolated `b6-session-menu` instance: a running Claude PTY menu exposes session ID, actual child PID, and session-list alias; browser reload preserves PID and alias. Evidence: `~/Gits/.tmp/results/b6-2112-visual-owned/` (DOM and screenshot, no session fixtures). Unknown-PID and absent-alias visibility is covered by the targeted sidebar component tests.
+
 ## Queued BG DONE diagnostics (2100-c249) — Rust restart required
 
 - [ ] After Boss manually rebuilds and restarts the backend, leave a BG DONE wake queued behind a retained draft for more than 60 seconds. Check `/logs?source=bg-wake` on that instance for one warning with `partial_composer=true` and the bounded process tree. Clear the draft and check that the existing delivery path submits the wake. No daily app restart was performed by this peer.
@@ -2765,3 +2772,4 @@ Needs an iPhone (iOS 16.4+, 18.4+ preferred), the desktop TUICommander running a
 - [ ] Mobile CLI answer gutter (#2110-734c): on a phone, verify the green bar stays left of the first ego glyph, Claude keeps its existing margin, and blank paragraphs, wrapped links and tables keep their bars.
 
 - [ ] After rebuilding, verify `agent send urgency=interrupt` with an isolated Claude or ego child: the running tool stops and the full message starts a new turn; normal/urgent remain non-interrupting (#2113-c419). Rust changes require a manual `make dev` restart or release rebuild to reach the daily app.
+- [ ] After a manual Rust restart/rebuild, check abandoned-shell markers on desktop/mobile after one idle hour; optional close hours default to zero. Running foreground/background work must remain open. Check remote MCP close against the owning daemon (#2111-131f).
