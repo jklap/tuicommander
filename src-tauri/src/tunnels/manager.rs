@@ -43,6 +43,10 @@ impl StartReservation<'_> {
 
 impl Drop for StartReservation<'_> {
     fn drop(&mut self) {
+        // Runs when `start_with` returns, i.e. AFTER its lost-publication
+        // cleanup has been awaited, so a zero in-flight count means every start
+        // has finished (or discarded) whatever it spawned.
+        let _release = InFlightRelease(&self.manager.starting_in_flight);
         if self.published {
             return;
         }
@@ -55,8 +59,22 @@ impl Drop for StartReservation<'_> {
     }
 }
 
+/// Decrements the in-flight start counter on drop.
+struct InFlightRelease<'a>(&'a tokio::sync::watch::Sender<usize>);
+
+impl Drop for InFlightRelease<'_> {
+    fn drop(&mut self) {
+        self.0.send_modify(|count| *count -= 1);
+    }
+}
+
 pub struct TunnelManager {
     tunnels: DashMap<String, TunnelSlot>,
+    /// Number of `start_with` calls between claiming a slot and returning.
+    /// `shutdown_all_and_wait` waits for it to reach zero: removing a
+    /// `Starting` reservation alone says nothing about the supervisor/ssh that
+    /// start is about to create (and then has to clean up itself).
+    starting_in_flight: tokio::sync::watch::Sender<usize>,
     next_reservation: AtomicU64,
     /// Wrapped in Mutex so Arc<Mutex<AuditLog>> is Send+Sync and can be
     /// captured in the `Send + 'static` status callback required by TunnelSupervisor.
@@ -67,6 +85,7 @@ impl TunnelManager {
     pub fn new(audit: Arc<Mutex<AuditLog>>) -> Self {
         Self {
             tunnels: DashMap::new(),
+            starting_in_flight: tokio::sync::watch::channel(0).0,
             next_reservation: AtomicU64::new(1),
             audit,
         }
@@ -104,6 +123,7 @@ impl TunnelManager {
                 slot.insert(TunnelSlot::Starting(token));
             }
         }
+        self.starting_in_flight.send_modify(|count| *count += 1);
         let mut reservation = StartReservation {
             manager: self,
             id: id.clone(),
@@ -325,7 +345,8 @@ impl TunnelManager {
     /// where the process is about to disappear and a fire-and-forget signal
     /// has no guarantee of being delivered (let alone acted on) before that
     /// happens. All tunnels are asked to stop concurrently, not one after
-    /// another, and the WHOLE batch shares a single `GRACEFUL_SHUTDOWN_TIMEOUT`
+    /// another, and the WHOLE batch (including any start still in flight, see
+    /// `starting_in_flight`) shares a single `GRACEFUL_SHUTDOWN_TIMEOUT`
     /// bound — this does not scale with tunnel count, so app exit can never
     /// hang indefinitely no matter how many tunnels are running.
     pub async fn shutdown_all_and_wait(&self) {
@@ -350,10 +371,16 @@ impl TunnelManager {
             })
             .collect();
 
+        // Also wait for every in-flight `start_with`: the reservation removed
+        // above makes it discard what it was spawning, but only once its
+        // `spawn` future returns, which may be after this batch otherwise
+        // finishes (and the process exits, orphaning that ssh).
+        let mut in_flight = self.starting_in_flight.subscribe();
         let joined = async {
             for task in tasks {
                 let _ = task.await;
             }
+            let _ = in_flight.wait_for(|count| *count == 0).await;
         };
         let _ = tokio::time::timeout(GRACEFUL_SHUTDOWN_TIMEOUT, joined).await;
     }
@@ -694,6 +721,72 @@ mod tests {
         assert!(manager.get_status(&id).is_none());
         let events = manager.audit.lock().query_by_tunnel(&id, 20).unwrap();
         assert!(!events.iter().any(|event| event.kind == EventKind::Started));
+    }
+
+    /// Catches: `shutdown_all_and_wait` returning while a start is still
+    /// spawning. The reservation is removed, the batch finds no task to await,
+    /// and the app could exit before the start discards the ssh it spawns.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn shutdown_waits_for_a_start_still_spawning_and_its_ssh_is_gone() {
+        let (audit, _dir) = temp_audit();
+        let manager = Arc::new(TunnelManager::new(audit));
+        let marker = crate::test_support::test_temp_root().join("shutdown_in_flight_ssh.pid");
+        let _ = std::fs::remove_file(&marker);
+        let script = fake_ssh_script(&format!(
+            "echo $$ > '{}'\nexec sleep 3600",
+            marker.display()
+        ));
+        let ssh_path = script.path().to_path_buf();
+        let profile = test_profile("shutdown-while-starting");
+        let id = profile.id.clone();
+        let (release_tx, release_rx) = tokio::sync::oneshot::channel();
+        let task_manager = Arc::clone(&manager);
+        let start = tokio::spawn(async move {
+            task_manager
+                .start_with(profile, move |profile, callback| async move {
+                    let _ = release_rx.await;
+                    TunnelSupervisor::start_with_binary(profile, ssh_path, callback).await
+                })
+                .await
+        });
+        while !matches!(manager.get_status(&id), Some(TunnelStatus::Starting)) {
+            tokio::task::yield_now().await;
+        }
+
+        let shutdown_manager = Arc::clone(&manager);
+        let shutdown = tokio::spawn(async move { shutdown_manager.shutdown_all_and_wait().await });
+        // The reservation is gone, but the batch must still be waiting.
+        while manager.get_status(&id).is_some() {
+            tokio::task::yield_now().await;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+        assert!(
+            !shutdown.is_finished(),
+            "shutdown returned while a start was still spawning"
+        );
+
+        let _ = release_tx.send(());
+        shutdown.await.unwrap();
+        // Confirmed, not eventual: the start has already returned its error.
+        assert!(
+            start.is_finished(),
+            "start must have finished before shutdown returned"
+        );
+        let _ = start
+            .await
+            .unwrap()
+            .expect_err("stopped start must not publish");
+        let ssh_pid: i32 = std::fs::read_to_string(&marker)
+            .map(|text| text.trim().parse().unwrap())
+            .unwrap_or(0);
+        if ssh_pid > 0 {
+            let alive = unsafe { libc::kill(ssh_pid, 0) } == 0;
+            if alive {
+                unsafe { libc::kill(ssh_pid, libc::SIGKILL) };
+            }
+            assert!(!alive, "ssh {ssh_pid} survived shutdown");
+        }
     }
 
     #[tokio::test]
