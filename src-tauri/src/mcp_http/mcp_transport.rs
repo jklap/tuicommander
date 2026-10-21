@@ -96,7 +96,6 @@ pub(crate) use super::mcp_transport_catalogue::native_tool_catalog;
 #[cfg(test)]
 use super::mcp_transport_catalogue::native_tool_definitions;
 pub(crate) use super::mcp_transport_catalogue::rebuild_tool_search_index;
-use super::mcp_transport_catalogue::removed_native_action_replacement;
 #[cfg(test)]
 use super::mcp_transport_catalogue::render_mcp_instructions;
 use super::mcp_transport_catalogue::resolve_allowed_upstreams;
@@ -553,31 +552,12 @@ async fn dispatch_mcp_tool_call_with_context(
     mcp_session_id: Option<&str>,
     managed_parent_cwd: Option<&str>,
 ) -> serde_json::Value {
-    if name == "config" {
-        return serde_json::json!({"error":"Unknown tool 'config'"});
-    }
     if let Some(error) = super::mcp_transport_catalogue::native_action_unavailability(
         state,
         name,
         args["action"].as_str(),
     ) {
         return serde_json::json!({"error": error});
-    }
-    if let Some(action) = args["action"].as_str()
-        && let Some(replacement) = removed_native_action_replacement(name, action)
-    {
-        return serde_json::json!({
-            "error": format!("{name} action={action} was removed; use {replacement}")
-        });
-    }
-    if name == "repo"
-        && matches!(
-            args["action"].as_str(),
-            Some("worktree_lifecycle" | "worktree_remove")
-        )
-        && args.get("workspace_id").is_some()
-    {
-        return serde_json::json!({"error": "repo parameter workspace_id was renamed to branch"});
     }
     if matches!(name, "session" | "agent")
         && let Some(connection) = args.get("connection_id")
@@ -629,12 +609,22 @@ async fn dispatch_mcp_tool_call_with_context(
             if action != "list"
                 && let Some(remote) = super::remote_mcp_sessions::resolve(state, args)
             {
-                if matches!(action, "submit" | "force_retry") && !addr.ip().is_loopback() {
+                if matches!(action, "submit" | "force_retry" | "close") && !addr.ip().is_loopback()
+                {
                     return serde_json::json!({"error":"This session action is restricted to localhost connections"});
                 }
                 return match remote {
                     Ok((host, id)) => {
-                        super::remote_mcp_sessions::call(state, &host, &id, args).await
+                        let own_pty = mcp_session_id
+                            .and_then(|sid| state.mcp.to_session.get(sid).map(|v| v.clone()));
+                        super::remote_mcp_sessions::call_with_caller(
+                            state,
+                            &host,
+                            &id,
+                            args,
+                            own_pty.as_deref(),
+                        )
+                        .await
                     }
                     Err(error) => error,
                 };

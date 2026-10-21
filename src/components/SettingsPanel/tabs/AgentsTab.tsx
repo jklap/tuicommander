@@ -1777,6 +1777,31 @@ const HibernationSection: Component = () => {
 	const store = useAgentConfig();
 	return (
 		<SectionCard title={t("settings.agents.hibernateHeading", "Idle agent hibernation")}>
+			<ExpertSetting configKey="agents.abandoned_shell_hours" value={store.state.abandoned_shell_hours}>
+				<div class={a.fieldRow}>
+					<div class={s.helpLabel}>
+						<label for="abandoned-shell-hours">
+							{t("settings.agents.abandonedHours", "Close abandoned shells after (hours)")}
+						</label>
+					</div>
+					<Input
+						data-setting-id="agents.abandoned_shell_hours"
+						id="abandoned-shell-hours"
+						class={a.formInput}
+						type="number"
+						min="0"
+						max="65535"
+						value={store.state.abandoned_shell_hours}
+						onChange={(event) => void store.setAbandonedShellHours(event.currentTarget.valueAsNumber)}
+					/>
+				</div>
+				<p class={s.hint}>
+					{t(
+						"settings.agents.abandonedHint",
+						"Zero disables automatic closure. Plain shells are marked abandoned after one idle hour. Running processes, managed sessions and uncertain process observations are never closed.",
+					)}
+				</p>
+			</ExpertSetting>
 			<ExpertSetting configKey="agents.hibernate_idle_minutes" value={store.state.hibernate_idle_minutes}>
 				<div class={a.fieldRow}>
 					<div class={s.helpLabel}>

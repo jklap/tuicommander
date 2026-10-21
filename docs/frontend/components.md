@@ -341,7 +341,7 @@ input-listener cleanup. These controllers do not use reactive state.
 
 ### Sidebar (`Sidebar/`)
 
-Session rows use the shared ContextMenu and writeClipboard utility to copy their PTY session ID or child PID. The PID comes from an on-demand `list_active_sessions` snapshot, shared with `GET /sessions`; it is checked again before copying. An unavailable or exited process disables the action. Both desktop and mobile copy confirmation uses the toast store.
+Session rows use the shared ContextMenu and writeClipboard utility to copy their PTY session ID, child PID, or alias. PID and alias come from the owning row of an on-demand `list_active_sessions` snapshot, shared with `GET /sessions`; they are checked again before copying. Unknown PID and absent alias entries are hidden, including exited or suspended sessions. Both desktop and mobile copy confirmation uses the toast store.
 
 Repository tree with branch management. Touch branch rows reveal their existing
 actions in a full-height tray after a horizontal left swipe. A Sidebar-owned
@@ -887,3 +887,5 @@ retain the existing TextCorrector workflow; export does not change settings.
 Desktop `TerminalChatView` renders active native questions from the existing session lifecycle store below the shared transcript. `ChoicePromptOverlay` has an embedded layout; desktop and mobile share `sendNativeChoice` for agent-specific PTY keys. Compose drafts and ACP interaction state are not involved.
 
 Mobile offers the **Chat** tab only when the host has a configured ego executable, using the same availability predicate as desktop. Host settings changes update the tab without reloading. Removing ego configuration returns an open Chat view to **Sessions**; unavailable saved Chat links also stay on **Sessions**.
+
+Abandoned-shell markers in desktop sidebar session rows and mobile SessionCard render the same backend `state.abandoned_since_ms` timestamp. A missing field retracts the marker; the frontend does not infer abandonment from silence.

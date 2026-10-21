@@ -210,7 +210,6 @@ repainting its unchanged anchor does not close it as replaced prose.
 
 For a managed Claude child with workspace trust acceptance enabled, the rendered screen is also checked for its exact startup safety question, both choices, and **No, exit** selected above **Yes, I trust this folder**, as recorded in the Claude startup capture. Only then does the reader send Down followed by Enter under the PTY writer lock, once for that session. Other dialogs and user-opened terminals are never answered by this path; session cleanup removes an unused allowance.
 
-**ANSI anomaly detection** — The `detect_anomalous_sequences()` function scans PTY output for unusual escape sequences (screen clears, cursor home, alt-screen toggles, scrollback clears) and logs them at warn level. This is a diagnostic tool for investigating scroll-jump issues.
 
 **Pause behavior:** When `paused` flag is set (`AtomicBool`), the reader thread sleeps in 10 ms slices instead of reading. This prevents output flooding during background operations.
 
@@ -607,7 +606,7 @@ Never write `text + "\r"` directly to a PTY — see `AGENTS.md`.
 
 ## OSC 133 Semantic Prompts
 
-When the shell emits OSC 133 markers (modern bash/zsh/fish with the integration enabled), the reader records clean command lifecycles into the per-session knowledge store:
+When the shell emits OSC 133 markers (modern bash/zsh/fish with the integration enabled), the reader updates shell activity and terminal command blocks:
 
 | Marker | Meaning |
 |--------|---------|
@@ -616,11 +615,9 @@ When the shell emits OSC 133 markers (modern bash/zsh/fish with the integration 
 | `OSC 133;C` | Command output start |
 | `OSC 133;D[;exit_code]` | Command completed with the given exit code |
 
-`ChunkProcessor.record_osc133_outcomes` consumes the markers and writes a `CommandOutcome { command, cwd, exit_code, classification, duration_ms, output_snippet }` into the session knowledge store. Classification is one of `Success`, `Error { error_type }`, `TuiLaunched { app_name }`, `Timeout`, `UserCancelled`, `Inferred`. `error_type` is inferred from the output snippet (e.g. `rust-error-borrow`, `npm-missing-module`, `python-traceback`).
+`ChunkProcessor.handle_osc133_event` applies prompt-start (idle) and output-start (busy) activity transitions. Command completion still supplies block exit status; it does not close activity before the next prompt. `has_osc133_integration` records whether shell markers have been observed.
 
-**Fallback:** when OSC 133 is absent (plain shells, remote sessions), the silence timer still records an `Inferred` outcome so the AI agent loop has *something* to learn from. The `has_osc133_integration` flag on `AppState` tracks per-session whether real markers have been seen.
-
-Persistence lives at `<config_dir>/agent-knowledge/<session_id>.json`. A 2 s debounced background task (`spawn_persist_task`) flushes `knowledge_dirty` sessions to disk. `load_all` rehydrates stores on app start.
+The former command knowledge store had no reader and was removed in #2115-1333, including inferred outcomes and the periodic disk flush. Existing history files remain untouched.
 
 ## TUI Application Detection
 
@@ -633,11 +630,9 @@ enum TerminalMode {
 }
 ```
 
-`depth` is a counter for nested alt-screen pushes (e.g. `less` invoked from inside `vim`). Known app hints — matched heuristically from nearby screen rows — include `vim`, `nvim`, `htop`, `btop`, `lazygit`, `less`, `tmux`, `claude`, and others. The mode is surfaced on `SessionState.terminal_mode` and used by:
-- The session knowledge store — `tui_apps_seen` accumulates from it. Its two
-  former readers, the ReAct loop's `get_context` tool and the
-  `SessionKnowledgeBar` footer, went with the embedded AI engine (#784-0aec).
-- The agent safety layer — blocks Ctrl-U prefix injection while a TUI app is in the foreground.
+`depth` is a counter for nested alt-screen pushes (e.g. `less` invoked from inside `vim`). Known app hints — matched heuristically from nearby screen rows — include `vim`, `nvim`, `htop`, `btop`, `lazygit`, `less`, `tmux`, `claude`, and others. The mode is surfaced on `SessionState.terminal_mode`. The PTY processor uses it to distinguish a shell-level agent-session conflict from text displayed inside a TUI. Primary-screen mouse reporting also classifies inline TUIs without overriding alternate-screen nesting.
+
+Output watchers receive the original cleaned stream. The removed xterm-era cursor-home/cursor-up clear injection never fed the canvas grid and is no longer applied to watcher input.
 
 ## Silence-Based Question Detection
 
@@ -1151,3 +1146,9 @@ This observer is independent of busy/idle edges. It does not change queue order,
 claims, retry rules or process reconciliation. A `queued` CLI receipt remains
 an acceptance receipt even after delivery. Missing inventory is reported as
 unavailable, never as proof that work stopped.
+
+### Abandoned shells
+
+Desktop sidebar session rows and mobile session cards mark a parentless plain shell as **Abandoned** after one idle hour and show its idle age. The five-second backend sweep requires a fresh OS process inventory: the PTY child must be an interactive shell with no child processes. An unknown inventory, script, foreground command, background child, detached TUIC job, managed identity, live child session, pending input or keep-open hold prevents closure. Unsupported or incomplete OS process observations fail closed.
+
+Settings → Agents → Idle agent hibernation (Expert Mode) includes **Close abandoned shells after (hours)** (`agents.abandoned_shell_hours`). The machine-owned value defaults to **0 (off)**; whole hours from 1 to 65535 enable closure. Idle age is measured from the most recent input, output or semantic activity, including elapsed time while the machine sleeps. Closure rechecks the process inventory and activity at the destructive boundary, and uses the normal session close/tombstone path. The sweep can lag the threshold by one five-second tick. A remote daemon applies its own setting, not the desktop host's value.

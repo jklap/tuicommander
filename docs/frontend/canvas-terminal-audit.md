@@ -255,7 +255,7 @@ cell's full text span, since native search points have no subcell index.
 | File path Cmd+click open | OK | |
 | Pointer cursor on link | OK | |
 | Web URL links (http/https) | OK | `webUrlRe` regex in `checkLinksAtRow` |
-| OSC 8 hyperlinks | OK | `terminal_hyperlink_at` IPC, priority over other link types |
+| OSC 8 hyperlinks | OK | `terminal_hyperlink_span` IPC, priority over other link types |
 
 ### Search
 

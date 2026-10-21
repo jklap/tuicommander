@@ -881,3 +881,7 @@ Typed Ego startup login returns a session on the explicitly selected daemon.
 Open that session in the owning client's terminal view to authenticate, then
 request status and refresh providers on that same daemon. Never read a local
 credential owner to infer the result of remote authentication.
+
+### Remote session closure
+
+MCP `session action=close` accepts a remote `connection_id` or connection-qualified session reference. The host resolves aliases on the owning daemon and sends authenticated `DELETE /sessions/{id}`. The caller's own PTY remains protected from self-close, and non-loopback MCP callers cannot invoke destructive close actions. A disconnected connection reports an error; it never falls back to a local session. HTTP DELETE and local MCP close use the same teardown, session-closed events and retained output tombstone. Repeating a close of a retained tombstone succeeds. Explicit close remains user-directed and is not limited to abandoned shells.

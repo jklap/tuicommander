@@ -391,7 +391,7 @@ A terminal tab can be suspended from its context menu (**Suspend Tab**) or with 
 
 ## 2. Sidebar
 
-- Right-click a session row to copy its PTY session ID or live PTY child PID, with clipboard confirmation and a disabled action when no process is available.
+- Right-click a session row to copy its PTY session ID, live PTY child PID, or exact session alias. Entries show their values on hover and confirm copies; unknown PID and absent alias entries are hidden.
 
 Automatic repository refreshes start at least five seconds apart per repository. Event bursts retain one trailing refresh; badges can lag by five seconds plus backend read time. Explicit repository additions, branch checkouts and merge cleanup refresh the affected repository immediately, while still waiting for any active refresh to finish.
 
@@ -1130,15 +1130,11 @@ What went with the embedded engine (#784-0aec) and did not come back here:
 | PR AI review, changelog generation, improvement scan | **795-320b** — one unattended ego turn each; see 8.3 and 8.10 |
 | Smart Prompts `api` execution mode | **787-ee50** — one unattended ego turn; see 10.5 |
 
-### 6.15 Session Knowledge Store (recording only)
-Outlived the engine because none of it involves a model, and `pty.rs` is the
-producer. Nothing reads it today — it is kept because the history cannot be
-re-derived later.
-- **Command outcomes** — exit code, duration, CWD, classification, output snippet, auto-correlated error→fix pairs, CWD history, `tui_apps_seen`, terminal mode
-- **OSC 133 semantic prompts** feed exact exit codes where the shell supports them; the PTY silence timer records an `Inferred` outcome where it does not
-- Persisted to `<config_dir>/ai-sessions/<session_id>.json` with a 2 s debounced flush
-- **TUI app detection** via alternate-screen tracking (`ESC[?1049h`/`l`). `TerminalMode::FullscreenTui { app_hint, depth }` is set when the terminal enters vim/htop/lazygit/less/tmux/…
-- Code: `src-tauri/src/ai_agent/{knowledge,tui_detect}.rs` — they kept the `ai_agent/` module path because `pty.rs` reads them there
+### 6.15 TUI Application Detection
+- Alternate-screen tracking (`ESC[?1049h`/`l`) and primary-screen mouse reporting classify shell versus fullscreen TUI activity.
+- `TerminalMode::FullscreenTui { app_hint, depth }` remains part of session state and protects agent-session conflict handling.
+- The write-only command knowledge store and its background disk flush were removed in #2115-1333. Existing history files are not deleted or migrated.
+- Code: `src-tauri/src/ai_agent/tui_detect.rs`.
 
 ### 6.16 ChoicePrompt Detection
 - Claude AskUserQuestion is parsed from its full-bleed Ink footer and numbered options, including rows with descriptions and imperative titles without a question mark (`Pick a colour`). Its `selection_mode: navigate-enter` tells mobile to move the highlight with arrows and submit with Enter; the mobile screen retains the whole open dialog
@@ -2357,6 +2353,16 @@ Unsupported actions are hidden. Menus close on outside tap or Escape and use
 
 TUICommander aggregates upstream MCP servers and exposes them through its own `/mcp` endpoint. Any MCP client (Claude Code, Cursor, VS Code) connecting to TUIC automatically gains access to all configured upstream tools.
 
+### Opt-in interrupting agent mail
+
+`agent action=send urgency=interrupt` sends Esc to a safe working Claude Code,
+Codex or ego, waits up to ten seconds for confirmed idle, then submits the full
+message as one input. Dialogs and drafts block the input. Unsupported agents
+and idle timeouts use the existing urgent notice/inbox fallback. The receipt
+reports `interrupt_delivered`, `interrupt_fallback_reason` and `delivery_path`.
+Normal and urgent mail remain non-interrupting. Interrupted tools may leave
+partial work, and their child processes may continue.
+
 ### 19.1 Architecture
 - TUIC acts as both an MCP server (to downstream clients) and an MCP client (to upstream servers)
 - All upstream tools are exposed via the single `POST /mcp` Streamable HTTP endpoint
@@ -2539,6 +2545,7 @@ TUICommander aggregates upstream MCP servers and exposes them through its own `/
 - tmux key name translation (Enter, C-c, Space, etc.)
 
 ### 21.4 Agent Orchestration
+- `tuic bg <log> -- <cmd>` — run a detached command without inheriting the foreground `TUIC_SESSION` or `TUIC_PARENT`; the runner retains caller-bound completion wake and mail routing
 - `tuic agent spawn <type> <prompt> [--repo <path>]` — spawn AI agent on an initial prompt
 - `tuic agent ls` — list running agents
 - `tuic agent send <peer-uuid> <message>` — deliver to a registered peer's inbox through the registry, the same path as the MCP `agent action=send` tool. Reports `Delivered` only when something surfaced the message; an `inbox_only` route reads `Buffered`
@@ -2572,8 +2579,7 @@ TUICommander aggregates upstream MCP servers and exposes them through its own `/
 - Runs the desktop's background tasks that a machine needs: process snapshots,
   standby parking, content indexing and boot pre-warm, tool search index, upstream
   MCP auto-connect and health checks, CPU watchdog, maintenance sweep. It does not
-  run the WebView watchdog (no WebView) or command-knowledge persistence (no
-  route exposes it). The embedded assistant's scheduler and watcher engine are
+  run the WebView watchdog (no WebView). Command-knowledge persistence was removed in #2115-1333. The embedded assistant's scheduler and watcher engine are
   not on this list any more — they were deleted outright in #784-0aec
 
 ### 22.2 Configuration
@@ -3308,3 +3314,9 @@ Mobile offers the **Chat** tab only when the host has a configured ego executabl
 ## Agent desktop verification
 
 `make agent-test` provides a preset isolated macOS desktop instance for authorized agent live checks. It uses a distinctly named binary and config namespace, loopback port 19876, disabled global input/microphone/Telegram/updater integrations, a side-effect-free dry-run and an instance-only stop target. See [Development Setup](guides/development-setup.md#isolated-agent-desktop-checks-macos).
+
+### Abandoned shells
+
+Desktop sidebar session rows and mobile session cards mark a parentless plain shell as **Abandoned** after one idle hour and show its idle age. The five-second backend sweep requires a fresh OS process inventory: the PTY child must be an interactive shell with no child processes. An unknown inventory, script, foreground command, background child, detached TUIC job, managed identity, live child session, pending input or keep-open hold prevents closure. Unsupported or incomplete OS process observations fail closed.
+
+Settings → Agents → Idle agent hibernation (Expert Mode) includes **Close abandoned shells after (hours)** (`agents.abandoned_shell_hours`). The machine-owned value defaults to **0 (off)**; whole hours from 1 to 65535 enable closure. Idle age is measured from the most recent input, output or semantic activity, including elapsed time while the machine sleeps. Closure rechecks the process inventory and activity at the destructive boundary, and uses the normal session close/tombstone path. The sweep can lag the threshold by one five-second tick. A remote daemon applies its own setting, not the desktop host's value.

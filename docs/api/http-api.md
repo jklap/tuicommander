@@ -3335,7 +3335,7 @@ Telegram replies now use TUIC-driven receipt (👀), working (👨‍💻), wait
 
 ### Styled terminal log wrap boundaries
 
-Rows returned by session `format=log` output and the `format=log|text` WebSocket include `wrapped: boolean` alongside `spans` and `cols`. True means the next row continues this logical line: concatenate span text verbatim, with no added space or newline. False means a hard line boundary. A finalized log row can wrap into the first current-screen row. Wrapped rows preserve real trailing spaces. The field is also present in the desktop `read_vt_log` response. MCP session text output applies these boundaries before redaction.
+Rows returned by session `format=log` output and the `format=log|text` WebSocket include `wrapped: boolean` alongside `spans` and `cols`. True means the next row continues this logical line: concatenate span text verbatim, with no added space or newline. False means a hard line boundary. A finalized log row can wrap into the first current-screen row. Wrapped rows preserve real trailing spaces. MCP session text output applies these boundaries before redaction.
 
 ### Settings change stream
 
@@ -3502,3 +3502,7 @@ clipped Claude form. Its `↑`, `↓`, and `↵` option keys denote previous, ne
 and select-highlighted controls, not native answer labels. Send one Up, Down, or
 Enter respectively; never append Enter to a navigation key. The same payload
 and semantics apply to desktop IPC state.
+
+### Remote session closure
+
+MCP `session action=close` accepts a remote `connection_id` or connection-qualified session reference. The host resolves aliases on the owning daemon and sends authenticated `DELETE /sessions/{id}`. The caller's own PTY remains protected from self-close, and non-loopback MCP callers cannot invoke destructive close actions. A disconnected connection reports an error; it never falls back to a local session. HTTP DELETE and local MCP close use the same teardown, session-closed events and retained output tombstone. Repeating a close of a retained tombstone succeeds. Explicit close remains user-directed and is not limited to abandoned shells.

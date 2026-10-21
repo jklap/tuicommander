@@ -603,9 +603,7 @@ Add-time secrets travel in an optional write-only `credentials` array on the sav
 Nothing migrates or deletes them: a file left behind by an older version is
 inert, and removing a user's data on upgrade is a worse default than leaving it.
 
-`ai-sessions/<session_id>.json` is the exception and stays live — `pty.rs` writes
-command outcomes there and `ai_agent::knowledge::spawn_persist_task` flushes them,
-neither of which involves a model. Nothing reads them back yet.
+`ai-sessions/<session_id>.json` is also inert after #2115-1333 removed the write-only command knowledge store and its persistence task. Existing history files are not deleted or migrated.
 
 ### UI Preferences (`ui-prefs.json`)
 
@@ -1815,3 +1813,9 @@ A compound vault/config failure publishes an unapplied generation only after a
 vault write has persisted, including when subsequent config persistence fails
 and the owner attempts rollback. Hints carry only section, generation and
 persistence/apply flags, never credentials or credential-derived hashes.
+
+### Abandoned shells
+
+Desktop sidebar session rows and mobile session cards mark a parentless plain shell as **Abandoned** after one idle hour and show its idle age. The five-second backend sweep requires a fresh OS process inventory: the PTY child must be an interactive shell with no child processes. An unknown inventory, script, foreground command, background child, detached TUIC job, managed identity, live child session, pending input or keep-open hold prevents closure. Unsupported or incomplete OS process observations fail closed.
+
+Settings → Agents → Idle agent hibernation (Expert Mode) includes **Close abandoned shells after (hours)** (`agents.abandoned_shell_hours`). The machine-owned value defaults to **0 (off)**; whole hours from 1 to 65535 enable closure. Idle age is measured from the most recent input, output or semantic activity, including elapsed time while the machine sleeps. Closure rechecks the process inventory and activity at the destructive boundary, and uses the normal session close/tombstone path. The sweep can lag the threshold by one five-second tick. A remote daemon applies its own setting, not the desktop host's value.

@@ -675,37 +675,20 @@ pub(super) async fn close_session(
     State(state): State<Arc<AppState>>,
     Path(session_id): Path<String>,
 ) -> impl IntoResponse {
-    if state.session_maps.sessions.contains_key(&session_id) {
-        // Broadcast to SSE/WebSocket consumers BEFORE cleanup: cleanup_session reaps
-        // this session's per-session PTY channel, so the closed frame must be emitted
-        // while the channel still exists. broadcast keeps the buffered frame available
-        // to live subscribers even after the sender is dropped, so they drain the
-        // "closed" frame and THEN see the channel close (no lost close notification).
-        tracing::info!(source = "session", session_id = %session_id, "Session closed: explicit close");
-        state.emit_pty_event(crate::state::AppEvent::SessionClosed {
-            session_id: session_id.clone(),
-            reason: "explicit_close".to_string(),
-        });
-        #[cfg(feature = "desktop")]
-        if let Some(app) = state.app_handle.read().as_ref() {
-            let _ = app.emit(
-                "session-closed",
-                serde_json::json!({
-                    "session_id": session_id,
-                    "reason": "explicit_close",
-                }),
-            );
-        }
-
-        let cleanup_session_id = session_id.clone();
-        let cleanup_state = state.clone();
+    if state.session_maps.sessions.contains_key(&session_id)
+        || state.grid.vt_log_buffers.contains_key(&session_id)
+    {
+        let cleanup_state = Arc::clone(&state);
         if let Err(error) = tokio::task::spawn_blocking(move || {
-            crate::pty::close_pty_core(&cleanup_state, &cleanup_session_id, false);
-            crate::pty::cleanup_session(&cleanup_session_id, &cleanup_state);
+            super::mcp_transport_session_agent::handle_session(
+                &cleanup_state,
+                &serde_json::json!({"action":"close", "session_id":session_id}),
+                None,
+            )
         })
         .await
         {
-            tracing::warn!(session_id = %session_id, "session cleanup task failed: {error}");
+            tracing::warn!(%error, "session cleanup task failed");
         }
 
         (StatusCode::OK, Json(serde_json::json!({"ok": true})))
@@ -2636,22 +2619,6 @@ pub(super) async fn terminal_get_cursor_line(
 ) -> impl IntoResponse {
     match crate::pty::vt_try_read(&state, session_id, |vt| vt.grid_get_cursor_line()).await {
         Ok(Some(text)) => Json(serde_json::json!({"text": text})).into_response(),
-        Ok(None) => not_found_response(),
-        Err(e) => read_failed_response(&e),
-    }
-}
-
-pub(super) async fn terminal_hyperlink_at(
-    State(state): State<Arc<AppState>>,
-    Path(session_id): Path<String>,
-    Query(query): Query<super::types::TerminalCellQuery>,
-) -> impl IntoResponse {
-    match crate::pty::vt_try_read(&state, session_id, move |vt| {
-        vt.grid_hyperlink_at(query.row, query.col)
-    })
-    .await
-    {
-        Ok(Some(url)) => Json(serde_json::json!({"url": url})).into_response(),
         Ok(None) => not_found_response(),
         Err(e) => read_failed_response(&e),
     }
