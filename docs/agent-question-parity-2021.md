@@ -212,3 +212,48 @@ The existing first Codex question, narrow Claude selector and Grok binding failu
 All ten owned PTYs were deleted. `cleanup.json` retains responses and `sessions-after-cleanup.json` is `[]`. `make agent-test-stop AGENT_TEST_INSTANCE=at-2021b AGENT_TEST_PORT=19931` requested shutdown; its desktop PID file disappeared and supervisor/Vite PIDs were absent afterward. The owned browser tab and named `ab-shared-desk-2021b-9981` daemon closed successfully; shared Chrome was not stopped. The temporary Vite configuration was removed. No Boss session or window was used.
 
 Criterion 2 can be checked for **evidence collection**, including failed cells and N/A list controls. It does not certify all capabilities as working, waive failed binding gates, prove native IPC/pixels, or close the follow-up fixes. No Rust, Vitest or TypeScript test suite was run for this documentation audit; the authorized native agent-test build and live UI/API round trips are the validation evidence.
+
+## Awaiting badge investigation (2105-f1e5, 2026-10-21)
+
+The earlier `desk-2021b` browser transcript records tab classes that disagree with the session API. It does not retain the event or store-update sequence needed to locate the loss. Its temporary `.tmp/parity-vite.config.ts` was removed after the audit. The observation alone does not prove either a native IPC defect or a proxy defect.
+
+A fresh check used source revision `f9a028f990`, `make agent-test AGENT_TEST_INSTANCE=at-2105 AGENT_TEST_PORT=19945`, and a worktree Vite page on port 19946. The proxy used only the isolated instance's Unix socket. The required stealth wrapper controlled one owned browser tab. One real Claude PTY ran under `~/Gits/.tmp/results/fix-2105-evidence/scratch/parity-claude`. The native startup import-consent dialog was answered with its selected **No, disable external imports** option; no credential store was read. No Boss session or desktop window was inspected.
+
+Before spawning Claude, browser diagnostics recorded an independent `session-state-changed` SSE stream, calls to the existing terminal store's `update` method, and tab class changes through `MutationObserver`. These diagnostics did not inject a lifecycle state or call the awaiting handler. The native question then produced this sequence without navigation or reload:
+
+| Observation | Browser timestamp (Unix ms) |
+| --- | --- |
+| Tab becomes `shellBusy` | 1792555628227 |
+| Independent SSE receives authoritative `awaiting_input=true` | 1792555638063 |
+| Application writes `awaitingInput="question"` to `term-1` | 1792555638063 |
+| Tab has `awaitingInput` and `awaitingQuestion`, without `shellBusy` | 1792555638066 |
+
+The observed SSE-to-DOM interval was 3 ms. A later same-page API read and DOM read also showed `awaiting_input=true` and the awaiting classes together. This is a passing fresh transition, not a reproduction or a fix of the earlier mismatch. There was no independent API polling timestamp for the first instant that the backend became awaiting; the transition timing above uses its authoritative SSE snapshot. The capture does not establish native WebView pixels or IPC delivery.
+
+The inspected path is `state.rs:4926-4975` (accumulator publishes a deduplicated snapshot to both transports), `mcp_http/sse_routes.rs:562-565` (shared payload), `useAgentPolling.ts:123-129,80-101` (session routing and store update), and `TabViews.tsx:133-135` (awaiting excludes the busy class). The proxy recorded successful HTTP 204 responses to `/events/types`, including the late subscription after the terminal appeared. `transport/sse.ts:132-168` shows why that route is relevant to a late consumer; its failure in the original audit is **not** established.
+
+Evidence is retained under `~/Gits/.tmp/results/fix-2105-evidence/`: `transition-proof.json`, `api-awaiting.json`, `browser-transcript.txt`, `proxy.ndjson`, `claude-awaiting.png`, the launch/proxy/probe scripts, and cleanup receipts. The native agent-test build passed through build-slot/mbx. No Rust or frontend test suite ran, no regression test was invented for an unproven cause, and no product code or capture corpus changed. The original loss boundary remains unresolved; story criterion 1 must stay open until its event/store trace or an equivalent failing reproduction is available.
+
+Cleanup deleted the owned Claude PTY (`sessions-after-cleanup.json` is `[]`), closed the owned browser tab and named daemon, stopped Vite, and requested `make agent-test-stop AGENT_TEST_INSTANCE=at-2105 AGENT_TEST_PORT=19945`. The shared Chrome and Boss's instance were left running.
+
+### Recovered proxy configuration: harness cause established
+
+The coordinator subsequently supplied the exact audit session transcript at `~/.ego/sessions/01a15c60-3644-75d1-b0da-7c1a0f1f7078/events.jsonl`. Only events containing the named configuration path were inspected. Event-file line 262 (record sequence 261) contains the original shell write of `.tmp/parity-vite.config.ts`; line 289 restarts Vite without changing the file; line 969 removes it during cleanup. No later edit of that path appears among those matching events. The recovered file is retained as `original-parity-vite.config.ts` in the evidence directory, SHA-256 `d13c33532ed762179b43a79de59ea324f64688ae876702c1aaa6ec0898f49c7c`.
+
+**This resolves the earlier attribution gap: the audit proxy excludes the application's SSE requests.** The configuration's line 3 ends its route-root regex with `(?:/|$)`, not `(?:/|\\?|$)`. The application constructs `/events?types=...&stream_id=...` at `src/transport/sse.ts:76-78`. Vite tests that regex against the full `req.url`, including the query (`node_modules/vite/dist/node/chunks/node.js:19363-19367,19444-19448` in the installed dependency). Thus the SSE request is not sent to the Unix socket at all. It cannot deliver an awaiting transition to the tab store.
+
+A Node probe decoded the actual JavaScript string literal from the recovered configuration and applied its regex, rather than transcribing a replacement pattern. `original-proxy-match.json` retains these results:
+
+| Request | Original proxy matches |
+| --- | --- |
+| `/events` | Yes |
+| `/events?types=session-state-changed&stream_id=probe` | **No** |
+| `/events/types` | Yes |
+| `/sessions` | Yes |
+| `/sessions/<id>/stream?format=grid` | Yes |
+
+This explains why API snapshot reads, terminal WebSockets, and reload-time hydration could work while live lifecycle pushes did not. It is a harness routing defect, not evidence of a product awaiting-state defect. The fresh check above used a query-aware boundary and recorded successful delivery through SSE, the store and DOM. No product code or regression test is warranted for this audit failure. The prior unresolved conclusion is superseded by this recovered configuration evidence, not by the passing run alone.
+
+Story disposition: criterion 1 is proven by the recovered config and Vite matcher. The product-only RED condition does not apply. The live check retains concurrent API JSON and DOM state plus the 3 ms authoritative SSE-to-DOM interval; it does not claim a separately polled timestamp for the first API-true instant. The coordinator owns the final harness/wontfix classification and must not describe this documentation commit as a product fix.
+
+Suggested memory: `$wiz:remember` can retain that Vite regex proxy contexts match the full request URL: route-root boundaries must accept `?` to forward queried SSE endpoints.
