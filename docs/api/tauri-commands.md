@@ -91,8 +91,8 @@ grid-cell coordinates. Both match the stored sequence without normalization.
 | `terminal_styled_rows` | `session_id, start, count` | `Result<Response, String>` (packed bytes) | A range of styled rows by absolute index, filling the client-side scroll cache. Raw bytes for the same reason as grid frames. Browser parity: `GET /sessions/:id/terminal/styled-rows` (`application/octet-stream`) |
 
 `terminal_scroll_info`, `terminal_search`, `terminal_search_buffer`,
-`terminal_get_row_text`, `terminal_get_logical_line`, `terminal_get_lines`,
-`pty::vt_try_read`, so it returns `Result<T, String>` rather than a bare `T`.
+`terminal_get_row_text`, `terminal_get_logical_line`, and `terminal_get_lines`
+use `pty::vt_try_read`, so each returns `Result<T, String>` rather than a bare `T`.
 The `Err` arm means the pool task itself failed; a session that is gone is still
 the old default (or a 404 over HTTP). See
 [`docs/backend/command-threading.md`](../backend/command-threading.md).
