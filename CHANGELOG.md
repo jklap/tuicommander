@@ -8,6 +8,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- Cancel the Markdown tab's pending focus animation frame on re-activation and unmount, so repeated activations no longer queue several frames and a late frame cannot focus a detached wrapper.
 - Correct Settings accent-action text, compact navigation, wrapped help badges, shortcut groups, and workspace path presentation; hide the desktop-only Local tools card in browser mode (#1945).
 
 - Keep marker-projected terminal frames incremental: repaint dirty display rows and changed projection slots instead of clearing the whole canvas (#2003-f218).
