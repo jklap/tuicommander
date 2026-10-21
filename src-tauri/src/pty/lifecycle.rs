@@ -3491,6 +3491,7 @@ fn release_pty_session(session_id: &str, session: PtySession) {
 
 /// Fully remove session state from all DashMaps.
 /// Called on explicit close/kill — caller has already consumed any output they need.
+#[cfg(test)]
 pub(crate) fn cleanup_session(session_id: &str, state: &AppState) {
     flush_open_intent_before_session_removal(session_id, state);
     remove_pty_session(session_id, state);

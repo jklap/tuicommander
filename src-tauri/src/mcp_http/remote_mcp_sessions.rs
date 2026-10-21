@@ -73,6 +73,7 @@ pub(super) fn resolve(state: &AppState, args: &Value) -> Option<Result<(String, 
         .and_then(|row| row.connection_id.map(|host| Ok((host, row.session_id))))
 }
 
+#[cfg(test)]
 pub(super) async fn call(state: &Arc<AppState>, host: &str, id: &str, args: &Value) -> Value {
     call_with_caller(state, host, id, args, None).await
 }
