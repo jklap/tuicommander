@@ -8,6 +8,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- Run every Rust test's git process against a fixed hermetic gitconfig (`tuic-test-support` points `GIT_CONFIG_GLOBAL` at it, sets `GIT_CONFIG_NOSYSTEM=1`, drops inherited `GIT_CONFIG_*`), so a developer's `merge.ff`, `url.*.insteadOf`, rerere, signing or hooks-path settings no longer fail tests.
+
 - Correct Settings accent-action text, compact navigation, wrapped help badges, shortcut groups, and workspace path presentation; hide the desktop-only Local tools card in browser mode (#1945).
 
 - Keep marker-projected terminal frames incremental: repaint dirty display rows and changed projection slots instead of clearing the whole canvas (#2003-f218).
