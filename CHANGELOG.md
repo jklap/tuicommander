@@ -20,6 +20,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - Preserve unrelated repo-root tabs when a worktree is removed or recycled; terminal placement and cleanup follow cwd instead of stale workspace membership (#1999-95b0).
 - Keep the selected workspace's active tab and pane layout consistent when saved tabs are restored to another workspace by cwd (#1999-95b0).
+
+- Fix plugin updates failing with "Failed to backup data/" on Linux: the `data/` backup now lives inside the plugins directory (same filesystem) instead of the OS temp dir, is restored if the install fails part-way, and URL installs download into a private auto-removed temp file instead of a predictable path in shared `/tmp`.
 ### Added
 
 - Publish read-only GitHub credential-source provenance and document GitHub/Ego startup ownership, confirmation and recovery; interactive Ego login and account enumeration remain explicit onboarding gaps (#1790-1011).
