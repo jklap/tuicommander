@@ -8,6 +8,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- Kill an SSH tunnel's whole process group (not just the `ssh` child) on shutdown and wait, bounded, for confirmed exit on app quit, so forked `ProxyCommand` grandchildren are no longer orphaned.
+
 - Correct Settings accent-action text, compact navigation, wrapped help badges, shortcut groups, and workspace path presentation; hide the desktop-only Local tools card in browser mode (#1945).
 
 - Keep marker-projected terminal frames incremental: repaint dirty display rows and changed projection slots instead of clearing the whole canvas (#2003-f218).

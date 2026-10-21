@@ -855,6 +855,57 @@ mod tests {
         assert_fake_ssh_stopped(pids);
     }
 
+    /// Catches: `graceful_kill` signalling only the direct child. The fake ssh
+    /// forks `sleep` (a grandchild that SIGTERM to the shell alone never
+    /// reaches); the whole process group must die before `stop_and_wait`
+    /// returns.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn shutdown_kills_forked_grandchild_before_returning() {
+        let root = crate::test_support::test_temp_root();
+        let child_marker = root.join("grandchild_shutdown_ssh_child.pid");
+        let _ = std::fs::remove_file(&child_marker);
+        let posix = format!("sleep 3600 &\necho $! > '{}'\nwait", child_marker.display());
+        let script = fake_ssh_script("grandchild_shutdown", &posix, "exit /b 0");
+        let (cb, _statuses) = status_collector();
+
+        let mut sup =
+            TunnelSupervisor::start_with_binary(test_profile(), script.to_path_buf(), cb).await;
+        let grandchild: i32 = tokio::time::timeout(Duration::from_secs(15), async {
+            loop {
+                if let Ok(text) = std::fs::read_to_string(&child_marker)
+                    && let Ok(pid) = text.trim().parse::<i32>()
+                {
+                    return pid;
+                }
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        })
+        .await
+        .expect("fake SSH forked its grandchild");
+        assert!(
+            unsafe { libc::kill(grandchild, 0) } == 0,
+            "grandchild should be alive before shutdown"
+        );
+
+        assert!(sup.stop_and_wait().await, "shutdown must be confirmed");
+
+        // Allow only for init reaping the orphan; the group signal itself has
+        // already been delivered and the shell reaped by `stop_and_wait`.
+        let mut alive = true;
+        for _ in 0..40 {
+            alive = unsafe { libc::kill(grandchild, 0) } == 0;
+            if !alive {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        if alive {
+            unsafe { libc::kill(grandchild, libc::SIGKILL) };
+        }
+        assert!(!alive, "forked grandchild {grandchild} survived shutdown");
+    }
+
     #[tokio::test]
     async fn local_forward_stays_starting_until_its_port_accepts_connections() {
         let first = TcpListener::bind("127.0.0.1:0").await.unwrap();
