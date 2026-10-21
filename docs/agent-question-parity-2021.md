@@ -124,4 +124,24 @@ Evidence is retained under `~/Gits/.tmp/results/fix-2105-evidence/`: `transition
 
 Cleanup deleted the owned Claude PTY (`sessions-after-cleanup.json` is `[]`), closed the owned browser tab and named daemon, stopped Vite, and requested `make agent-test-stop AGENT_TEST_INSTANCE=at-2105 AGENT_TEST_PORT=19945`. The shared Chrome and Boss's instance were left running.
 
-Suggested memory: `$wiz:remember` can retain the verified distinction between a passing fresh SSE transition and attribution of the earlier browser-only mismatch.
+### Recovered proxy configuration: harness cause established
+
+The coordinator subsequently supplied the exact audit session transcript at `~/.ego/sessions/01a15c60-3644-75d1-b0da-7c1a0f1f7078/events.jsonl`. Only events containing the named configuration path were inspected. Event-file line 262 (record sequence 261) contains the original shell write of `.tmp/parity-vite.config.ts`; line 289 restarts Vite without changing the file; line 969 removes it during cleanup. No later edit of that path appears among those matching events. The recovered file is retained as `original-parity-vite.config.ts` in the evidence directory, SHA-256 `d13c33532ed762179b43a79de59ea324f64688ae876702c1aaa6ec0898f49c7c`.
+
+**This resolves the earlier attribution gap: the audit proxy excludes the application's SSE requests.** The configuration's line 3 ends its route-root regex with `(?:/|$)`, not `(?:/|\\?|$)`. The application constructs `/events?types=...&stream_id=...` at `src/transport/sse.ts:76-78`. Vite tests that regex against the full `req.url`, including the query (`node_modules/vite/dist/node/chunks/node.js:19363-19367,19444-19448` in the installed dependency). Thus the SSE request is not sent to the Unix socket at all. It cannot deliver an awaiting transition to the tab store.
+
+A Node probe decoded the actual JavaScript string literal from the recovered configuration and applied its regex, rather than transcribing a replacement pattern. `original-proxy-match.json` retains these results:
+
+| Request | Original proxy matches |
+| --- | --- |
+| `/events` | Yes |
+| `/events?types=session-state-changed&stream_id=probe` | **No** |
+| `/events/types` | Yes |
+| `/sessions` | Yes |
+| `/sessions/<id>/stream?format=grid` | Yes |
+
+This explains why API snapshot reads, terminal WebSockets, and reload-time hydration could work while live lifecycle pushes did not. It is a harness routing defect, not evidence of a product awaiting-state defect. The fresh check above used a query-aware boundary and recorded successful delivery through SSE, the store and DOM. No product code or regression test is warranted for this audit failure. The prior unresolved conclusion is superseded by this recovered configuration evidence, not by the passing run alone.
+
+Story disposition: criterion 1 is proven by the recovered config and Vite matcher. The product-only RED condition does not apply. The live check retains concurrent API JSON and DOM state plus the 3 ms authoritative SSE-to-DOM interval; it does not claim a separately polled timestamp for the first API-true instant. The coordinator owns the final harness/wontfix classification and must not describe this documentation commit as a product fix.
+
+Suggested memory: `$wiz:remember` can retain that Vite regex proxy contexts match the full request URL: route-root boundaries must accept `?` to forward queried SSE endpoints.
