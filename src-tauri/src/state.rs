@@ -1989,26 +1989,6 @@ pub(crate) struct GridState {
     pub(crate) pending_scroll: DashMap<String, Arc<AtomicI64>>,
 }
 
-/// What a terminal session has learnt about its own commands (#678-9a75).
-///
-/// This is all that is left of the embedded agent subsystem after the engine was
-/// deleted (#784-0aec): no loop, no sandbox, no watcher, no scheduler. The two
-/// fields below are written by `pty.rs` from OSC 133 boundaries and read back by
-/// the same file to explain a failed command, so they outlived the LLM that used
-/// to consume them as well.
-///
-/// `Default` is derived: both fields start empty.
-#[derive(Default)]
-pub(crate) struct AiAgentState {
-    /// Per-session command outcome + error/fix knowledge store.
-    /// Populated by pty.rs OSC 133 hooks and SessionState transitions.
-    pub(crate) session_knowledge:
-        DashMap<String, Mutex<crate::ai_agent::knowledge::SessionKnowledge>>,
-    /// Sessions with unpersisted knowledge changes. Flushed to disk every 2s
-    /// by the background knowledge-persist task.
-    pub(crate) knowledge_dirty: DashMap<String, ()>,
-}
-
 /// The per-session side tables of [`AppState`] (#678-9a75).
 ///
 /// Every one is keyed by session id and starts empty, so the group derives its
@@ -2376,9 +2356,6 @@ pub struct AppState {
     pub(crate) desktop_window_focused: std::sync::atomic::AtomicBool,
     /// Server start time for uptime calculation in health endpoint.
     pub(crate) server_start_time: std::time::Instant,
-    /// TUIC's own AI agent: per-session knowledge, sandboxes, the watcher
-    /// engine, the cron scheduler and the suggestion triggers.
-    pub(crate) ai: AiAgentState,
     /// SSH tunnel manager — owns running tunnel supervisors.
     /// No outer Mutex needed: `TunnelManager` uses `DashMap` for interior mutability
     /// and all its methods take `&self`. Wrapping in `Mutex` would prevent holding
@@ -3834,7 +3811,6 @@ impl AppState {
             managed_trust_dialogs: DashSet::new(),
             active_agent_waiters: DashMap::new(),
             orchestrator_peers: DashSet::new(),
-            ai: AiAgentState::default(),
             #[cfg(unix)]
             bound_socket_path: parking_lot::RwLock::new(std::path::PathBuf::new()),
             tailscale_state: parking_lot::RwLock::new(
@@ -4145,37 +4121,6 @@ impl AppState {
             .min()
             .map(|(_, identity)| identity)
     }
-
-    /// This session's knowledge record, read off disk when it is not resident.
-    ///
-    /// The startup load is capped at `MAX_RESIDENT_SESSIONS`, so a session with
-    /// a file on disk is not necessarily in memory. Starting a blank record for
-    /// it is how resuming an older session erased its own history: the next
-    /// flush persists what is in memory, over a file nothing had read.
-    pub(crate) fn knowledge_entry(
-        &self,
-        session_id: &str,
-    ) -> dashmap::mapref::one::RefMut<'_, String, Mutex<crate::ai_agent::knowledge::SessionKnowledge>>
-    {
-        self.ai
-            .session_knowledge
-            .entry(session_id.to_string())
-            .or_insert_with(|| {
-                Mutex::new(crate::ai_agent::knowledge::load_or_start_fresh(session_id))
-            })
-    }
-
-    /// Record a command outcome into this session's knowledge store and mark it
-    /// dirty for the background persister. Creates the entry on first use.
-    pub(crate) fn record_outcome(
-        &self,
-        session_id: &str,
-        outcome: crate::ai_agent::knowledge::CommandOutcome,
-    ) -> u64 {
-        let id = self.knowledge_entry(session_id).lock().record(outcome);
-        self.ai.knowledge_dirty.insert(session_id.to_string(), ());
-        id
-    }
 }
 
 /// Derive a short prefix from a repo directory name.
@@ -4360,7 +4305,6 @@ pub(crate) struct GitCacheState {
     pub(crate) branches_detail: GitCache<Vec<crate::git::BranchDetail>>,
     pub(crate) github_status: GitCache<Vec<crate::github::BranchPrStatus>>,
     pub(crate) git_status: GitCache<crate::github::GitHubStatus>,
-    pub(crate) git_panel_context: GitCache<crate::git::GitPanelContext>,
     pub(crate) worktree_paths:
         GitCache<std::collections::HashMap<String, crate::worktree::WorkspaceWorktree>>,
     /// Repos that returned null from GitHub GraphQL (not found / no access).
@@ -4387,7 +4331,6 @@ impl GitCacheState {
             branches_detail: build_git_cache(GIT_CACHE_TTL, Arc::clone(&ttl_fallbacks)),
             github_status: build_git_cache(GITHUB_CACHE_TTL, Arc::clone(&ttl_fallbacks)),
             git_status: build_git_cache(GIT_CACHE_TTL, Arc::clone(&ttl_fallbacks)),
-            git_panel_context: build_git_cache(GIT_CACHE_TTL, Arc::clone(&ttl_fallbacks)),
             worktree_paths: build_git_cache(GIT_CACHE_TTL, Arc::clone(&ttl_fallbacks)),
             github_repo_cooldown: DashMap::new(),
             settled_review_threads: DashMap::new(),
@@ -4407,7 +4350,6 @@ impl GitCacheState {
         self.branches_detail.invalidate_all();
         self.github_status.invalidate_all();
         self.git_status.invalidate_all();
-        self.git_panel_context.invalidate_all();
         self.worktree_paths.invalidate_all();
     }
 
@@ -4421,7 +4363,6 @@ impl GitCacheState {
         // changes don't affect remote PRs. The poller and head-changed → pollRepo
         // handle remote refreshes on their own cadence.
         self.git_status.invalidate(path);
-        self.git_panel_context.invalidate(path);
         self.worktree_paths.invalidate(path);
     }
 }

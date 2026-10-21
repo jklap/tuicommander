@@ -1212,10 +1212,6 @@ fn shared_routes() -> Router<Arc<AppState>> {
             get(session::terminal_get_cursor_line),
         )
         .route(
-            "/sessions/{id}/terminal/hyperlink",
-            get(session::terminal_hyperlink_at),
-        )
-        .route(
             "/sessions/{id}/terminal/hyperlink-span",
             get(session::terminal_hyperlink_span),
         )
@@ -1490,7 +1486,6 @@ fn shared_routes() -> Router<Arc<AppState>> {
             "/repo/recent-commits",
             get(git_routes::get_recent_commits_http),
         )
-        .route("/repo/panel-context", get(git_routes::git_panel_context))
         .route("/repo/run-git", post(git_routes::run_git_command_http))
         .route(
             "/repo/working-tree-status",

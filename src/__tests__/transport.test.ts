@@ -1200,14 +1200,6 @@ describe("transport", () => {
 			expect(result.transform?.({ text: "$ " })).toBe("$ ");
 		});
 
-		it("maps terminal_hyperlink_at to GET with transform", () => {
-			const result = mapCommandToHttp("terminal_hyperlink_at", { sessionId: "s1", row: 2, col: 10 });
-			expect(result.method).toBe("GET");
-			expect(result.path).toBe("/sessions/s1/terminal/hyperlink?row=2&col=10");
-			expect(result.transform?.({ url: "https://example.com" })).toBe("https://example.com");
-			expect(result.transform?.({ url: null })).toBeNull();
-		});
-
 		it("maps terminal_request_frame to POST /sessions/{id}/terminal/request-frame", () => {
 			const result = mapCommandToHttp("terminal_request_frame", { sessionId: "s1" });
 			expect(result.method).toBe("POST");

@@ -603,9 +603,7 @@ Add-time secrets travel in an optional write-only `credentials` array on the sav
 Nothing migrates or deletes them: a file left behind by an older version is
 inert, and removing a user's data on upgrade is a worse default than leaving it.
 
-`ai-sessions/<session_id>.json` is the exception and stays live — `pty.rs` writes
-command outcomes there and `ai_agent::knowledge::spawn_persist_task` flushes them,
-neither of which involves a model. Nothing reads them back yet.
+`ai-sessions/<session_id>.json` is also inert after #2115-1333 removed the write-only command knowledge store and its persistence task. Existing history files are not deleted or migrated.
 
 ### UI Preferences (`ui-prefs.json`)
 

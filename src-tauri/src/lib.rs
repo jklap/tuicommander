@@ -2128,7 +2128,6 @@ pub fn run(mut context: tauri::Context<tauri::Wry>) {
             pty::force_retry_provider_recovery_command,
             pty::write_pty,
             pty::write_pty_parts,
-            attachments::upload_attachment,
             pty::get_input_buffer_content,
             pty::send_agent_input_if_empty,
             pty::resize_pty,
@@ -2171,7 +2170,6 @@ pub fn run(mut context: tauri::Context<tauri::Wry>) {
             pty::list_queued_agent_commands,
             pty::remove_queued_agent_command,
             pty::get_process_stats,
-            pty::read_vt_log,
             pty::subscribe_terminal_grid,
             pty::unsubscribe_terminal_grid,
             pty::terminal_request_frame,
@@ -2184,7 +2182,6 @@ pub fn run(mut context: tauri::Context<tauri::Wry>) {
             pty::terminal_scroll_to_anchor,
             pty::terminal_styled_rows,
             pty::terminal_scroll_to,
-            pty::terminal_get_block_rows,
             pty::terminal_scroll_info,
             pty::terminal_search,
             pty::terminal_search_buffer,
@@ -2193,7 +2190,6 @@ pub fn run(mut context: tauri::Context<tauri::Wry>) {
             pty::terminal_get_selection_text,
             pty::terminal_get_lines,
             pty::terminal_get_cursor_line,
-            pty::terminal_hyperlink_at,
             pty::terminal_hyperlink_span,
             pty::set_session_visible,
             pty::set_session_name,
@@ -2202,7 +2198,6 @@ pub fn run(mut context: tauri::Context<tauri::Wry>) {
             pty::get_session_foreground_process,
             pty::get_session_leaf_pid,
             pty::has_foreground_process,
-            pty::debug_agent_detection,
             pty_capture::get_pty_capture,
             pty_capture::set_pty_capture,
             load_config,
@@ -2249,7 +2244,6 @@ pub fn run(mut context: tauri::Context<tauri::Wry>) {
             git::check_is_main_branch,
             git::get_initials,
             git::run_git_command,
-            git::get_git_panel_context,
             git::get_working_tree_status,
             git::git_stage_files,
             git::git_unstage_files,
@@ -2712,7 +2706,6 @@ pub fn run(mut context: tauri::Context<tauri::Wry>) {
                         // End every ego AI Chat started: `std::process::exit`
                         // skips the destructors that would kill them.
                         tauri::async_runtime::block_on(state.acp.shutdown_all());
-                        crate::ai_agent::knowledge::flush_dirty(state.inner());
                     }
                     // Flush the last buffered log lines to disk before the
                     // process exits (story #672-c1a3) — the lines a shutdown
@@ -2756,7 +2749,6 @@ fn spawn_background_tasks(state: &Arc<AppState>) {
     // loop, and the CPU watchdog must not be able to hang behind it.
     #[cfg(feature = "desktop")]
     webview_recovery::spawn(state.clone());
-    ai_agent::knowledge::spawn_persist_task(state.clone());
 }
 
 /// Interactive CLI to set username + password for headless auth.
@@ -2846,11 +2838,6 @@ fn spawn_daemon_background_tasks(state: &Arc<AppState>) {
     //
     // - `webview_recovery::spawn` — `#[cfg(feature = "desktop")]`, so it does
     //   not exist in this build. There is no WebView whose document can be lost.
-    // - `ai_agent::knowledge::spawn_persist_task` — `build_remote_router`
-    //   serves no route that exposes command knowledge. Deleting the embedded
-    //   AI engine (#784-0aec) took its last reader too, so the desktop build
-    //   keeps recording while nothing consumes it yet; the daemon has no reason
-    //   to write files no one asks it for.
 }
 
 /// Run the tuic-remote server.

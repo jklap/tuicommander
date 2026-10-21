@@ -243,30 +243,6 @@ pub(super) async fn list_user_plugins_http(
 
 // --- GitPanel commands ---
 
-pub(super) async fn git_panel_context(
-    axum::extract::State(state): axum::extract::State<std::sync::Arc<crate::AppState>>,
-    Query(q): Query<PathQuery>,
-) -> Response {
-    if let Err(e) = validate_repo_path(&q.path) {
-        return e.into_response();
-    }
-    let path = q.path.clone();
-    let cache = state.git_cache.git_panel_context.clone();
-    let p = path.clone();
-    match tokio::task::spawn_blocking(move || {
-        cache.get_with(p.clone(), || {
-            std::sync::Arc::new(crate::git::get_git_panel_context_impl(
-                std::path::Path::new(&p),
-            ))
-        })
-    })
-    .await
-    {
-        Ok(ctx) => Json(&*ctx).into_response(),
-        Err(e) => err_500(&format!("Task failed: {e}")),
-    }
-}
-
 pub(super) async fn run_git_command_http(
     axum::extract::State(state): axum::extract::State<std::sync::Arc<crate::AppState>>,
     Json(body): Json<RunGitCommandRequest>,
