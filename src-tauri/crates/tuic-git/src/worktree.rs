@@ -505,7 +505,7 @@ fn rev_at(path: &Path, spec: &str) -> Result<String, String> {
         .map_err(|e| format!("could not resolve {spec}: {e}"))
 }
 
-fn dirty_files_at(path: &Path) -> Result<usize, String> {
+pub(crate) fn dirty_files_at(path: &Path) -> Result<usize, String> {
     git_cmd(path)
         .args([
             "status",
@@ -1249,73 +1249,377 @@ fn patches_integrated_in(repo: &Path, target: &str, tip: &str) -> Result<bool, S
     Ok(cherry.stdout.lines().all(|line| line.starts_with("- ")))
 }
 
-/// Ref state that decides one branch's classification, read without git
-/// subprocesses: the branch and all remote-tracking refs, the default-branch refs
-/// (origin/HEAD, its target, main, master), the main checkout's HEAD, config and
-/// the branch's own reflog. Other local branches never enter the key: a commit in one
-/// worktree must not re-run cherry/merge-tree for every sibling branch.
-pub fn monitoring_ref_key(repo: &Path, branch: &str) -> Result<String, String> {
+type MonitoringSignature = Option<(std::time::SystemTime, u64)>;
+
+fn monitoring_signature(path: &Path) -> MonitoringSignature {
+    #[cfg(test)]
+    MONITORING_SIGNATURE_READS.with(|reads| reads.set(reads.get() + 1));
+    let metadata = std::fs::metadata(path).ok()?;
+    Some((metadata.modified().ok()?, metadata.len()))
+}
+
+#[derive(Clone)]
+struct MonitoringFile {
+    signature: MonitoringSignature,
+    digest: Vec<u8>,
+    symbolic: Option<String>,
+}
+
+#[derive(Default)]
+struct MonitoringRefs {
+    packed: MonitoringSignature,
+    initialized: bool,
+    watching: bool,
+    watch_registered: bool,
+    verify_files: bool,
+    changed_paths: std::collections::HashSet<PathBuf>,
+    targets: std::collections::BTreeMap<String, (String, Option<String>)>,
+    loose: HashMap<PathBuf, MonitoringSignature>,
+    directories: HashMap<PathBuf, (MonitoringSignature, Vec<(PathBuf, bool)>)>,
+    files: HashMap<PathBuf, MonitoringFile>,
+}
+
+// The mutex single-flights snapshots for this checkout, including standalone
+// callers outside the app's repository diff cache. Values retain hashes, not logs.
+static MONITORING_REFS: LazyLock<
+    moka::sync::Cache<PathBuf, Arc<std::sync::Mutex<MonitoringRefs>>>,
+> = LazyLock::new(|| moka::sync::Cache::builder().max_capacity(64).build());
+
+/// Enable path-driven snapshots only after the app has armed its Git watches.
+/// Watch failures and stop transitions restore signature validation.
+pub fn set_monitoring_watch_active(repo: &Path, active: bool) {
+    let cache = MONITORING_REFS.get_with(repo.to_path_buf(), || {
+        Arc::new(std::sync::Mutex::new(MonitoringRefs::default()))
+    });
+    if let Ok(mut snapshot) = cache.lock() {
+        snapshot.watch_registered = active;
+        // Some backends return from watch() before the stream is armed. Keep
+        // signature validation until a delivered event proves it is live.
+        snapshot.watching = false;
+        snapshot.initialized = false;
+        snapshot.verify_files = true;
+    }
+}
+
+/// Feed the existing repository watcher; never start a second recursive watcher.
+/// The snapshot lock serializes updates with refresh: events arriving during a
+/// refresh remain pending for the next coalesced refresh, not cleared mid-read.
+pub fn monitoring_paths_changed(repo: &Path, paths: &[PathBuf]) {
+    let Some(cache) = MONITORING_REFS.get(repo) else {
+        return;
+    };
+    if let Ok(mut snapshot) = cache.lock() {
+        let git = repo.join(".git");
+        let paths: Vec<_> = paths
+            .iter()
+            .filter(|path| {
+                *path == &git
+                    || *path == &git.join("HEAD")
+                    || *path == &git.join("config")
+                    || *path == &git.join("packed-refs")
+                    || path.starts_with(git.join("refs"))
+                    || path.starts_with(git.join("logs/refs/heads"))
+            })
+            .cloned()
+            .collect();
+        if paths.is_empty() {
+            return;
+        }
+        if snapshot.watch_registered && !snapshot.watching {
+            snapshot.watching = true;
+            snapshot.initialized = false;
+            snapshot.verify_files = true;
+        }
+        if snapshot.changed_paths.len().saturating_add(paths.len()) > 4096 {
+            snapshot.initialized = false;
+            snapshot.verify_files = true;
+            snapshot.changed_paths.clear();
+        } else {
+            snapshot.changed_paths.extend(paths);
+        }
+    }
+}
+
+impl MonitoringRefs {
+    fn read_file(&mut self, path: &Path, required: bool) -> Result<MonitoringFile, String> {
+        if self.watching
+            && !self.verify_files
+            && !self.changed_paths.contains(path)
+            && let Some(file) = self.files.get(path)
+        {
+            return Ok(file.clone());
+        }
+        let signature = monitoring_signature(path);
+        if let Some(file) = self.files.get(path)
+            && file.signature == signature
+        {
+            return Ok(file.clone());
+        }
+        #[cfg(test)]
+        if required {
+            MONITORING_COMMON_READS.with(|reads| reads.set(reads.get() + 1));
+        } else {
+            MONITORING_LOG_READS.with(|reads| reads.set(reads.get() + 1));
+        }
+        let bytes = match std::fs::read(path) {
+            Ok(bytes) => bytes,
+            Err(error) if !required && error.kind() == std::io::ErrorKind::NotFound => Vec::new(),
+            Err(error) => return Err(error.to_string()),
+        };
+        let file = MonitoringFile {
+            signature,
+            digest: Sha256::digest(&bytes).to_vec(),
+            symbolic: bytes
+                .strip_prefix(b"ref: ")
+                .map(|name| String::from_utf8_lossy(name).trim().to_owned()),
+        };
+        // A concurrent write must be checked again, not cached as a new generation.
+        if monitoring_signature(path) == signature {
+            self.files.insert(path.to_path_buf(), file.clone());
+        } else {
+            self.files.remove(path);
+        }
+        Ok(file)
+    }
+
+    fn loose_files(&mut self, dir: &Path, files: &mut Vec<PathBuf>) -> Result<(), String> {
+        let signature = monitoring_signature(dir);
+        let cached = self
+            .directories
+            .get(dir)
+            .filter(|(old, _)| *old == signature);
+        let entries = if let Some((_, entries)) = cached {
+            entries.clone()
+        } else {
+            let entries = match std::fs::read_dir(dir) {
+                Ok(entries) => entries
+                    .map(|entry| {
+                        let entry = entry?;
+                        Ok::<_, std::io::Error>((entry.path(), entry.file_type()?.is_dir()))
+                    })
+                    .collect::<Result<Vec<_>, _>>()
+                    .map_err(|error| error.to_string())?,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => Vec::new(),
+                Err(error) => return Err(error.to_string()),
+            };
+            self.directories
+                .insert(dir.to_path_buf(), (signature, entries.clone()));
+            entries
+        };
+        for (path, is_dir) in entries {
+            if is_dir {
+                self.loose_files(&path, files)?;
+            } else if path.extension().is_none_or(|extension| extension != "lock") {
+                files.push(path);
+            }
+        }
+        Ok(())
+    }
+
+    fn refresh(&mut self, repo: &gix::Repository) -> Result<(), String> {
+        use gix::bstr::ByteSlice;
+        if self.watching && self.initialized {
+            let common = repo.common_dir();
+            let refs = common.join("refs");
+            let broad = self.changed_paths.iter().any(|path| {
+                path == common
+                    || path == &common.join("packed-refs")
+                    || (path.starts_with(&refs)
+                        && (path.is_dir()
+                            || self.targets.keys().any(|name| {
+                                common.join(name).starts_with(path) && common.join(name) != *path
+                            })))
+            });
+            if !broad {
+                let paths: Vec<_> = self
+                    .changed_paths
+                    .iter()
+                    .filter(|path| {
+                        path.starts_with(&refs)
+                            && path.extension().is_none_or(|extension| extension != "lock")
+                    })
+                    .cloned()
+                    .collect();
+                for path in paths {
+                    let name = path
+                        .strip_prefix(common)
+                        .map_err(|e| e.to_string())?
+                        .components()
+                        .map(|part| part.as_os_str().to_string_lossy())
+                        .collect::<Vec<_>>()
+                        .join("/");
+                    match repo
+                        .try_find_reference(name.as_str())
+                        .map_err(|e| e.to_string())?
+                    {
+                        Some(reference) => {
+                            self.targets
+                                .insert(name.clone(), monitoring_target(&reference));
+                        }
+                        None => {
+                            self.targets.remove(&name);
+                        }
+                    }
+                    if let Some(branch) = name.strip_prefix("refs/heads/") {
+                        self.changed_paths
+                            .insert(common.join("logs/refs/heads").join(branch));
+                    }
+                }
+                return Ok(());
+            }
+            self.verify_files = true;
+        }
+        let packed = monitoring_signature(&repo.common_dir().join("packed-refs"));
+        let full = !self.initialized || packed != self.packed;
+        // Sample loose-file generations before reading targets. A write racing
+        // the snapshot then differs on the next refresh instead of being sealed
+        // into the cache with a newer signature than the value it describes.
+        let mut files = Vec::new();
+        self.loose_files(&repo.common_dir().join("refs"), &mut files)?;
+        let mut loose = HashMap::new();
+        for path in &files {
+            loose.insert(path.clone(), monitoring_signature(path));
+        }
+        if full {
+            let references = repo.references().map_err(|error| error.to_string())?;
+            #[cfg(test)]
+            MONITORING_REF_ENUMERATIONS.with(|reads| reads.set(reads.get() + 1));
+            let mut targets = std::collections::BTreeMap::new();
+            for reference in references.all().map_err(|error| error.to_string())? {
+                let reference = reference.map_err(|error| error.to_string())?;
+                targets.insert(
+                    reference.name().as_bstr().to_str_lossy().into_owned(),
+                    monitoring_target(&reference),
+                );
+            }
+            self.targets = targets;
+        }
+        if !full {
+            let paths: std::collections::HashSet<_> =
+                loose.keys().chain(self.loose.keys()).collect();
+            for path in paths {
+                if self.loose.get(path) == loose.get(path) {
+                    continue;
+                }
+                let name = path
+                    .strip_prefix(repo.common_dir())
+                    .map_err(|e| e.to_string())?
+                    .components()
+                    .map(|part| part.as_os_str().to_string_lossy())
+                    .collect::<Vec<_>>()
+                    .join("/");
+                match repo
+                    .try_find_reference(name.as_str())
+                    .map_err(|e| e.to_string())?
+                {
+                    Some(reference) => {
+                        self.targets.insert(name, monitoring_target(&reference));
+                    }
+                    None => {
+                        self.targets.remove(&name);
+                    }
+                }
+            }
+        }
+        self.loose = loose;
+        self.packed = packed;
+        self.initialized = true;
+        Ok(())
+    }
+}
+
+fn monitoring_target(reference: &gix::Reference<'_>) -> (String, Option<String>) {
     use gix::bstr::ByteSlice;
-    let grepo = gix::open(repo).map_err(|e| e.to_string())?;
-    let mut names = vec![
-        format!("refs/heads/{branch}"),
-        format!("refs/remotes/origin/{branch}"),
-        "refs/remotes/origin/HEAD".to_string(),
-        "refs/heads/main".to_string(),
-        "refs/heads/master".to_string(),
-        "refs/remotes/origin/main".to_string(),
-        "refs/remotes/origin/master".to_string(),
-    ];
-    let origin_default = grepo
-        .try_find_reference("refs/remotes/origin/HEAD")
-        .map_err(|e| e.to_string())?
-        .and_then(|reference| match reference.target() {
-            gix::refs::TargetRef::Symbolic(target) => target
-                .as_bstr()
-                .to_str_lossy()
-                .strip_prefix("refs/remotes/origin/")
-                .map(str::to_owned),
-            gix::refs::TargetRef::Object(_) => None,
-        });
-    if let Some(default) = origin_default {
-        names.push(format!("refs/remotes/origin/{default}"));
-        names.push(format!("refs/heads/{default}"));
+    let symbolic = match reference.target() {
+        gix::refs::TargetRef::Symbolic(target) => {
+            Some(target.as_bstr().to_str_lossy().into_owned())
+        }
+        gix::refs::TargetRef::Object(_) => None,
+    };
+    (format!("{:?}", reference.target()), symbolic)
+}
+
+/// Reuse unchanged ref and reflog pieces across sidebar refreshes. Metadata
+/// signatures also cover standalone callers that do not own an app watcher.
+pub fn monitoring_ref_keys(
+    repo: &Path,
+    branches: &[String],
+) -> Result<HashMap<String, String>, String> {
+    if branches.is_empty() {
+        return Ok(HashMap::new());
     }
-    let references = grepo.references().map_err(|e| e.to_string())?;
-    for reference in references
-        .prefixed("refs/remotes/")
-        .map_err(|e| e.to_string())?
-    {
-        let reference = reference.map_err(|e| e.to_string())?;
-        names.push(reference.name().as_bstr().to_str_lossy().into_owned());
+    let grepo = crate::git_reads::cached_repo(repo)?;
+    let cache = MONITORING_REFS.get_with(repo.to_path_buf(), || {
+        Arc::new(std::sync::Mutex::new(MonitoringRefs::default()))
+    });
+    let mut snapshot = cache.lock().map_err(|error| error.to_string())?;
+    if let Err(error) = snapshot.refresh(&grepo) {
+        *snapshot = MonitoringRefs::default();
+        return Err(error);
     }
-    names.sort();
-    names.dedup();
-    let mut digest = Sha256::new();
-    for name in names {
-        let target = grepo
-            .try_find_reference(name.as_str())
-            .map_err(|e| e.to_string())?
-            .map(|reference| format!("{:?}", reference.target()));
-        digest.update(format!("{name}={target:?}").as_bytes());
-        digest.update([0]);
+    let head = snapshot.read_file(&grepo.git_dir().join("HEAD"), true)?;
+    let config = snapshot.read_file(&grepo.common_dir().join("config"), true)?;
+    let mut common = Sha256::new();
+    // Any remote can prove containment; keep all remote dependencies without
+    // reopening their files on every local commit.
+    for (name, (target, _)) in &snapshot.targets {
+        if name.starts_with("refs/remotes/") {
+            common.update(format!("{name}={target}\0").as_bytes());
+        }
     }
-    // HEAD of the checkout whose ancestry the classifier consults.
-    let head = grepo.rev_parse_single("HEAD").ok().map(|id| id.detach());
-    digest.update(format!("HEAD={head:?}").as_bytes());
-    digest.update([0]);
-    for file in [
-        grepo.git_dir().join("HEAD"),
-        grepo.common_dir().join("config"),
-    ] {
-        digest.update(std::fs::read(file).map_err(|e| e.to_string())?);
-        digest.update([0]);
+    let origin_default = snapshot
+        .targets
+        .get("refs/remotes/origin/HEAD")
+        .and_then(|(_, symbolic)| symbolic.as_deref())
+        .and_then(|name| name.strip_prefix("refs/remotes/origin/"));
+    let mut defaults = vec!["main", "master"];
+    defaults.extend(origin_default);
+    defaults.sort_unstable();
+    defaults.dedup();
+    for branch in defaults {
+        let name = format!("refs/heads/{branch}");
+        common.update(format!("{name}={:?}\0", snapshot.targets.get(&name)).as_bytes());
     }
-    // The branch reflog distinguishes own commits from following the default.
-    if let Ok(log) = std::fs::read(grepo.common_dir().join("logs/refs/heads").join(branch)) {
-        digest.update(log);
+    common.update(head.digest);
+    // Resolve symbolic HEAD from the shared snapshot, not another ref-store read.
+    let mut symbolic = head.symbolic.as_deref();
+    for _ in 0..16 {
+        let Some(name) = symbolic else { break };
+        let target = snapshot.targets.get(name);
+        common.update(format!("{name}={target:?}\0").as_bytes());
+        symbolic = target.and_then(|(_, next)| next.as_deref());
     }
-    Ok(hex::encode(digest.finalize()))
+    common.update(config.digest);
+    let mut keys = HashMap::new();
+    for branch in branches {
+        let mut digest = common.clone();
+        let name = format!("refs/heads/{branch}");
+        digest.update(format!("{name}={:?}\0", snapshot.targets.get(&name)).as_bytes());
+        let log = snapshot.read_file(
+            &grepo.common_dir().join("logs/refs/heads").join(branch),
+            false,
+        )?;
+        digest.update(log.digest);
+        keys.insert(branch.clone(), hex::encode(digest.finalize()));
+    }
+    snapshot.changed_paths.clear();
+    snapshot.verify_files = false;
+    Ok(keys)
+}
+
+#[cfg(test)]
+thread_local! {
+    static MONITORING_COMMON_READS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    static MONITORING_REF_ENUMERATIONS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    static MONITORING_LOG_READS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    static MONITORING_SIGNATURE_READS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// Standalone callers get the same dependency set as a batched sidebar refresh.
+pub fn monitoring_ref_key(repo: &Path, branch: &str) -> Result<String, String> {
+    monitoring_ref_keys(repo, &[branch.to_owned()])?
+        .remove(branch)
+        .ok_or_else(|| "missing monitoring ref key".to_string())
 }
 
 type MonitoringMerge = (WorkspaceCommitStatus, Option<String>);
@@ -1364,15 +1668,42 @@ pub fn inspect_workspace_monitoring_with_pr(
     workspace: &WorkspaceWorktree,
     pr_proves_tip: impl Fn(&Path, &str, &str) -> bool,
 ) -> WorkspaceLifecycleStatus {
+    let key = monitoring_ref_key(base_repo, &workspace.branch);
+    inspect_workspace_monitoring_with_key(
+        base_repo,
+        workspace,
+        key.as_deref().map_err(String::as_str),
+        pr_proves_tip,
+    )
+}
+
+/// Consume the shared snapshot instead of reopening its ref store per workspace.
+pub fn inspect_workspace_monitoring_with_key(
+    base_repo: &Path,
+    workspace: &WorkspaceWorktree,
+    ref_key: Result<&str, &str>,
+    pr_proves_tip: impl Fn(&Path, &str, &str) -> bool,
+) -> WorkspaceLifecycleStatus {
+    let path = Path::new(&workspace.path);
+    let dirty = crate::git_reads::GixGitReads::dirty_files(path)
+        .map(Ok)
+        .unwrap_or_else(|| dirty_files_at(path));
+    inspect_workspace_monitoring_with_status(base_repo, workspace, ref_key, dirty, pr_proves_tip)
+}
+
+/// Monitoring alone may supply a shared status result; removal preflights stay fresh.
+pub fn inspect_workspace_monitoring_with_status(
+    base_repo: &Path,
+    workspace: &WorkspaceWorktree,
+    ref_key: Result<&str, &str>,
+    dirty: Result<usize, String>,
+    pr_proves_tip: impl Fn(&Path, &str, &str) -> bool,
+) -> WorkspaceLifecycleStatus {
     let result = (|| -> Result<WorkspaceLifecycleStatus, String> {
-        let path = Path::new(&workspace.path);
-        let dirty_files = match crate::git_reads::GixGitReads::dirty_files(path) {
-            Some(count) => count,
-            None => dirty_files_at(path)?,
-        };
-        let ref_key = monitoring_ref_key(base_repo, &workspace.branch)?;
+        let dirty_files = dirty?;
+        let ref_key = ref_key.map_err(str::to_owned)?;
         let (commit_status, merge_proof) =
-            monitoring_branch_merge(base_repo, &workspace.branch, &ref_key, true, pr_proves_tip)?;
+            monitoring_branch_merge(base_repo, &workspace.branch, ref_key, true, pr_proves_tip)?;
         Ok(WorkspaceLifecycleStatus {
             dirty_files: Some(dirty_files),
             missing_checkout: false,
@@ -1439,7 +1770,7 @@ fn lifecycle_branch_merge(
     // monitoring cache classifies the ref, so retain fresh HEAD classification
     // in that case rather than changing the lifecycle verdict.
     let branch_matches_head = monitoring
-        && gix::open(base_repo)
+        && crate::git_reads::cached_repo(base_repo)
             .ok()
             .and_then(|repo| {
                 repo.rev_parse_single(format!("refs/heads/{branch}").as_str())
@@ -2083,17 +2414,47 @@ fn preserve_missing_worktree_modules(
         base_repo: &Path,
         worktree: &Path,
         path: &Path,
+        owner: &Path,
         names: &mut Vec<String>,
-        inside_repo: bool,
     ) -> Result<(), String> {
         if !path.is_dir() {
             return Ok(());
         }
         let is_repo = path.join("HEAD").is_file() && path.join("objects").is_dir();
         if is_repo {
-            let relative = names.join("/");
-            let destination = base_repo.join(&relative);
-            if !initialized_main_submodule(base_repo, &destination) {
+            let name = names.join("/");
+            let mapping = git_cmd(owner)
+                .args([
+                    "config",
+                    "--file",
+                    ".gitmodules",
+                    "--get-all",
+                    &format!("submodule.{name}.path"),
+                ])
+                .run()
+                .map_err(|error| {
+                    format!(
+                        "Cannot resolve missing worktree submodule {name} path from .gitmodules: {error}"
+                    )
+                })?;
+            let paths = mapping.stdout.lines().collect::<Vec<_>>();
+            let [relative] = paths.as_slice() else {
+                return Err(format!(
+                    "Cannot resolve missing worktree submodule {name}: expected one .gitmodules path"
+                ));
+            };
+            if relative.is_empty()
+                || tuic_core::path_spelling::is_absolute_on_any_platform(relative)
+                || !Path::new(relative)
+                    .components()
+                    .all(|component| matches!(component, Component::Normal(_)))
+            {
+                return Err(format!(
+                    "Cannot resolve missing worktree submodule {name}: invalid .gitmodules path {relative:?}"
+                ));
+            }
+            let destination = owner.join(relative);
+            if !initialized_main_submodule(owner, &destination) {
                 return Err(format!(
                     "Cannot preserve missing worktree submodule {relative}: main module is not initialized"
                 ));
@@ -2197,33 +2558,26 @@ fn preserve_missing_worktree_modules(
                 .timeout(Duration::from_secs(60))
                 .run()
                 .map_err(|e| format!("Cannot preserve missing submodule {relative}: {e}"))?;
+            // Nested modules have their own declarations and admin namespace.
+            // Never interpret Git's objects/refs/logs directories as module names.
+            return visit(
+                base_repo,
+                worktree,
+                &path.join("modules"),
+                &destination,
+                &mut Vec::new(),
+            );
         }
         for entry in std::fs::read_dir(path)
             .map_err(|e| format!("Cannot inspect module admin directory: {e}"))?
         {
             let entry = entry.map_err(|e| format!("Cannot inspect module admin entry: {e}"))?;
-            if !entry.path().is_dir()
-                || entry.file_name() == "objects"
-                || entry.file_name() == "refs"
-                || entry.file_name() == "logs"
-            {
+            if !entry.path().is_dir() {
                 continue;
             }
-            let component = entry.file_name().to_string_lossy().into_owned();
-            let structural_modules = component == "modules" && (inside_repo || is_repo);
-            if !structural_modules {
-                names.push(component.clone());
-            }
-            visit(
-                base_repo,
-                worktree,
-                &entry.path(),
-                names,
-                inside_repo || is_repo,
-            )?;
-            if !structural_modules {
-                names.pop();
-            }
+            names.push(entry.file_name().to_string_lossy().into_owned());
+            visit(base_repo, worktree, &entry.path(), owner, names)?;
+            names.pop();
         }
         Ok(())
     }
@@ -2231,8 +2585,8 @@ fn preserve_missing_worktree_modules(
         base_repo,
         worktree,
         &admin.join("modules"),
+        base_repo,
         &mut Vec::new(),
-        false,
     )
 }
 
@@ -4412,6 +4766,200 @@ mod tests {
             std::fs::read_to_string(allocation_marker(repo.path(), &first.path).unwrap()).unwrap(),
             "finished"
         );
+    }
+
+    // Catches: a bare Git entry with neither a branch nor detached marker is accepted as an orphan.
+    #[test]
+    fn orphan_validation_refuses_a_bare_repository_entry() {
+        let (_temp, repo, _workspaces) = workspace_fixture();
+        let bare = repo.parent().unwrap().join("bare.git");
+        git_cmd(&repo)
+            .args([
+                "clone",
+                "--bare",
+                &repo.to_string_lossy(),
+                &bare.to_string_lossy(),
+            ])
+            .run()
+            .unwrap();
+        let porcelain = git_cmd(&bare)
+            .args(["worktree", "list", "--porcelain"])
+            .run()
+            .unwrap();
+        assert!(
+            porcelain.stdout.lines().any(|line| line == "bare"),
+            "{}",
+            porcelain.stdout
+        );
+        let error =
+            validate_worktree_path(&bare.to_string_lossy(), &bare.to_string_lossy()).unwrap_err();
+        assert!(error.contains("not detached"), "{error}");
+        git_cmd(&bare)
+            .args(["cat-file", "-e", "HEAD"])
+            .run()
+            .unwrap();
+    }
+
+    // Catches: an unreadable allocation marker is treated as absent and the checkout is moved.
+    #[test]
+    fn archive_refuses_an_allocation_marker_that_is_a_directory() {
+        // DEFERRED (2026-10-20) — rollback remove_file failures need a deterministic real filesystem reproducer; this covers the initial read refusal only.
+        let (_temp, repo, _workspaces) = workspace_fixture();
+        let path = add_worktree(&repo, "marker-directory");
+        let marker = allocation_marker(&repo, &path).unwrap();
+        assert!(!marker.exists());
+        fs::create_dir(&marker).unwrap();
+        let error = archive_worktree(&repo, "marker-directory", None).unwrap_err();
+        assert!(error.contains("Cannot read allocation marker"), "{error}");
+        assert!(path.join(".git").exists());
+        assert_eq!(
+            get_worktree_paths_raw(&repo.to_string_lossy()).unwrap()["marker-directory"].path,
+            path.to_string_lossy()
+        );
+    }
+
+    // Catches: a valid dirty-file confirmation is inverted or force is reinterpreted as non-force.
+    #[test]
+    fn confirmed_force_removal_discards_only_the_confirmed_dirty_checkout() {
+        let (_temp, repo, _workspaces) = workspace_fixture();
+        let path = add_worktree(&repo, "confirmed-dirty");
+        fs::write(path.join("untracked.txt"), "confirmed discard\n").unwrap();
+        let lifecycle = inspect_workspace_lifecycle(&repo, "confirmed-dirty");
+        assert_eq!(lifecycle.dirty_files, Some(1));
+        remove_worktree_by_workspace_id_with_missing_confirmation_and_pr(
+            &repo.to_string_lossy(),
+            "confirmed-dirty",
+            false,
+            None,
+            true,
+            false,
+            lifecycle.dirty_fingerprint.as_deref(),
+            Some(false),
+            |_, _, _| false,
+        )
+        .unwrap();
+        assert!(!path.exists());
+        assert!(rev_at(&repo, "refs/heads/confirmed-dirty").is_ok());
+    }
+
+    // Catches: the final removal boundary accepts a stale fingerprint or refuses an unchanged one.
+    #[test]
+    fn removal_boundary_rechecks_the_confirmed_fingerprint() {
+        for changed in [false, true] {
+            let (_temp, repo, _workspaces) = workspace_fixture();
+            let path = add_worktree(&repo, "boundary-fingerprint");
+            let confirmed = dirty_fingerprint_at(&path).unwrap().0;
+            if changed {
+                fs::write(path.join("new.txt"), "not confirmed\n").unwrap();
+            }
+            let worktree = WorktreeInfo {
+                name: "boundary-fingerprint".into(),
+                path: path.clone(),
+                branch: Some("boundary-fingerprint".into()),
+                base_repo: repo,
+            };
+            let result = remove_worktree_internal_with_lock(
+                &worktree,
+                true,
+                false,
+                Some(&confirmed),
+                Some(false),
+            );
+            if changed {
+                let error = result.unwrap_err();
+                assert!(error.contains("changed since confirmation"), "{error}");
+                assert_eq!(
+                    fs::read_to_string(path.join("new.txt")).unwrap(),
+                    "not confirmed\n"
+                );
+            } else {
+                result.unwrap();
+                assert!(!path.exists());
+            }
+        }
+    }
+
+    // Catches: generic Git deletion errors are reported as lock/main-worktree errors or cleanup success.
+    #[cfg(unix)]
+    #[test]
+    fn removal_keeps_a_generic_admin_permission_failure_distinct_from_confirmation_errors() {
+        // DEFERRED (2026-10-20) — late unregister/delete races and alternate Git error wording remain mutation survivors; do not synthesize stderr to claim coverage.
+        use std::os::unix::fs::PermissionsExt;
+        let (_temp, repo, _workspaces) = workspace_fixture();
+        let path = add_worktree(&repo, "admin-permissions");
+        let admin = registered_worktree_admin_dir(&repo, &path)
+            .unwrap()
+            .unwrap();
+        let worktree = WorktreeInfo {
+            name: "admin-permissions".into(),
+            path: path.clone(),
+            branch: Some("admin-permissions".into()),
+            base_repo: repo.clone(),
+        };
+        let original = fs::metadata(&admin).unwrap().permissions();
+        fs::set_permissions(&admin, fs::Permissions::from_mode(0o500)).unwrap();
+        let result = remove_worktree_internal(&worktree, true);
+        fs::set_permissions(&admin, original).unwrap();
+        let error = result.unwrap_err();
+        assert!(error.starts_with("Git worktree remove failed:"), "{error}");
+        assert!(
+            admin.exists(),
+            "Git failure must not silently prune the registration"
+        );
+    }
+
+    // Catches: force incorrectly refuses a changed submodule HEAD before preserving its local-only commit.
+    #[test]
+    fn forced_removal_preserves_a_changed_submodule_head() {
+        let (_temp, repo, _workspaces) = workspace_fixture();
+        add_populated_submodule(&repo);
+        let path = add_worktree(&repo, "ignored-submodule-dirt");
+        git_cmd(&path)
+            .args([
+                "-c",
+                "protocol.file.allow=always",
+                "submodule",
+                "update",
+                "--init",
+            ])
+            .run()
+            .unwrap();
+        let module = path.join("modules/local");
+        git_cmd(&module)
+            .args(["config", "user.email", "test@test.com"])
+            .run()
+            .unwrap();
+        git_cmd(&module)
+            .args(["config", "user.name", "Test"])
+            .run()
+            .unwrap();
+        commit_file(&module, "only-here.txt", "preserve this commit\n");
+        let oid = rev_at(&module, "HEAD").unwrap();
+        let status = git_cmd(&path).args(["submodule", "status"]).run().unwrap();
+        assert!(status.stdout.starts_with('+'), "{}", status.stdout);
+        let worktree = WorktreeInfo {
+            name: "ignored-submodule-dirt".into(),
+            path: path.clone(),
+            branch: Some("ignored-submodule-dirt".into()),
+            base_repo: repo.clone(),
+        };
+        remove_worktree_internal(&worktree, true).unwrap();
+        assert!(!path.exists());
+        git_cmd(&repo.join("modules/local"))
+            .args(["cat-file", "-e", &oid])
+            .run()
+            .unwrap();
+        let refs = git_cmd(&repo.join("modules/local"))
+            .args([
+                "for-each-ref",
+                "--format=%(refname)",
+                "--points-at",
+                &oid,
+                "refs/tuic/preserved",
+            ])
+            .run()
+            .unwrap();
+        assert!(!refs.stdout.trim().is_empty());
     }
 
     // Catches: archive errors leave the sidebar and registry pointing at a moved checkout.
@@ -8940,6 +9488,330 @@ branch refs/heads/feat
         );
     }
 
+    // Catches: an absent or malformed declaration falls back to an unrelated admin-name path.
+    #[test]
+    fn missing_checkout_refuses_missing_or_malformed_submodule_path_mapping() {
+        for mapping in [
+            None,
+            Some(""),
+            Some("../outside"),
+            Some("/outside"),
+            Some(r"C:\outside"),
+        ] {
+            let (_temp, repo, _workspaces) = workspace_fixture();
+            add_populated_submodule(&repo);
+            let path = add_worktree(&repo, "invalid-missing-module");
+            git_cmd(&path)
+                .args([
+                    "-c",
+                    "protocol.file.allow=always",
+                    "submodule",
+                    "update",
+                    "--init",
+                ])
+                .run()
+                .unwrap();
+            let module = path.join("modules/local");
+            let module_gitdir = PathBuf::from(rev_at(&module, "--absolute-git-dir").unwrap());
+            let oid = rev_at(&module, "HEAD").unwrap();
+            let admin = registered_worktree_admin_dir(&repo, &path)
+                .unwrap()
+                .unwrap();
+            let worktree = WorktreeInfo {
+                name: "invalid-missing-module".into(),
+                path: path.clone(),
+                branch: Some("invalid-missing-module".into()),
+                base_repo: repo.clone(),
+            };
+            fs::remove_dir_all(&path).unwrap();
+            if let Some(mapping) = mapping {
+                git_cmd(&repo)
+                    .args([
+                        "config",
+                        "--file",
+                        ".gitmodules",
+                        "submodule.modules/local.path",
+                        mapping,
+                    ])
+                    .run()
+                    .unwrap();
+            } else {
+                fs::remove_file(repo.join(".gitmodules")).unwrap();
+            }
+            let error = remove_worktree_internal(&worktree, true).unwrap_err();
+            assert!(
+                error.contains("Cannot resolve missing worktree submodule")
+                    && error.contains(".gitmodules"),
+                "{mapping:?}: {error}"
+            );
+            assert!(
+                admin.is_dir(),
+                "{mapping:?}: refusal must retain registration"
+            );
+            git_cmd(&repo)
+                .args([
+                    "--git-dir",
+                    &module_gitdir.to_string_lossy(),
+                    "--work-tree",
+                    &repo.to_string_lossy(),
+                    "cat-file",
+                    "-e",
+                    &oid,
+                ])
+                .run()
+                .expect("refusal must retain source module objects");
+        }
+    }
+
+    // Catches: nested module names are resolved against the root instead of their owning module.
+    #[test]
+    fn missing_checkout_preserves_nested_named_module_objects() {
+        let (_temp, repo, _workspaces) = workspace_fixture();
+        let leaf = repo.parent().unwrap().join("nested-leaf-source");
+        fs::create_dir(&leaf).unwrap();
+        git_cmd(&leaf).args(["init"]).run().unwrap();
+        git_cmd(&leaf)
+            .args(["config", "user.email", "test@test.com"])
+            .run()
+            .unwrap();
+        git_cmd(&leaf)
+            .args(["config", "user.name", "Test"])
+            .run()
+            .unwrap();
+        commit_file(&leaf, "leaf.txt", "base leaf\n");
+        let outer = repo.parent().unwrap().join("nested-outer-source");
+        fs::create_dir(&outer).unwrap();
+        git_cmd(&outer).args(["init"]).run().unwrap();
+        git_cmd(&outer)
+            .args(["config", "user.email", "test@test.com"])
+            .run()
+            .unwrap();
+        git_cmd(&outer)
+            .args(["config", "user.name", "Test"])
+            .run()
+            .unwrap();
+        commit_file(&outer, "outer.txt", "base outer\n");
+        git_cmd(&outer)
+            .args([
+                "-c",
+                "protocol.file.allow=always",
+                "submodule",
+                "add",
+                "--name",
+                "nested-git-name",
+                &leaf.to_string_lossy(),
+                "nested/checkout-path",
+            ])
+            .run()
+            .unwrap();
+        git_cmd(&outer).args(["add", "."]).run().unwrap();
+        git_cmd(&outer)
+            .args(["commit", "-m", "add leaf"])
+            .run()
+            .unwrap();
+        git_cmd(&repo)
+            .args([
+                "-c",
+                "protocol.file.allow=always",
+                "submodule",
+                "add",
+                "--name",
+                "outer-git-name",
+                &outer.to_string_lossy(),
+                "modules/outer-path",
+            ])
+            .run()
+            .unwrap();
+        git_cmd(&repo).args(["add", "."]).run().unwrap();
+        git_cmd(&repo)
+            .args(["commit", "-m", "add outer"])
+            .run()
+            .unwrap();
+
+        let path = add_worktree(&repo, "missing-nested-module");
+        git_cmd(&path)
+            .args([
+                "-c",
+                "protocol.file.allow=always",
+                "submodule",
+                "update",
+                "--init",
+                "--recursive",
+            ])
+            .run()
+            .unwrap();
+        let outer_module = path.join("modules/outer-path");
+        let nested = outer_module.join("nested/checkout-path");
+        git_cmd(&nested)
+            .args(["config", "user.email", "test@test.com"])
+            .run()
+            .unwrap();
+        git_cmd(&nested)
+            .args(["config", "user.name", "Test"])
+            .run()
+            .unwrap();
+        commit_file(&nested, "local-only.txt", "nested local commit\n");
+        let oid = rev_at(&nested, "HEAD").unwrap();
+        let nested_gitdir = PathBuf::from(rev_at(&nested, "--absolute-git-dir").unwrap());
+        git_cmd(&repo)
+            .args([
+                "-c",
+                "protocol.file.allow=always",
+                "submodule",
+                "update",
+                "--init",
+                "--recursive",
+            ])
+            .run()
+            .unwrap();
+        let destination = repo.join("modules/outer-path/nested/checkout-path");
+        assert!(
+            git_cmd(&destination)
+                .args(["cat-file", "-e", &oid])
+                .run()
+                .is_err()
+        );
+        let admin = registered_worktree_admin_dir(&repo, &path)
+            .unwrap()
+            .unwrap();
+        let worktree = WorktreeInfo {
+            name: "missing-nested-module".into(),
+            path: path.clone(),
+            branch: Some("missing-nested-module".into()),
+            base_repo: repo.clone(),
+        };
+        fs::remove_dir_all(&path).unwrap();
+        remove_worktree_internal(&worktree, true).unwrap();
+        assert!(!admin.exists());
+        assert!(!nested_gitdir.exists());
+        git_cmd(&destination)
+            .args(["cat-file", "-e", &oid])
+            .run()
+            .unwrap();
+        let refs = git_cmd(&destination)
+            .args([
+                "for-each-ref",
+                "--format=%(refname)",
+                "--points-at",
+                &oid,
+                "refs/tuic/preserved",
+            ])
+            .run()
+            .unwrap();
+        assert!(
+            !refs.stdout.trim().is_empty(),
+            "nested module-only commit needs a durable ref"
+        );
+    }
+
+    // Catches: missing-checkout cleanup treats a submodule admin name as its checkout path.
+    #[test]
+    fn missing_checkout_preserves_named_submodule_before_pruning() {
+        // Catches: an admin-name container called objects is mistaken for a Git repository.
+        for module_name in ["git-module-name", "bucket/objects/git-module-name"] {
+            let (_temp, repo, _workspaces) = workspace_fixture();
+            let source = repo.parent().unwrap().join("named-missing-module-source");
+            fs::create_dir(&source).unwrap();
+            git_cmd(&source).args(["init"]).run().unwrap();
+            git_cmd(&source)
+                .args(["config", "user.email", "test@test.com"])
+                .run()
+                .unwrap();
+            git_cmd(&source)
+                .args(["config", "user.name", "Test"])
+                .run()
+                .unwrap();
+            commit_file(&source, "module.txt", "base commit\n");
+            git_cmd(&repo)
+                .args([
+                    "-c",
+                    "protocol.file.allow=always",
+                    "submodule",
+                    "add",
+                    "--name",
+                    module_name,
+                    &source.to_string_lossy(),
+                    "modules/checkout-path",
+                ])
+                .run()
+                .unwrap();
+            git_cmd(&repo).args(["add", "."]).run().unwrap();
+            git_cmd(&repo)
+                .args(["commit", "-m", "add named submodule"])
+                .run()
+                .unwrap();
+            let path = add_worktree(&repo, "missing-named-module");
+            git_cmd(&path)
+                .args([
+                    "-c",
+                    "protocol.file.allow=always",
+                    "submodule",
+                    "update",
+                    "--init",
+                ])
+                .run()
+                .unwrap();
+            let module = path.join("modules/checkout-path");
+            git_cmd(&module)
+                .args(["config", "user.email", "test@test.com"])
+                .run()
+                .unwrap();
+            git_cmd(&module)
+                .args(["config", "user.name", "Test"])
+                .run()
+                .unwrap();
+            commit_file(&module, "local-only.txt", "worktree-only commit\n");
+            let local_oid = rev_at(&module, "HEAD").unwrap();
+            let module_gitdir = PathBuf::from(rev_at(&module, "--absolute-git-dir").unwrap());
+            assert_eq!(module_gitdir.file_name().unwrap(), "git-module-name");
+            let destination = repo.join("modules/checkout-path");
+            assert!(initialized_main_submodule(&repo, &destination));
+            assert!(!repo.join("git-module-name").exists());
+            assert!(
+                git_cmd(&destination)
+                    .args(["cat-file", "-e", &local_oid])
+                    .run()
+                    .is_err()
+            );
+            let worktree = WorktreeInfo {
+                name: "missing-named-module".into(),
+                path: path.clone(),
+                branch: Some("missing-named-module".into()),
+                base_repo: repo.clone(),
+            };
+            let admin = registered_worktree_admin_dir(&repo, &path)
+                .unwrap()
+                .unwrap();
+            fs::remove_dir_all(&path).unwrap();
+            assert!(module_gitdir.is_dir());
+            remove_worktree_internal(&worktree, true).expect(
+                "initialized named destination must receive the missing checkout's objects",
+            );
+            assert!(
+                !admin.exists(),
+                "successful preservation permits registration pruning"
+            );
+            git_cmd(&destination)
+                .args(["cat-file", "-e", &local_oid])
+                .run()
+                .unwrap();
+            let refs = git_cmd(&destination)
+                .args([
+                    "for-each-ref",
+                    "--format=%(refname)",
+                    "--points-at",
+                    &local_oid,
+                    "refs/tuic/preserved",
+                ])
+                .run()
+                .unwrap();
+            assert!(
+                !refs.stdout.trim().is_empty(),
+                "the local-only commit needs a durable ref"
+            );
+        }
+    }
+
     #[test]
     fn missing_worktree_directory_preserves_its_submodule_refs_before_pruning() {
         let (_temp, repo, _workspaces) = workspace_fixture();
@@ -9525,6 +10397,159 @@ branch refs/heads/feat
         assert_eq!(status.commit_status, WorkspaceCommitStatus::InSync);
         assert_eq!(status.dirty_files, Some(0));
         assert_eq!(status.removal_safety, WorkspaceRemovalSafety::Safe);
+    }
+
+    // Catches: a shared HEAD/config read is repeated once per workspace on every refresh.
+    #[test]
+    fn monitoring_refresh_reads_shared_files_once_not_per_worktree() {
+        let (_temp, repo, _) = workspace_fixture();
+        let branches: Vec<_> = (0..8).map(|i| format!("bounded-{i}")).collect();
+        for branch in &branches {
+            add_worktree(&repo, branch);
+        }
+        let before = monitoring_ref_keys(&repo, &branches).unwrap();
+        let checkout = resolve_any_workspace(&repo, &branches[0]).unwrap();
+        commit_file(Path::new(&checkout.path), "bounded.txt", "one change\n");
+        MONITORING_COMMON_READS.with(|reads| reads.set(0));
+        let after = monitoring_ref_keys(&repo, &branches).unwrap();
+        let reads = MONITORING_COMMON_READS.with(std::cell::Cell::get);
+        assert_ne!(before[&branches[0]], after[&branches[0]]);
+        for branch in &branches[1..] {
+            assert_eq!(before[branch], after[branch]);
+        }
+        assert!(
+            reads <= 2,
+            "shared HEAD/config file opens after one commit: {reads}; limit 2, independent of 8 worktrees"
+        );
+    }
+
+    // Catches: one commit enumerates every ref and reopens every sibling reflog.
+    #[test]
+    fn monitoring_one_commit_reads_only_changed_ref_and_history() {
+        let (_temp, repo, _) = workspace_fixture();
+        let branches: Vec<_> = (0..16).map(|i| format!("incremental-{i}")).collect();
+        for branch in &branches {
+            add_worktree(&repo, branch);
+        }
+        let before = monitoring_ref_keys(&repo, &branches).unwrap();
+        let checkout = resolve_any_workspace(&repo, &branches[0]).unwrap();
+        commit_file(Path::new(&checkout.path), "incremental.txt", "one change\n");
+        MONITORING_COMMON_READS.with(|reads| reads.set(0));
+        MONITORING_REF_ENUMERATIONS.with(|reads| reads.set(0));
+        MONITORING_LOG_READS.with(|reads| reads.set(0));
+        let after = monitoring_ref_keys(&repo, &branches).unwrap();
+        assert_ne!(before[&branches[0]], after[&branches[0]]);
+        for branch in &branches[1..] {
+            assert_eq!(before[branch], after[branch]);
+        }
+        let common = MONITORING_COMMON_READS.with(std::cell::Cell::get);
+        let enumerations = MONITORING_REF_ENUMERATIONS.with(std::cell::Cell::get);
+        let logs = MONITORING_LOG_READS.with(std::cell::Cell::get);
+        assert!(
+            common == 0 && enumerations == 0 && logs <= 1,
+            "one commit: {common} unchanged common reads, {enumerations} full ref enumerations, {logs} reflog reads; expected 0, 0, at most 1"
+        );
+    }
+
+    // Catches: a branch-only event stats sibling refs/logs or forgets its own reflog.
+    #[test]
+    fn monitoring_path_update_does_not_probe_sibling_signatures() {
+        let (_temp, repo, _) = workspace_fixture();
+        let branches: Vec<_> = (0..16).map(|i| format!("event-{i}")).collect();
+        for branch in &branches {
+            add_worktree(&repo, branch);
+        }
+        set_monitoring_watch_active(&repo, true);
+        monitoring_paths_changed(&repo, &[repo.join(".git")]);
+        let before = monitoring_ref_keys(&repo, &branches).unwrap();
+        let checkout = resolve_any_workspace(&repo, &branches[0]).unwrap();
+        commit_file(Path::new(&checkout.path), "event.txt", "changed\n");
+        // The adapter receives a real Git ref path, not a synthesized file format.
+        monitoring_paths_changed(&repo, &[repo.join(".git/refs/heads").join(&branches[0])]);
+        MONITORING_SIGNATURE_READS.with(|reads| reads.set(0));
+        let after = monitoring_ref_keys(&repo, &branches).unwrap();
+        assert_ne!(before[&branches[0]], after[&branches[0]]);
+        for branch in &branches[1..] {
+            assert_eq!(before[branch], after[branch]);
+        }
+        let signatures = MONITORING_SIGNATURE_READS.with(std::cell::Cell::get);
+        assert!(
+            signatures <= 2,
+            "changed-branch reflog signatures: {signatures}; sibling signatures must not be probed"
+        );
+        // A failed/stopped watcher must not seal the cached generation forever.
+        set_monitoring_watch_active(&repo, false);
+        commit_file(Path::new(&checkout.path), "event.txt", "changed again\n");
+        let fallback = monitoring_ref_keys(&repo, &branches).unwrap();
+        assert_ne!(after[&branches[0]], fallback[&branches[0]]);
+    }
+
+    // Catches: batching misses packed refs, a moved remote, or the integration HEAD.
+    #[test]
+    fn monitoring_shared_snapshot_keeps_integration_dependencies_current() {
+        let (_temp, repo, _) = workspace_fixture();
+        let checkout = add_worktree(&repo, "snapshot-feature");
+        commit_file(&checkout, "feature.txt", "own work\n");
+        let branches = vec!["snapshot-feature".to_owned()];
+        let key = || {
+            monitoring_ref_keys(&repo, &branches)
+                .unwrap()
+                .remove(&branches[0])
+                .unwrap()
+        };
+        let workspace = resolve_any_workspace(&repo, "snapshot-feature").unwrap();
+        let status = || {
+            inspect_workspace_monitoring_with_pr(&repo, &workspace, |_, _, _| false).commit_status
+        };
+        let initial = key();
+        assert_eq!(status(), WorkspaceCommitStatus::Unmerged);
+        git_cmd(&repo)
+            .args(["pack-refs", "--all", "--prune"])
+            .run()
+            .unwrap();
+        assert_eq!(
+            initial,
+            key(),
+            "packing unchanged refs must not change semantic keys"
+        );
+        git_cmd(&repo)
+            .args([
+                "update-ref",
+                "refs/remotes/other/topic",
+                "refs/heads/snapshot-feature",
+            ])
+            .run()
+            .unwrap();
+        let remote = key();
+        assert_eq!(status(), WorkspaceCommitStatus::PushedUnmerged);
+        assert_ne!(
+            initial, remote,
+            "a remote containment proof must invalidate the key"
+        );
+        commit_file(&repo, "default.txt", "main moved\n");
+        git_cmd(&repo)
+            .args([
+                "merge",
+                "--no-ff",
+                "snapshot-feature",
+                "-m",
+                "integrate feature",
+            ])
+            .run()
+            .unwrap();
+        let main = key();
+        assert_eq!(status(), WorkspaceCommitStatus::Merged);
+        assert_ne!(
+            remote, main,
+            "main checkout ancestry must invalidate the key"
+        );
+        git_cmd(&repo)
+            .args(["config", "tuic.test", "changed"])
+            .run()
+            .unwrap();
+        assert_ne!(main, key(), "configuration must invalidate the key");
+        assert_eq!(status(), WorkspaceCommitStatus::Merged);
+        assert!(monitoring_ref_keys(&repo, &[]).unwrap().is_empty());
     }
 
     // Catches: a transient PR proof-provider failure permanently poisons the merged badge.

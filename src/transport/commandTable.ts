@@ -2107,7 +2107,15 @@ export const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 	},
 
 	// --- Plugins ---
-	list_user_plugins: { map: () => ({ method: "GET", path: "/plugins/list" }) },
+	list_user_plugins: {
+		map: (args) => ({
+			method: "GET",
+			path:
+				args.pluginIds == null
+					? "/plugins/list"
+					: `/plugins/list?plugin_ids=${encodeURIComponent(JSON.stringify(args.pluginIds))}`,
+		}),
+	},
 
 	// --- Remote Connections ---
 	list_remote_connections: { map: () => ({ method: "GET", path: "/config/remote-connections" }) },
