@@ -965,7 +965,7 @@ initialization. Later lookups use the index; file events refresh changed rollout
 paths. Date changes, directory events and lost-event notifications rebuild the
 recent-day snapshot. Watches cover only the recent day trees and their shallow
 parent boundaries, not the lifetime session tree. Watch failure falls back to
-fresh recent-day scans rather than serving stale entries.
+fresh recent-day scans rather than serving stale entries. A replaced watched day or parent directory invalidates the index so the next lookup re-arms its watches, even when the date paths do not change.
 
 Candidates still require a readable recorded cwd, an age of at most five minutes
 and an unclaimed session ID. Age and claimed IDs are checked for each lookup.

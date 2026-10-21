@@ -597,13 +597,21 @@ fn discover_codex_session(
     claimed_ids: &[String],
     codex_home: Option<&str>,
 ) -> Option<String> {
+    discover_codex_session_at(cwd, claimed_ids, codex_home, SystemTime::now())
+}
+
+fn discover_codex_session_at(
+    cwd: &str,
+    claimed_ids: &[String],
+    codex_home: Option<&str>,
+    now: SystemTime,
+) -> Option<String> {
     let sessions_root = codex_sessions_dir(codex_home)?;
 
     if !sessions_root.exists() {
         return None;
     }
 
-    let now = SystemTime::now();
     let wanted_cwd = normalize_cwd(cwd);
     let index = CODEX_INDEXES.get_with(sessions_root.clone(), || {
         std::sync::Arc::new(CodexIndex::new(&sessions_root))
@@ -738,9 +746,17 @@ impl CodexIndex {
         // Drain before reading: events arriving during the refresh remain queued
         // for the next lookup rather than being erased by this snapshot.
         let updates = std::mem::take(&mut *self.updates.lock().unwrap_or_else(|e| e.into_inner()));
-        // Removing/replacing the watched store invalidates the watch itself on
-        // platforms such as inotify. Re-arm it on the next discovery.
-        if updates.paths.contains(root) {
+        // Removing/replacing a watched directory invalidates its inode watch on
+        // platforms such as inotify, even when the date paths stay identical.
+        // Recreate the bounded watch set through the existing next-lookup path.
+        if updates.rescan
+            || updates.paths.contains(root)
+            || state.days.iter().any(|day| {
+                day.ancestors()
+                    .take(3)
+                    .any(|directory| updates.paths.contains(directory))
+            })
+        {
             CODEX_INDEXES.invalidate(root);
         }
         let days = codex_recent_day_dirs(root, chrono::Local::now());
@@ -2692,18 +2708,20 @@ mod tests {
             "rollout-test-bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb.jsonl",
             cwd,
         );
-        let index = CodexIndex::new(&sessions);
         let now = SystemTime::now();
-        let normalized = normalize_cwd(cwd);
-        assert_eq!(index.candidates(&sessions, now, &normalized).len(), 1);
-        assert!(
-            index
-                .candidates(
-                    &sessions,
-                    now + SESSION_MAX_AGE + Duration::from_secs(1),
-                    &normalized
-                )
-                .is_empty()
+        assert_eq!(
+            discover_codex_session_at(cwd, &[], Some(cwd), now).as_deref(),
+            Some("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb")
+        );
+        assert_eq!(
+            discover_codex_session_at(
+                cwd,
+                &[],
+                Some(cwd),
+                now + SESSION_MAX_AGE + Duration::from_secs(1)
+            ),
+            None,
+            "discovery must not resume an expired cached session"
         );
     }
 
