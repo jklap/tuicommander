@@ -1,12 +1,13 @@
 ---
-id: "2010-30a7"
-title: "Record auditable MCP cost and effect outcomes without response bodies"
+id: 2010-30a7
+title: Record auditable MCP cost and effect outcomes without response bodies
 status: pending
 priority: P2
 type: feature
-created: 2026-10-17T16:09:53.975Z
-updated: 2026-10-17T16:09:53.975Z
+created: "2026-10-17T16:09:53.975Z"
+updated: "2026-10-22T09:04:04.812Z"
 dependencies: []
+started_at: "2026-10-22T09:03:05.518Z"
 ---
 
 # Record auditable MCP cost and effect outcomes without response bodies
@@ -30,3 +31,7 @@ Candidate 8. Source: ~/Gits/personal/orchestrator/reports/tuicommander/2026-10-1
 - ego:495-e668
 
 ## Work Log
+
+### 2026-10-22T09:03:39.162Z - REALITY: effect=Capture four genuine MCP outcomes without response bodies; state=actual client observations and isolated server audit projection; assumptions=agent-test can render speech, checked before build; radius=fixture and provenance only. Preflight found agent_test::enable rejects the dictation feature, so rendering-success prerequisite is being traced before starting expensive native build.
+
+### 2026-10-22T09:04:04.589Z - BLOCKED: Required rendering success cannot occur in the authorized agent-test instance. src-tauri/src/agent_test.rs:30-32 rejects any dictation-enabled build; mcp_transport_ancillary.rs:936-949 selects the no-audio handler without that feature. Existing mdkb report 7837 already records genuine client permission denial separately from server ingress. No client run, desktop launch, build or tests started; no response fabricated. Need authorization for an isolated audio-capable fixture capture design, not daily-instance access.
