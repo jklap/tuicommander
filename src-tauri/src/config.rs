@@ -2231,26 +2231,21 @@ impl AgentsConfig {
         })
     }
 
-    /// The run configuration used when nothing names one: the user's default, or the only one saved.
-    pub(crate) fn default_run_config(&self) -> Result<&AgentRunConfig, String> {
-        let mut saved: Vec<&AgentRunConfig> = self
+    /// Every saved run configuration with its agent, sorted by name.
+    pub(crate) fn saved_run_configs(&self) -> Vec<(&str, &AgentRunConfig)> {
+        let mut saved: Vec<(&str, &AgentRunConfig)> = self
             .agents
             .iter()
             .filter(|(agent, _)| crate::agent::is_known_agent_type(agent))
-            .flat_map(|(_, settings)| settings.run_configs.iter())
+            .flat_map(|(agent, settings)| {
+                settings
+                    .run_configs
+                    .iter()
+                    .map(move |profile| (agent.as_str(), profile))
+            })
             .collect();
-        saved.sort_by(|a, b| a.name.cmp(&b.name));
-        if let Some(chosen) = saved.iter().find(|profile| profile.is_default) {
-            return Ok(chosen);
-        }
-        match saved.as_slice() {
-            [only] => Ok(only),
-            [] => Err("no run configuration is saved; save one in Settings > Agents".into()),
-            _ => Err(
-                "several run configurations are saved and none is the default; mark one as default in Settings > Agents"
-                    .into(),
-            ),
-        }
+        saved.sort_by(|a, b| a.1.name.cmp(&b.1.name));
+        saved
     }
 
     pub(crate) fn require_named_run_config(

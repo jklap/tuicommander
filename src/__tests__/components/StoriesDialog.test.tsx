@@ -756,6 +756,39 @@ describe("StoriesDialog", () => {
 			);
 		});
 
+		it("keeps Start disabled while readiness is pending, also after switching definition", async () => {
+			// Catches: Start enabled during the readiness request, so a click creates the run that pauses at once.
+			const fallback = vi.mocked(invoke).getMockImplementation();
+			const pending: ((problems: string[]) => void)[] = [];
+			vi.mocked(invoke).mockImplementation(async (command, args) => {
+				const action = (args as { action?: { action: string } } | undefined)?.action;
+				if (command === "workflow_definition_action")
+					return {
+						type: "drafts",
+						value: [
+							{ id: "flow-1", name: "Story delivery", kind: "story", latestPublishedRevision: 2 },
+							{ id: "flow-2", name: "Other delivery", kind: "story", latestPublishedRevision: 1 },
+						],
+					};
+				if (command === "workflow_run_action" && action?.action === "start_readiness")
+					return new Promise((resolve) => pending.push((value) => resolve({ type: "readiness", value })));
+				return fallback?.(command, args);
+			});
+			render(() => <StoriesDialog project="/repo" onClose={() => {}} />);
+			await screen.findByRole("heading", { name: "Implement API" });
+			fireEvent.click(screen.getByRole("button", { name: "Start story workflow" }));
+			const start = (await screen.findByRole("button", { name: "Start published workflow" })) as HTMLButtonElement;
+			await waitFor(() => expect(pending.length).toBe(1));
+			expect(start.disabled).toBe(true);
+			pending[0]([]);
+			await waitFor(() => expect(start.disabled).toBe(false));
+			fireEvent.change(screen.getByRole("combobox", { name: "Published workflow" }), { target: { value: "flow-2" } });
+			await waitFor(() => expect(pending.length).toBe(2));
+			expect(start.disabled).toBe(true);
+			pending[1]([]);
+			await waitFor(() => expect(start.disabled).toBe(false));
+		});
+
 		it("updates the run list row when the run changes, without Refresh", async () => {
 			// Catches: the list keeping the first fetched status while only the detail pane reloads.
 			let current: Record<string, unknown> = { ...runBase };

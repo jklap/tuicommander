@@ -318,21 +318,51 @@ pub(in crate::workflows) fn resolve_run_profile(
     if let Some((_, profile)) = config.named_run_config(preferred) {
         return Ok(profile.name.clone());
     }
-    let profile = config
-        .default_run_config()
-        .map_err(|why| format!("workflow has no run profile for the {role:?} role: {why}"))?;
-    // A default is chosen for interactive use; a sandbox bypass must be chosen for workflows by name.
-    if let Some(flag) = profile
-        .args
+    let saved = config.saved_run_configs();
+    let no_default = || {
+        format!(
+            "workflow has no run profile for the {role:?} role: {}",
+            if saved.is_empty() {
+                "no run configuration is saved; save one in Settings > Agents".to_owned()
+            } else {
+                "several run configurations are saved and none is the default; mark one as default in Settings > Agents".to_owned()
+            }
+        )
+    };
+    let defaults: Vec<_> = saved
         .iter()
-        .find(|arg| arg.starts_with("--dangerously-") || arg.as_str() == "--yolo")
-    {
-        return Err(format!(
-            "workflow will not use the default run profile '{}': it passes {flag}. Save a run profile named '{preferred}' to choose it for workflows, or use another default",
-            profile.name
-        ));
+        .filter(|(_, profile)| profile.is_default)
+        .collect();
+    let candidates: Vec<_> = match (defaults.as_slice(), saved.as_slice()) {
+        ([], [only]) => vec![only],
+        ([], _) => return Err(no_default()),
+        _ => defaults,
+    };
+    // A default is chosen for interactive use; a sandbox bypass must be chosen for workflows by name.
+    let (safe, bypassing): (Vec<_>, Vec<_>) =
+        candidates.into_iter().partition(|(agent, profile)| {
+            crate::agent_hook_launch::permission_bypass_flag(config, agent, &profile.args).is_none()
+        });
+    match (safe.as_slice(), bypassing.first()) {
+        ([(_, profile)], _) => Ok(profile.name.clone()),
+        ([], Some((agent, profile))) => {
+            let flag =
+                crate::agent_hook_launch::permission_bypass_flag(config, agent, &profile.args)
+                    .unwrap_or_default();
+            Err(format!(
+                "workflow will not use the default run profile '{}': it passes {flag}. Save a run profile named '{preferred}' to choose it for workflows, or use another default",
+                profile.name
+            ))
+        }
+        (several, _) => Err(format!(
+            "several agents have a default run profile ({}); save a run profile named '{preferred}' to choose one for workflows",
+            several
+                .iter()
+                .map(|(_, profile)| profile.name.as_str())
+                .collect::<Vec<_>>()
+                .join(", ")
+        )),
     }
-    Ok(profile.name.clone())
 }
 
 /// What stops a published workflow from reaching its Agent steps, checked before a run starts.

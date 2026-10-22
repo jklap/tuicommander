@@ -499,3 +499,72 @@ fn a_default_profile_that_bypasses_the_sandbox_is_refused_for_workflows() {
     ]}}}));
     assert_eq!(resolve(&chosen, &AgentRole::Implementer).unwrap(), "sol");
 }
+
+/// What the Start dialog would be told for a published Agent workflow under this saved config.
+fn readiness_under(agents_json: serde_json::Value) -> Vec<String> {
+    let (_config, project, _plan, _story, _template, _guard) = fixture();
+    let project_path = project.path().to_str().unwrap();
+    let published = definition(project_path, false, true);
+    crate::config::save_agents_config(crate::config::AgentsConfig::default(), agents(agents_json))
+        .unwrap();
+    match crate::workflows::run_action(
+        project_path,
+        crate::workflows::RunAction::StartReadiness {
+            definition_id: published.id.clone(),
+            definition_revision: published.revision,
+        },
+    )
+    .unwrap()
+    {
+        crate::workflows::RunReply::Readiness(problems) => problems,
+        other => panic!("unexpected reply {other:?}"),
+    }
+}
+
+#[test]
+fn readiness_refuses_every_effective_ego_yolo_default() {
+    // catches: a fallback that checks two flag spellings but launches ego with yolo through --mode forms or ego_mode.
+    for (args, ego_mode) in [
+        (serde_json::json!(["--mode=yolo"]), serde_json::json!(null)),
+        (
+            serde_json::json!(["--mode", "yolo"]),
+            serde_json::json!(null),
+        ),
+        (serde_json::json!([]), serde_json::json!("yolo")),
+    ] {
+        let problems = readiness_under(serde_json::json!({"agents": {
+            "codex": {"codex_bypass_migrated": true},
+            "ego": {"ego_mode": ego_mode, "run_configs": [
+                {"name": "Ego", "command": "ego", "args": args, "is_default": true}
+            ]}
+        }}));
+        assert!(
+            problems
+                .iter()
+                .all(|p| p.contains("'Ego'") && p.contains("yolo")),
+            "{args} {ego_mode}: {problems:?}"
+        );
+        assert!(!problems.is_empty(), "{args} {ego_mode}");
+    }
+}
+
+#[test]
+fn readiness_picks_the_one_safe_default_among_per_agent_defaults_and_names_real_ambiguity() {
+    // catches: choosing the alphabetically first agent's default as if defaults were global.
+    let seeded_and_safe = readiness_under(serde_json::json!({"agents": {
+        "codex": {"codex_bypass_migrated": true, "run_configs": [
+            {"name": "Codex Default", "command": "codex",
+             "args": ["--dangerously-bypass-approvals-and-sandbox"], "is_default": true}]},
+        "claude": {"run_configs": [{"name": "Zed", "command": "claude", "is_default": true}]}
+    }}));
+    assert_eq!(seeded_and_safe, Vec::<String>::new());
+    let two_safe = readiness_under(serde_json::json!({"agents": {
+        "codex": {"codex_bypass_migrated": true, "run_configs": [
+            {"name": "Alpha", "command": "codex", "is_default": true}]},
+        "claude": {"run_configs": [{"name": "Zed", "command": "claude", "is_default": true}]}
+    }}));
+    assert!(
+        two_safe[0].contains("Alpha") && two_safe[0].contains("Zed"),
+        "{two_safe:?}"
+    );
+}

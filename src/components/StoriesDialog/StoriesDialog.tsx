@@ -191,6 +191,8 @@ export const StoriesDialog: Component<StoriesDialogProps> = (props) => {
 	>([]);
 	const [workflowChoice, setWorkflowChoice] = createSignal("");
 	const [startProblems, setStartProblems] = createSignal<string[]>([]);
+	// The definition whose readiness answer is in; Start waits for it.
+	const [readyFor, setReadyFor] = createSignal("");
 	const [recoveryExecution, setRecoveryExecution] = createSignal("");
 	const [recoveryActivation, setRecoveryActivation] = createSignal("");
 	const [resolution, setResolution] = createSignal("");
@@ -372,6 +374,7 @@ export const StoriesDialog: Component<StoriesDialogProps> = (props) => {
 	async function checkStartReadiness(definitionId: string): Promise<void> {
 		const workflow = publishedChoices().find((item) => item.id === definitionId);
 		setStartProblems([]);
+		setReadyFor("");
 		if (!workflow) return;
 		try {
 			const reply = await callRun({
@@ -380,7 +383,10 @@ export const StoriesDialog: Component<StoriesDialogProps> = (props) => {
 				definition_revision: workflow.latestPublishedRevision,
 			});
 			if (reply.type !== "readiness") throw new Error("Invalid run response");
-			if (workflowChoice() === definitionId) setStartProblems(reply.value);
+			if (workflowChoice() === definitionId) {
+				setStartProblems(reply.value);
+				setReadyFor(definitionId);
+			}
 		} catch (cause) {
 			if (workflowChoice() === definitionId) setStartProblems([`Could not check the start requirements: ${cause}`]);
 		}
@@ -767,7 +773,7 @@ export const StoriesDialog: Component<StoriesDialogProps> = (props) => {
 									<For each={startProblems()}>{(problem) => <p>{problem}</p>}</For>
 								</div>
 							</Show>
-							<button type="submit" disabled={busy() || !workflowChoice() || startProblems().length > 0}>
+							<button type="submit" disabled={busy() || readyFor() !== workflowChoice() || startProblems().length > 0}>
 								Start published workflow
 							</button>
 						</Show>

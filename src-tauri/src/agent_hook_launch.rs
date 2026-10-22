@@ -232,6 +232,32 @@ fn ego_permission_args(config: &crate::config::AgentsConfig, args: &[String]) ->
     result
 }
 
+/// The permission-skipping option a launch of `args` would carry, after configured ego choices apply.
+pub(crate) fn permission_bypass_flag(
+    config: &crate::config::AgentsConfig,
+    agent_type: &str,
+    args: &[String],
+) -> Option<String> {
+    let effective = if agent_type == "ego" {
+        ego_permission_args(config, args)
+    } else {
+        args.to_vec()
+    };
+    let mut rest = effective.iter();
+    while let Some(arg) = rest.next() {
+        if arg == "--" {
+            break;
+        }
+        if arg.starts_with("--dangerously-") || arg == "--yolo" || arg == "--mode=yolo" {
+            return Some(arg.clone());
+        }
+        if arg == "--mode" && rest.clone().next().is_some_and(|value| value == "yolo") {
+            return Some("--mode yolo".into());
+        }
+    }
+    None
+}
+
 /// Structured launches: status integration, then the marker instructions.
 pub(crate) fn launch_args(
     agent_type: &str,

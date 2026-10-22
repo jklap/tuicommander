@@ -70,7 +70,8 @@ impl From<RunStartError> for String {
 /// Version 2 adds graph events and additive JSON snapshot fields. Legacy JSON
 /// is decoded with defaults, without inventing graph positions. Version 3
 /// records explicit graph-root targets; older binaries must refuse that contract.
-const RUN_STORE_SCHEMA_VERSION: i64 = 3;
+// 4: paused_for events; a build that supports 3 refuses the store instead of failing to decode them.
+const RUN_STORE_SCHEMA_VERSION: i64 = 4;
 
 mod approval;
 mod runtime_start;
