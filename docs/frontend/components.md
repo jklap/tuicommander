@@ -889,3 +889,9 @@ Desktop `TerminalChatView` renders active native questions from the existing ses
 Mobile offers the **Chat** tab only when the host has a configured ego executable, using the same availability predicate as desktop. Host settings changes update the tab without reloading. Removing ego configuration returns an open Chat view to **Sessions**; unavailable saved Chat links also stay on **Sessions**.
 
 Abandoned-shell markers in desktop sidebar session rows and mobile SessionCard render the same backend `state.abandoned_since_ms` timestamp. A missing field retracts the marker; the frontend does not infer abandonment from silence.
+
+### Context menu viewport bounds
+
+Context menus use their unscaled layout size to stay within an 8px viewport margin.
+Oversized menus scroll; their minimum width also shrinks in narrow windows.
+Shell workspace rows do not offer branch workflow actions or Git smart prompts.

@@ -61,8 +61,8 @@ const clampSubmenu = (wrapEl: HTMLDivElement, submenuEl: HTMLDivElement) => {
 	const subRect = submenuEl.getBoundingClientRect();
 	const vw = window.innerWidth;
 	const vh = window.innerHeight;
-	const subWidth = Math.min(subRect.width || 160, viewportLimit("width"));
-	const subHeight = Math.min(subRect.height || 36, viewportLimit("height"));
+	const subWidth = Math.min(submenuEl.offsetWidth || subRect.width || 160, viewportLimit("width"));
+	const subHeight = Math.min(submenuEl.offsetHeight || subRect.height || 36, viewportLimit("height"));
 
 	// Horizontal: prefer right of parent, flip left if needed, clamp to viewport
 	let left = parentRect.right;
@@ -219,9 +219,13 @@ export const ContextMenu: Component<ContextMenuProps> = (props) => {
 		if (!menuRef) return;
 		constrainPopupSize(menuRef);
 		const rect = menuRef.getBoundingClientRect();
-		// Fallback estimates when getBoundingClientRect returns 0 (e.g. jsdom)
-		const menuWidth = Math.min(rect.width || 180, viewportLimit("width"));
-		const menuHeight = Math.min(rect.height || props.items.length * 36 + 8, viewportLimit("height"));
+		// Layout dimensions ignore the opening scale animation; rects do not.
+		// Fallback estimates support environments without layout (e.g. jsdom).
+		const menuWidth = Math.min(menuRef.offsetWidth || rect.width || 180, viewportLimit("width"));
+		const menuHeight = Math.min(
+			menuRef.offsetHeight || rect.height || props.items.length * 36 + 8,
+			viewportLimit("height"),
+		);
 		const vw = window.innerWidth;
 		const vh = window.innerHeight;
 

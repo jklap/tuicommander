@@ -150,6 +150,7 @@ vi.mock("../../components/PrDetailPopover/PrDetailPopover", () => ({
 import { _resetMergedActivityAccum } from "../../components/Sidebar/RepoSection";
 import { Sidebar } from "../../components/Sidebar/Sidebar";
 import { appLogger } from "../../stores/appLogger";
+import { contextMenuActionsStore } from "../../stores/contextMenuActionsStore";
 import { githubStore } from "../../stores/github";
 import { progressStore } from "../../stores/progress";
 import { repositoriesStore } from "../../stores/repositories";
@@ -3428,6 +3429,42 @@ describe("Sidebar", () => {
 	});
 
 	describe("context menu", () => {
+		it("hides branch workflow actions on non-git shell rows", () => {
+			// Catches: Create PR and other branch prompts offered without a Git branch.
+			const action = contextMenuActionsStore.registerContextAction("test", {
+				id: "create-pr",
+				label: "Create PR",
+				target: "branch",
+				action: vi.fn(),
+			});
+			try {
+				setRepos({
+					"/repo1": makeRepo({
+						isGitRepo: false,
+						activeWorkspaceId: "shell",
+						workspaces: {
+							shell: {
+								workspaceId: "shell",
+								branchName: "shell",
+								isShell: true,
+								isMain: true,
+								worktreePath: "/repo1",
+								terminals: [],
+								additions: 0,
+								deletions: 0,
+							},
+						},
+					}),
+				});
+				const { container } = render(() => <Sidebar {...defaultProps()} />);
+				fireEvent.contextMenu(container.querySelector(".branchItem")!);
+				expect(container.querySelector(".menu")?.textContent).toContain("Add Terminal");
+				expect(container.querySelector(".menu")?.textContent).not.toContain("Create PR");
+			} finally {
+				action.dispose();
+			}
+		});
+
 		it("opens context menu on right-click of branch item", () => {
 			setRepos({ "/repo1": makeRepo() });
 			const { container } = render(() => <Sidebar {...defaultProps()} />);

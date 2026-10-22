@@ -981,7 +981,7 @@ export const BranchItem: Component<{
 
 		// Group 3 — PR / workflow actions (plugin + built-in smart prompts).
 		const workflow: ContextMenuItem[] = [];
-		const branchActions = contextMenuActionsStore.getContextActions("branch");
+		const branchActions = isShell ? [] : contextMenuActionsStore.getContextActions("branch");
 		if (branchActions.length > 0) {
 			const ctx = { target: "branch" as const, repoPath: props.repoPath, branchName: props.branch.branchName };
 			for (const a of branchActions) {
