@@ -498,7 +498,12 @@ pub(super) async fn github_auth_status(State(state): State<Arc<AppState>>) -> Re
 }
 
 pub(super) async fn github_diagnostics(State(state): State<Arc<AppState>>) -> Response {
-    json_result(crate::github_auth::github_diagnostics_impl(&state).await)
+    json_result(crate::github_auth::github_diagnostics_impl(&state, false).await)
+}
+
+/// Explicit manual refresh releases retry exclusions; ordinary GET remains read-only.
+pub(super) async fn github_refresh_diagnostics(State(state): State<Arc<AppState>>) -> Response {
+    json_result(crate::github_auth::github_diagnostics_impl(&state, true).await)
 }
 
 // --- Multi-account: accounts + repo bindings (IPC/HTTP parity) ---

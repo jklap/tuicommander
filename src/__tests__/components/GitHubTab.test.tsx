@@ -395,3 +395,49 @@ describe("GitHubTab — CircleCI token", () => {
 		expect(h.rpc).not.toHaveBeenCalledWith("circleci_set_token", expect.anything());
 	});
 });
+
+describe("GitHubTab — access diagnostics", () => {
+	beforeEach(resetState);
+	it("does not hide owner-specific denial messages and authorization actions", async () => {
+		const GitHubTab = await loadTab();
+		h.rpc.mockImplementation((cmd, args) => {
+			if (cmd === "github_auth_status")
+				return Promise.resolve({ authenticated: true, login: "sstraus", source: "oauth" });
+			if (cmd === "github_diagnostics")
+				return Promise.resolve({
+					circuit_breaker_open: false,
+					repos_not_found: [],
+					repos_monitored: 1,
+					repo_access_errors: [
+						{
+							owner: "Lansweeper",
+							host: "github.com",
+							account_id: "github.com",
+							repos: [
+								{
+									repo: "gate-os",
+									reason: "not_found",
+									message: "Could not resolve to a Repository with the name 'Lansweeper/gate-os'.",
+								},
+							],
+							oauth_app_url: "https://github.com/settings/connections/applications/Ov23liN95BHKQDboVFRl",
+						},
+					],
+				});
+			return h.defaultRpc(cmd, args);
+		});
+		const { findByText, getByText } = render(() => <GitHubTab />);
+		expect(await findByText("Lansweeper")).toBeTruthy();
+		expect(h.rpc).toHaveBeenCalledWith("github_diagnostics", { refresh: false });
+		// Catches the visible Refresh status action leaving the retry cache untouched.
+		fireEvent.click(getByText("Refresh status"));
+		await waitFor(() => expect(h.rpc).toHaveBeenCalledWith("github_diagnostics", { refresh: true }));
+		expect(getByText(/Could not resolve to a Repository/)).toBeTruthy();
+		fireEvent.click(getByText("Grant or request organization access"));
+		expect(h.rpc).not.toHaveBeenCalledWith("github_start_login");
+		const { handleOpenUrl } = await import("../../utils/openUrl");
+		expect(handleOpenUrl).toHaveBeenCalledWith(
+			"https://github.com/settings/connections/applications/Ov23liN95BHKQDboVFRl",
+		);
+	});
+});

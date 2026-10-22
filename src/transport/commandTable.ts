@@ -1264,7 +1264,7 @@ export const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 		map: () => ({ method: "GET", path: "/github/auth/status" }),
 	},
 	github_diagnostics: {
-		map: () => ({ method: "GET", path: "/github/diagnostics" }),
+		map: (args) => ({ method: args.refresh === true ? "POST" : "GET", path: "/github/diagnostics" }),
 	},
 	// Multi-account: accounts + repo bindings
 	github_list_accounts: {
