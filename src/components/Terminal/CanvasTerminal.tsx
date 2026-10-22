@@ -1900,6 +1900,8 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 		}
 
 		currentFrame = frame;
+		// A frame at our own size confirms the reclaim: release the once-per-foreign-size latch.
+		if (frame.screenRows === lastResizeRows && frame.screenCols === lastResizeCols) reclaimAskedFor = "";
 		clearSelectionIfEvicted(frame);
 
 		// Re-anchor the soft-keyboard lift to the new cursor row (touch + keyboard
