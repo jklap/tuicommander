@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+- Keep remote Design Mode error reads behind explicit host consent and avoid claiming eval consent when Chrome does not add it (#1724-fe7e).
+- Add the optional Design Mode **Let agents capture any site** grant. Without it, screenshots retain temporary browser-action access and explain how to enable capture; capture consent does not enable agent eval (#1724-fe7e).
 - Initialize every terminal grid at its PTY spawn size and seed the first resize no-op guard from the kernel PTY size, not the grid (#2130-2ca2).
 
 ### Fixed

@@ -1,3 +1,7 @@
+## Optional Design Mode all-sites capture (1724-fe7e) — rebuilt bridge and extension reload required
+
+- [x] Isolated real Chrome consent, actual MCP screenshot and matching browser PNG, live sidebar history, and post-capture **Allow eval on this host** click/eval. _(verified: S0 results Round 11; 1628 × 1596 PNGs have identical SHA256 and zero differing pixels; actual Chrome added the host origin and MCP eval succeeded.)_
+- [ ] Normal deployment still needs a rebuilt `tuic-bridge` whose installed extension assets match source. The multi-package agent-test build returned old bridge assets twice; the verified package-only installer worked. Pick-crop, revoke/activeTab recovery, and a fresh-profile capture-only host/eval sequence remain unverified. No daily app was restarted.
 ## PTY spawn geometry (2130-2ca2) — Rust restart required
 
 - [ ] After Boss manually rebuilds and restarts the backend, open a terminal and a direct agent at a non-default size. Verify their initial output wraps at the spawn width and a first resize to 24x220 reaches the child. This Rust change does not hot-reload; this peer did not restart the daily app.

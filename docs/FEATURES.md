@@ -148,6 +148,8 @@ per cell and the configured history limit still apply.
 
 ### 1.0 Design Mode for agent terminals
 
+The extension offers **Let agents capture any site** as an optional Chrome all-sites grant. Approved capture needs no further browser-action gesture; without the grant, temporary `activeTab` access remains available. Capture consent is separate from agent eval and remote error-read consent. The sidebar reports when Chrome does not add a separate eval grant.
+
 Agents can use `ui action=design_start/stop/status/reload/navigate/screenshot/errors/eval` with the same armed-recipient ownership and extension host grants. Existing Design Mode denials remain effective. The separate `design_mode` tool is retired without an alias.
 
 The extension sends a heartbeat every five seconds. A stale mode stops after 60 seconds without a heartbeat, or ten minutes after Start if the extension has not connected. Agents can request a page reload with `ui action=design_reload repo_path=<repoPath>`; the worker reloads the reviewed tab once per new sequence.
