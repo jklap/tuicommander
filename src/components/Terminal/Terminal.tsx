@@ -867,8 +867,8 @@ export const Terminal: Component<TerminalProps> = (props) => {
 			let reconnected = false;
 			if (sessionId) {
 				try {
-					const box = gridBox(containerRef);
-					if (isPerfDebug())
+					if (isPerfDebug()) {
+						const box = gridBox(containerRef);
 						appLogger.diag.info("terminal", `resize_pty request reconnect ${grid.rows}x${grid.cols}`, {
 							sessionId,
 							caller: "reconnect",
@@ -878,6 +878,7 @@ export const Terminal: Component<TerminalProps> = (props) => {
 							boxWidth: box.width,
 							boxHeight: box.height,
 						});
+					}
 					await pty.resize(sessionId, grid.rows, grid.cols);
 					reconnected = true;
 					await attachSessionListeners(sessionId);
