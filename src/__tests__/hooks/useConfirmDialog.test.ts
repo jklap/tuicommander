@@ -244,6 +244,27 @@ describe("useConfirmDialog", () => {
 			}
 		});
 
+		// Catches: the coordinator closes live terminals before the backend recycles, so a clean
+		// checkout with an open shell is archived too but the dialog still says Remove.
+		it("says archive for a clean finished checkout that has a live session", async () => {
+			const pending = dialog.confirmRemoveWorktree(
+				"finished",
+				{
+					dirtyFiles: 0,
+					commitStatus: "in_sync",
+					removalSafety: "safe",
+					liveSessions: [{ sessionId: "pty-1", name: "zsh" }],
+				},
+				true,
+			);
+			const state = dialog.dialogState();
+			expect(state?.title).toBe("Archive workspace?");
+			expect(state?.confirmLabel).toBe("Archive");
+			expect(state?.message).toContain("Live sessions in this worktree: zsh");
+			dialog.handleClose();
+			expect(await pending).toBe(false);
+		});
+
 		// Catches: the archive wording leaks onto removals that really delete (unmerged, dirty, keep-branch).
 		it("keeps the remove wording when the checkout is not recyclable", async () => {
 			for (const [status, deleteBranch] of [

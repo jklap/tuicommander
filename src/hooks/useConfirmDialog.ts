@@ -144,7 +144,6 @@ export function useConfirmDialog() {
 			status.removalSafety === "safe" &&
 			!missing &&
 			status.dirtyFiles === 0 &&
-			!status.liveSessions?.length &&
 			!(status.submoduleUnpushedCommits ?? []).some((entry) => entry.count > 0) &&
 			(status.commitStatus === "merged" || status.commitStatus === "in_sync");
 		const branchAction = deleteBranch && !recycled
