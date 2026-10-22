@@ -257,3 +257,90 @@ The main-story read-only-root denial remains binding. No alternate tool was used
 to modify its criteria. Original help, one-frame and combined non-regression
 criteria remain unsupported; the parent must reconcile scope and worklog wording,
 not mark those requirements passed from these measurements.
+
+
+## Follow-up: accepted frame → actual rAF callback → paint
+
+A second coordinator assignment requested callback-entry timestamps to distinguish
+normal frame scheduling from an unnecessary second rAF. It used the same isolated
+instance, 20 trusted keys and controlled output. No production fix was present.
+
+The temporary frontend observer records `performance.now()` after decoded rows
+are installed and the frame becomes current (`accepted`), at `scheduleRepaint`,
+when a new rAF is queued, at the actual callback entry, and before/after
+`paintFrame`. Each event includes the accepted-frame number, queued-rAF number
+and circled key decoded from the authoritative first row. A separate every-frame
+rAF sentinel records both its browser frame timestamp and actual callback-entry
+time. This removes the earlier ambiguity between rAF timestamp and execution.
+All temporary source additions were restored byte-for-byte after the run.
+
+### Result: no extra rAF in this workload
+
+**All 20 accepted key frames were painted in the first subsequent rAF opportunity
+observed by the sentinel, in that callback itself.** There was exactly one
+sentinel callback between each acceptance and the matching production callback,
+with no intervening production callback. No key required a second queued rAF.
+Nineteen acceptances queued a new callback immediately; one reused an already
+pending callback and painted in it. No key was held behind a separate non-urgent
+paint queue.
+
+| Boundary | Median | p95 | Maximum |
+| --- | ---: | ---: | ---: |
+| Browser message → accepted decoded frame | 0.100 ms | 0.200 ms | 0.300 ms |
+| Accepted frame → schedule call | 0.000 ms | 0.100 ms | 0.100 ms |
+| Accepted frame → actual rAF entry | 15.950 ms | 16.300 ms | 16.400 ms |
+| Queued rAF → actual entry | 16.000 ms | 16.400 ms | 16.600 ms |
+| rAF frame timestamp → actual entry | 0.100 ms | 0.200 ms | 0.200 ms |
+| Actual rAF entry → matching fill completion | 0.200 ms | 0.300 ms | 12.500 ms |
+| Whole paint call | 0.300 ms | 0.500 ms | 12.900 ms |
+| Trusted event → browser message | 11.150 ms | 19.000 ms | 24.100 ms |
+| Trusted event → matching fill | 27.450 ms | 40.700 ms | 47.500 ms |
+
+The key-bearing frames arrived just after the previous sentinel callback:
+acceptance minus previous callback-entry median/p95 was 0.700/1.300 ms, with a
+9.000 ms maximum. This explains why the next legitimate rAF cost nearly a full
+frame in most samples. It is not an application double-rAF. The source's one-rAF
+coalescing mechanism behaves as written under this capture. The trace cannot
+attribute why browser messages are phase-aligned this way; browser delivery,
+backend scheduling and capture effects are not separated by this frontend probe.
+
+The first key had a 12.900 ms paint and 12.500 ms entry-to-matching-fill interval;
+the other 19 whole paints were at most 0.500 ms. That first paint is recorded, not
+silently excluded. Its cause is not isolated: the observer does not identify a
+font-cache, canvas, compositor or OS cause. It is not evidence of an extra queued
+paint opportunity.
+
+For a concrete first-key timeline (milliseconds from browser time origin):
+wire arrival 5160.200; accepted 5160.400; queued 5160.500; actual callback entry
+5176.200 (browser rAF timestamp 5176.000); matching fill completion 5188.700;
+paint end 5189.100. The long interval occurs inside this same paint, not in a
+second callback. Key 15 demonstrates the pending-callback path: queued at
+7309.600, accepted at 7318.500, callback at 7326.200, fill at 7326.400.
+
+There were 20 trusted inputs, 20 fills and 20 matching compositor PNGs. Sampled
+compositor p95/max was 52.242/55.231 ms; rAF gap p95/max was 16.7/16.8 ms; the
+100 ms sentinel p95/max was 101.7/106.0 ms. Observed output was 18,691.179 bytes/s.
+These are another instrumented observation, not an optimization before/after or
+non-regression comparison. In particular, fill p95 40.7 ms does not improve on the
+earlier 34.5 ms and does not meet the target.
+
+### Decision and evidence
+
+No avoidable extra scheduling turn was found. No production fix or RED test is
+justified for a double-rAF or deferred-queue bug that this trace does not show.
+Removing rAF batching would be a design trade-off (paint outside the browser's
+frame callback), not a supported repair of an extra wait. The earlier three-pair
+`seq` ratio remains the measured comparison; it was not rerun as a claimed
+post-fix result because there is no fix. Story criteria 3/4/24 still require the
+coordinator's scope decision; none was marked met.
+
+Evidence is under `~/Gits/.tmp/2040-web/fine/`: `observer.patch`,
+`CanvasTerminal.tsx.original`, `measure-fine.mjs`, `run.py`,
+`run/{probe,summary,frames,throughput}.json`, actual `run/match-*.png`,
+`analyze.py`, `timeline.json` and `analysis.json`. The 444 frontend trace events
+identify only session `21c6d582-39ba-4eb9-85ba-88653c78a740`. The per-key timeline
+retains queued/accepted frame IDs, all intermediate callbacks and same-callback
+fill assertions. `lifecycle.json` records zero remaining PTY sessions, owned tab
+and named daemon closed, exact instance stop exit 0, and expected supervisor
+termination. No daily instance, shared Chrome process or installed binary was
+stopped or replaced.
