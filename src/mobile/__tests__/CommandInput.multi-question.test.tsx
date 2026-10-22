@@ -73,6 +73,51 @@ it("answers every tab of a Claude multi-question form, Submit included", async (
 	await waitFor(() => expect(writes).toEqual(["\r"]));
 });
 
+// Catches: an extra Enter immediately submits the composer opened by z/n,
+// or leaks into the next question after an immediate numeric answer.
+it.each([
+	{ agent: "grok", key: "z", label: "Type your answer here" },
+	{ agent: "grok", key: "1", label: "Yes" },
+	{ agent: "ego", key: "n", label: "No" },
+])("sends only the immediate $agent answer key $key", async ({ agent, key, label }) => {
+	// Keys observed in grok-native-permission-2027 and ego-enforced-approval-2028.
+	const prompt: ChoicePrompt = {
+		title: "May I run ls?",
+		options: [
+			{ key, label, highlighted: true, destructive: false },
+			{ key: "2", label: "Alternative", highlighted: false, destructive: false },
+		],
+	};
+	const { container } = render(() => <CommandInput sessionId="disposable" agentType={agent} choicePrompt={prompt} />);
+	await fireEvent.click(buttonFor(container, label));
+	// Drain the resolved PTY writes, including any unwanted follow-up Enter.
+	await new Promise((resolve) => setTimeout(resolve, 0));
+	expect(writes).toEqual([key]);
+});
+
+// Catches: capturing the prompt changes the legacy numeric path to omit Enter,
+// or sends an extra Enter to a dialog that handles its numeric shortcut itself.
+it.each([
+	{ dismissKey: undefined, expected: ["2", "\r"] },
+	{ dismissKey: "cancel", expected: ["2"] },
+])("submits legacy numeric choices with dismiss key $dismissKey", async ({ dismissKey, expected }) => {
+	const prompt: ChoicePrompt = {
+		...form("Which color?", ["Red", "Blue"]),
+		selection_mode: undefined,
+		dismiss_key: dismissKey,
+	};
+	const { container } = render(() => (
+		<CommandInput sessionId="legacy-dialog" agentType="claude" choicePrompt={prompt} />
+	));
+	fireEvent.click(buttonFor(container, "Blue"));
+	// The shortcut is immediate; only its acknowledgement separates a legacy Enter.
+	expect(writes).toEqual(["2"]);
+	// Drain all follow-up keys before asserting the complete answer, including
+	// an unwanted Enter that a prefix-only assertion would miss.
+	await new Promise((resolve) => setTimeout(resolve, 0));
+	expect(writes).toEqual(expected);
+});
+
 // Catches: sending "10" to ego toggles option 1 instead of option 10,
 // because its raw selector binds single digits only.
 it("navigates and toggles ego options beyond the single-digit shortcuts", async () => {
@@ -88,4 +133,29 @@ it("navigates and toggles ego options beyond the single-digit shortcuts", async 
 	fireEvent.click(buttonFor(container, "Check 10"));
 	await waitFor(() => expect(writes).toEqual(["\x1b[B", " "]));
 	expect(writes).not.toContain("\r");
+});
+
+// Catches: clipped-form navigation submits Enter, locks after one arrow, or duplicates settlement.
+it("navigates a clipped Claude form without answering until explicit selection", async () => {
+	const prompt: ChoicePrompt = {
+		title: "Pick a colour?",
+		selection_mode: "navigate-only",
+		dismiss_key: "cancel",
+		options: [
+			{ key: "↑", label: "Previous option", highlighted: false, destructive: false },
+			{ key: "↓", label: "Next option", highlighted: false, destructive: false },
+			{ key: "↵", label: "Select highlighted option", highlighted: false, destructive: false },
+		],
+	};
+	const { container } = render(() => (
+		<CommandInput sessionId="narrow-claude" agentType="claude" choicePrompt={prompt} />
+	));
+	await fireEvent.click(buttonFor(container, "Next option"));
+	await waitFor(() => expect(buttonFor(container, "Next option").disabled).toBe(false));
+	await fireEvent.click(buttonFor(container, "Next option"));
+	await waitFor(() => expect(writes).toEqual(["\x1b[B", "\x1b[B"]));
+	await fireEvent.click(buttonFor(container, "Select highlighted option"));
+	await fireEvent.click(buttonFor(container, "Select highlighted option"));
+	await waitFor(() => expect(writes).toEqual(["\x1b[B", "\x1b[B", "\r"]));
+	expect(buttonFor(container, "Select highlighted option").disabled).toBe(true);
 });

@@ -1,0 +1,266 @@
+{
+  "source_head": "bfd3f4c33ef767e0f3de07ca3674911b34defafb",
+  "session": "197ff43e-3be4-4fde-b3e5-2cc426fc256a",
+  "phases": [
+    {
+      "phase": "before-touch",
+      "time": "2026-10-19T19:40:29.634Z",
+      "visible": "visible",
+      "width": 390,
+      "height": 844,
+      "touch": 1,
+      "buttons": [
+        "",
+        "claude\nclaude-cwd \u00b7 Idle 5m",
+        "CLI",
+        "Chat",
+        "",
+        "",
+        "Reply alpha",
+        "Reply beta",
+        "/",
+        "Ctrl",
+        "Tab",
+        "Esc",
+        "\u2191",
+        "\u2193",
+        "\u2190",
+        "\u2192",
+        "\u21b5",
+        "",
+        "",
+        ""
+      ],
+      "text": "claude\nclaude-cwd \u00b7 Idle 5m\nCLI\nChat\n \u2590\u259b\u2588\u2588\u2588\u259b\u2588   Claude Code v2.1.286\n\u259d\u259c\u2588\u2588\u2588\u2588\u2588\u2588\u2580  Sonnet 5.5 \u00b7 Claude Team\n \u259d\u259d   \u259d\u259d   ~/Gits/.tmp/results/live-2029/claude-cwd\n\u276f This is a UI verification. Do not use any tools. Respond with exactly this standalone line, no bullets, no code fence, no \n  other text: suggest: [ Reply alpha | Reply beta ]. After I pick either reply, respond only ACK and never repeat the \n  suggestion marker.\n\u23fa\ufe0e\n\u273b\ufe0e Crunched for 8s \u00b7 done 9:34 PM\nReply alpha\nReply beta\n/\nCtrl\nTab\nEsc\n\u2191\n\u2193\n\u2190\n\u2192\n\u21b5",
+      "events": []
+    },
+    {
+      "phase": "after-touch",
+      "time": "2026-10-19T19:40:29.841Z",
+      "visible": "visible",
+      "width": 390,
+      "height": 844,
+      "touch": 1,
+      "buttons": [
+        "",
+        "claude\nclaude-cwd \u00b7 Working now",
+        "CLI",
+        "Chat",
+        "",
+        "",
+        "/",
+        "Ctrl",
+        "Tab",
+        "Esc",
+        "\u2191",
+        "\u2193",
+        "\u2190",
+        "\u2192",
+        "\u21b5",
+        "",
+        "",
+        ""
+      ],
+      "text": "claude\nclaude-cwd \u00b7 Working now\nCLI\nChat\n \u2590\u259b\u2588\u2588\u2588\u259b\u2588   Claude Code v2.1.286\n\u259d\u259c\u2588\u2588\u2588\u2588\u2588\u2588\u2580  Sonnet 5.5 \u00b7 Claude Team\n \u259d\u259d   \u259d\u259d   ~/Gits/.tmp/results/live-2029/claude-cwd\n\u276f This is a UI verification. Do not use any tools. Respond with exactly this standalone line, no bullets, no code fence, no \n  other text: suggest: [ Reply alpha | Reply beta ]. After I pick either reply, respond only ACK and never repeat the \n  suggestion marker.\n\u23fa\ufe0e\n\u273b\ufe0e Crunched for 8s \u00b7 done 9:34 PM\n/\nCtrl\nTab\nEsc\n\u2191\n\u2193\n\u2190\n\u2192\n\u21b5",
+      "events": [
+        {
+          "type": "touchstart",
+          "trusted": true,
+          "target": "Reply alpha",
+          "time": 1792438829682
+        },
+        {
+          "type": "touchend",
+          "trusted": true,
+          "target": "Reply alpha",
+          "time": 1792438829688
+        },
+        {
+          "type": "click",
+          "trusted": true,
+          "target": "Reply alpha",
+          "pointerType": "touch",
+          "time": 1792438829689
+        }
+      ]
+    },
+    {
+      "phase": "poll-1",
+      "time": "2026-10-19T19:40:30.087Z",
+      "visible": "visible",
+      "width": 390,
+      "height": 844,
+      "touch": 1,
+      "buttons": [
+        "",
+        "claude\nclaude-cwd \u00b7 Working now",
+        "CLI",
+        "Chat",
+        "",
+        "",
+        "/",
+        "Ctrl",
+        "Tab",
+        "Esc",
+        "\u2191",
+        "\u2193",
+        "\u2190",
+        "\u2192",
+        "\u21b5",
+        "",
+        "",
+        ""
+      ],
+      "text": "claude\nclaude-cwd \u00b7 Working now\nCLI\nChat\n \u2590\u259b\u2588\u2588\u2588\u259b\u2588   Claude Code v2.1.286\n\u259d\u259c\u2588\u2588\u2588\u2588\u2588\u2588\u2580  Sonnet 5.5 \u00b7 Claude Team\n \u259d\u259d   \u259d\u259d   ~/Gits/.tmp/results/live-2029/claude-cwd\n\u276f This is a UI verification. Do not use any tools. Respond with exactly this standalone line, no bullets, no code fence, no \n  other text: suggest: [ Reply alpha | Reply beta ]. After I pick either reply, respond only ACK and never repeat the \n  suggestion marker.\n\u23fa\ufe0e\n\u273b\ufe0e Crunched for 8s \u00b7 done 9:34 PM\n\u276f Reply alpha\n\u2733 Grooving\u2026 (running UserPromptSubmit hooks\u2026 3/4 \u00b7 0s)\n/\nCtrl\nTab\nEsc\n\u2191\n\u2193\n\u2190\n\u2192\n\u21b5",
+      "events": [
+        {
+          "type": "touchstart",
+          "trusted": true,
+          "target": "Reply alpha",
+          "time": 1792438829682
+        },
+        {
+          "type": "touchend",
+          "trusted": true,
+          "target": "Reply alpha",
+          "time": 1792438829688
+        },
+        {
+          "type": "click",
+          "trusted": true,
+          "target": "Reply alpha",
+          "pointerType": "touch",
+          "time": 1792438829689
+        }
+      ]
+    },
+    {
+      "phase": "poll-2",
+      "time": "2026-10-19T19:40:33.086Z",
+      "visible": "visible",
+      "width": 390,
+      "height": 844,
+      "touch": 1,
+      "buttons": [
+        "",
+        "claude\nclaude-cwd \u00b7 Working now",
+        "CLI",
+        "Chat",
+        "",
+        "",
+        "/",
+        "Ctrl",
+        "Tab",
+        "Esc",
+        "\u2191",
+        "\u2193",
+        "\u2190",
+        "\u2192",
+        "\u21b5",
+        "",
+        "",
+        ""
+      ],
+      "text": "claude\nclaude-cwd \u00b7 Working now\nCLI\nChat\n \u2590\u259b\u2588\u2588\u2588\u259b\u2588   Claude Code v2.1.286\n\u259d\u259c\u2588\u2588\u2588\u2588\u2588\u2588\u2580  Sonnet 5.5 \u00b7 Claude Team\n \u259d\u259d   \u259d\u259d   ~/Gits/.tmp/results/live-2029/claude-cwd\n\u276f This is a UI verification. Do not use any tools. Respond with exactly this standalone line, no bullets, no code fence, no \n  other text: suggest: [ Reply alpha | Reply beta ]. After I pick either reply, respond only ACK and never repeat the \n  suggestion marker.\n\u23fa\ufe0e\n\u273b\ufe0e Crunched for 8s \u00b7 done 9:34 PM\n\u276f Reply alpha\n\u273b\ufe0e Grooving\u2026\n/\nCtrl\nTab\nEsc\n\u2191\n\u2193\n\u2190\n\u2192\n\u21b5",
+      "events": [
+        {
+          "type": "touchstart",
+          "trusted": true,
+          "target": "Reply alpha",
+          "time": 1792438829682
+        },
+        {
+          "type": "touchend",
+          "trusted": true,
+          "target": "Reply alpha",
+          "time": 1792438829688
+        },
+        {
+          "type": "click",
+          "trusted": true,
+          "target": "Reply alpha",
+          "pointerType": "touch",
+          "time": 1792438829689
+        }
+      ]
+    }
+  ],
+  "polls": [
+    {
+      "time": "2026-10-19T19:40:29.935Z",
+      "url": "http://127.0.0.1:1529/sessions",
+      "status": 200,
+      "sessions": [
+        {
+          "session_id": "197ff43e-3be4-4fde-b3e5-2cc426fc256a",
+          "cwd": "/Users/stefano.straus/Gits/.tmp/results/live-2029/claude-cwd",
+          "worktree_path": null,
+          "worktree_branch": null,
+          "display_name_is_custom": false,
+          "display_name_from_spawn": false,
+          "is_remote": true,
+          "alias": "cc-1",
+          "tuic_session": "197ff43e-3be4-4fde-b3e5-2cc426fc256a",
+          "state": {
+            "awaiting_input": false,
+            "rate_limited": false,
+            "shell_state": "busy",
+            "agent_state": "working",
+            "last_activity_ms": 1792438829843,
+            "agent_type": "claude",
+            "current_task": "Grooving"
+          }
+        }
+      ]
+    },
+    {
+      "time": "2026-10-19T19:40:32.934Z",
+      "url": "http://127.0.0.1:1529/sessions",
+      "status": 200,
+      "sessions": [
+        {
+          "session_id": "197ff43e-3be4-4fde-b3e5-2cc426fc256a",
+          "cwd": "/Users/stefano.straus/Gits/.tmp/results/live-2029/claude-cwd",
+          "worktree_path": null,
+          "worktree_branch": null,
+          "display_name_is_custom": false,
+          "display_name_from_spawn": false,
+          "is_remote": true,
+          "alias": "cc-1",
+          "tuic_session": "197ff43e-3be4-4fde-b3e5-2cc426fc256a",
+          "state": {
+            "awaiting_input": false,
+            "rate_limited": false,
+            "shell_state": "busy",
+            "agent_state": "working",
+            "last_activity_ms": 1792438829843,
+            "agent_type": "claude",
+            "current_task": "Grooving"
+          }
+        }
+      ]
+    }
+  ],
+  "settled_sessions": [
+    {
+      "session_id": "197ff43e-3be4-4fde-b3e5-2cc426fc256a",
+      "cwd": "/Users/stefano.straus/Gits/.tmp/results/live-2029/claude-cwd",
+      "worktree_path": null,
+      "worktree_branch": null,
+      "display_name_is_custom": false,
+      "display_name_from_spawn": false,
+      "is_remote": true,
+      "alias": "cc-1",
+      "tuic_session": "197ff43e-3be4-4fde-b3e5-2cc426fc256a",
+      "state": {
+        "awaiting_input": false,
+        "rate_limited": false,
+        "shell_state": "idle",
+        "agent_state": "idle",
+        "last_activity_ms": 1792438837670,
+        "agent_type": "claude",
+        "current_task": "Grooving"
+      }
+    }
+  ]
+}

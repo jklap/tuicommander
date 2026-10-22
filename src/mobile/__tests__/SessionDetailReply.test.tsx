@@ -1,5 +1,6 @@
 import { cleanup, fireEvent, render, screen, waitFor } from "@solidjs/testing-library";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { appLogger } from "../../stores/appLogger";
 import { SessionDetailScreen } from "../screens/SessionDetailScreen";
 import type { SessionInfo } from "../useSessions";
 
@@ -16,8 +17,10 @@ vi.mock("../../stores/toasts", () => ({ toastsStore: { add: vi.fn() } }));
 
 // Match the isolated screen's known development warnings; unexpected warnings fail.
 let warnings: ReturnType<typeof vi.spyOn>;
+let errors: ReturnType<typeof vi.spyOn>;
 beforeEach(() => {
 	warnings = vi.spyOn(console, "warn").mockImplementation(() => {});
+	errors = vi.spyOn(appLogger, "error").mockImplementation(() => {});
 });
 afterEach(() => {
 	cleanup();
@@ -27,6 +30,10 @@ afterEach(() => {
 			["[dictation] Failed to get dictation config"],
 		]).toContainEqual(args);
 	}
+	for (const args of errors.mock.calls) {
+		expect(args).toEqual(["dictation", "Failed to get dictation config", expect.any(TypeError)]);
+	}
+	errors.mockRestore();
 	warnings.mockRestore();
 	rpc.mockClear();
 });
@@ -64,7 +71,7 @@ it("submits a root coordinator's answer atomically from the deep-linked session"
 	);
 });
 
-it("opens a waiting Codex question through the session's PTY", async () => {
+it("opens a waiting Codex 0.162 question with the live-verified Shift+Left key", async () => {
 	const session: SessionInfo = {
 		session_id: "codex-question",
 		cwd: "/repo",
@@ -91,7 +98,7 @@ it("opens a waiting Codex question through the session's PTY", async () => {
 	await waitFor(() =>
 		expect(rpc).toHaveBeenCalledWith("write_pty", {
 			sessionId: "codex-question",
-			data: "\x1b[1;3A",
+			data: "\x1b[1;2D",
 		}),
 	);
 });
@@ -278,4 +285,34 @@ it("preserves an unsent ego answer when the question card is opened before Send"
 			.join("");
 		expect(delivered).toContain(`${answer}\r`);
 	});
+});
+
+// Catches: Chat availability adds a permanent guidance bar beside the header toggle.
+it.each(["claude", "ego"])("renders mobile %s CLI without invented guidance", async (agentType) => {
+	await import("../../stores/dictation");
+	const session: SessionInfo = {
+		session_id: `guidance-${agentType}`,
+		cwd: "/repo",
+		worktree_path: null,
+		worktree_branch: null,
+		state: {
+			agent_type: agentType,
+			awaiting_input: false,
+			rate_limited: false,
+			last_activity_ms: 1,
+		},
+	};
+	const view = render(() => (
+		<SessionDetailScreen
+			subscribeChatWake={() => () => {}}
+			session={session}
+			sessionExists
+			onBack={() => {}}
+			onOpenFiles={() => {}}
+		/>
+	));
+	await new Promise((resolve) => setTimeout(resolve, 0));
+	expect(view.getByRole("button", { name: "CLI" }).getAttribute("aria-pressed")).toBe("true");
+	expect(view.getByRole("button", { name: "Chat" })).not.toBeNull();
+	expect(view.container.textContent).not.toMatch(/Reply below|Switch to CLI|Read file edits in Chat/);
 });

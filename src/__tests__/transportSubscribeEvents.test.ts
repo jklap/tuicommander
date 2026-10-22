@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { subscribeEvents } from "../transport";
+
+let subscribeEvents: typeof import("../transport").subscribeEvents;
 
 /**
  * `onResync` is the only signal a consumer gets that events were MISSED — the
@@ -32,7 +33,9 @@ class MockEventSource {
 }
 
 describe("subscribeEvents onResync", () => {
-	beforeEach(() => {
+	beforeEach(async () => {
+		vi.resetModules();
+		({ subscribeEvents } = await import("../transport"));
 		MockEventSource.instances.length = 0;
 		vi.stubGlobal("EventSource", MockEventSource);
 	});
@@ -53,6 +56,7 @@ describe("subscribeEvents onResync", () => {
 		browserMode();
 		const onResync = vi.fn();
 		await subscribeEvents({ "session-state-changed": vi.fn() }, { onResync });
+		await new Promise((resolve) => setTimeout(resolve, 0));
 		const es = MockEventSource.instances[0];
 
 		// An initial snapshot can predate the server subscription.
@@ -76,6 +80,7 @@ describe("subscribeEvents onResync", () => {
 		browserMode();
 		const onResync = vi.fn();
 		await subscribeEvents({ "session-state-changed": vi.fn() }, { onResync });
+		await new Promise((resolve) => setTimeout(resolve, 0));
 		const es = MockEventSource.instances[0];
 
 		es.onopen?.();
@@ -89,6 +94,7 @@ describe("subscribeEvents onResync", () => {
 		browserMode();
 		const onResync = vi.fn();
 		await subscribeEvents({ "session-state-changed": vi.fn() }, { onResync });
+		await new Promise((resolve) => setTimeout(resolve, 0));
 		const es = MockEventSource.instances[0];
 
 		es.onopen?.();
@@ -104,6 +110,7 @@ describe("subscribeEvents onResync", () => {
 		const onResync = vi.fn();
 		const handler = vi.fn();
 		await subscribeEvents({ "session-state-changed": handler }, { onResync });
+		await new Promise((resolve) => setTimeout(resolve, 0));
 		const es = MockEventSource.instances[0];
 
 		es.onopen?.();
@@ -132,6 +139,7 @@ describe("subscribeEvents onResync", () => {
 		browserMode();
 		const handler = vi.fn();
 		const unsubscribe = await subscribeEvents({ "repo-changed": handler });
+		await new Promise((resolve) => setTimeout(resolve, 0));
 		const es = MockEventSource.instances[0];
 
 		es.onopen?.();

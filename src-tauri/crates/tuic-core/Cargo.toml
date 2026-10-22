@@ -9,10 +9,10 @@ audio-output = ["dep:rodio"]
 test-support = ["dep:tempfile", "dep:tuic-test-support"]
 
 [dependencies]
-rodio = { version = "0.22.2", default-features = false, features = ["playback"], optional = true }
+rodio = { version = "0.23", default-features = false, features = ["playback"], optional = true }
 tuic-ipc = { path = "../tuic-ipc" }
 bm25 = { path = "../../patches/bm25" }
-dirs = "6"
+dirs = "7"
 jsonc-parser = { version = "0.33", features = ["cst", "serde", "serde_json"] }
 keyring = { version = "3", features = ["apple-native", "windows-native", "linux-native"] }
 lazy_static = "1"

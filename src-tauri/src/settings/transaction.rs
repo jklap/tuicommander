@@ -124,9 +124,8 @@ pub(super) fn prepare(
             }
             Edit::Create { id, .. } | Edit::Remove { id, .. } => {
                 pointer::valid_key(id, store)?;
-                if id.contains(['/', '\\']) {
-                    return Err(Error::new(store, "unknown_path"));
-                }
+                // IDs are decoded owner keys, not pointer fragments. Escaping belongs
+                // to leaf paths; create/remove keep the key as one segment.
                 let collection = cat
                     .collections
                     .iter()

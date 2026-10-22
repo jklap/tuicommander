@@ -1,3 +1,215 @@
+## Detached command peer isolation (2100-c249) — CLI update and backend restart required
+
+- [ ] After installing the rebuilt `tuic` CLI, verify a detached reviewer cannot set the foreground composer to awaiting through its progress report, and its BG DONE still arrives. Install both the rebuilt CLI and backend, then manually restart the backend: the ancestry boundary cannot load through frontend hot reload. No daily app restart was performed by this peer.
+## Sidebar session identifiers (2112-8a79)
+
+- [x] Isolated `b6-session-menu` instance: a running Claude PTY menu exposes session ID, actual child PID, and session-list alias; browser reload preserves PID and alias. Evidence: `~/Gits/.tmp/results/b6-2112-visual-owned/` (DOM and screenshot, no session fixtures). Unknown-PID and absent-alias visibility is covered by the targeted sidebar component tests.
+
+## Queued BG DONE diagnostics (2100-c249) — Rust restart required
+
+- [ ] After Boss manually rebuilds and restarts the backend, leave a BG DONE wake queued behind a retained draft for more than 60 seconds. Check `/logs?source=bg-wake` on that instance for one warning with `partial_composer=true` and the bounded process tree. Clear the draft and check that the existing delivery path submits the wake. No daily app restart was performed by this peer.
+
+## App Nap opt-out (1638-c94c) — Rust restart required
+
+- [ ] After Boss manually restarts a rebuilt backend, check the log line `App Nap disabled for the process lifetime` (source `app-nap`). Cover the TUIC window with a full-screen app while no agent is busy, wait two minutes, and check that `/logs` contains no `Sleep-wake detected` or `Frontend unresponsive` line for that period and that remote clients stay live. This Rust change does not hot-reload into the daily app.
+## Wrapped ego approval controls (2102-98ab) — Rust restart required
+
+- [x] An isolated `at-2102` worktree build exported a wrapped printf approval with all five native keys. The mobile header question card sent `y` and the command exited 0 with `PARITY_P_OK`. Evidence: `~/Gits/.tmp/results/fix-2102-live/`. The daily backend still requires Boss's manual `make dev` restart or `make build` installation to load this Rust fix; no daily app restart was performed.
+## Grok npm launcher Chat binding (2104-0523) — Rust restart required
+
+- [ ] After Boss manually rebuilds and restarts the daily backend, verify a Grok terminal launched through npm opens its own Chat transcript. The isolated instance evidence does not load this Rust change into Boss's running app; no daily restart is performed by the peer.
+
+## Bounded repository file reads (2098-98b2) — Rust restart required
+
+- [ ] After a manual backend rebuild/restart, verify an external edit under an ignored directory containing a tracked file updates that checkout, unchanged siblings remain correct, and watcher restart returns fresh status. macOS/Windows monitoring snapshots require complete watches; Linux stays fresh. No daily app restart was performed.
+
+- [ ] After a manual backend rebuild/restart, verify one file staged then edited and a directory with two untracked files show unchanged diff totals and correct dirty counts; monitoring now shares one status traversal. No daily app restart was performed.
+
+- [ ] After Boss manually rebuilds and restarts the backend, commit twice in one linked worktree, fetch a remote, and pack refs. Confirm the changed row and integration badges update while sibling badges stay correct. This peer does not restart the daily app.
+
+- [ ] After loading the rebuilt backend, verify Codex session and same-path date-directory replacement in an isolated CODEX_HOME and unchanged discovery without historical rollout scans; watched-index and cwd/age/claimed-ID regressions run on rb, but macOS watcher behavior still needs the isolated instance.
+
+- [ ] After Boss manually restarts a rebuilt backend, commit in one disposable linked worktree and check current dirty/integration badges and unchanged sibling rows. This Rust change does not hot-reload into the daily app. The peer must not restart that app; isolated counter evidence is recorded in the story.
+## Unchanged content-index events (2099-8c87) — Rust restart required
+
+- [ ] After Boss manually restarts a rebuilt backend, confirm repeated unchanged repository events do not schedule content-index validation within 60 seconds of a completed validation. Verify a later content edit remains searchable after the cooldown. This Rust change does not hot-reload; this peer does not restart the daily app.
+## Missing-checkout named submodule preservation (2096-1d25) — Rust restart required
+
+- [ ] After Boss manually restarts a rebuilt backend, verify forced cleanup of a disposable missing worktree with a named submodule preserves its local-only commit in the initialized main module before pruning registration. No running desktop backend was restarted by this peer. Automated Git boundary evidence is recorded in the gate report.
+## Managed Claude default-No trust dialog (2097-5739) — Rust restart required
+
+- [ ] After Boss manually restarts a rebuilt `make dev` or installs `make build`, spawn a managed Claude child in a disposable untrusted folder. Check that the startup dialog selects Yes with Down then Enter once; an unmanaged terminal and trust opt-out must remain unanswered. The recorded 1987 capture is covered by automated replay; this Rust change does not hot-reload into the daily app. No daily app restart was performed.
+## Covered agent-test presentation (2095-0106) — isolated native check verified
+
+- [x] The recovered native observer passed a 300-second covered-window run: document/native visibility stayed true, rAF advanced with a 319 ms maximum gap, no focus or activation, and stable compact geometry. Evidence: `reports/tuicommander/2095-covered-observation/`. The dedicated agent-test binary must be rebuilt to load this Rust policy; the daily app is unchanged and needs no restart for this fix. This peer did not restart or replace Boss's running app.
+
+## First narrow Codex /plan question (2094-da19) — Rust restart required
+
+- [ ] After Boss manually restarts a rebuilt backend, open the first Codex /plan question in a narrow terminal. Check Input in the mobile list and named answer controls in CLI and Chat. Answer once and check native completion. This Rust parser change does not hot-reload into the daily app; isolated worktree verification is recorded in the story.
+## Bounded input frame priority (2040-16b2) — Rust restart required
+
+- [ ] After Boss manually restarts a rebuilt `make dev` or installs `make build`, type while a disposable terminal prints paced output. Check desktop and browser/PWA responsiveness, sustained output, and DEC-2026 complete redraws. This Rust change does not hot-reload into the running daily app. Isolated native trace timing is an untrusted-input-to-`fillText` proxy, not trusted keyboard or compositor proof; the original native REALITY criterion remains separate.
+
+## Agent-test non-focusing visibility (2090-cf8a) — isolated native check verified
+
+- [x] `scripts/agent-test-visible.py --instance at-2090 --port 19883` observes a visible document, positive terminal canvas and real `fillText` paint without native/document focus. The window is 640x420 logical pixels, 17 pixels from the primary work-area right edge and 16 from its bottom edge. Unrelated frontmost PID 761 stays unchanged before launch, at readiness and after paint (owned PID 42795). Removing only `native.orderFront(None)` produces hidden document/native window, no canvas and no text paint; restoring it passes. Both runs delete their sessions, stop through `make agent-test-stop`, and report no remaining worktree executable. Evidence: `~/Gits/.tmp/results/fix-2090-round2/{red2,green}/` (JSON, logs and GREEN canvas-only PNGs). This opt-in native observer requires desktop authorization; source/config contracts do not prove visibility. The change loads only in a newly built agent-test binary and requires no daily-app restart.
+
+## Question state after agent exit (2091-ba03) — Rust restart required
+
+- [ ] After a manual backend restart, exit a Claude question to the shell and run a command. Input and question controls must stay absent; verify an active question still shows its controls. Isolated automated live verification is recorded in the story. The daily app cannot load this Rust fix through hot reload.
+
+## Repeated ego MCP approvals (2089-aafb) — Rust restart required
+
+- [ ] After Boss manually restarts a rebuilt `make dev` or installs `make build`, run a disposable ego default-mode session that requires two or more MCP approvals. Each approval must show Input and native answer controls on mobile; answer once and confirm the controls clear before the next approval. Include a long approval title that wraps. This peer did not restart or replace the running desktop backend. The retained capture supplies the replay regression; seven targeted rb parity/corpus tests pass. Live verification belongs to integration.
+## Isolated agent desktop target (2086-269b) — operator live proof pending
+
+- [ ] After the coordinator reviews/builds this branch, checksum Boss's running binary and app bundle, launch `make agent-test` from the worktree, verify the daily port and agent-test loopback port both answer, and recheck identical checksums. Confirm the daily shortcut/microphone/Telegram ownership remains unchanged. Stop with `make agent-test-stop`, verify only its PID exits, and confirm the daily instance still responds. This peer is implementation-only: no desktop app was launched or restarted, and no live isolation/TCC claim is made. The launch-instruction and global CLI/hook refusal changes require a rebuilt backend and refreshed agent launch text; it does not hot-reload into Boss's running app.
+
+## Paired native plugin refresh (2039-428c) — rebuild required
+
+- [ ] After Boss manually restarts a rebuilt backend or installs a signed package, verify notification permission and delivery, then the updater check/download/install flow and deferred relaunch. Rust/npm notification 2.7.0 and updater 2.14.0 are paired; Linux default-feature compilation and targeted tests pass, but macOS/Windows packaging and real OS integration still need release validation. This peer did not restart or replace the running app.
+
+## Audio dependency alignment (2036-f740) — Rust restart and hardware required
+
+- [ ] [HUMAN] After Boss manually restarts `make dev` or installs `make build`, record and transcribe speech with the default and a named microphone; check the meter and stop/drain behavior. Include an integer-only microphone if available. CPAL 0.18 prefers 48 kHz and may rank high-precision formats above I16; capture must continue using a supported F32/I16 configuration.
+- [ ] [HUMAN] Play all notification tones at low and high volume on the default and a named output; confirm no end click and missing named output falls back. Play an Edge MP3 reply, pause/resume it, interrupt it and play the next reply. This peer did not restart or use Boss's desktop or claim real microphone/speaker validation.
+## Claude imperative question title (2074-b0dc) — Rust restart required
+
+- [x] Worktree verification: real Claude `Pick a colour` without a question mark exports the title and five ordered controls to REST, mobile and desktop PTY Chat. One Green click reaches Claude, clears awaiting and leaves another session unchanged. Mobile evidence: `fix-2074-live-10`; desktop-width Vite component evidence after merging 2079: `fix-2074-desktop-3`, both under `~/Gits/.tmp/results/`. The desktop check mounts the production component and lifecycle consumer, not the full desktop shell.
+- [ ] Boss must manually restart `make dev` or install `make build` to load the Rust change in the installed app. This peer did not restart or replace that backend.
+## Dirs dependency consolidation (2035-096f) — rebuild required
+
+- [ ] After Boss manually restarts a rebuilt `make dev` or installs `make build`, confirm the existing config, CLI/bridge connection and SSH aliases are unchanged. This dependency update does not load into the running backend; this peer did not restart or replace it. Targeted Linux tests cover config isolation, instance/socket paths, tilde expansion and SSH alias parsing.
+## gix 0.89 migration (2038-b4c9) — Rust restart required
+
+- [ ] After Boss manually restarts `make dev` or installs `make build`, verify repository status counts, blame attribution and linked-worktree rows in an isolated repository. This dependency and Rust adapter change does not hot-reload; this peer did not restart or replace the running desktop.
+
+## Codex enforced approval retention (2075-aa2f) — Rust restart required
+
+- [ ] After Boss manually restarts `make dev` or installs `make build`, open an enforced Codex command approval, leave it unanswered, and confirm desktop and mobile retain all three native choices through delayed idle notifications. Approve once, refuse and cancel separate harmless requests; controls must retire after each answer. The running desktop does not hot-reload this Rust change and was not restarted by this peer.
+## HTTP and MCP Codex binding (2081-ac1f) — Rust restart required
+
+- [ ] After Boss manually restarts `make dev` or installs `make build`, spawn disposable Codex terminals through HTTP and MCP, submit a prompt and verify desktop/mobile Chat reads each terminal’s own transcript. Include Codex launched inside a generic HTTP shell terminal. Confirm HTTP/desktop and MCP session lists remain responsive after native binding. This peer did not restart or replace the running desktop; reader changes require a rebuilt backend.
+
+## Compact MCP guidance (2069-7347) — Rust restart required
+
+- [ ] After Boss manually restarts `make dev` or installs `make build`, reconnect a cached MCP client and confirm session/agent/repo/ui/voice/telegram/automations advertise `help` where their owner is available. `action=help` returns the complete guide; disabled/unconfigured owners still refuse it. This peer did not restart or replace the running desktop. Automated tests cover catalogue lookup, complete guidance and owner gates.
+## UI Design Mode actions (2067-e708) — Rust restart required
+
+- [ ] After Boss manually restarts `make dev` or installs `make build`, reconnect MCP and use `ui design_start` with the target terminal and page URL. Verify browser commands remain limited to the armed recipient/repository and extension host grants. The separate `design_mode` tool remains until story 2068. This peer did not restart the backend.
+
+## Conditional MCP tools (2066-516c, 2067-e708) — Rust restart required
+
+- [ ] After Boss manually restarts the backend with `make dev` or installs `make build`, verify a downstream MCP client refreshes after remote connect/disconnect and Voice/Telegram configuration changes. Clients that ignore `notifications/tools/list_changed` need a reconnect. The running desktop does not load these Rust changes; this peer did not restart it. Conversation binding, Telegram registration and remote digest/session-loss confirmation remain required.
+## Joined intent title closure (2060-0ebe) — Rust restart required
+
+- [ ] After Boss manually restarts `make dev` or installs `make build`, check an intent followed immediately by ordinary prose on the same row. CONTEXT must contain only the intent description; desktop and mobile tint must stop at the title closure without hiding trailing prose. Include a title that wraps. This peer did not restart or replace the running desktop.
+## Workflow MCP grouping (2065-dcc5) — Rust restart required
+
+- [ ] After Boss manually restarts `make dev` or installs `make build`, reconnect MCP and confirm the grouped `workflow` schema exposes story, run, proposal_create, report and launch. Legacy tools remain available; `tuic workflow` uses the new entry and `tuic automations` stays independent. The running backend was not restarted by this peer.
+
+## Agent task operations (2064-6385) — Rust restart required
+
+- [ ] After Boss manually restarts `make dev` or installs `make build`, reconnect MCP and confirm `agent task_get/task_cancel` appear; cancelling an owned spawned task must leave its terminal running. The installed backend was not restarted by this peer.
+
+## Ego PID index (2058-0d0e) — Rust restart required
+
+- [ ] After Boss manually restarts `make dev` or installs `make build`, confirm an ego terminal discovers its active conversation through the PID index. The live backend does not hot-reload Rust. This peer did not restart or change the installed desktop instance.
+
+## Agent session discovery and frame receipts (2040-16b2) — Rust restart required
+
+- [ ] After Boss manually restarts `make dev` or installs `make build`, measure native keyboard-to-paint latency while a visible agent prints and other agent tabs perform session discovery. Confirm frame-receipt stalls no longer correlate with discovery file reads. The backend regression checks real PTY echo and an independent frame consumer under slow discovery I/O; it does not prove that every historical stall or native WebKit freeze is resolved. This peer did not restart or change the running desktop.
+
+## Mobile ego slash filtering (2030-84bb) — Rust restart required
+
+- [x] An isolated native headless worktree build and worktree Vite, through agent-browser at 1180×820, show only `/goal` for `/go` both idle and while a real ego turn runs. Exact `/goal` and unmatched `/gz` retract the menu. Claude's `/he` also replaces its broad menu with its own fuzzy matches. Evidence and DOM measurements: `src-tauri/src/fixtures/agent_prompts/ego-slash-filter-2030.md`.
+- [ ] After Boss manually restarts `make dev` or installs `make build`, the installed app can load the fix; the running desktop was not restarted or used to verify changed Rust.
+- [ ] Codex 0.162.1 draws `/status` and `/statusline` for `/sta`, but publishes no mobile dropup. Its menu sits above the composer/status line and uses `›`, unlike this parser's supported bottom block. This layout gap also exists in `main`; the shared Claude/Codex criterion remains unchecked. See the inline `DEFERRED (2026-10-19)` note at `parse_slash_menu`.
+## ego Chat export diagnostics (2032-8dc3) — Rust restart required
+
+- [ ] After Boss manually restarts `make dev` or installs `make build`, verify an incompatible configured ego executable reports its path and failed export status. For the retained live failure, Settings points to `/Users/stefano.straus/bin/ego`, which rejects `--after`; select the transcript-capable `/Users/stefano.straus/.local/bin/ego`, then open Chat on a bound local ego session. Confirm the completed answer is shown and Chat stays open. This peer did not alter Settings, replace a binary, restart the app, or call desktop MCP tools.
+## Agent session discovery (2057-2769) — Rust restart required
+
+- [ ] After Boss manually restarts `make dev` or installs `make build`, profile an isolated instance against about 1500 ego sessions and 10 polled ego terminals. Confirm discovery stays off the desktop main thread and repeated polls read only each bound lease. Check session ids after an ego restart and pid reuse. This peer did not restart or probe Boss's desktop; REALITY stays open for the coordinator.
+
+## Canvas base-grid repaint reductions (2040-16b2) — load landed frontend
+
+- [ ] With the landed frontend in native WebKit, verify typing stays responsive during scrolling agent output and record keyboard-to-paint latency. Check normal history growth, a stationary spinner, colored trailing blanks, wide glyphs, combining marks and marker-filtered output. Worktree browser replay proves lower drawing-operation counts and identical reference pixels, not native timing or the ego printer's independent row-emission delay. No Rust restart is needed for these frontend-only changes; do not restart a live desktop merely for this check.
+## MCP worktree listing latency (2044-31f3) — Rust restart required
+
+- [ ] After Boss manually restarts the Rust backend, repeat `tuic mcp repo` with `action=worktree_list` on the many-worktree repositories. Confirm cold listing makes no GitHub requests, dirty file/fingerprint fields still update after edits, and the sidebar remains unchanged. A GitHub-only merged proof can be absent until background monitoring populates the existing cache. Fresh Git/filesystem reads are not a hard latency guarantee. This peer did not restart the installed app; criterion 4 remains unchecked.
+
+## Live spawned caller declaration (2044-31f3) — Rust restart and updated frontend required
+
+- [ ] After Boss manually restarts the Rust backend and loads the updated frontend, spawn a native MCP agent, an HTTP agent and a generic `POST /sessions` terminal in an isolated instance. Declare an existing worktree from each caller and confirm only its live tab moves, with unchanged process cwd and stable placement after reconnect. Native session-created now carries the backend-bound identity; the installed backend was not restarted by this peer.
+
+## Declaration into a newly discovered workspace (2044-31f3) — Rust restart required
+
+- [ ] After Boss restarts the Rust backend, use an isolated instance and declare an existing linked worktree whose saved workspace row has no `savedTerminals`. Confirm declaration succeeds, the caller restore record moves without duplicating sibling records, and the caller tab appears under the declared workspace despite unchanged cwd. Repeat the declaration, cd into another repository or an unregistered directory, reload the frontend and send a cwd update; placement must persist without moving sibling tabs. The peer did not restart or mutate the installed instance; live sidebar verification is still pending.
+
+## Automation profile validation and failure mail (2015-bdb3) — Rust restart required
+
+- [ ] After Boss restarts `make dev` or installs `make build`, use an isolated instance to reject an unknown saved profile with valid-profile choices. Remove a profile after saving and confirm list exposes `run_config_error` with no next run. A failed agent-created run must send its creator one inbox message with run id and reason even before spawn; repeated publication must not resend it. The installed backend was not restarted by this peer.
+## Mobile suggest dismissal (2029-994d) — Rust restart required
+
+- [ ] After Boss rebuilds/restarts the Rust app, verify Claude publishes `suggest: [ Reply alpha | Reply beta ]` after Stop hooks settle. At 390×844, tap Reply alpha and confirm all old chips disappear and stay gone after the next poll and an ACK-only response. Final recorded-stream tests and isolated backend submission checks pass, but the Mac locked during the final rebuild: Chrome reports `visibilityState=hidden`, so final trusted-click/poll screenshots remain unverified. Earlier screenshots expose the pre-boundary history-repaint defect, not a final pass. Evidence: `~/Gits/.tmp/results/fix2029-live/`.
+- [ ] Verify a genuinely later list, including identical labels after the backend clear, appears. Disconnect before choosing: exhausted retries must show the existing Send failed notice. Targeted component tests cover both cases; desktop behavior is unchanged.
+
+## ego title and enforced approval parity (2028-6999) — Rust restart required
+
+- [ ] After Boss manually restarts `make dev` or installs `make build`, verify ego question titles exclude skill/provider diagnostics and working rows. Check a default-mode CLI-enforced command approval on desktop/mobile: native keys appear, tapping No opens the explanation prompt without submitting it, and a subsequent bare Enter refuses and clears the wait. Confirm an answered selector stays cleared while its retained rows scroll after protocol busy. Replay evidence does not verify updated live UI rendering. The exact historical provider-notice adjacency was not reproduced.
+
+## Grok native question parity (2027-7ef3) — Rust restart required
+
+- [ ] After Boss restarts `make dev` or installs `make build`, verify Grok Ask color/Yes-No choices and a default-mode CLI-enforced tool approval on desktop/mobile. Numeric answers must submit once without Enter; z must switch to a text-only wait, and refusal/settlement must retract the controls. Live native CLI forms were captured, but this worktree backend was not loaded into the desktop.
+
+## Codex native question parity (2026-9178) — Rust restart required
+
+- [ ] After Boss restarts the backend, trigger `/plan` `request_user_input` with “Pick a colour” and Red/Green/Blue. Verify the clean title and four choices (including None of the above) on desktop and authenticated mobile. The 2026-10-19 raw-byte parser regression does not prove live UI rendering; mobile verification requires Boss’s login.
+
+- [ ] After Boss manually restarts `make dev` or installs `make build`, ask Codex 0.162.1 for a native color question. Verify the desktop/mobile waiting state, use the mobile Open Codex question action, and answer once. Confirm options retract after settlement. Also trigger a CLI-enforced command approval and verify numeric refusal without Enter. Live CLI Shift+Left and numeric answers were captured; updated desktop/mobile rendering has not been verified against this worktree backend.
+## Automation validation parity (2007-59f6) — Rust restart required
+
+- [ ] After Boss manually restarts `make dev` or installs `make build`, submit an automation action with an unknown field through HTTP and MCP on an isolated instance. Confirm HTTP returns 400 and both payloads report `invalid_arguments`, bounded violations and `effect=not_started`. No live desktop or installed binary was restarted by this peer.
+
+## Durable peer-mail subscriptions (2004-4760) — Rust restart required
+
+- [ ] After Boss manually restarts `make dev` or installs `make build`, create two named actionable readers for an isolated peer. Send idle lifecycle traffic, then RESULT and BLOCKED mail; confirm each reader receives the result independently, explicit ack prevents reconnect replay, and an interrupted unacknowledged batch remains available. Check the HTTP SSE stream and ACP resource notification path. No installed binary or live desktop instance was replaced by this peer.
+## Local spawned-agent Chat (2032-8dc3) — frontend load after landing
+
+- [ ] After the frontend loads the landed change, spawn a throwaway local agent with `tuic agent spawn` and confirm Chat opens once the transcript is bound. Confirm worker-tab cleanup and muted completion policy remain unchanged; configured remote sessions must still have Chat disabled. The live pre-fix desktop reproduced the disabled Chat tooltip with bound Claude session rt-2032-1; that PTY was killed. No desktop restart or second instance was used.
+
+## Ego idle turn state (2018-1885) — Rust restart required
+
+- [ ] After Boss manually restarts `make dev` or installs `make build`, read `tuic agent ls` and the mobile session list for an ego session at its ready composer. It must not report Working solely because a background job remains pending. Confirm an active ego turn still reports Working and a question still reports Input. Keep background ownership metadata for suspend/standby safety. An idle ego with a current-turn pending descendant probe must refuse Suspend until ownership is resolved, even when `background_work` is false. No live desktop restart was performed by this peer.
+
+## Generated launch modules — Rust restart required
+
+- [ ] Inspect the launch module switches and additions preview after unlocking the Mac. Browser snapshot confirmed all labels and initial checkbox states; direct Chrome and wrapper screenshots could not complete while the macOS screen was locked.
+
+- [ ] After Boss restarts the backend, launch a root and a spawned child. Inspect the delivered launch text: both get enabled modules and global then agent additions; only the child gets Children and omits suggest. Turn all off and verify a new launch has no TUIC playbook. Existing agent processes are not updated by hot reload.
+
+## Launch instruction preview critic fixes — Rust restart required
+
+- [ ] After Boss restarts `make dev` or installs `make build`, verify launch instruction previews on a daemon-backed machine. Switch from a loaded local machine to a delayed or unavailable remote: inherited text must not carry over and Customize must stay disabled until that machine's preview arrives. The running desktop backend was not restarted.
+## Mobile Ideas dictation (2022-1b80)
+
+- [ ] On an iPhone with the updated frontend, dictate with the caret inside an idea and with selected text. Confirm surrounding words remain, a second take works, and no idea or session command is sent until the user explicitly adds or sends it. Browser screenshots verify the real overlay at 390 px, not physical speech recognition.
+
+## Mobile dictation recovery (2020-66aa)
+
+- [ ] After the updated frontend loads on the phone, record a real take and inspect debug source `dictation` on the owner. Retain its session/take-correlated start, first-result, error/abort if present, end and ownership-release sequence for any recurrence. These records are bounded diagnostics, not an assertion that the original incident is fixed.
+
+- [ ] On an iPhone after the updated frontend loads, reproduce a failed/empty recognition, then dictate again without a manual send. Confirm the next transcript inserts and “Dictation failed” stays visible beside the composer mic with the real keyboard open. The worktree browser probe used a focused textarea at 390×480 and a lifecycle driver; it did not record iOS callback order or display a real on-screen keyboard.
+
+## Run-owned launch timeout (2006-f5a1) — Rust restart required
+
+- [ ] After Boss manually restarts `make dev` or installs `make build`, use an isolated run-owned child stalled before its composer is ready. Read its durable launch receipt after 30 seconds: it must report blocked with a delivery-timeout reason and retain one queued prompt and the same child identity. No live desktop restart was performed by this peer.
+## Guided event configuration (2012-72ff)
+
+- [ ] On a throwaway headless owner or browser-mode instance, send each Configure Smart Prompt to a test agent and verify the step-by-step interview stops on missing owner/profile/GitHub auth/skills and unsupported intake, without saving or launching work. Automated library tests verify the delivered prompt contract, not model compliance.
+- [ ] After beta, with Boss-approved repository/test issue and authorization on the owner, run one labelled-issue-to-draft-PR pilot. Retain independent reviewer/check receipts on the published commit, the real draft PR URL and reconciliation evidence. No live GitHub publication or credentials were used by this change.
+
 ## Continuous answer gutter (1998-d826)
 
 - [ ] [VISUAL] Capture the worktree CLI gutter for the real Claude answer fixture with blank rows, section headings and marked list items; confirm one continuous line and no line on trailing unmarked prose or tool output. Both headless Chrome capture attempts failed to produce a PNG; the bounded retry stopped its own Chrome/Vite processes after 35 seconds. The production-plan regression passes, but it is not screenshot evidence. No Rust change or backend restart is required.
@@ -134,6 +346,8 @@
 
 - [x] Recorded Codex paragraphs form one CLI and Chat tint with no visible answer glyphs. _(verified: worktree CanvasTerminal and Transcript screenshots in ~/Gits/.tmp/results/1872/before-grid-chat.png and after-grid-chat.png; real Codex VT replayed with the Rust grid.)_
 # To Test
+
+- [ ] [HUMAN] Mobile composer safe area (#2116-0213): in the next guided iPhone session, check the installed PWA with keyboard closed/open/reopened. Controls must stay above the Home Indicator and the composer background must reach the bottom. If the separate shell-height band remains, capture a full-screen screenshot, device/iOS, orientation and keyboard state before reloading. The bottom-inset change is not proof that this band is fixed.
 
 ## Work-item page total (1845-66f6) — Rust restart required
 
@@ -2416,11 +2630,16 @@ Needs an iPhone (iOS 16.4+, 18.4+ preferred), the desktop TUICommander running a
 ## Plugin review follow-up (#1756)
 
 - [ ] After the existing provider configuration migration, reload GitHub Work, GitLab and Jira twice. Verify one registration per account, and verify that rejected startup reports its error. The read-only live snapshot on 2026-10-15 reported GitLab/Jira loaded, but GitHub Work failed with `Configurable plugin requires a settings schema`; no reload was attempted.
-- [ ] Set and use a project ID through the approved plugin settings UI. Tasks setup contains project fields, but the audited Plugins tab does not expose a settings schema form.
-- [ ] After Jira cancellation is implemented, resolve a Jira URL and cancel its in-flight request. The resolver passes a signal, but the audited provider `detail(ref)`, client request and host-fetch adapter do not propagate it.
+- [ ] Set and use a project ID through the approved plugin settings UI. _(Correction 2026-10-20: current main and plugin pin `56659df3` include schema-backed Jira/GitLab defaults; the earlier missing-form observation is historical, not an outstanding implementation gap.)_
+- [ ] Resolve a Jira URL and cancel its in-flight request. _(Correction 2026-10-20: current main and plugin pin `56659df3` propagate cancellation through resolver, provider, client and host HTTP; the remaining gap is live loaded-plugin evidence.)_
 - [ ] Install an incompatible plugin in an isolated verification environment and check its refusal message. Catalogue/provider boundary checks passed 38/38 and loader minimum-version checks passed 3/3 (25 filtered) through build-slot on 2026-10-15; these are not native install E2E evidence.
 - [ ] Once GitHub Work loads with an authorized test account, invoke a read-only review action through core and verify it reaches the account-bound provider. No vendor writes are authorized.
-- [ ] Same-version stale-copy detection requires an approved source-content identity contract before its E2E check: the audited catalogue update decision compares versions only.
+- [ ] Check same-version stale-copy detection in a supported isolated loaded-plugin runtime. _(Correction 2026-10-20: current main includes catalogue payload identity and installed hashing; version-only comparison is historical. The `tuic-remote` plus Vite path still skips user-plugin loading in `loadUserPlugins`, so it cannot supply this story's required loaded-plugin proof.)_
+- [ ] After landing the restored #1756 branch and its plugin commit, set and use the Jira default project ID and GitLab default project through their schema-driven plugin settings pages. Verify an account-specific Tasks project overrides the default. Module tests cover schema registration and persistence; live UI set/use remains unverified.
+- [ ] After landing the restored #1756 branch and restarting the backend, resolve a Jira URL and cancel its in-flight request. The restored provider/client/account adapter forwards the signal and the host cancels headers/body reads; confirm this through the loaded plugin, not only the module tests.
+- [ ] Install an incompatible plugin in an isolated verification environment and check its refusal message. Catalogue/provider boundary checks passed 38/38 and loader minimum-version checks passed 3/3 (25 filtered) through build-slot on 2026-10-15; these are not native install E2E evidence.
+- [ ] Once GitHub Work loads with an authorized test account, invoke a read-only review action through core and verify it reaches the account-bound provider. No vendor writes are authorized.
+- [ ] Verify same-version stale-copy detection with an isolated installed plugin and a catalogue payload digest. The host and catalogue now compare payload identities; mutable `data/` files are excluded. Module/package tests are not live installation E2E evidence.
 
 - [ ] #1756-4d42: after Boss restarts `make dev` (Rust does not hot-reload), resolve a Jira URL and cancel while headers/body are pending; confirm no late result and active requests stop. No live restart was performed by w-1756.
 
@@ -2446,7 +2665,7 @@ Needs an iPhone (iOS 16.4+, 18.4+ preferred), the desktop TUICommander running a
 - [ ] After Boss restarts the Rust backend (`make dev` or a release rebuild), send an allowed Telegram message with AI Chat connected and no explicit Telegram registration. Check receipt, delivery to ego and its final reply on the phone. Connect two chats: the latest-connected chat is the fallback, not the selected tab. Connect the second chat while the first is answering phone mail: the first reply must still arrive, and later mail must reach the second chat. Register another agent: it must retain ownership. With neither registration nor a connected AI Chat, check the no-agent instruction. This needs Boss's restart; Rust does not hot-reload.
 - [ ] [VISUAL] #1981-0caf: Capture the session header at 390 px, 430 px, and 834 px in Commander and Paper. Confirm COORDINATOR is readable, CLI/Chat stays direct, phone voice/tasks are in More, and tablet controls stay direct. The local headless capture timed out before producing images; the Mac screen was locked.
 
-- [ ] [VISUAL] #1982-ee68: After the backend rebuild, capture the same tab-separated Claude Edit in Chat at 390 px in Commander and Paper. Expand tool activity and its edit; confirm full-width old/new backgrounds, aligned columns and horizontal scrolling. From phone CLI tap Read file edits in Chat, then CLI; verify terminal history and draft remain intact, with CLI following the latest output. Includes Rust projection changes, so Boss must restart make dev or rebuild release when ready; no Rust hot reload.
+- [ ] [VISUAL] #1982-ee68: After the backend rebuild, capture the same tab-separated Claude Edit in Chat at 390 px in Commander and Paper. Expand tool activity and its edit; confirm full-width old/new backgrounds, aligned columns and horizontal scrolling. From phone CLI tap the header Chat toggle, then CLI; verify terminal history and draft remain intact, with CLI following the latest output. Includes Rust projection changes, so Boss must restart make dev or rebuild release when ready; no Rust hot reload.
 
 ## Settings MCP live refresh (#1788-2163)
 
@@ -2462,11 +2681,101 @@ Needs an iPhone (iOS 16.4+, 18.4+ preferred), the desktop TUICommander running a
 - [ ] Coordinator batch: source catalogue parity, allSettingsTab renderer/options/owner-write regressions, pluginSettingsTab, settings resource/background merge and keybindingActionPublication tests; Rust frontend_plugin_actions_reach_keybinding_owner_choices and catalogue generation consistency. No per-story GREEN run.
 - [ ] #1788-2163 critic fixes: after Boss rebuilds/restarts Rust, interrupt only a remote daemon event stream while health stays connected, then change settings and reconnect. Verify that owner refreshes after the generation resets, without reloading local or other remote settings. Keep a launch-instruction draft and issue two rapid repository-default edits during a settings refresh; verify the draft survives and both nonconflicting edits persist. No desktop restart was performed by the agent.
 
+## Settings generated IPC parity (#1787-4778)
+
+- [ ] After a Boss-controlled backend restart/rebuild, use an isolated instance to patch notification volume through MCP, read it through HTTP and desktop `settings_action({request: ...})`, then edit through desktop IPC and read through MCP/HTTP. The opt-in native mock-runtime harness covers generated-handler argument extraction and durable readback without launching a desktop app; it does not verify the installed desktop handler/ACL state. Do not restart Boss's live sessions or launch a second desktop instance for this check.
+
 ## Settings startup contract (#1790-1011)
 
-- [ ] Coordinator batch: exercise the published GitHub/Ego settings facade with isolated owners, covering refusal/confirmation expiry, device-flow refusal/expiry, stale revisions and persisted apply/readback failure; never use production credentials.
-- [ ] Schema-only startup remains incomplete while account enumeration or typed Ego interactive login is absent. Human login completion requires explicit owner refresh; terminal exit is not success. See docs/backend/settings-startup.md.
+- [x] Coordinator batch: exercise the published GitHub/Ego settings facade with isolated owners, covering refusal/confirmation expiry, device-flow refusal/expiry, stale revisions and persisted apply/readback failure; never use production credentials. _(verified: targeted Linux runs on f5c637467d passed startup_flow_tests, startup_uses_only_published_schema and provider_authorization_deadline_cannot_authenticate_or_persist in both configurations; the headless run also passed persisted_apply_failure_publishes_unapplied_generation)_
+- [ ] After Boss restarts the Rust backend, discover GitHub list_accounts and Ego begin_login/login_status through Settings. Complete a human Ego login in the returned terminal; verify closed/expired is never success and provider refresh shows owner credential state. Use only an isolated test account/instance. Automated isolated recovery tests passed; live authentication remains unverified. See docs/backend/settings-startup.md for prerequisites and the redacted evidence checklist.
 - [ ] After the next backend restart, check Claude trust, external-import and Bash permission dialogs in mobile CLI: all options and the footer must remain visible (#1987-606c). Rust changes require a manual restart to load.
 
 - [ ] After a manual Rust rebuild/restart, answer an ego selector and submit an ordinary prompt: no orange awaiting dot or question sound from the answered selector; a real new question still alerts (#1997-eb30).
 - [ ] After Boss restarts the Rust backend, verify CircleCI Settings discovery (`circleci.token`) and presence-only readback through the shared Settings action. Isolated tests cover set/clear and failures; no production credential test is required (#1991-bd88).
+
+- [ ] After Boss restarts `make dev` or installs a new release, ask a bound agent to schedule a recheck in one hour using name, prompt, in_secs=3600 and the actual saved run_config. Confirm one create returns caller repository, explicit profile, local fire time and next_run_ms; an identical retry must return the same id and occurrence. Omitting run_config must report caller_profile_unresolved. Rust changes do not hot-reload (#2001-5c1f).
+- [ ] After the next manual `make dev` restart or release rebuild, open Settings → Agents. Check read-only global and per-agent launch instruction previews, Customize, Use global, empty overrides, and marker-toggle refresh. The Rust preview response is not loaded by hot reload.
+- [ ] After Boss restarts the Rust backend, exercise `agent action=launch` in an isolated throwaway checkout: repeat a key, confirm the same child/name/parent/hold policy, and read its durable `launch_id` receipt. Rust does not hot-reload. Automated targeted transaction tests cover partial-stage retries; this item checks the installed build.
+- [ ] After Boss rebuilds/restarts TUIC (#2005-191f), read a large inbox and terminal with `byte_budget=4096`, concatenate chunk strings and parse JSON; verify final-page cursor advancement, scoped compact inventory and explicit expired-token errors. Rust does not hot-reload; no desktop verification instance was started.
+- [ ] After Boss manually rebuilds/restarts, explicitly enable perfDebug and frameWorkload; capture a real long paint/stall, confirm the saved path via eval_js logs, and replay in isolated native WebKit with heartbeat/input and independent backend timings. Synthetic smoke is not the real-stall RED (#1638-c94c). Rust changes do not hot-reload; do not start a second desktop instance.
+
+- [ ] #1993: After Boss restarts the Rust build, set the global PR visibility filters and repository Show/Hide/Inherit overrides. Restart and verify they persist, and Inherit tracks the current global value.
+- [ ] After a Boss-controlled rebuild/restart, use an isolated instance to create, edit and remove a `corrections` Settings record; verify Voice and the runtime dictionary adopt it and the new-entry draft remains intact (#1992-d4fa). Seed a legacy `constructor` correction through the owner and verify ordinary sibling edits preserve it without `unknown_path`. No real microphone is needed; the running Rust process does not hot-reload.
+
+- [ ] After a Boss-controlled Rust rebuild/restart, verify isolated legacy upstream credential edits, OAuth completion, connection password set/clear, deployment pairing-token creation and deployment-mode changes refresh another open Settings reader; vault rejection must not emit a successful persistence hint (#1989-22fe).
+## MCP inline schemas (2013-73f9) — Rust restart required
+
+- [ ] After Boss loads the rebuilt backend, measure a real ego session before/after: search top_schema admission must remove one discovery hop before its first tool call. Confirm a tools/list_changed notification invalidates admission. Requires the ego client counterpart; no desktop restart was performed by this peer.
+
+## MCP argument contracts (2007-59f6) — Rust restart required
+
+- [ ] After the backend rebuild and ego counterpart are available, validate the action-input-contract-2007 fixture in ego locally; static bad arguments must produce no server call. This peer did not restart the desktop backend.
+
+## MCP runtime outcomes (2010-30a7) — Rust restart required
+
+- [ ] After Boss manually restarts `make dev` or installs `make build`, capture real ego/client correlation for permission denial, application refusal, rendering success and lost reply in an isolated instance. Inspect `/mcp/audit`: bodies must be absent; a lost reply must not imply no effect. Supply UUID call/parent metadata to distinguish recipient batches. Server-only tests do not verify Codex custom calls that never reach MCP. No desktop restart was performed by this peer.
+
+## Managed stateless reconnect (2008-5317) — Rust restart required
+
+- [ ] After Boss manually restarts `make dev` or installs `make build`, reconnect an isolated real ego managed session using its live host-issued identity with no legacy MCP session header. Verify retained mail and authoritative project recover; missing host context must stop unchanged repair loops. Verify external initialize/register and explicit replacement migration/stranded receipts. No desktop instance was restarted; server contract tests do not prove the ego retry policy.
+
+- [ ] After the normal backend rebuild/restart, verify description-only MCP input updates/clears the context bar without sending terminal input (#2007).
+
+- [ ] After the normal backend rebuild/restart, verify an ACP wake skipped while ego is busy can wake once after it becomes idle and later mail arrives (#2004).
+- [ ] After Boss rebuilds/restarts the desktop or deploys the new `tuic-remote`, verify authenticated remote Settings edits refresh open readers; headless upstream OAuth remains unavailable (#2014-9d06). Rust changes do not hot-reload.
+- [ ] After a Boss-controlled rebuild/restart, save and delete a remote connection and tunnel profile from desktop Settings and confirm another connected client refreshes without reopening Settings (#1788-2163 review repair). Rust changes do not hot-reload.
+- [ ] After Boss manually restarts `make dev` or rebuilds release, verify a disposable repository with local main/master and a different remote HEAD uses main first, then master when main is absent. Keep the no-remote non-standard-base check above (#1961-bab6). Rust does not hot-reload; do not restart live sessions for this check.
+
+- [ ] After the next manual Rust restart/rebuild, verify a disposable repo with a stale `main` and an explicit `branch.<main-checkout-branch>.tuicommander-base=develop` classifies branches integrated into `develop` as Merged. Explicit verified bases take priority; unconfigured repos still prefer main/master before remote HEAD (#1961-bab6).
+
+- [ ] After the next backend restart, check a Claude `intent:` line that wraps on a phone: its first row and continuation must both stay visible with the warning tint. The Rust log serializer change requires a manual `make dev` restart or release rebuild. Do not restart live sessions for this check (#2019-7c5d).
+- [ ] On a real iPhone, confirm the session menu Markdown list stays still during session updates; on an iPad, open a listed file from the top-bar Markdown dropdown and return to the session (#2024-9a86, #2025-82cb). Browser evidence covers 390 px and 1024 px, not physical touch behavior.
+
+- [ ] After the next planned desktop rebuild, confirm desktop startup and browser/mobile static pages still load. Story 2041-04c4 moves Tauri context construction into the binary; no restart was performed by the agent.
+- [x] Mobile Markdown review send (#2042-a71b): 360×800 agent-browser fixture check ticks a checkbox, saves a block comment, sends one path-and-count prompt, and displays transient queued feedback with amber commented-block highlighting; screenshots are in the orchestrator report. The fixture uses real components with an isolated transport, not a live backend round trip.
+
+- [ ] Mobile CLI on a real phone: answer paragraphs show a continuous green gutter instead of protocol speech bubbles; verify native text selection and touch scrolling. Browser evidence at 390×844 is retained under `~/Gits/.tmp/2070/` (#2070-773d).
+
+## Plugin review integration (#1756-4d42)
+
+- [ ] After the Rust restart and plugin catalogue publication, install a plugin, edit its installed `main.js` without changing its version, rediscover it and refresh Browse: both Installed and Browse offer Update. Restore from the catalogue and confirm the badge clears; editing only `data/config.json` must not offer an update.
+- [ ] Reload GitHub/GitLab/Jira twice: one registration each; rejected async startup reports its error. Set and use Jira/GitLab default projects through plugin Settings (account-specific projects take precedence); capture the settings page. Resolve a Jira URL and cancel an in-flight detail request.
+- [ ] Remaining original live checks: switch repos during scans, change composer during retry/wakeup reads, open same-name CSV/DOCX/XLSX files in different repos, refuse an incompatible real plugin, and route an account-authorized GitHub review/action through the core ports. Module tests do not satisfy these live E2Es.
+- [ ] #2072-adf9: After a manual `make dev` restart or release rebuild, reconnect Claude Code and confirm ToolSearch finds agent, session, repo, and ui; send one agent message. Rust schemas do not hot-reload.
+
+## Mobile Codex Chat (#2076-8190)
+
+- [ ] On a real phone, open a Codex session with an exact native-hook transcript binding. Switch CLI → Chat → CLI and confirm the existing header, composer and question controls remain touch-usable. Browser verification does not prove phone touch behavior.
+
+## Mobile Grok Chat (#2077-b132)
+
+- [ ] On a real phone, open a registry-bound Grok session and switch CLI → Chat → CLI. Confirm the existing question controls and composer remain touch-usable. Worktree browser evidence does not prove phone touch behavior.
+
+- [ ] After Boss restarts `make dev` or installs a rebuilt release, verify MCP capability switches, migrated denial diagnostics and client reconnect to the alias-free catalogue (#2068-63b9). Rust changes do not hot-reload.
+## ZIP 9 dependency migration (2037-6c5a) — backend rebuild required
+
+- [ ] After Boss rebuilds/restarts the app, install a disposable plugin ZIP with a root manifest and another with a single top-level directory; confirm their files load. On Windows, install the speech runtime from its ZIP and confirm the selected library loads. Automated extraction/name tests run on rb; this item records that the currently running backend cannot load the ZIP 9 migration without a rebuild. Do not restart the running app for this check.
+
+
+## 1638-c94c — generated workload WKWebView replay
+
+- [ ] After story 2086's isolated `make agent-test` harness lands, run the single-command `scripts/stall-workload/desktop-replay.mjs` procedure from its README against the generated recording in `~/Gits/.tmp/stall-1638/font-workload/frame-workload.json`. Verify named-instance/executable guards, collect native heartbeat-command round trips and independent backend timings, and retain the result. This is paint-only replay of generated output, not the original captured-real-stall RED. No Boss-app restart or second ordinary desktop instance is needed or authorized.
+- [x] Mobile AI Chat tab availability (#2087-07bf): isolated worktree Vite + headless backend at 390×844 shows four tabs without ego and five with ego; host config saves update the tab over SSE without page reload. _(verified: ~/Gits/.tmp/feat-2087-visual/transcript.txt and with-ego.png / without-ego.png)_
+
+- [ ] After Boss rebuilds/restarts the Rust backend, ask ego for a native selector immediately after a TUIC connection/intent or successful tool receipt. Desktop and mobile must show only the native question title, with the same choices (#2088-98ea). The running app does not hot-reload this parser change; do not restart it during agent work.
+
+- [ ] After the next normal Rust rebuild, check a narrow Claude AskUserQuestion: previous/next/select controls replace generic Yes/No, and widening restores all native choices (#2093-0be6).
+
+- [ ] #2107-bbda: After the next Rust rebuild/restart, right-click shell and agent rows on main and linked branches; confirm exact session/PID clipboard values and copy toasts, and disabled PID for a suspended tab. The new child_pid session metadata does not hot-reload.
+
+- [ ] #2108-465b: After rebuilding/restarting the Rust backend, reconnect Claude Code and Codex and confirm served instructions distinguish the TUIC agent tool from native Agent. Client qualification is recorded in tool-names-2108.json.
+
+- [ ] Mobile CLI answer gutter (#2110-734c): on a phone, verify the green bar stays left of the first ego glyph, Claude keeps its existing margin, and blank paragraphs, wrapped links and tables keep their bars.
+
+- [ ] After rebuilding, verify `agent send urgency=interrupt` with an isolated Claude or ego child: the running tool stops and the full message starts a new turn; normal/urgent remain non-interrupting (#2113-c419). Rust changes require a manual `make dev` restart or release rebuild to reach the daily app.
+- [ ] After a manual Rust restart/rebuild, check abandoned-shell markers on desktop/mobile after one idle hour; optional close hours default to zero. Running foreground/background work must remain open. Check remote MCP close against the owning daemon (#2111-131f).
+
+## Library cleanup (#2115-1333)
+
+- [ ] After the next manual backend restart, confirm shell activity, inline-TUI classification and plugin output watchers still work. The write-only command knowledge recorder no longer writes history files. Existing files remain untouched. Do not restart the daily app for this check.

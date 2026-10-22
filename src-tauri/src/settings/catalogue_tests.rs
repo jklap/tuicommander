@@ -87,6 +87,16 @@ fn native_inventory_preserves_optional_dynamic_and_unavailable_fields() {
     );
     assert!(catalogue.fields.contains_key("prompts.prompts.{id}.text"));
     assert!(catalogue.fields.contains_key("voice.device"));
+    assert!(
+        catalogue
+            .fields
+            .contains_key("corrections.replacements.{from}.to")
+    );
+    #[cfg(not(feature = "dictation"))]
+    assert!(matches!(
+        catalogue.fields["corrections.replacements.{from}.to"].availability,
+        Availability::Unavailable { .. }
+    ));
     #[cfg(not(feature = "dictation"))]
     assert!(matches!(
         catalogue.fields["voice.device"].availability,

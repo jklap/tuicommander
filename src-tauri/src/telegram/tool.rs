@@ -82,7 +82,12 @@ mod tests {
     async fn tool_rejects_forged_authority_and_malformed_button_fields() {
         use crate::telegram::tests::{FakeServer, setup};
         use axum::http::StatusCode;
-        let (_dir, paths) = setup();
+        let config_dir = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+        let _guard = crate::config::set_config_dir_override(config_dir.path().to_path_buf());
+        let (setup_dir, _) = setup();
+        // Dispatch availability and the runtime must read the same private setup.
+        std::fs::rename(setup_dir.path(), config_dir.path().join("telegram")).unwrap();
+        let paths = crate::telegram::settings::paths().unwrap();
         let server = FakeServer::start(vec![(
             StatusCode::OK,
             json!({"ok":true,"result":{"message_id":7}}),
@@ -132,7 +137,16 @@ mod tests {
             json!({"action":"send","text":"hello","buttons":[[{"label":"ok","data":"x","approved":true}]]}),
             json!({"action":"send","text":"hello","chat_id":"1111111"}),
         ] {
-            assert_eq!(invoke(value).await["error"], "telegram_invalid_config");
+            let path = if value.get("buttons").is_some() {
+                "/buttons/0/0"
+            } else {
+                ""
+            };
+            let result = invoke(value).await;
+            assert_eq!(
+                crate::test_support::mcp_argument_constraint(&result, path, "additionalProperties"),
+                &json!(false)
+            );
         }
         assert_eq!(server.requests().len(), 1);
         let inbox = crate::mcp_http::mcp_transport::local_peer_call_with_message_id(

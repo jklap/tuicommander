@@ -619,11 +619,7 @@ export const RemoteMachinesPanel: Component = () => {
 	return (
 		<div>
 			<div class={s.group}>
-				<div style={{ display: "flex", "align-items": "center", gap: "8px", "justify-content": "space-between" }}>
-					<p class={s.hint} style={{ margin: 0 }}>
-						Connect to TUIC instances running on other machines. SSH connections create an encrypted tunnel
-						automatically.
-					</p>
+				<div style={{ display: "flex", "align-items": "center", gap: "8px", "justify-content": "flex-end" }}>
 					<button
 						data-non-setting="Open, prefill, cancel or close the connection editor"
 						class={s.copyBtn}
@@ -670,9 +666,6 @@ export const RemoteMachinesPanel: Component = () => {
 						{probingHosts() ? "Probing..." : "Probe config hosts"}
 					</button>
 				</div>
-				<p class={s.hint} style={{ margin: "4px 0 0" }}>
-					Only ssh config hosts are probed in bulk. A known_hosts host is contacted only when you press its own Probe.
-				</p>
 				<Show when={discovered().hashed_count > 0}>
 					<p class={s.hint} style={{ margin: "4px 0 0" }}>
 						{discovered().hashed_count} known_hosts entries are hashed and cannot be listed.
@@ -770,7 +763,7 @@ export const RemoteMachinesPanel: Component = () => {
 			{/* Empty state */}
 			<Show when={connectionList().length === 0 && !showAdd()}>
 				<p class={s.hint} style={{ color: "var(--text-dimmed)" }}>
-					No remote machines configured. Click <strong>+</strong> to add one.
+					No remote machines configured.
 				</p>
 			</Show>
 

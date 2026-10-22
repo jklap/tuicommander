@@ -1,6 +1,10 @@
 /* Styles for #markdown-content (ContentRenderer innerHTML output).
    Global selectors required — CSS modules don't apply to innerHTML. */
 
+:root {
+  --tweak-highlight: #f5a623;
+}
+
 #markdown-content {
   min-width: 0;
   padding: 16px;

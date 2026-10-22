@@ -12,6 +12,7 @@ import { registerModal } from "../../stores/modalStack";
 import { settingsStore } from "../../stores/settings";
 import type { AcpHostRequestId } from "../../types/acp";
 import { writeClipboard } from "../../utils/clipboard";
+import { mobileChatReadingStyle } from "../mobileFontSize";
 import styles from "./MobileChatScreen.module.css";
 
 export function MobileChatScreen(props: {
@@ -168,40 +169,42 @@ export function MobileChatScreen(props: {
 					</button>
 				</div>
 			</Show>
-			<Transcript
-				mobile
-				entries={chat.entries}
-				muteIntermediate={settingsStore.state.chatMuteIntermediateText}
-				busy={chat.busy}
-				onOpenFile={openFile}
-				observeToolDuration={false}
-				onOpenTable={setTableDocument}
-				onSuggestion={(text) => void chat.send(text)}
-				emptyMessage={
-					!settingsReady()
-						? "Chat settings are unavailable. Waiting for the server…"
-						: chat.phase() === "unconfigured"
-							? "Configure ego in desktop Settings to start a conversation."
-							: "Ask ego about any repository."
-				}
-			>
-				<Interactions
-					interactions={chat.interactions}
-					onPermission={(requestId, optionId) =>
-						void answerOnce(requestId, () => chat.answerPermission(requestId, optionId))
+			<div class={styles.reading} data-mobile-reading style={mobileChatReadingStyle()}>
+				<Transcript
+					mobile
+					entries={chat.entries}
+					muteIntermediate={settingsStore.state.chatMuteIntermediateText}
+					busy={chat.busy}
+					onOpenFile={openFile}
+					observeToolDuration={false}
+					onOpenTable={setTableDocument}
+					onSuggestion={(text) => void chat.send(text)}
+					emptyMessage={
+						!settingsReady()
+							? "Chat settings are unavailable. Waiting for the server…"
+							: chat.phase() === "unconfigured"
+								? "Configure ego in desktop Settings to start a conversation."
+								: "Ask ego about any repository."
 					}
-					onPermissionDismissed={(requestId) => void answerOnce(requestId, () => chat.cancelPermission(requestId))}
-					onElicitationAccepted={(requestId, content) =>
-						void answerOnce(requestId, () => chat.answerElicitation(requestId, { action: "accept", content }))
-					}
-					onElicitationDeclined={(requestId) =>
-						void answerOnce(requestId, () => chat.answerElicitation(requestId, { action: "decline" }))
-					}
-					onElicitationCancelled={(requestId) =>
-						void answerOnce(requestId, () => chat.answerElicitation(requestId, { action: "cancel" }))
-					}
-				/>
-			</Transcript>
+				>
+					<Interactions
+						interactions={chat.interactions}
+						onPermission={(requestId, optionId) =>
+							void answerOnce(requestId, () => chat.answerPermission(requestId, optionId))
+						}
+						onPermissionDismissed={(requestId) => void answerOnce(requestId, () => chat.cancelPermission(requestId))}
+						onElicitationAccepted={(requestId, content) =>
+							void answerOnce(requestId, () => chat.answerElicitation(requestId, { action: "accept", content }))
+						}
+						onElicitationDeclined={(requestId) =>
+							void answerOnce(requestId, () => chat.answerElicitation(requestId, { action: "decline" }))
+						}
+						onElicitationCancelled={(requestId) =>
+							void answerOnce(requestId, () => chat.answerElicitation(requestId, { action: "cancel" }))
+						}
+					/>
+				</Transcript>
+			</div>
 			<Show when={chat.phase() !== "unconfigured" && chat.phase() !== "starting"}>
 				<Composer
 					chat={chat}
