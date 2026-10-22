@@ -1547,6 +1547,10 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 	// after we've handed control to another scroll path (scrollbar, programmatic jump).
 	function resetSmoothScroll(repaint = true) {
 		clearTimeout(scrollGestureEndTimer);
+		// That timer is what clears the forwarded wheel's sub-notch residual
+		// (onWheelGestureEnd), so cancelling it must clear the residual too: typing,
+		// a resize or a scrollbar drag would otherwise leave it to the next gesture.
+		resetWheelNotch(wheelNotch);
 		if (scrollRafId) {
 			cancelAnimationFrame(scrollRafId);
 			scrollRafId = 0;
