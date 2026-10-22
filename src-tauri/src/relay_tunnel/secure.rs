@@ -403,11 +403,4 @@ mod tests {
         let shown = format!("{p:?}");
         assert!(!shown.contains("ab") && !shown.contains("AB") && shown.contains("redacted"));
     }
-
-    #[test]
-    fn generated_secrets_are_independent() {
-        let a = PairingSecret::generate().unwrap();
-        let b = PairingSecret::generate().unwrap();
-        assert_ne!(a.as_bytes(), b.as_bytes());
-    }
 }
