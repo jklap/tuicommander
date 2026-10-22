@@ -1360,6 +1360,37 @@ fn run_claimed_injection(
 pub(crate) const PEER_MAIL_WAKE: &str =
     "[TUIC] message available — read it with: agent action=inbox";
 
+pub(super) const URGENT_NOTICE_NAME_MAX_CHARS: usize = 40;
+
+/// Label a sender in the urgent notice. Display names are peer-controlled
+/// prompt text, so the name (then the TUIC-generated terminal alias) is shown
+/// only when it is one token of `[A-Za-z0-9._-]` and at most
+/// `URGENT_NOTICE_NAME_MAX_CHARS` long. `@` is excluded: it opens the file
+/// picker in Claude and Codex composers. Anything else falls back to the
+/// validated UUID, or `unknown-peer` when that is not a UUID either.
+pub(super) fn urgent_notice_sender_label(
+    sender_identity: &str,
+    sender_name: &str,
+    sender_alias: Option<&str>,
+) -> String {
+    let single_token = |text: &str| {
+        !text.is_empty()
+            && text.chars().count() <= URGENT_NOTICE_NAME_MAX_CHARS
+            && text
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'))
+    };
+    if single_token(sender_name) {
+        return sender_name.to_string();
+    }
+    if let Some(alias) = sender_alias.filter(|alias| single_token(alias)) {
+        return alias.to_string();
+    }
+    uuid::Uuid::parse_str(sender_identity)
+        .map(|id| id.to_string())
+        .unwrap_or_else(|_| "unknown-peer".to_string())
+}
+
 /// Submit an inbox pointer into a busy Claude Code, Codex, or ego composer.
 /// Claude/Codex live probes (2026-09-27) show that Enter queues the line for the
 /// next tool boundary. ego's busy admission durably queues plain Enter and
@@ -1370,6 +1401,7 @@ pub(crate) fn deliver_urgent_mail_notice(
     state: &AppState,
     session_id: &str,
     sender_identity: &str,
+    sender_name: &str,
 ) -> Result<(), &'static str> {
     if !state.session_maps.sessions.contains_key(session_id) {
         return Err("recipient_exited");
@@ -1403,13 +1435,17 @@ pub(crate) fn deliver_urgent_mail_notice(
     } else if !should_inject_now(state, session_id) {
         return Err("recipient_not_ready");
     }
-    // Display names are peer-controlled prompt text. Use only a validated
-    // identity in the notice; the inbox keeps the human-facing sender name.
-    let sender_id = uuid::Uuid::parse_str(sender_identity)
-        .map(|id| id.to_string())
-        .unwrap_or_else(|_| "unknown-peer".to_string());
+    let sender_alias = state.live_pty_for_peer(sender_identity).and_then(|pty| {
+        state
+            .session_maps
+            .term_aliases
+            .get(&pty)
+            .map(|alias| alias.value().clone())
+    });
+    let sender_label =
+        urgent_notice_sender_label(sender_identity, sender_name, sender_alias.as_deref());
     let notice = format!(
-        "URGENT mail from {sender_id}: read agent inbox before your next step (agent action=inbox)"
+        "URGENT mail from {sender_label}: read agent inbox before your next step (agent action=inbox)"
     );
     let Some(claim) = claim_composer_for_human_input(state, session_id) else {
         return Err(if has_partial_user_input(state, session_id) {
