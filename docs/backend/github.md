@@ -553,5 +553,7 @@ not prove that the repository was deleted.
 `unknown`; message wording does not infer organization policy or SSO.
 Every github.com OAuth group offers the app's authorized-app page, including
 NOT_FOUND groups because GitHub can hide private repositories until org approval.
-Settings renders these backend groups without reclassifying them. Refresh status reads the latest
-poll diagnostics; it does not log in, grant access or bypass the monitoring cadence.
+Settings renders these backend groups without reclassifying them. Refresh status clears the NOT_FOUND retry cache for all accounts through an
+explicit mutation, then reads diagnostics. Opening Settings and ordinary GET
+diagnostics remain read-only. Refresh does not log in, grant access, reset rate
+limits or bypass the monitoring cadence; the next poll retries the repositories.

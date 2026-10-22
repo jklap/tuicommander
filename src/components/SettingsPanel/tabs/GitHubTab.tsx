@@ -344,9 +344,9 @@ export const GitHubTab: Component = () => {
 		}
 	}
 
-	async function fetchDiagnostics() {
+	async function fetchDiagnostics(refresh = false) {
 		try {
-			const diag = await rpc<GitHubDiagnostics>("github_diagnostics");
+			const diag = await rpc<GitHubDiagnostics>("github_diagnostics", { refresh });
 			setDiagnostics(diag);
 		} catch (e) {
 			appLogger.warn("github", "Failed to fetch diagnostics", e);
@@ -654,7 +654,8 @@ export const GitHubTab: Component = () => {
 											)}
 										</Show>
 										<div class={g.diagHint}>
-											Access denials are retried on the next monitoring poll. NOT_FOUND is retried after 24 hours.
+											Access denials are retried on the next monitoring poll. Refresh status also clears the 24-hour
+											NOT_FOUND retry delay for all accounts.
 										</div>
 									</div>
 								</div>
@@ -663,7 +664,7 @@ export const GitHubTab: Component = () => {
 						<button
 							class={g.btn}
 							data-non-setting="Refresh GitHub access diagnostics without changing authentication"
-							onClick={fetchDiagnostics}
+							onClick={() => fetchDiagnostics(true)}
 						>
 							Refresh status
 						</button>

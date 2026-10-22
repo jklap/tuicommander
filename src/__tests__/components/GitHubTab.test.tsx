@@ -428,6 +428,10 @@ describe("GitHubTab — access diagnostics", () => {
 		});
 		const { findByText, getByText } = render(() => <GitHubTab />);
 		expect(await findByText("Lansweeper")).toBeTruthy();
+		expect(h.rpc).toHaveBeenCalledWith("github_diagnostics", { refresh: false });
+		// Catches the visible Refresh status action leaving the retry cache untouched.
+		fireEvent.click(getByText("Refresh status"));
+		await waitFor(() => expect(h.rpc).toHaveBeenCalledWith("github_diagnostics", { refresh: true }));
 		expect(getByText(/Could not resolve to a Repository/)).toBeTruthy();
 		fireEvent.click(getByText("Grant or request organization access"));
 		expect(h.rpc).not.toHaveBeenCalledWith("github_start_login");

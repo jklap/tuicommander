@@ -475,8 +475,9 @@ pub(crate) fn compute_diagnostics(state: &AppState) -> GitHubDiagnostics {
 #[tauri::command]
 pub(crate) async fn github_diagnostics(
     state: State<'_, Arc<AppState>>,
+    refresh: Option<bool>,
 ) -> Result<GitHubDiagnostics, String> {
-    github_diagnostics_impl(state.inner()).await
+    github_diagnostics_impl(state.inner(), refresh.unwrap_or(false)).await
 }
 
 /// HTTP/IPC-parity wrapper over the pure `compute_diagnostics` seam. Kept so the
@@ -484,7 +485,11 @@ pub(crate) async fn github_diagnostics(
 /// share one code path; `compute_diagnostics` now also folds in GHE accounts.
 pub(crate) async fn github_diagnostics_impl(
     state: &Arc<AppState>,
+    refresh: bool,
 ) -> Result<GitHubDiagnostics, String> {
+    if refresh {
+        state.git_cache.github_repo_cooldown.clear();
+    }
     Ok(compute_diagnostics(state))
 }
 

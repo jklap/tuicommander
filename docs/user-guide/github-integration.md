@@ -350,7 +350,7 @@ responses without inferring organization policy from message wording.
 
 For any github.com OAuth failure, select **Grant or request organization access**
 to open the authorized TUICommander OAuth app page. This action is also available
-for NOT_FOUND because pending organization approval can hide private repositories. After granting access, wait for the next
-monitoring poll and select **Refresh status**. Access denials do not require a new
+for NOT_FOUND because pending organization approval can hide private repositories. After granting access, select **Refresh status** to clear NOT_FOUND retry
+delays for all accounts, then wait for the next monitoring poll. Access denials do not require a new
 login or a 24-hour wait. Only explicit `NOT_FOUND` responses keep the 24-hour retry
 interval. GitHub can use this response for an inaccessible private repository too.

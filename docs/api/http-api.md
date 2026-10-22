@@ -3513,3 +3513,8 @@ optional `oauth_app_url` for every github.com OAuth group, regardless of reason.
 `reason` is `not_found`, `forbidden` or `unknown`. Messages are the exact per-alias GraphQL errors.
 Only confirmed root `NOT_FOUND` responses enter `repos_not_found` and its 24-hour
 exclusion. Other denials are eligible for the next monitoring poll.
+
+Manual GitHub diagnostics refresh uses `POST /github/diagnostics` (no body). It
+clears the NOT_FOUND cooldown for all accounts and returns the same diagnostics
+DTO. `GET /github/diagnostics` remains read-only. This maps to
+`github_diagnostics` with `refresh: true` over IPC; omitted or false is read-only.

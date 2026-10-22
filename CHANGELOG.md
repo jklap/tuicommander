@@ -6,6 +6,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+- Clear NOT_FOUND retry delays for all GitHub accounts when Refresh status is selected, without changing read-only diagnostics (#2133-9213).
 - Preserve GitHub repository access errors by owner and distinguish confirmed NOT_FOUND from retriable access denials, with an OAuth recovery action even for NOT_FOUND groups (#2127-97f5).
 
 - Hide agent-mail wake notices in terminal Chat while keeping interruption notices and real user messages unchanged (#2123-8f17).

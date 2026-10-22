@@ -1842,7 +1842,7 @@ pub fn build_router(state: Arc<AppState>, remote_auth: bool, mcp_enabled: bool) 
         )
         .route(
             "/github/diagnostics",
-            get(github_routes::github_diagnostics),
+            get(github_routes::github_diagnostics).post(github_routes::github_refresh_diagnostics),
         )
         // Multi-account repo bindings (IPC/HTTP parity). Accounts + repo resolution
         // are gated to desktop below — their impls are #[cfg(feature = "desktop")].

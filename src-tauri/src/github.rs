@@ -5626,6 +5626,78 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn refresh_status_clears_not_found_cooldowns_for_all_accounts() {
+        // Catches a manual refresh leaving org-granted repositories in the 24-hour exclusion.
+        use axum::body::Body;
+        use axum::http::{Request, StatusCode};
+        use tower::ServiceExt;
+
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+        let response = serde_json::from_str(include_str!(
+            "../crates/tuic-git/src/fixtures/github/access-errors.json"
+        ))
+        .unwrap();
+        let accounts = [
+            cloud_account(),
+            GitHubAccount::github_com_named("alice"),
+            ghe_account(),
+        ];
+        for account in &accounts {
+            record_repo_access(
+                &state,
+                account,
+                "stefanostraus",
+                "caplock",
+                &response,
+                "missing",
+            );
+        }
+        assert_eq!(state.git_cache.github_repo_cooldown.len(), 3);
+        let router = crate::mcp_http::build_router(state.clone(), false, false);
+        let request = |method| {
+            Request::builder()
+                .method(method)
+                .uri("/github/diagnostics")
+                .body(Body::empty())
+                .unwrap()
+        };
+        assert_eq!(
+            router
+                .clone()
+                .oneshot(request("GET"))
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::OK
+        );
+        assert_eq!(
+            state.git_cache.github_repo_cooldown.len(),
+            3,
+            "ordinary diagnostics must not reset retry policy"
+        );
+        let refreshed = router.clone().oneshot(request("POST")).await.unwrap();
+        assert_eq!(refreshed.status(), StatusCode::OK);
+        assert!(
+            state.git_cache.github_repo_cooldown.is_empty(),
+            "manual Refresh status must release every account's NOT_FOUND exclusion"
+        );
+        // Repeating refresh remains safe, and a subsequent missing result may restore cooldown.
+        assert_eq!(
+            router.oneshot(request("POST")).await.unwrap().status(),
+            StatusCode::OK
+        );
+        record_repo_access(
+            &state,
+            &accounts[0],
+            "stefanostraus",
+            "caplock",
+            &response,
+            "missing",
+        );
+        assert_eq!(state.git_cache.github_repo_cooldown.len(), 1);
+    }
+
     #[test]
     fn oauth_not_found_group_offers_the_oauth_app_page() {
         // Catches the real pending-org-approval case (GitHub hides such repos as NOT_FOUND)
