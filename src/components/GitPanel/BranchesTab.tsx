@@ -2,8 +2,8 @@ import { type Component, createEffect, createMemo, createSignal, For, on, onClea
 import type { BaseRefOption } from "../../hooks/useRepository";
 import { invoke } from "../../invoke";
 import { appLogger } from "../../stores/appLogger";
-import { repositoriesStore } from "../../stores/repositories";
 import { repoSettingsStore } from "../../stores/repoSettings";
+import { repositoriesStore } from "../../stores/repositories";
 import { toastsStore } from "../../stores/toasts";
 import { cx } from "../../utils";
 import { onClickKeyDown } from "../../utils/a11y";

@@ -981,7 +981,10 @@ mod tests {
     fn labelled_repo(branch: &str) -> (tempfile::TempDir, String, tempfile::TempDir) {
         let (dir, path) = setup_test_repo_with_commit();
         let repo = path.to_string_lossy().to_string();
-        git_cmd(&path).args(["branch", branch]).run().expect("branch");
+        git_cmd(&path)
+            .args(["branch", branch])
+            .run()
+            .expect("branch");
         let config = tempfile::TempDir::new().expect("config dir");
         (dir, repo, config)
     }
@@ -1001,7 +1004,9 @@ mod tests {
     }
 
     fn labels(repo: &str) -> HashMap<String, String> {
-        crate::config::load_repo_settings().repos[repo].branch_labels.clone()
+        crate::config::load_repo_settings().repos[repo]
+            .branch_labels
+            .clone()
     }
 
     /// B15: the label stayed under the old name and vanished from the renamed row.
@@ -1014,7 +1019,10 @@ mod tests {
 
         rename_branch_with_label(&repo, "feat/a", "feat/a2").expect("rename");
 
-        assert_eq!(labels(&repo), HashMap::from([("feat/a2".into(), "X".into())]));
+        assert_eq!(
+            labels(&repo),
+            HashMap::from([("feat/a2".into(), "X".into())])
+        );
     }
 
     /// C3: the toolbar path renamed `main`; the sidebar refuses it.
