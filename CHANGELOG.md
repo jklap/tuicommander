@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+- Offer Add Agent on non-git shell-folder rows using the folder as the working directory, without Git branch or worktree actions (#2125-13fe).
+
+- Clamp context menus using their unscaled layout size, constrain narrow-window menus, and hide branch workflow actions on non-git shell rows (#2124-1866).
+
 - Hide agent-mail wake notices in terminal Chat while keeping interruption notices and real user messages unchanged (#2123-8f17).
 
 - **BREAKING:** remove MCP migration hints for `agent detect/stats/metrics` (use `GET /agents`, `/stats`, `/metrics`), `session process_stats` (use `GET /process/stats`), and `repo prs/issues/close_issue/reopen_issue/ci_logs` (use `GET /repo/prs`, `GET /repo/issues`, `POST /repo/issues/close`, `POST /repo/issues/reopen`, `GET /repo/ci-failure-logs`). These actions now use ordinary unsupported-input errors; no compatibility alias or replacement hint remains (#2115-1333).
