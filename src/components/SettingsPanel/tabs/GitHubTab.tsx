@@ -52,10 +52,32 @@ interface AuthStatus {
 	error?: string | null;
 }
 
+interface RepoAccessErrorGroup {
+	account_id: string;
+	host: string;
+	owner: string;
+	repos: {
+		repo: string;
+		reason: "not_found" | "organization_restriction" | "sso" | "forbidden" | "unknown";
+		message: string;
+		sso_url: string | null;
+	}[];
+	oauth_app_url: string | null;
+}
+
+const ACCESS_REASONS = {
+	not_found: "Not found or not visible to this token",
+	organization_restriction: "Organization OAuth app restriction",
+	sso: "SSO authorization required",
+	forbidden: "Access forbidden",
+	unknown: "Access reason unknown",
+};
+
 interface GitHubDiagnostics {
 	circuit_breaker_open: boolean;
 	circuit_breaker_status: string;
 	repos_not_found: string[];
+	repo_access_errors?: RepoAccessErrorGroup[];
 	repos_monitored: number;
 }
 
@@ -605,26 +627,69 @@ export const GitHubTab: Component = () => {
 							</div>
 						</Show>
 
-						{/* Repos not found */}
-						<Show when={(diagnostics()?.repos_not_found?.length ?? 0) > 0}>
-							<div class={g.diagWarning}>
-								<svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" style="flex-shrink: 0">
-									<path d="M1 21h22L12 2 1 21zm12-3h-2v-2h2v2zm0-4h-2v-4h2v4z" />
-								</svg>
-								<div>
-									<div>Cannot access {diagnostics()?.repos_not_found?.length} repo(s) with this token:</div>
-									<ul class={g.diagRepoList}>
-										<For each={diagnostics()?.repos_not_found}>{(repo) => <li>{repo}</li>}</For>
-									</ul>
-									<div class={g.diagHint}>
-										The token may lack organization access or SSO authorization for these repos.
+						<For each={diagnostics()?.repo_access_errors}>
+							{(group) => (
+								<div class={g.diagWarning}>
+									<div>
+										<strong>{group.owner}</strong>
+										<div class={g.diagHint}>
+											{group.host} — {group.account_id}
+										</div>
+										<ul class={g.diagRepoList}>
+											<For each={group.repos}>
+												{(repo) => (
+													<li>
+														<strong>{repo.repo}</strong>: {ACCESS_REASONS[repo.reason]}
+														<div class={g.diagHint}>{repo.message}</div>
+														<Show when={repo.sso_url}>
+															{(url) => (
+																<button
+																	class={g.btn}
+																	data-non-setting="Open GitHub SSO authorization"
+																	onClick={() => handleOpenUrl(url())}
+																>
+																	Authorize SSO
+																</button>
+															)}
+														</Show>
+													</li>
+												)}
+											</For>
+										</ul>
+										<Show when={group.oauth_app_url}>
+											{(url) => (
+												<button
+													class={g.btn}
+													data-non-setting="Open the authorized OAuth app page"
+													onClick={() => handleOpenUrl(url())}
+												>
+													Grant or request organization access
+												</button>
+											)}
+										</Show>
+										<div class={g.diagHint}>
+											Access denials are retried on the next monitoring poll. NOT_FOUND is retried after 24 hours.
+										</div>
 									</div>
 								</div>
-							</div>
-						</Show>
+							)}
+						</For>
+						<button
+							class={g.btn}
+							data-non-setting="Refresh GitHub access diagnostics without changing authentication"
+							onClick={fetchDiagnostics}
+						>
+							Refresh status
+						</button>
 
 						{/* All good */}
-						<Show when={!diagnostics()?.circuit_breaker_open && diagnostics()?.repos_not_found?.length === 0}>
+						<Show
+							when={
+								!diagnostics()?.circuit_breaker_open &&
+								diagnostics()?.repos_not_found?.length === 0 &&
+								!diagnostics()?.repo_access_errors?.length
+							}
+						>
 							<div class={g.diagOk}>
 								<svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" style="flex-shrink: 0">
 									<path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41L9 16.17z" />

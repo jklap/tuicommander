@@ -3506,3 +3506,10 @@ and semantics apply to desktop IPC state.
 ### Remote session closure
 
 MCP `session action=close` accepts a remote `connection_id` or connection-qualified session reference. The host resolves aliases on the owning daemon and sends authenticated `DELETE /sessions/{id}`. The caller's own PTY remains protected from self-close, and non-loopback MCP callers cannot invoke destructive close actions. A disconnected connection reports an error; it never falls back to a local session. HTTP DELETE and local MCP close use the same teardown, session-closed events and retained output tombstone. Repeating a close of a retained tombstone succeeds. Explicit close remains user-directed and is not limited to abandoned shells.
+
+GitHub diagnostics (`GET /github/diagnostics`) also returns `repo_access_errors`:
+owner/account/host groups with `repos: [{repo, reason, message, sso_url}]` and an
+optional `oauth_app_url`. `reason` is `not_found`, `organization_restriction`,
+`sso`, `forbidden` or `unknown`. Messages are the exact per-alias GraphQL errors.
+Only confirmed root `NOT_FOUND` responses enter `repos_not_found` and its 24-hour
+exclusion. Other denials are eligible for the next monitoring poll.

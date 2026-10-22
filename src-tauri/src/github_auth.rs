@@ -216,6 +216,12 @@ pub(crate) async fn github_poll_login_impl_at_epoch(
             .git_cache
             .github_repo_cooldown
             .retain(|key, _| key.contains(':'));
+        state
+            .git_cache
+            .github_repo_access_errors
+            .retain(|_, failure| {
+                failure.account_id != crate::github_account::GitHubAccount::GITHUB_COM_ID
+            });
         tracing::info!(source = "github", "OAuth Device Flow login successful");
     }
 
@@ -368,8 +374,18 @@ pub(crate) struct GitHubDiagnostics {
     pub circuit_breaker_status: String,
     /// Repos that returned "not found" from GitHub (in cooldown)
     pub repos_not_found: Vec<String>,
+    pub repo_access_errors: Vec<RepoAccessErrorGroup>,
     /// Number of repos successfully monitored
     pub repos_monitored: u32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(crate) struct RepoAccessErrorGroup {
+    pub account_id: String,
+    pub host: String,
+    pub owner: String,
+    pub repos: Vec<tuic_git::github_access::RepoAccessError>,
+    pub oauth_app_url: Option<String>,
 }
 
 /// Compute GitHub integration diagnostics from the current state.
@@ -401,6 +417,53 @@ pub(crate) fn compute_diagnostics(state: &AppState) -> GitHubDiagnostics {
         .map(|entry| entry.key().clone())
         .collect();
 
+    let mut groups = std::collections::BTreeMap::new();
+    for entry in &state.git_cache.github_repo_access_errors {
+        let failure = entry.value();
+        if failure.error.reason == tuic_git::github_access::RepoAccessReason::NotFound
+            && !state
+                .git_cache
+                .github_repo_cooldown
+                .get(entry.key())
+                .is_some_and(|expiry| *expiry > now)
+        {
+            continue;
+        }
+        let group = groups
+            .entry((
+                failure.account_id.clone(),
+                failure.host.clone(),
+                failure.owner.clone(),
+            ))
+            .or_insert_with(|| RepoAccessErrorGroup {
+                account_id: failure.account_id.clone(),
+                host: failure.host.clone(),
+                owner: failure.owner.clone(),
+                repos: Vec::new(),
+                oauth_app_url: None,
+            });
+        if failure.oauth_app
+            && failure.host == "github.com"
+            && matches!(
+                failure.error.reason,
+                tuic_git::github_access::RepoAccessReason::OrganizationRestriction
+                    | tuic_git::github_access::RepoAccessReason::Sso
+            )
+        {
+            group.oauth_app_url = Some(format!(
+                "https://github.com/settings/connections/applications/{CLIENT_ID}"
+            ));
+        }
+        group.repos.push(failure.error.clone());
+    }
+    let repo_access_errors = groups
+        .into_values()
+        .map(|mut group| {
+            group.repos.sort_by(|a, b| a.repo.cmp(&b.repo));
+            group
+        })
+        .collect();
+
     // Count repos with cached GitHub status (successfully queried).
     // `entry_count` is eventually consistent — fine for a diagnostic gauge.
     let repos_monitored = state.git_cache.github_status.entry_count() as u32;
@@ -409,6 +472,7 @@ pub(crate) fn compute_diagnostics(state: &AppState) -> GitHubDiagnostics {
         circuit_breaker_open,
         circuit_breaker_status,
         repos_not_found,
+        repo_access_errors,
         repos_monitored,
     }
 }

@@ -341,3 +341,16 @@ nullable overrides in `repo-settings.json`: null inherits the current global
 value, true hides the matching PRs, and false explicitly shows them. Settings
 owner transactions preserve unrelated fields, and settings refresh adopts owner
 readback without saving it again. The Rust settings catalogue describes both scopes.
+
+### Troubleshoot repository access
+
+Settings > Git & GitHub shows repository access failures by owner and account,
+with GitHub's exact message. An organization OAuth restriction is different from
+SSO authorization or a repository that is not visible to the token.
+
+For an OAuth restriction, select **Grant or request organization access** to open
+the authorized TUICommander OAuth app page. For SSO, select **Authorize SSO** when
+GitHub supplies an authorization link. After granting access, wait for the next
+monitoring poll and select **Refresh status**. Access denials do not require a new
+login or a 24-hour wait. Only explicit `NOT_FOUND` responses keep the 24-hour retry
+interval. GitHub can use this response for an inaccessible private repository too.

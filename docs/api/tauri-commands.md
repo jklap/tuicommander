@@ -1058,3 +1058,7 @@ host-injected state routes both through the shared value-free Settings publisher
 only after owner persistence. Their HTTP equivalents use the same adapters.
 
 Progress reporting rejects text longer than 500 raw Unicode scalar values before trimming, consistently with HTTP and the native MCP schema (#2007-59f6).
+
+`github_diagnostics` includes `repo_access_errors` grouped by account, host and
+owner, with per-repository reason, exact message and optional SSO URL, plus an
+optional OAuth app authorization URL per group. IPC and HTTP share this DTO.

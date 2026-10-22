@@ -4307,11 +4307,12 @@ pub(crate) struct GitCacheState {
     pub(crate) git_status: GitCache<crate::github::GitHubStatus>,
     pub(crate) worktree_paths:
         GitCache<std::collections::HashMap<String, crate::worktree::WorkspaceWorktree>>,
-    /// Repos that returned null from GitHub GraphQL (not found / no access).
+    /// Repos explicitly reported NOT_FOUND by GitHub GraphQL.
     /// Keyed by "owner/name", value is the cooldown expiry time.
-    /// Excluded from batch queries until the cooldown expires (1 hour).
+    /// Excluded from batch queries until the cooldown expires (24 hours).
     /// NOT a TTL value cache — kept as a plain `DashMap` set with custom expiry.
     pub(crate) github_repo_cooldown: DashMap<String, Instant>,
+    pub(crate) github_repo_access_errors: DashMap<String, crate::github::RepoAccessFailure>,
     /// Settled review-thread totals of PRs with more threads than the batch poll reads, keyed by
     /// "host/owner/name#number". Not a TTL cache: an entry is valid while the PR's `updatedAt` and head
     /// are unchanged and it is younger than `SETTLED_THREADS_TTL`.
@@ -4333,6 +4334,7 @@ impl GitCacheState {
             git_status: build_git_cache(GIT_CACHE_TTL, Arc::clone(&ttl_fallbacks)),
             worktree_paths: build_git_cache(GIT_CACHE_TTL, Arc::clone(&ttl_fallbacks)),
             github_repo_cooldown: DashMap::new(),
+            github_repo_access_errors: DashMap::new(),
             settled_review_threads: DashMap::new(),
             ttl_fallbacks,
         }
