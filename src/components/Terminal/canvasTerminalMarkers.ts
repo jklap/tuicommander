@@ -128,12 +128,14 @@ export function createCanvasMarkerPlanner(): typeof planCanvasMarkers {
 /** Cache text and wrap interpretation separately; the preceding row may change alone. */
 export function cachedMarkerSnapshot<T extends object>(
 	read: (row: T) => string,
+	endColumn?: (row: T, offset: number) => number,
 ): (row: T, wrapped: boolean) => RowSnapshot {
 	const snapshots = new WeakMap<T, RowSnapshot>();
 	return (row, wrapped) => {
 		let snapshot = snapshots.get(row);
 		if (!snapshot || snapshot.isWrapped !== wrapped) {
 			snapshot = { text: snapshot?.text ?? read(row), isWrapped: wrapped };
+			if (endColumn) snapshot.endColumn = (offset) => endColumn(row, offset);
 			snapshots.set(row, snapshot);
 		}
 		return snapshot;
