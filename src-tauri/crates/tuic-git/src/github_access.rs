@@ -44,8 +44,9 @@ pub fn repo_access_error(
             .collect::<Vec<_>>()
             .join("\n")
     };
-    // DEFERRED (2026-10-22) — a real TUIC OAuth-restriction/SAML capture needs
-    // Boss's isolated-instance login; the audit-log fixture proves only the wire shape.
+    // DEFERRED (2026-10-22) — the OAuth app page confirms pending org approval,
+    // but its repository errors still need capture after an isolated-instance login.
+    // The audit-log fixture proves only the wire shape; see fixtures/github/access-errors.md.
     let lower = message.to_ascii_lowercase();
     let reason = if lower.contains("saml")
         || lower.contains("single sign-on")
