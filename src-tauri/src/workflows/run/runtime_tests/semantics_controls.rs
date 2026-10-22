@@ -429,7 +429,11 @@ fn a_default_install_with_one_saved_profile_serves_every_role() {
     let config = agents(serde_json::json!({"agents": {"claude": {"run_configs": [
         {"name": "mine", "command": "claude"}
     ]}}}));
-    for role in [AgentRole::Implementer, AgentRole::Reviewer, AgentRole::Coordinator] {
+    for role in [
+        AgentRole::Implementer,
+        AgentRole::Reviewer,
+        AgentRole::Coordinator,
+    ] {
         assert_eq!(
             super::super::runtime::effects::resolve_run_profile(&config, &role).unwrap(),
             "mine"
@@ -457,8 +461,9 @@ fn several_profiles_without_a_default_say_what_to_do() {
         {"name": "alpha", "command": "claude"},
         {"name": "beta", "command": "claude"}
     ]}}}));
-    let error = super::super::runtime::effects::resolve_run_profile(&config, &AgentRole::Implementer)
-        .unwrap_err();
+    let error =
+        super::super::runtime::effects::resolve_run_profile(&config, &AgentRole::Implementer)
+            .unwrap_err();
     assert!(error.contains("mark one as default"), "{error}");
 }
 

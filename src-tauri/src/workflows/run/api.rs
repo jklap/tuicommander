@@ -138,10 +138,12 @@ pub fn run_action(project: &str, action: RunAction) -> Result<RunReply, String> 
         } => {
             let definition =
                 WorkflowStore::open()?.get_published(&definition_id, definition_revision)?;
-            Ok(RunReply::Readiness(super::runtime::effects::profile_problems(
-                &definition,
-                &crate::config::load_agents_config(),
-            )))
+            Ok(RunReply::Readiness(
+                super::runtime::effects::profile_problems(
+                    &definition,
+                    &crate::config::load_agents_config(),
+                ),
+            ))
         }
         RunAction::StartPlan {
             plan_id,
