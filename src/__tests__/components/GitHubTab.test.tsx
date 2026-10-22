@@ -440,4 +440,49 @@ describe("GitHubTab — access diagnostics", () => {
 			"https://github.com/settings/connections/applications/Ov23liN95BHKQDboVFRl",
 		);
 	});
+
+	const mockDiagnostics = (diag: Record<string, unknown>) =>
+		h.rpc.mockImplementation((cmd, args) => {
+			if (cmd === "github_auth_status")
+				return Promise.resolve({ authenticated: true, login: "sstraus", source: "oauth" });
+			if (cmd === "github_diagnostics")
+				return Promise.resolve({ circuit_breaker_open: false, repo_access_errors: [], ...diag });
+			return h.defaultRpc(cmd, args);
+		});
+
+	// Catches: not-found repositories silently hidden after the 2127 rewrite.
+	it("names not-found repositories that have no classified access error", async () => {
+		const GitHubTab = await loadTab();
+		mockDiagnostics({ repos_monitored: 0, repos_not_found: ["o/r"] });
+		const { findByText } = render(() => <GitHubTab />);
+		expect(await findByText(/o\/r/)).toBeTruthy();
+	});
+
+	// Catches: Status section empty instead of saying no repository is monitored.
+	it("says explicitly that no repository is monitored when diagnostics are otherwise benign", async () => {
+		const GitHubTab = await loadTab();
+		mockDiagnostics({ repos_monitored: 0, repos_not_found: [] });
+		const { findByText } = render(() => <GitHubTab />);
+		expect(await findByText(/No repositories are monitored/)).toBeTruthy();
+	});
+
+	// Catches: a classified access error leaving the section without a tracked-count line.
+	it("still reports the tracked count beside access errors", async () => {
+		const GitHubTab = await loadTab();
+		mockDiagnostics({
+			repos_monitored: 2,
+			repos_not_found: [],
+			repo_access_errors: [
+				{
+					owner: "Lansweeper",
+					host: "github.com",
+					account_id: "github.com",
+					repos: [{ repo: "gate-os", reason: "not_found", message: "denied" }],
+					oauth_app_url: null,
+				},
+			],
+		});
+		const { findByText } = render(() => <GitHubTab />);
+		expect(await findByText(/2 repo\(s\) tracked/)).toBeTruthy();
+	});
 });

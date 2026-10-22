@@ -669,28 +669,28 @@ export const GitHubTab: Component = () => {
 							Refresh status
 						</button>
 
-						{/* All good */}
+						{/* Not-found repos in cooldown carry no access error (compute_diagnostics skips them) */}
+						<Show when={(diagnostics()?.repos_not_found?.length ?? 0) > 0}>
+							<div class={g.diagWarning}>
+								<div>
+									<strong>Cannot access {diagnostics()?.repos_not_found.length} repo(s) with this token</strong>
+									<ul class={g.diagRepoList}>
+										<For each={diagnostics()?.repos_not_found}>{(repo) => <li>{repo}</li>}</For>
+									</ul>
+								</div>
+							</div>
+						</Show>
+
+						{/* Summary — always rendered so Status is never empty */}
 						<Show
-							when={
-								!diagnostics()?.circuit_breaker_open &&
-								diagnostics()?.repos_not_found?.length === 0 &&
-								!diagnostics()?.repo_access_errors?.length
-							}
+							when={(diagnostics()?.repos_monitored ?? 0) > 0}
+							fallback={<div class={g.diagHint}>No repositories are monitored yet</div>}
 						>
 							<div class={g.diagOk}>
 								<svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" style="flex-shrink: 0">
 									<path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41L9 16.17z" />
 								</svg>
 								<span>PR monitoring active — {diagnostics()?.repos_monitored} repo(s) tracked</span>
-							</div>
-						</Show>
-
-						<Show when={(diagnostics()?.repos_monitored ?? 0) > 0 && (diagnostics()?.repos_not_found?.length ?? 0) > 0}>
-							<div class={g.diagOk}>
-								<svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" style="flex-shrink: 0">
-									<path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41L9 16.17z" />
-								</svg>
-								<span>{diagnostics()?.repos_monitored} repo(s) tracked successfully</span>
 							</div>
 						</Show>
 					</div>
