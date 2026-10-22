@@ -6,7 +6,7 @@ One-click AI automation for common git and code tasks. Smart Prompts inject cont
 
 Smart Prompts are context-aware automation shortcuts that turn repetitive developer workflows into single-click actions. They automatically resolve git context (branch, diff, changed files, PR data) and deliver a well-crafted prompt to your AI agent — no manual typing, no copy-pasting, no context switching.
 
-TUICommander ships with **24 built-in prompts** covering commit workflows, code review, PR management, CI fixes, and code investigation. Each prompt includes a description explaining what it does, so you always know what will happen before clicking.
+TUICommander ships with built-in prompts covering commit workflows, code review, PR management, CI fixes, and code investigation. Each prompt includes a description explaining what it does, so you always know what will happen before clicking.
 
 ## How to Use
 
@@ -41,6 +41,11 @@ Right-click a branch in the Branches tab (Cmd+G) for branch-specific prompts lik
 | **CI & Quality** | Fix CI Failures, Fix Lint Issues, Write Tests, Run & Fix Tests |
 | **Investigation** | Investigate Issue, What Changed?, Summarize Branch, Explain Changes |
 | **Code Operations** | Suggest Refactoring, Security Audit |
+| **Event configuration** | Configure Issue to Draft PR, Configure Incoming PR Review, Configure Authorized Bounded Fix |
+
+The [event configuration guides](event-driven-templates.md) ask for prerequisites
+and confirmation one step at a time. They open in the composer for review and do
+not install event intake or publish to GitHub merely by being selected.
 
 ## Customizing Smart Prompts
 

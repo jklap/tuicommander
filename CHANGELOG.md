@@ -6,11 +6,207 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [2.0.0-beta.1] - 2026-10-22
+
+- Keep the terminal mobile composer's bottom safe-area inset inside its painted surface, above the Home Indicator; the separately reported iPhone shell-height band still needs device evidence (#2116-0213).
+- Remove the unused command-knowledge recorder, xterm-only watcher clear injection, orphan desktop commands and git panel-context endpoint. Removed MCP action and workspace-parameter migration hints now use ordinary input errors; no compatibility aliases remain (#2115-1333).
+
+- Add opt-in `agent send urgency=interrupt`: Esc for safe working Claude/Codex/ego sessions, a ten-second confirmed-idle wait, then complete message submission, with explicit urgent fallback receipts (#2113-c419).
+- Remove inherited foreground peer identity from detached `tuic bg` commands and stop MCP ancestry recovery at their command boundary so background progress cannot block the parent composer and strand its completion wake; preserve runner wake and mail routing (#2100-c249).
+### Added
+- Mark verified abandoned shells with their idle age on desktop and mobile. Add an optional machine-owned idle-hours close setting, disabled by default (#2111-131f).
+
+### Fixed
+- Add Copy alias to sidebar session menus using the owning session-list value, and hide unknown process IDs instead of offering an unavailable action (#2112-8a79).
+- Route MCP remote session close to the owning daemon, with self-close protection and retained final output (#2111-131f).
+
+
+- Keep the mobile CLI green answer bar in its own gutter so column-zero ego text stays clear without adding a second Claude text margin (#2110-734c).
+
+- Distinguish TUIC MCP protocol names from client-callable Claude Code and Codex tool names, including native Agent versus TUIC agent (#2108-465b).
+
+- Add a sidebar session context menu to copy the PTY session ID or live child PID, with copy confirmation and unavailable-process handling (#2107-bbda).
+- Capture held injection gates and a bounded fresh process tree when a BG DONE wake remains queued for 60 seconds, without changing delivery policy (#2100-c249).
+
+- Align the native macOS Rust and CMake deployment targets with the bundle minimum of 12.0, overriding older shell defaults and removing Make's separate target (#2106-e647).
+
+- Keep macOS App Nap off for the whole desktop process while still allowing idle system sleep. A controlled hidden-window replay under CPU contention reduced the maximum WebView callback gap from 36.753 s to 2.561 s with the activity alone; this does not attribute the historical backend outage to App Nap (#1638-c94c).
+- Export ego approval titles and all five native choices when the footer spans three or more rows, including newline-bearing printf rules (#2102-98ab).
+- Bind Grok Chat to the registered native process behind the npm launcher without guessing another terminal's transcript (#2104-0523).
+- Keep desktop ego Chat available after reload while a native question or permission prompt is pending; validate the transcript through the backend live-process binding (#2103-60e4).
+
+- Reuse unchanged checkout monitoring status on macOS/Windows with raw file-event invalidation, source signatures and a five-minute backstop; keep fresh reads on Linux and for unsupported repositories (#2098-98b2).
+
+- Share one Git status traversal between sidebar diff totals and dirty badges per checkout (#2098-98b2).
+
+- Index recent Codex rollouts with file-watch updates instead of re-statting the full recent-day history on every discovery poll (#2098-98b2).
+- Recover Telegram configuration watchers after pathless event-loss notifications, and re-arm Codex watches after date-directory replacement (#2098-98b2).
+- Stop reopening Telegram configuration on every idle tick and unrelated app event; use file events for runtime opt-in and setup changes (#2098-98b2).
+
+- Read shared Git ref state once per sidebar refresh instead of reopening and scanning it for every linked worktree (#2098-98b2).
+- Refresh monitoring ref targets and reflog hashes incrementally from Git paths; retain signature validation when complete file watching is unavailable (#2098-98b2).
+- Read worktree inventory from checkout HEAD files without reopening each checkout’s Git configuration and object store (#2098-98b2).
+- Reuse monitoring repository handles for dirty and lifecycle reads, with configuration-signature invalidation instead of reopening global Git configuration for every workspace (#2098-98b2).
+- Coalesce plugin reload discovery by changed ID and reuse unchanged payload-file hashes instead of repeatedly reading every installed plugin (#2099-8c87).
+
+- Use watcher-driven dirty transcript metadata checks for Claude Usage, serialize refreshes, and resolve specific projects without enumerating global history (#2099-8c87).
+
+- Share filename-search inventories across queries instead of walking the repository again for each no-match search; invalidate on repository events and reconcile unwatched roots after 60 seconds (#2099-8c87).
+
+- Reuse unchanged Claude subagent metadata across Progress Flow refreshes, with signature-based invalidation and idle eviction (#2099-8c87).
+
+- Re-arm the content-index cooldown after an unchanged validation so repeated repository events do not each start another full metadata walk (#2099-8c87).
+- Preserve named and nested submodule history when force-removing a missing worktree checkout; refuse missing or malformed destination mappings before pruning (#2096-1d25).
+
+- Accept the recorded managed Claude startup trust dialog with No selected above Yes; send Down then Enter once and leave incomplete or unmanaged dialogs untouched (#2097-5739).
+
+- Keep clipped Claude native questions answerable with explicit previous/next/select controls instead of generic Yes/No or guessed hidden choices (#2093-0be6).
+- Export the first Codex /plan question in narrow terminals, including the split footer and independently wrapped answer labels and descriptions; keep its controls active through a delayed idle hook (#2094-da19).
+- Give reader-applied terminal input output bounded priority over animation frame floors on desktop and HTTP/PWA, using the existing gated serializer (#2040-16b2).
+- Re-measure mobile shell height and top on page restore, foreground visibility and document resume so stale viewport geometry is not retained (#1900-5ff6).
+
+- Keep the agent-test document visible under covering windows, prevent App Nap during live checks, and prohibit test-application activation; add a covered-window regression observer without changing the daily app (#2095-0106).
+- Keep the agent-test WebView visible and painting in a compact bottom-right floating window without activating the application or taking keyboard focus; add an opt-in native visibility observer and leave the daily window profile unchanged (#2090-cf8a).
+- Prevent a retained question footer from restoring Input state after the agent exits to the shell (#2091-ba03).
+- Restore awaiting state and native answer controls for repeated ego MCP approvals, including hard-wrapped approval titles (#2089-aafb).
+
+- Keep connection, intent and finished tool rows out of ego selector titles shared by desktop and mobile (#2088-98ea).
+
+- Add `make agent-test` for isolated macOS desktop checks with a distinct binary, preset instance and loopback port, disabled machine-wide integrations (including global CLI and agent-hook writes), dry-run plan and instance-only stop target (#2086-269b).
+- Hide mobile AI Chat when ego is not configured on the host, refresh availability on settings changes, and return unavailable Chat views to Sessions (#2087-07bf).
+
+- **BREAKING:** replace native per-tool MCP switches with capability switches. Migrate saved denials without widening access and retain unknown-name diagnostics. Remove task, story, workflow_run/workflow_story_create/workflow_report/workflow_launch and design_mode aliases: use agent task_*, workflow actions and ui design_*. Reconnect cached clients and review external allow rules for the expanded groups (#2068-63b9).
+
+- Populate mobile New Session from installed registry agents, including ego; show detection failures and select the first installed agent (#2083-149c).
+
+- Export Claude native question titles without a question mark, including `Pick a colour`, with ordered desktop and mobile answer choices (#2074-b0dc).
+- Show mobile report suggestions instead of generic Yes/No confirmations while an agent is blocked; keep native dialog choices and the Input state (#2082-f782).
+
+- Keep unanswered Codex enforced command approvals and all three native answer controls active when a delayed idle hook arrives (#2075-aa2f).
+- Bind native Codex hooks for HTTP/MCP-spawned agents and generic HTTP terminals using their live inherited session identity; preserve exact owner validation and prevent bound-session listing deadlocks (#2081-ac1f).
+- Share browser event subscriptions across session, Chat, Markdown, dictation and speech consumers so two mobile tabs leave HTTP/1.1 capacity for state reads and permission answers (#2078-464b).
+
+- Desktop terminal Chat now shows active native question and permission choices without submitting Compose drafts (#2079-78fa).
+- Expose bound Grok terminal Chat on mobile and share the supported-adapter check with desktop, without changing exact transcript binding or native question controls (#2077-b132).
+
+- Expose the existing bound Codex terminal Chat view in the mobile session header, with the same PTY controls and backend binding refusal (#2076-8190).
+
+- Publish and retain the stable session identity for newly spawned native MCP/HTTP agents and generic HTTP sessions so a worktree declaration moves the live sidebar tab, not only its saved restore record (#2044-31f3).
+- Open parked Activity Dashboard sessions in their own Global Workspace tabs instead of displaying their content under the current repository tab; preserve existing session bindings (#2080-d401).
+- Shorten agent-facing MCP descriptions for session, agent, repo, ui, voice, telegram and automations; preserve complete guidance through each tool’s `action=help`, without changing Settings copy or owner gates (#2069-7347).
+
+- Invalidate the shared intent grammar during frontend hot reload so stale JSON cannot abort answer gutters or expose raw answer markers (#2073-8131).
+
+- Add `ui design_*` MCP actions with the existing Design Mode ownership, host grants and saved denials; keep the old tool until the explicit 2068 catalogue cutover (#2067-e708).
+- List and allow `remote`, `voice` and `telegram` only when their owning connection/configuration is available; share discovery and call gates and notify clients when conditions change (#2066-516c, #2067-e708).
+- End PTY intents at the title closure so joined trailing prose stays out of the CONTEXT header and desktop/mobile intent tint (#2060-0ebe).
+- Add the typed `workflow` MCP tool and `tuic workflow` CLI with story, run, proposal_create, report and launch actions; reuse existing handlers, retain proposal idempotency and member denials, and keep legacy tools until cutover. Automations remains separate (#2065-dcc5).
+- Render mobile CLI answer markers as the desktop continuous green gutter instead of speech bubbles; preserve literal glyphs in prompts and code, including standalone fenced examples (#2070-773d).
+
+- Add `agent task_get/task_cancel` using the existing task service, with spawning-owner checks, immutable final outcomes and cancellation that leaves the PTY running; retain the current `task` tool until the catalogue cutover (#2064-6385).
+- Group native MCP switches in Settings by domain, with separate rare and conditional sections; preserve tool names, saved denials and Settings opt-in (#2063-baa9).
+
+- Resolve ego session discovery through its per-PID index and held writer lease without scanning historical sessions; retain legacy lookup only when the index is absent (#2058-0d0e).
+
+- Keep GitHub network proof lookups off the worktree-list request path; use cached definitive answers or conservative local classification, with fresh checkout safety fields (#2044-31f3).
+
+- Keep an agent tab under its explicitly declared worktree despite unchanged shell cwd, later cwd reports and saved-tab restore; preserve sibling tabs and cwd-based removal safety (#2044-31f3).
+- Export the title and clean answer labels from Codex native `/plan` questions instead of retaining an unrelated waiting title (#2026-9178).
+
+- Reuse retained terminal pixels during whole-row history growth instead of redrawing every glyph, skip unchanged damaged rows repaint bounded cell spans, and merge equal background fills; invalidate reuse on geometry, theme, screen or marker-layout changes (#2040-16b2).
+
+- Reject automation profiles the runner cannot resolve, preserve host-local timezone defaults on creation, expose repair hints on invalid list rows, and notify the creator inbox once for failed runs, including pre-spawn failures (#2015-bdb3).
+- Create retry-safe one-shot automations with name, prompt, a relative delay and an explicit saved profile; the host resolves caller repository defaults and returns the saved fire time without extra clock/list/get calls (#2001-5c1f).
+- Persist global and per-repository PR visibility filters, including explicit Show overrides and inherited defaults (#1993).
+- Send saved mobile Markdown checkbox edits and tweak comments to a repository agent with the desktop review prompt, transient delivered or queued feedback, and visible comment highlighting (#2042-a71b).
+
+- Recover modern stateless managed MCP routing from exact live host identity and return bounded missing-context diagnostics instead of blind registration advice (#2008-5317).
+
+- Record bounded body-free runtime MCP call outcomes with separate application, transport and effect observations; do not mark native `error:null` results as failures (#2010-30a7).
+
+- Validate native MCP arguments against advertised action contracts before dispatch; return bounded, value-masked repair details. Progress limits count raw Unicode scalar values consistently across transports (#2007-59f6).
+
+- Include a byte-bounded complete top schema in MCP tool search, with catalogue identity and explicit schema reuse until invalidation (#2013-73f9).
+
+- Publish typed Settings account enumeration and configured Ego interactive login start/status, with human terminal authentication and separate credential readback (#1790-1011).
 ### Fixed
 
 - Run every Rust test's git process against a fixed hermetic gitconfig (`tuic-test-support` points `GIT_CONFIG_GLOBAL` at it, sets `GIT_CONFIG_NOSYSTEM=1`, drops inherited `GIT_CONFIG_*`), so a developer's `merge.ff`, `url.*.insteadOf`, rerere, signing or hooks-path settings no longer fail tests.
 
+- Preserve Claude follow-up suggestions through Stop-hook repaints after an early idle hook, so mobile receives the chips and can consume the list after a tap (#2029-994d).
+
+- Detect installed plugin payload differences even when the catalogue version is unchanged.
+
+- Keep mobile choice answers, queued drafts and delayed Enter writes bound to the session selected when tapped, even after navigation (#2021-30cd).
+
+- Report the configured ego executable and failed export status instead of blaming a missing transcript header when an older binary rejects Chat export (#2032-8dc3).
+- Show the mobile awaiting total only in the AWAITING tile, move waiting-session navigation to that tile, keep the per-session question banners, and remove the connected header narration (#2055-b727).
+
+- Remove repeated Settings, roadmap and variable-field copy, use a plain catalogue record label, and omit subtitle space from title-only Settings headers (#2053-58a5).
+- Style Remote Mobile retries with shared dialog controls, keep task Save buttons beside their fields, fit the Stories header on phones while keeping Close at the top right, and apply theme colors to crash diagnostics (#2054-0eb2).
+
+- Remove implementation commentary and repeated usage hints from Settings, keep compact page names clear of the selector arrow, and prevent clipped header badges, tight catalogue labels and touching action buttons, and show catalogue effects only once (#2047-e20c).
+
+- Keep Settings help beside wrapped labels, match narrow plugin header widths across loading states, and align repository color actions (#2046-5c34).
+- Remove permanent query-engine and prompt-inspector narration while retaining status values and contextual warnings (#2052-c9d1).
+
+- Keep Remote Access settings and the mobile QR dialog available after local IP discovery fails, with an inline error and retry (#2049-2d50).
+
+- Use a theme-coloured monochrome icon in the Ideas panel heading instead of a platform emoji (#2048-5a9f).
+- Reuse unchanged worktree integration proofs during MCP listing instead of repeating per-checkout Git work; keep fresh safety fields and uncached removal checks (#2044-31f3).
+- Remove permanent setup narration from AI Chat, Ideas, Tasks setup and Worktrees while keeping their actions and state labels (#2050-2b8a).
+
+- Keep the code Copy control inside its own row above fenced answers, without clipping or covering wrapped text in desktop and mobile Chat (#2045-848c).
+
+- Return the same structured static-validation errors from automation HTTP and MCP calls (#2007-59f6).
+
+- Preserve description-only MCP session input without terminal bytes, and consume ACP mail wake cursors only after an accepted turn (#2007, #2004).
+- Generate configurable launch playbook modules with append-only global and agent additions, explicit all-off controls, child-only guidance and legacy override migration. Effective previews follow the selected machine (#2000-b50f).
+- Keep the mobile Markdown menu list stable during session polls and refresh it in place.
+
+### Added
+
+- Set independent mobile Terminal and Chat font sizes in Settings, remembered on this device only (#2023-54c4).
+- Dictate into the mobile Ideas input with the shared composer mic. Speech replaces the selected text without sending to a session or saving the idea.
+- Open desktop Markdown tabs from the mobile session top bar at tablet widths; phones keep the session menu list.
+
+- Durable keyed managed-child launches across MCP, HTTP and IPC, with explicit workspace, parent, stable name, hold-open policy and retry-safe receipts (#2006-f5a1).
+- Publish typed Settings account enumeration and configured Ego interactive login start/status, with human terminal authentication and separate credential readback (#1790-1011).
+### Fixed
+
+- Replace stale slash-command lists with a single filtered match, and dismiss the list when the agent closes completion, including ego `/go` and `/goal` (#2030-84bb).
+- Refresh Settings readers after legacy upstream credential and OAuth owner writes, including durable partial-vault failures, connection password edits, deployment pairing-token creation and deployment-mode changes (#1989-22fe).
+- Dismiss the mobile suggestion list as soon as a chip is picked, without restoring it from session activity updates; re-arm after the backend clears or replaces the list and show the existing send-failure notice if submission fails (#2029-994d).
+
+- Send Grok and ego immediate approval keys without an extra Enter on mobile, and keep answered ego selectors cleared during retirement scrolling (#2027-7ef3, #2028-6999).
+
+- Export CLI-enforced Codex command approvals past command metadata, preserving immediate numeric refusal (#2026-9178).
+
+- Keep ego selector titles free of diagnostics and working rows, and expose default-mode CLI approval controls with the refusal explanation wait (#2028-6999).
+
+- Export Grok native Ask and CLI-enforced approval options, preserving immediate numeric answers and the free-text transition (#2027-7ef3).
+
+- Recognize Codex 0.162.1 native question options and open queued questions with the live-verified Shift+Left key on mobile (#2026-9178).
+
+- Keep local HTTP/MCP-spawned agent terminals eligible for Chat; distinguish machine ownership from creation provenance while preserving worker cleanup and notification policy (#2032-8dc3).
+
+- Serve authenticated Settings actions and the browser Settings bootstrap on headless daemons through shared routes; keep desktop-only upstream OAuth unavailable there (#2014-9d06).
+- Report an idle ego turn as idle even while background processes remain tracked, consistently across desktop, mobile, and `agent ls` (#2018-1885).
+
+- Preserve and tint the complete wrapped intent line in mobile CLI output, including its first row (#2019-7c5d).
+- Keep Settings peer refresh current after no-op edits, omitted repository defaults, transient read failures, and desktop connection/tunnel saves; avoid conflict notices for acknowledged upstream header saves (#1788-2163).
+- Disable Ideas dictation while a voice call or terminal browser dictation owns the microphone (#2022-1b80).
+
+- Mirror bounded browser dictation lifecycle diagnostics with session/take identity to the owner log ring, without transcript content or per-hypothesis logging (#2020-66aa).
+
+- Browser dictation now requests shutdown through the existing cancellation path after a recognition error. “Dictation failed” also stays beside the composer mic, above the mobile keyboard.
+- Float the Chat new-text badge above the composer without reserving a row, and keep full-radius controls pill-shaped instead of elliptical (#2017-b9e0).
+
+- Report stalled parentless automation/workflow initial prompts as blocked after the existing delivery timeout, without dropping or duplicating the queued task (#2006-f5a1).
+- Honor an explicitly configured worktree integration base before stale conventional or remote default refs (#1961-bab6).
+
 - Correct Settings accent-action text, compact navigation, wrapped help badges, shortcut groups, and workspace path presentation; hide the desktop-only Local tools card in browser mode (#1945).
+- Add independent durable peer-mail subscriptions with actionable filters, explicit acknowledgement, bounded replay, retention-loss reporting, HTTP SSE and ACP notifications (#2004-4760).
 
 - Keep marker-projected terminal frames incremental: repaint dirty display rows and changed projection slots instead of clearing the whole canvas (#2003-f218).
 - Bound CLI marker planning to 128 rows above the viewport, reuse unchanged row generations, and resolve cold prompt ownership in bounded background steps (#2002-2239).
@@ -24,6 +220,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Keep the selected workspace's active tab and pane layout consistent when saved tabs are restored to another workspace by cwd (#1999-95b0).
 ### Added
 
+- Discover and edit dictation correction records through their stable-key Settings owner, with shared atomic persistence and live dictionary refresh (#1992-d4fa).
+- Publish typed Settings account enumeration and configured Ego interactive login start/status, with human terminal authentication and separate credential readback (#1790-1011).
+- Add three guided Smart Prompts for issue-to-draft-PR, incoming PR review and authorized bounded-fix configuration, with prerequisite stops and an end-to-end setup guide; the live GitHub pilot remains pending (#2012-72ff).
+
+- Add an opt-in bounded terminal frame-workload recorder, rotated capture files and grid-paint replay timing for future WebView stall evidence; this does not replace the missing real-stall replay (#1638-c94c).
 - Publish read-only GitHub credential-source provenance and document GitHub/Ego startup ownership, confirmation and recovery; interactive Ego login and account enumeration remain explicit onboarding gaps (#1790-1011).
 
 - Add a typed **All settings (Expert)** inspector, catalogue identities on native Settings controls, descriptor-owned enum choices, resource-limit controls and runtime plugin shortcut discovery (#1789-796d).
@@ -77,6 +278,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Keep mobile question cards theme-readable and above the terminal key bar, including ego free-text questions (#1973-3d1b).
 - Apply confirmed username and password changes live in headless Settings without reporting a persisted apply failure or restarting the desktop listener; real listener changes keep their restart contract (#1984-3472).
 
+- Prefer local main, then master, then remote HEAD when resolving the worktree base; preserve no-remote repositories with a non-standard base branch (#1961-bab6).
+
 - Preserve unsent mobile answers when opening an ego question card, and exclude startup/help rows from fresh-session free-text questions (#1980-47b7, #1973-3d1b).
 - Preserve original spaces across terminal soft wraps in MCP text, copied selections, ego questions and mobile CLI output; keep hard line breaks (#1977-063c).
 - Preserve Claude /resume session rows and filtered results in mobile CLI output without widening agent-state parsing (#1971-5834).
@@ -124,9 +327,6 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
-- Require authenticated same-owner peers in the relay prototype and atomically enforce room and token capacity, while allowing the second peer at the room limit; terminate expired sockets and prevent stale peers from accessing recreated rooms (#1932-8398).
-
-### Fixed
 - Restore Edge spoken replies after the service migration with the new endpoint and the live-verified existing v1 GEC handshake (#1952-bf91).
 
 - Recover failed mobile views after a server outage through automatic or manual retry, without false empty/setup states, raw network errors or desktop restart advice (#1930-f4c2).
@@ -147,6 +347,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - Keep ego attachment grants after `run` and `resume` so direct launches accept their prompt (#1833).
 
+- Cancel Jira URL resolution end to end, including shared plugin HTTP header and body reads (#1756-4d42).
+
 - Grant Gemini session attachment trust without a folder prompt or global settings changes. Grant ego PTY attachments read-only access in confined sandbox modes (#1833-aa60).
 
 - Add conditional atomic Ego settings batches, executable paths and base-only write-only provider auth actions (#1907-0f9f).
@@ -163,6 +365,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Delete saved AI Chat conversations from the Conversations list with named confirmation and ACP capability gating (#1917).
 
 - Pin AI Chat repository context per conversation and show its configured name color, including parent repository colors for linked worktrees without changing draft parking (#1924-12be).
+- Configure Jira and GitLab default projects in schema-driven plugin settings; explicit account projects retain precedence (#1756-4d42).
 - Diagnose empty or off-screen mobile resume shells through the backend log ring without reloading the page (#1900-5ff6).
 - Preserve a bounded mobile lifecycle trail across reloads and send prior abnormal-document evidence automatically to the backend log ring; acknowledge HTTP 204 log writes so later mobile warnings are not lost. The reported iPhone grey-screen cause remains under investigation (#1900-5ff6).
 - Bind GitHub Work review threads and PR actions to the selected account through core policy, with desktop and HTTP parity (#1693-a816).
@@ -171,35 +374,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - Opt-in Tasks OS notices for linked GitHub check failures and comments on locally followed items, using existing detail refreshes and native notice delivery.
 
-### Fixed
-
-- Await async plugin startup, surface rejected startup errors, and cancel obsolete host lifetimes on unload or reload (#1756-4d42).
-
-- GitHub OAuth now requests `read:project` for Projects v2 reads. Existing logins need reauthorization.
-
-- Add the GitHub Work adapter, account-authenticated runtime, catalog entry and recorded-fixture tests; core PR-action binding and Projects v2 success-path verification remain pending (#1693-a816).
-
-### Fixed
-- Protect suspended tabs from worktree recycling and cleanup, and remove obsolete worktree bell actions (#1705-67b3).
-- Keep detached checkouts with a local feature branch at HEAD out of orphan cleanup, and stop reporting fresh in-sync branches as integrated (#1894-7683).
-### Changed
-- Remove answer background tints from the terminal grid, Answers view, AI Chat and terminal Chat cards. Keep green left rules and spacing; use the darker success green for Paper answer rules; user-question styling is unchanged (#1896-f355).
-- Tasks loads complete lists of at most 1,000 items for Rust-backed all-field queries; unknown or larger lists keep server controls (#1851-7ade).
-- Discover GitHub Projects v2 in Tasks Board with visible read:project scope errors (#1846-55d7).
-
-- Tasks offers only provider-supported sort, group and filter fields, and restores the last valid selection after a rejection.
-
-### Added
 - Add a mobile Claude CLI / Chat switch with shared transcript rendering, the existing composer and SSE stream, visibility-paused reads and touch-safe scrolling (#1770-3e28).
 
-### Added
 - Background desktop WebViews unload after a configurable awake delay (default 10 minutes, 0 disables) and reconnect tabs on Show. Rust sessions keep running; frontend plugins pause while unloaded.
 
 
 - Add correlated Design Mode native-port browser commands, explicit host eval grants, screenshots, page-error reads and sidebar action history.
 - Fix seeded workflow Pause resume targets, expose their target in the Designer, and report invalid publication fields as HTTP 422.
 
-### Added
 - Add the internal settings-policy foundation: host-issued origin checks, write-only secret reads and backend-built one-use confirmation proposals for exposure/execution settings. Replacement settings transport publication remains separate (#1786-9cbd).
 - Render searchable Integrations settings pages from live plugin catalogue entries, with scoped revision-checked edits and unload removal (#1683-c04b).
 - List the desktop repository’s open Markdown files in the mobile session menu, with live updates and the existing mobile viewer (#1879-05ad).
@@ -214,122 +396,29 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Native tray and menu-bar icon with live agent counts, attention indicator, Show and Quit. Choose Always, Only in background or Never in General settings. Missing tray support safely minimizes the window (#1804-d44b).
 - Read linked Tasks items and comments through MCP repo actions; allow provider comments and transitions only after enabling `mcp_work_item_writes` (#1854-4960).
 
-### Fixed
-- Repaint answer-rule strips when terminal cell metrics or projected row positions change, so font loading and theme remeasurement keep the rule aligned (#1896-f355).
-
-- Preserve GitLab endpoint and username-filter scope in small Tasks lists; align Jira and GitHub local field values, and keep Roadmap provider paging (#1851-7ade).
-- Run desktop orphan-worktree safety checks and removal on the blocking pool instead of the IPC main thread. Live heartbeat confirmation remains pending (#1638-c94c).
-- Include CSS tokens referenced by shorthand declarations in Design Mode grabs, including inline styles and adopted shadow-root sheets (#1888-14a3).
-- Allow workflow agents to launch in registered branch worktrees while preserving detached-orphan removal guards (#1883-eba0).
-
-- Preserve attached Goose session names and legacy paths without injecting a duplicate or conflicting `--name`.
-- Keep the Context preview clear of the terminal CLI/Chat switch (#1893-a053).
-
-- Apply scrollbar history-mark visibility changes immediately on idle terminals (#1891-a933).
-
-- Start status-bar agent usage blinking at 96% instead of 90%; dashboard critical colours remain at 90% (#1887-86a5).
-
-- Retract saved agent placement declarations when a linked worktree is removed or recycled (#1705-67b3).
-- AI Chat provider-retry waits now count down live to “retrying now”; user-message Copy buttons no longer wrap vertically.
-
-- Hide Markdown review Agent and Send controls after a successful send until a new change (#1881-f84a).
-
-- Preserve independent settings windows' edits when one changes agent visibility and another changes the IDE or other preferences (#1876-ceee).
-- Show cancelled story status and dependency removal actions from the API response; keep plan state visible beside cancellation counts (#1875-c3d9).
-
-- Preserve live attachment uploads when another TUIC instance starts; keep Claude attachment access with disabled instructions and preserve custom wrapper arguments (#1833-aa60).
-
-- Allow worktree removal when its branch tip is contained in any remote-tracking branch, naming that ref as proof. Offer a one-click action to keep branches with local-only commits (#1874-1758).
-- Preserve the local branch and report a warning if a concurrent fetch conflicts with the remote proof during worktree removal (#1874-1758).
-
-### Added
 - Let Rust own desktop close and quit. Choose Ask, Background or Quit for the main window; Ask can remember the choice, and explicit Quit keeps its own confirmation (#1802-e6b8).
 - Attach PNG, JPEG, WebP and GIF images in terminal Compose by dropping them on the editor or choosing multiple images with the file button; paste keeps its existing behavior (#1758-1613).
 - Remember Tasks source, view, grouping, sort and filters per repository and provider account; recover rejected saved sorts with the last accepted order (#1852-35a8).
 - Keep the Tasks move menu open while scrolling its destinations; simplify board refresh to merge page one into loaded cards (#1844-858d).
 - Terminal Chat view for Grok terminals, read from the session's `chat_history.jsonl` and offered only when `~/.grok/active_sessions.json` names the exact session of that terminal's process; the newest-session fallback never feeds Chat (#1791-b8be).
 
-### Changed
-- Store uploads in TUIC-owned session directories, grant supported agents access at launch, and remove files at session end without touching repositories (#1833-aa60).
-- Run saved command moves from `Cmd+R` to `Cmd+Shift+R`. `Cmd+R` now reloads the active web/preview tab (new `reload-tab` action). `edit-command` has no default shortcut because `Cmd+Alt+R` belongs to answers-only; an existing `keybindings.json` override keeps working (#1871-4cfd).
-
-### Removed
-- Remove the Aider agent harness, including launch profiles, detection, screen adapters and mobile commands. Existing settings remain readable (#1849-0c19).
-
-### Fixed
-
-- Tasks view preferences keep the settings catalogue available and restore nullable query defaults correctly (#1852-35a8).
-- Stop answer tint before blank-separated unmarked prose, while retaining wrapped continuations and structured answer content (#1872-1870).
-- Merge adjacent marked answer paragraphs into one continuous CLI and Chat tint, including blank paragraph gaps and excluding Codex duration footers. Hide answer glyphs in the CLI grid while keeping raw copy and search text (#1872-1870).
-- Tasks board lanes show loaded counts and More controls; cards show assignees and labels with a compact keyboard-accessible Move menu (#1844-858d).
-- Preserve account metadata when saving Tasks setup, keep assignee username filters as text, and hide unsupported GitLab roadmap date filters and grouping (#1841-bbac, #1843-9b0f, #1845-66f6).
-- Hide Codex/Ink hard-wrapped intent tails with their marker rows, stopping at blank rows and new output (#1761-7249).
-
-- Tasks details display provider enum labels while retaining IDs for edits (#1839-dcbf).
-- Jira create forms support searchable Reporter and Assignee, free labels, inline required errors, and configured Project/Type values (#1859-c01f).
-
-- Keep Jira JQL parse errors visible in Tasks lists and boards, with explicit `jql:` and `text:` search prefixes (#1861-8a4c).
-- Trackpad and wheel scrolling no longer stalls while the pointer is over the CLI/Chat switch, in either view (#1847-feb9).
-- Design Mode automatically loads its own extension on cold Edge launches and opens the discovered dev server. Running profiles and unsupported branded Chrome return clear errors (#1834-f6c4).
-- Make Terminal Chat easier to read with one lightly tinted answer card per turn, whole-answer Copy, reading-width limits, collapsible terminal pastes and compact inbox notices. Keep the collapsed tool row and show Claude Bash descriptions when available (#1832-b19a).
-- GitHub Settings hides bindings for a unique account/remote, restores Logout for OAuth credentials, and keeps an environment-token disconnect effective until login or restart (#1829-54c2).
-- Ego model settings now honor the configured profile and AI Chat workspace. The internal settings service adds managed Ego configuration, readback and presence-only credentials through owner services (#1775-330c).
-- Goose returns to idle after a reply and accepts the next submission without waiting for the five-minute stale recovery (#1812-022d).
-- Aider returns to idle after a reply and accepts the next submission (#1823-8150).
-- Keep child agent MCP bridges on the spawning instance, including isolated `tuic-remote` instances and fallback sockets (#1811-a0fe).
-- Align community plugin permissions, CLI binaries and minimum app versions with shipped manifests.
-- Keep document preview panels separate for files with the same name in different repositories.
-- Cancel pending retry and wakeup decisions when session state changes during composer inspection.
-- Discard obsolete plan, story and dashboard results after repository switches or plugin unloads; refresh the MDKB ticker on repository switches.
-- Preserve beta installs in the macOS terminal installer and normalize release tag prefixes for default and pinned downloads.
-
-### Added
 - Offer Codex terminal Chat after a trusted native SessionStart hook establishes exact session ownership; validate rollout id/cwd and live process identity, isolate tabs in the same folder, and revoke stale bindings (#1792-7450).
 - Internal settings owners cover repository defaults and registered repository `.tuic.json` targets, with revision checks and isolated locked writes (#1825-4566).
 - Add the internal GitHub settings owner adapter for device login, verified Enterprise accounts, credential presence and revision-checked repository bindings (#1774-ce8f); shared settings transport wiring follows separately.
 - Beta update channel: automatically check for the next beta and final stable release. Completed beta releases publish a rolling feed without changing stable updates.
 
-### Added
 - After an update restart, every agent tab with a session the agent confirmed resumes on its own, on every branch, not only the selected one; **Settings → General → Updates → Resume all agents after an update** (`eager_resume_after_update`, default on) turns it off. Tabs without a confirmed session keep the click-to-resume banner (#1772-25c5).
 - After an update installs, the app restart waits until no session is busy or awaiting input; **Settings → General → Updates → Wait for agents before restarting** (`defer_update_relaunch`, default on) turns it off, and the APP UPDATE notification offers Restart now with the busy-session count (#1771-c6fb).
 - Shared themed form controls unify desktop and mobile select fields and the Tasks, Settings, Automations, Git and chat forms; List, Board and Roadmap use a keyboard-accessible segmented switch (#1815-01c9).
 - Chat mutes intermediate assistant text (text followed by a tool call in the same turn) in the terminal Chat view, AI Chat and mobile; **Settings → Appearance → Chat → Mute Intermediate Text** turns it off (#1769-89dc).
 
 - Show agent toast cards only while their origin terminal tab is active, with a default-on per-client Notifications toggle. Urgent notices always show a card (#1760-bab7).
-### Fixed
-- Desktop dictation in terminal Chat inserts into Compose instead of the hidden CLI. The destination and selection are captured before recording yields; undelivered transcripts stay in Messages for recovery (#1773-5b69).
-- A prerelease tag such as `v2.0.0-beta.1` publishes as a GitHub prerelease, never as "latest", and does not update the Homebrew tap. The updater and plugin checks use semver precedence: a beta user is offered later betas and the final release, and a nightly user is offered later nightlies (#1799-d6be).
-
-### Removed
-- Remove the duplicate AI Chat control-bar + button; New chat tab still starts a conversation (#1755-7709).
-- GitHub token chain no longer reads the `gh` CLI login (`gh auth token`, `gh-token` crate); use OAuth login or `GH_TOKEN`/`GITHUB_TOKEN`. TUIC spawns no `gh` process (#1714-1c1d).
-
-### Fixed
-- Mobile PWA: the shell follows the visual viewport again, so the command input sits above the iOS keyboard; the bottom tab bar is 56 px again and no longer covers the + button; session cards lose the empty space under the close button (#1795-a710).
-- Recurring cron Automations now dispatch once per due occurrence and Run Now works for them (#1794-f0bb).
-- Restored mobile dictation drafts reconcile with the current terminal line on Send or first edit, preserving words if the desktop cleared the line and avoiding duplicate replay (#1768-a83f).
-- Mobile output stops following after a small upward scroll and ignores queued follow frames after the user scrolls away (#1745-63b0).
-- Mobile ego questions show Input and open a full, wrapping question card from the header; selecting an option sends one answer (#1759-6047).
-- Native macOS Fn dictation keeps recording through window focus changes while the key is held and detects its release outside TUIC (#1763-3361).
-- Automations uses readable schedule cards, short repository names, keyboard tabs and a compact toolbar. The first definition opens automatically unless disabled in the dialog; the palette entry also matches scheduler and schedule (#1762-c772).
-- The bell no longer counts static plugin status rows; unread Progress outcomes have an explicit Mark as read action (#1764-862a).
-- Mobile AI Chat keeps Park and Stop in the composer input row, removing the archive-only row above it (#1746-aa9e).
-- Default-app URL and file opens reap their launcher child instead of leaving a zombie process (#1749-f9a0).
-- Design Mode retains a wait owner for Chrome/Edge launches, including short-lived handoff processes, independently of the launch runtime (#1707-bd40).
-- Duplicate workflow starts report the active run ID instead of a raw SQLite constraint error (#1748-47b0).
-- Design Mode delivers the first navigation after a backend restart, including before the first idle heartbeat (#1724-fe7e).
-- A console that stops reading the backend's stderr (for example the `make dev` pipe) no longer blocks every thread that logs, the main thread included; console output is now non-blocking and lossy, while retention in the existing lossy file log and bounded `/logs` ring is unchanged (#1638-c94c).
-- Design Mode lists only the dev servers of the session being edited (HTML-serving listeners of its worktree, URLs it printed, the configured URL) and excludes TUIC itself (#1723-4a21).
-
-### Added
 - Chat transcripts show New text below when content arrives while you read earlier messages. Select it to resume following; a per-client setting is available on desktop and mobile (#1757-c6a9).
 
 - Design Mode extension heartbeats expire stale sessions and deliver agent-requested page reloads once per sequence (#1735-080b).
 
-### Added
 - Start Design Mode directly from terminal HTTP(S) links, bound to the agent that printed them. HTTP/IPC start accepts an optional URL; MCP `design_mode` exposes URL-aware start, stop and status (#1722-f02d).
 
-### Added
 - Hands-free listening and spoken replies are now separate settings, so replies-only (push-to-talk dictation with spoken answers) works, and the dictation toast has a spoken-replies toggle (#1729-f7f1).
 - Compact mobile session attachment icon and smaller in-field mic and Send controls for a wider draft (#1719-ff5d).
 - Long-press mobile Send to queue the current agent draft for its next ready window (#1717-efd3).
@@ -391,14 +480,576 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - Accept pasted images in AI Chat before ego connects, retain concurrent pastes while its first session opens, and share Finder/text clipboard rules with Ideas and terminal Compose (#1639-f474).
 - Add the `automations` MCP tool for definition management, with bound creator provenance and atomic pause/resume.
-### Added
 - Add multiple masked custom authentication headers beside Bearer/OAuth for HTTP MCP upstreams; bind vault secrets to the saved MCP origin before outgoing requests and block cross-origin redirects. Old unbound credentials require re-saving or OAuth authorization (#1657-e1a4).
 - Start the owner-guarded Once automation runtime on desktop and headless hosts, with durable precheck decisions, literal prompts and configured workspace/profile dispatch. Public execution controls and completion handling remain pending (#1615-57cf, #1614-7e8f).
 
 - Mobile terminal Ctrl menu offers Ctrl+C, Ctrl+B, Ctrl+D and Ctrl+Enter from one keybar button. Ctrl+Enter follows the agent registry mapping; verified behavior and conservative fallbacks are recorded with the probe evidence.
 - Add the Rust foundation for Once automation schedules with IANA timezone validation, a single preview instant and durable occurrence deduplication (#1629-2262).
 
+- Add Automations Runs with backend 24h/7d counts, paginated history, owner-safe terminal navigation and saved output for unavailable sessions (#1619-b84d).
+- Add the Automations dialog with backend cadence and Once previews, recent history, atomic pause/resume, Run now and confirmed deletion. Backend API integration is pending (#1618-685b).
+- Add an all-repositories toggle to the Ideas panel header: it lists every repository's ideas for cross-repo work (in memory, resets on reload). The badge and "clear completed" follow the visible list, so clearing in a single-repository view no longer deletes other repositories' completed ideas; ideas added in all-mode stay tagged with the active repository (#1598-c0a0).
+- Add a headless agent capture scenario driver with explicit fixture promotion and ordered replay expectations; record real Codex and pi turns; Claude (expired login) and goose (its banner prints the home directory) stay unverified, and a test rejects fixtures that embed `/Users/` or `/home/` paths.
+
+- Telegram draft Stop interrupts only its bound agent turn; replacement input retires stale Stop requests before writing.
+- **Mobile Markdown review** — In the mobile Files view, tapping a task-list checkbox toggles it in the file, and a block comment can be added to a paragraph, heading or list item in the desktop's `<!--tweak:...-->` format. Saves refuse to overwrite a file that changed on disk meanwhile (new `write_file_if_unchanged` command, `POST /fs/write-if-unchanged`).
+- Add a CLI | Chat switch to Claude terminals: a conversation view built from the agent's session file, with prompts apart from replies and tool calls folded into compact cards. The grid is hidden while Chat is open and never unmounted.
+- Fix missing older Claude prompts, image/PDF tool-output markers and model-change cards in Chat; validate the parser against sanitized records from real CLI transcripts.
+
+
+- **ego launch permissions** — Choose permission mode and filesystem sandbox in Settings > Agents > ego. Terminal launches and MCP spawns use the same persisted overrides; leaving either choice unset preserves ego configuration.
+- Inspect managed-agent launch instructions from the terminal context menu: captured brief (including peer context), explicit system instruction arguments/file snapshots and MCP initialize responses, with source, original UTF-8 bytes, redaction and capture limits. Historical and agent-autoloaded instructions are explicitly unobservable.
+- Add ego Perimeter controls in Settings > AI Chat for root access, read allowlists, extra writable directories and network mode. Show ego's effective view and a measured or unverified exec-sandbox badge; writes use ego CLI.
+
+- Add terminal history back/forward (`Cmd+Alt+Left/Right`, toolbar arrows) over the last 10 activated terminals, and a Default/Recent sort on the mobile Sessions screen.
+- Navigate from parent agents to live children in other repositories.
+
+- Summarize merged idle worktrees with a guarded Clean up action.
+
+- Keep rich active/idle repository sections inside their existing groups.
+
+- Add an opt-in Telegram channel to the headless daemon with native peer mail, correlated Thinking/activity drafts, exact final replies, authored progress notices and opaque-button choices. Agents opt in with `telegram register`; registration ends with the agent or MCP session and is not persisted. With no agent, authorized chats receive "Nessun agent registrato". Live mint deployment remains pending.
+
+
+- **Private secret forms** — Agents request only named sensitive fields and run user-approved argv commands with values in the child environment. Values remain in memory, output is masked, and a one-time capability supports browser or phone entry on the existing server. TUIC inspection tools are suspended while entry is open.
+- **Remote peer mail** — A flooding host has its own replay quota. Budget pressure reclaims only departed senders, and disconnect retires old shadow peers even during a reconnect handshake. A departed sender may replay once after pressure evicted its history.
+
+
+- **Update and restart remote machines** — Direct and SSH connections compare
+  the daemon's running build with the binary the desktop can deploy. A
+  per-connection action confirms live session loss, updates the daemon, and
+  verifies the new build after restart. Direct uploads require the daemon
+  session token and validate size, target and SHA-256.
+
+
+- **Managed agents start in new folders** — Claude Code and direct Codex children spawned by another agent pass their workspace trust question by default. A per-agent expert setting turns this off; user-opened terminals keep their usual trust behavior.
+- **Configurable PTY capture directory** — `TUIC_CAPTURE_DIR` sends diagnostic `.tcap` files to an absolute path selected at process start. Relative paths reject capture activation.
+
+- **Editor line wrapping** — Text and Markdown files open wrapped, while code opens unwrapped. Toggle it from the editor header or with `Alt+Z`; each file kind remembers its setting.
+
+- **Settings expert mode** — An **Expert** switch in the Settings header shows or hides expert settings: settings whose default is correct for almost everyone. In basic mode an expert setting is hidden only while it has its default value, so a setting you changed is never hidden. A search result for an expert setting shows an **Expert** badge and opens it without changing the switch. The switch position is kept between restarts.
+- **Native plans and stories** — A config-directory SQLite store tracks plans, criteria, dependencies, revisions, manual claims, and guarded review transitions. Typed manual actions are available through desktop IPC, authenticated HTTP, managed-session MCP, and `tuic story`.
+- **Manual Plans and Stories dialog** — A project toolbar action opens native plans and stories on desktop or in the browser. Users can create records, start a Ready story without a terminal claim, update criteria, manage dependencies, and review or block work.
+- **Versioned workflow definitions** — Project-scoped plan and story graphs can be saved as drafts, validated, and published as immutable revisions. The built-in `Resolve plan` graph pins a version of `Story delivery`. Running and editing graphs visually are later parts of this feature.
+- **Durable workflow run foundation** — Project-scoped plan runs now store ordered events, pinned revisions, attempt and effect projections, bounded retries, and recovery state in SQLite. Desktop and HTTP clients can page history and send explicit commands; automatic scheduling and graph UI are still in progress.
+- **Plan run timeline** — Run history in Plans and Stories lists durable runs for the selected plan and pages their ordered events. Desktop and browser clients refresh on workflow run changes.
+- **Workflow review and input evidence** — Managed reviewer reports can carry criterion-indexed findings and an artifact digest without changing story status. A worker can request input, pausing the run until an operator records an idempotent answer and resumes it.
+- **Workflow draft designer** — The Plans and Stories dialog now includes a draft editor for adding and connecting graph nodes, changing agent prompts and loop limits, and publishing a validated revision. The node palette supports drag and drop and click controls.
+- **Conservative workflow dispatch** — Explicit story attempts now serialize overlapping or unknown file scopes, cap parallel workers, and record a distinct registered worktree per story before spawn. Dependent stories stay held until an integration receipt exists.
+- **Checked story integration** — TUIC records pinned command receipts from assigned story worktrees and verifies an operator-created merge with post-integration checks before releasing dependents. A changed canonical ref or tree invalidates the receipt. HTTP story actions without a managed session record local API provenance and cannot approve a story.
+- **Canonical recertification** — After an unrelated commit advances the canonical branch, TUIC can rerun pinned checks at its clean tip and record a durable receipt for previously integrated stories. Parallel workers retain valid reports even when another worker pauses the run for input.
+- **Story transition provenance** — Native story transitions now keep a durable actor and revision history. Managed MCP agents cannot approve stories; the user action remains the approval path.
+- **Workflow closure policy** — Definitions default to human approval. Automatic closure can be drafted but publication rejects it until TUIC can verify the required evidence.
+- **Pinned workflow checks** — Published definitions now retain a bounded set of direct-executable checks. The runtime receipt path will use these pinned commands rather than an agent's test claim.
+
+- **Progress Flow view** — The Progress dialog has a **List | Flow** toggle. Flow draws the journal as a sequence diagram: one column per terminal and per Claude subagent, delegations and peer messages as arrows, each child's done or blocked as its return arrow, and intents as notes. TUICommander now records `delegated` at `agent action=spawn` and `message` at `agent action=send`, redacted and capped at 500 characters. Click a label to read all of it; a subagent's full prompt or report is fetched on demand. An existing journal is migrated on first open.
+- **Hold `+` to open an agent** — A long press on the tab bar's `+` lists the enabled agents and their run configs; picking one opens a new tab in the active branch with that agent already started. A click still opens a plain terminal.
+- **Design Mode for agent terminals** — Open a dedicated Chrome window on a repository's development server, click an element to capture its selector, styles, the design tokens its rules use, source location and optional screenshot, then edit the inserted agent draft before sending. Repeated grabs accumulate; the same Chrome window can be rebound to another agent terminal in the repository. The development-server URL is a local per-repository setting.
+- **SSH remote machines deploy and install themselves** — “Deploy on connect” resolves and caches the matching `tuic-remote` release, copies it only when its hash changes, launches it on loopback with a vault-backed pairing token, and reconnects through the SSH tunnel. A configurable idle lifetime preserves sessions across short disconnects. Linux systemd user units and macOS launchd agents can be installed or removed from Remote Machines, while the SSH host picker reports shell, no-shell, authentication-failed and unreachable hosts without duplicates.
+- **Agent activity in the sidebar** — The optional nested-terminal view now expands every occupied branch into one compact card. Agent rows reuse Activity Dashboard state and show the agent icon, current intent/task, last-update age, and attention state; plain terminals remain selectable in the same card, including single-session branches.
+- **Agent toasts can jump to their repository** — A toast from another registered repository shows a keyboard-reachable “Go to repo” action. It selects that repository and focuses the originating session when the session is still open; local and stale-repository toasts do not show the action. (#835-314c)
+- **Hands-free voice conversation** — Settings > Voice binds one terminal, keeps the microphone open and sends each utterance by itself. An optional activation phrase gates which speech is sent and is stripped before sending; a configurable hold-back shows a finished utterance before it goes, so one you did not mean can be stopped. Speech is typed into the agent at once, even while it works — the way a line typed by hand is — and never waits in the Compose queue; an open permission dialog or text you are typing holds the turn until it is gone. The conversation ends by itself when the bound terminal closes, the owner disconnects or the capture device fails.
+- **Spoken replies** — Agents answer out loud through local Kokoro synthesis, over IPC, HTTP and MCP alike. Runtime library and per-language voice bundles are downloaded and verified from Settings > Voice. Replies use the language of the conversation rather than defaulting to English, and the agent is told when it may answer out loud and when to go back to text.
+- **Talking over a reply stops it** — Echo cancellation runs on the captured audio, so the reply coming out of the speaker neither interrupts itself nor becomes a turn, while the user's own speech stops playback and opens the next turn.
+- **Voice progress reaches browser and remote clients** — Model and speech-asset download progress, and every state a spoken reply passes through, are pushed on the `/events` stream as well as to the desktop window. A browser tab no longer watches a download start and finish with nothing in between, and no longer polls to learn that a reply ended.
+- **Hands-free earcons** — A short, quiet blip tells you a spoken turn reached the agent, and a softer one that the activation phrase dropped it, so you do not have to look at the screen. Works on the desktop and in a browser; only the device you are talking into plays it. A dictation setting turns them off.
+- **Custom hands-free start notice** — Settings > Voice lets you replace the notice the agent reads when a hands-free conversation starts with your own instructions. Empty, or **Reset to default**, sends the built-in text.
+- **Hands-free conversation from a browser tab** — A browser or PWA client uses its own microphone and speaker: Settings > Voice now opens outside the desktop app, and starting a conversation there is heard and answered where you are. The two sides never mix — arming from a laptop cannot open the microphone on the machine running TUICommander, and the desktop cannot take audio from a browser — and a client that has no audio connection is refused rather than quietly served the server's hardware. Closing the tab ends the conversation it held, leaving nothing queued and nothing speaking. The global dictation hotkey and the microphone-device list stay desktop-only.
+- **Start hands-free from the Command Palette** — "Start hands-free conversation" binds the active terminal and opens the microphone; while it runs the entry reads "Stop hands-free conversation". No default shortcut; `toggle-hands-free` can be bound in Settings.
+- **Leaner MCP responses for orchestrators** — `session action=output` no longer returns an empty input box and the status line or HUD below it on a tail read (`format=raw` still does). A permission dialog or a draft in the input box is never cut. `agent action=spawn` no longer repeats `monitor_with`, `status_with`, `wait_with`, `peer_monitor_with` and `peer_wait_with` call templates, which were most of each spawn response; `parent_session_id` still tells whether child-to-parent mail works.
+- **MCP `session action=rename`** — An agent can set a tab's display name directly instead of relying on an `intent:` title or the desktop UI. Sticky by default (`is_custom` true), same as a manual rename, so a later OSC/intent title update does not overwrite it unless `is_custom=false` is passed.
+
+
+- **SQLite databases open in a self-contained plugin viewer.** The registry's
+  SQLite Viewer claims `.db`, `.sqlite`, `.sqlite3`, `.db3`, and `.s3db` files
+  and shows tables, views, schema, indexes, per-column filters, sortable native
+  SQL pages, configurable page sizes, bounded read-only SQL, CSV copy, and visual
+  query plans. Tables with primary keys support explicit inline editing and an
+  atomic save back to the source file; encrypted/SQLCipher input gets a clear
+  unsupported-format diagnostic.
+  Its pinned sql.js JavaScript and WebAssembly ship inside the plugin: there is
+  no CDN request, system SQLite dependency, or SQLite-specific host API. The
+  engine and database live in the panel iframe and are released with the tab.
+  Generic plugin APIs now accept optional bounded binary read/write budgets, can
+  transfer `ArrayBuffer` ownership through `PanelHandle.send`, and serve `.wasm`
+  assets with the standard MIME type. Existing binary reads retain their 10 MiB
+  default; the host ceiling for an explicit budget is 512 MiB.
+
+- **PR review, changelog generation and the improvement scan are back, on ego.**
+  All three went with the embedded engine and all three now run as one unattended
+  ego turn: the whole input goes inline, ego is offered no TUICommander tools, and
+  every permission request is refused. TUICommander stores no API key and makes no
+  provider HTTP call for any of them, and none of them names a model — which model
+  runs is ego's own configuration.
+  - **PR review** reads the PR diff (at most 30 files, 300 lines each, with the
+    truncation stated in the prompt so nothing is silently dropped) and returns
+    findings with severity, path, line and confidence. The confidence gate runs in
+    Rust before the result is built — default `0.7`, `TUIC_REVIEW_CONFIDENCE_THRESHOLD`
+    overrides it — so a finding that reaches the popover has already passed it.
+    Selected findings still post to GitHub as inline review comments, and GitHub's
+    rule that a comment needs a concrete line still decides which are selectable.
+  - **Changelog generation** produces the markdown plus the structured JSON split
+    over the merged PRs since a tag. Ego answering in prose only is a valid answer,
+    not an error: the JSON half is `null` and the markdown still renders.
+  - **The improvement scan** returns at most five proposals for `refactor`,
+    `testing` or `perf`, and each one is promoted to a GitHub issue only by an
+    explicit click. Nothing files an issue by itself.
+  The three do not fail quietly. An ego that is not configured, not reachable, or
+  that ends a turn without answering produces ego's own sentence — "no ego
+  executable is configured", "ego asked to use 2 tools that an unattended turn
+  cannot grant, and produced no answer" — where the deleted version would have
+  shown an empty result that reads as "nothing to report".
+  The four surfaces are reachable over HTTP as well (`POST /repo/pr-review`,
+  `GET /repo/changelog`, `POST /repo/improvement-scan`,
+  `POST /repo/create-issue-from-proposal`) and are deliberately not desktop-gated:
+  ego is reached over ACP, so `tuic-remote` serves them too.
+- **The terminal stream is compressed over a remote connection.** HTTP bodies
+  were already compressed; the WebSocket carrying the terminal was not, and it
+  is the traffic that matters — an agent repainting a full screen sends the grid
+  many times a second. A remote client now opens the stream with
+  `?compress=deflate` and every frame arrives raw-deflated, with a one-byte tag
+  naming its encoding so a frame that does not shrink is sent as it is rather
+  than sent larger. Measured on a replay of a real Codex session: 2.2 MB of grid
+  frames become 127 KB, and a full-screen repaint costs 0.234 ms to compress
+  against a 16 ms frame budget. A client that does not ask gets exactly the old
+  framing.
+- **An SSH tunnel compresses its channel.** `Compression=yes`, on by default and
+  switchable per profile. It is also why the WebSocket refuses to deflate for a
+  loopback peer: a tunnelled client reaches the daemon through the local ssh
+  process, so its frames would otherwise be compressed twice.
+- **Smart Prompts run in `api` mode again, on ego.** The mode used to call a
+  provider directly over HTTP from TUICommander; that client, its registry and
+  its keyring entry went with the embedded engine, and none of them came back.
+  An `api` prompt now runs one unattended ego turn — launch the configured ego
+  in the active directory, one session, one prompt, shut down — and the turn's
+  final text goes to the prompt's output target. Nothing streams, because a
+  Smart Prompt runs with no panel open. A `headless` prompt whose agent resolves
+  to `api` takes the same one path. The model is ego's default, set in Settings
+  → AI Providers; with no ego binary named the mode refuses and says to name one
+  under Settings → General first.
+- **An unattended turn gets no TUICommander tools, and cannot be left waiting.**
+  Every attended ego session is handed TUICommander's own MCP server, which is
+  how ego reaches terminals and repositories. A turn with nobody at the keyboard
+  to approve a single call is opened with **no MCP server at all**, and every
+  permission request and elicitation ego makes is refused the instant it
+  arrives — a seat nobody takes is a turn that never ends. How many were refused
+  comes back with the answer, so a prompt that returned nothing because the
+  model reached for a tool says that, instead of looking like an empty reply.
+  The turn is abandoned after 300 seconds, a server-side limit no request can
+  raise.
+
+
+
+- **Settings → AI Providers shows what `ego` is configured with, and sets the
+  model it starts from.** It replaces the provider registry deleted with the
+  embedded engine, and it is not a registry: every value is read and written by
+  running ego — `config ls`, `models`, `doctor`, and `config set model` — so
+  TUICommander stores no API key, puts nothing in the OS keyring, and makes no
+  provider HTTP call. The one call that reaches a provider is
+  `ego models --refresh`, which ego makes, and only when you press Refresh;
+  opening the tab makes none. Credential state comes from `ego doctor` and keeps
+  its distinctions: a store that could not be *read* is not an empty store, and
+  an expired credential says ego renews it on its next run instead of sending
+  you to log in again. `model` is the only writable key and it is its own
+  operation rather than a key/value pair, so no caller over IPC or HTTP can
+  reach `sandbox` or `permissions.judge`. When ego is not configured the tab
+  names the field to fill instead of rendering an empty list, and when an ego
+  command fails it shows the command, the exit code and what ego printed, word
+  for word. Offered while Experimental Features is on, beside the AI Chat panel
+  it configures.
+- **Project Progress answers "what changed since I last looked?"** Agents
+  record outcomes — capabilities, decisions, discoveries, blockers, completed
+  objectives — through one compact MCP `progress` call that persists the event
+  and shows its toast together; starting or finishing an agent task is
+  deliberately not an outcome. History belongs to the project, in a SQLite
+  store at its own root that local Git excludes cover, so closing a session or
+  deleting a temporary workspace never takes it away. A dedicated panel, opened
+  from the command palette or the notification bell, shows all projects or one:
+  since last visit, today, blockers, completed, and full history, with
+  provenance on demand. Collection can be paused and resumed per project,
+  events can be deleted, corrected, merged or re-grouped, and clearing a
+  project pauses it in the same transaction. There is no inference job and no
+  background model: grouping is exact and every sentence in the panel is one an
+  agent wrote. The optional fuller reporting prompt, and the measured
+  comparison against the short default, are in the user guide.
+- **Progress exports a readable `progress.md` when you ask it to.** One
+  deterministic snapshot of the owning project — revision, UTC time, workstream
+  states, open blockers and dated history, with source metadata off by default —
+  is previewed in the panel before anything is written. Writing succeeds only
+  while that same snapshot is current, replacing an existing file needs the
+  exact content the preview returned, and a hand edit, a removal, a symlink or a
+  directory at the target is refused instead of overwritten. The write is atomic
+  and touches nothing else: no Git staging, no change to collection or read
+  state, no scheduled re-export, and the Markdown is never read back in.
+
+
+- **A workspace created for an agent comes with instructions.** The MCP
+  response says it is a linked worktree, that refs and objects are shared with
+  the parent, which ignored build directories arrived warm and how large they
+  are (so no install or full build is run to "set up"), and that tracked parent
+  changes are not carried over.
+
+- **One terminal, three addresses.** Every `session` action that takes a
+  `session_id`, and `agent action=send`'s `to`, now accept the PTY id, the
+  `tuic_session` the tab persists, or the repo-derived alias (`tu-1`)
+  interchangeably. An alias also survives a restart: the frontend replays it at
+  create time and the backend reserves it, advancing the per-prefix counter past
+  it so the next auto-assigned alias cannot collide. A terminal tab's context
+  menu shows its alias and copies it on click. An address that resolves to
+  nothing is passed through unchanged, so a session whose process has exited can
+  still be read.
+
+- **`tuic-remote` can run isolated named application instances.**
+  `--instance <id>` selects a separate platform configuration tree and OS
+  keyring vault before password setup or daemon startup. Named instances never
+  migrate or fall back to default state, and a vault failure stops a release
+  daemon before it binds. Omitting the option preserves all existing paths,
+  credentials, and migrations.
+
+- **A repo dropped by the memory budget comes back without re-indexing it.** The
+  index is written to `<data_dir>/content-index/` on the way out and reloaded on
+  the way back in, so returning to a repo costs a stat walk instead of a full
+  walk, read and re-embedding. A snapshot is always validated against the working
+  tree before use and brought up to date through the same path a live index uses,
+  so it can never serve content that disagrees with disk; one that fails to parse
+  is discarded and the repo is rebuilt. Requires a local patch to `bm25`, which
+  keeps its document embeddings private with no way to read them back
+  (`patches/bm25`, one read-only accessor).
+
+- **Spreadsheets open as tables instead of binary noise.** The registry gains
+  `xlsx-preview`, which reads `.xlsx`, `.xlsm`, `.xltx`, `.xltm`, `.xlsb`, `.xls`,
+  `.ods` and `.fods` through SheetJS and shows one sortable table per worksheet —
+  the counterpart of `csv-preview` for the formats the code editor could only
+  render as a zip. Cells carry the value the spreadsheet displays, so dates keep
+  the workbook's own format. Large sheets are capped at 2000 rows and 200 columns
+  and the panel says what it hid.
+
+- **TUICommander can now drive ego.** A supervised agent process per
+  connection, durable sessions, turns you can cancel or pause, and the
+  questions the agent asks back — all of it reachable from the desktop app and,
+  identically, from a browser or the PWA. Same request fields, same responses,
+  same errors; the only difference is that the desktop gets its turn frames on
+  a Channel and everyone else on a WebSocket.
+  The binary it launches is a setting, never an argument: no request can choose
+  what your machine runs, and correcting the setting takes effect without a
+  restart.
+
+- **Settings has a search box.** 123 controls across 13 tabs and 2 sub-panels
+  could only be found by opening each tab in turn. Selecting a result opens the
+  owning tab and scrolls to the field, falling back to its heading when the
+  field is not rendered. The index is committed rather than scanned from the
+  DOM — only one tab is mounted at a time, and mounting the rest would fire CLI
+  status, mdkb status, GitHub probes and audio enumeration on every keystroke —
+  and a drift test re-derives it from the sources, so a setting added without
+  indexing fails CI.
+
+- **The language picker exists, and translation actually works.** `t()` ignored
+  its key and always returned the inline English, with an empty `en.json`
+  behind it: the whole i18n layer was inert. It now reads the active locale map
+  and falls back to the inline string only when the map has none; `en.json` is
+  populated from all 843 call sites (756 keys), byte-identical to the fallbacks
+  it came from, so no rendered English string changed. Settings → General gains
+  the picker, offering only locales that ship a catalogue.
+
+- **The three terminal block-display settings are reachable.** Block
+  timestamps, scrollbar marks and block folding existed in the store with no
+  control, so the only way to change one was to edit `config.json` — which the
+  backend then dropped on the next save. They are toggles in General →
+  Terminal now, with scrollback reflow beside them, and all five are persisted.
+  Block folding also honours its own setting: the check moved into
+  `toggleBlockFold`, where the shortcut, the command palette and any future
+  caller converge, instead of sitting in one of them.
+
+- **A provider card says whether the endpoint answers, not just whether a key
+  is set.** A local Ollama that is not running used to look exactly like one
+  that is. The card carries a Reachable / Not detected indicator and renders
+  the backend's own explanation verbatim; a probe that could not run at all
+  reports unreachable with the error rather than showing nothing.
+
+- **Codex usage dashboard.** The same shape of data the Claude one shows, from
+  the rate-limit endpoint the Codex CLI itself polls and from the daily token
+  history, both reading the OAuth token from `~/.codex/auth.json`. Identity
+  fields — user id, email, account id, the whole profile object — are stripped
+  in the backend before either response leaves it. The usage ticker follows the
+  agent the active terminal is running instead of always showing Claude.
+
+- **Diagnostics can now name what broke.** `GET /diagnostics/memory` reports
+  entry counts for every map that grows with sessions, clients or repos,
+  measured bytes for the four that hold payloads, and the real
+  `phys_footprint_bytes` (resident *plus* compressed — `ps` read 0.52 GB while
+  the process held 40 GB). A tripwire logs that report by itself at 4 GB,
+  always on. The WebView also beats every 5 s, so a blocked main thread is
+  logged after 30 s of silence; and a separate watcher notices the window
+  landing on `about:srcdoc` after a standby memory sweep and navigates back to
+  the app on its own, which no heartbeat can detect because the app is gone
+  rather than blocked.
+
+- **The terminal answers OSC 10/11/12 colour queries** from the resolved theme.
+  An app that asks what it is painted with used to get silence, and a querier
+  with no reply retries forever. Indexed `OSC 4;n;?` queries stay unanswered on
+  purpose — that palette is not tracked, and no fence idiom waits on them.
+
+- **goose gets a ready-screen adapter.** It launches as a long-lived
+  interactive process, so OSC 133 never clears and the tab latched busy for the
+  whole turn; its spinner glyphs and whimsical, reworded messages defeat both
+  generic signals. Detection now keys on the hints at each end — `Ctrl+C to
+  interrupt` while a turn can be interrupted, `Enter to send` when the composer
+  accepts input — captured live on goose 1.49.0 and shipped as fixtures. The
+  interrupt hint is tested first so a working screen is never downgraded, and
+  Ready demands the composer footer rather than merely the absence of a
+  spinner: a false Ready is what lets auto-standby SIGSTOP a live turn.
+
+- **Both dictation speech gates are settings.** The RMS floor was hardcoded low
+  enough for room noise to clear it, which is how Whisper ends up transcribing
+  an empty room; the right value depends on the room and the microphone.
+  `rms_threshold` joins a new `no_speech_threshold`, which uses Whisper's own
+  per-segment no-speech probability and so rejects whatever the model invents,
+  not only the wordings someone remembered to list. Configs written before they
+  existed keep the defaults.
+
+- **Resume finds the conversation again.** Two halves. A tab now binds to its
+  agent through the agent's own pid→session registry (Claude's
+  `sessions/<pid>.json`, grok's `active_sessions.json`) instead of "the newest
+  unclaimed file in the folder" — measured on a live instance, 3 of 6 Claude
+  tabs held no id and one held another tab's, so every tab resumed into the
+  same conversation. And the launch command is rebuilt from the live process's
+  argv and env, because a shell alias is expanded before `exec`: a run config
+  reading `c2` is really `claude --dangerously-skip-permissions` under a
+  different `CLAUDE_CONFIG_DIR`, and resuming with the config's version sent
+  `--resume` to a binary reading the wrong directory.
+
+- **Session state is pushed, not sampled.** `list_active_sessions` ran once a
+  second for as long as any terminal existed. The backend now publishes
+  `session-state-changed` once per real transition on both transports, with the
+  same body the poll returned, so one frontend applier serves both. A push is
+  not a queue, so an SSE reconnect or a `lagged` frame triggers the same
+  catch-up read used at mount.
+
+- **Every `/dictation/*` route, and seven more, now exist.** `dictation_routes`
+  was written but never declared as a module, so it had never been compiled and
+  all twelve handlers answered 404; `shell-family`, `agents/detect-all`,
+  `agents/open-in-app`, `notification-sound`, `relay-status`, `check-update`
+  and `worktrees/run-script` had no route either. Desktop worked over IPC while
+  browser and PWA clients got 404 on all nineteen. The parity gate that should
+  have caught this could not fail — its probe read a 405 from the SPA catch-all
+  as "route present" — and is now split across both languages: Vitest snapshots
+  every `COMMAND_TABLE` path and a Rust test probes each one against the real
+  router.
+
+- **The reason a smart prompt cannot run is clickable.** It reached the user as
+  a `title=` attribute, which can never be. It is a button wired to the
+  Providers settings tab now, with the click prevented from running the prompt
+  it just said was unrunnable.
+
+- **A corrupt config file is kept, and the backups are bounded.** An
+  unparseable `config.json` was replaced with defaults, and because defaults
+  carry empty tokens the document was written back on the same startup — so the
+  broken-but-recoverable file was gone on the first restart, deterministically.
+  It is now preserved as `<name>.corrupt-<uuid>` like every other config file,
+  and the five newest backups per file stem are kept (a count, not an age: a
+  user who comes back a month later would find an age rule had deleted the very
+  file they came for).
+
+- **An AI stream reaches a detached panel.** Detaching unmounts the docked copy,
+  so a stream the main window runs for that terminal — a watcher rule, an
+  automation goal, a terminal context action — rendered nowhere at all. The
+  detached window now receives a projection of it, re-checking the chat id at
+  the receiving end so another terminal's stream stays on another screen.
+
+- **Windows works, and the suite now runs there to keep it that way.** The
+  build shipped a Windows installer that nothing had executed: the first real
+  run on the platform reported defects no unix machine could see, and they were
+  production code, not test plumbing. `~` reached the OS literally in repository
+  paths, working directories and agent commands, because tilde expansion read
+  `$HOME`, which Windows does not set. Plugin ZIP installs extracted nothing and
+  reported success over an empty directory — the archive spells its entry names
+  with `/` and the path they were stripped from is spelled with `\`. Reading
+  another process's environment always answered "not set", one oversized read
+  running off the end of the mapping and failing the whole call, so nothing that
+  depended on an agent's own environment worked. The allowlist of variables a
+  child inherits was written by analogy with POSIX and omitted `PATHEXT` — half
+  of what `PATH` means on Windows, where `claude` and `npm` are `.cmd` shims —
+  along with `APPDATA`, `LOCALAPPDATA` and `PROGRAMDATA`, where such a tool keeps
+  its configuration. The progress store refused to open while a `-shm` file was
+  locked, which there is every moment a second connection is live. Terminating a
+  process left its grandchildren running. CI now builds and tests on Windows on
+  every pull request, so the next one of these is caught before it ships rather
+  than after.
+
 ### Fixed
+
+- Correct Settings accent-action text, compact navigation, wrapped help badges, shortcut groups, and workspace path presentation; hide the desktop-only Local tools card in browser mode (#1945).
+
+- Keep marker-projected terminal frames incremental: repaint dirty display rows and changed projection slots instead of clearing the whole canvas (#2003-f218).
+- Bound CLI marker planning to 128 rows above the viewport, reuse unchanged row generations, and resolve cold prompt ownership in bounded background steps (#2002-2239).
+
+- Keep quoted answer markers in Claude and Codex prompt echoes out of the answer gutter and Answers view, including long prompts above the viewport lookback, while preserving blank-separated indented answers (#1389-3a47).
+
+- Keep compact Settings color targets circular and reserve layout space for MCP heading actions (#1945-a78d).
+- Align Settings help badges and row actions, restore the General status/local-tools layout, and correct compact repository navigation and shortcut spacing (#1945-a78d).
+
+- Preserve unrelated repo-root tabs when a worktree is removed or recycled; terminal placement and cleanup follow cwd instead of stale workspace membership (#1999-95b0).
+- Keep the selected workspace's active tab and pane layout consistent when saved tabs are restored to another workspace by cwd (#1999-95b0).
+- Keep the shared desktop CLI/Chat switch above the conversation and preserve line breaks in notice cards (#1969-ac9b).
+- Keep mobile question cards theme-readable and above the terminal key bar, including ego free-text questions (#1973-3d1b).
+- Apply confirmed username and password changes live in headless Settings without reporting a persisted apply failure or restarting the desktop listener; real listener changes keep their restart contract (#1984-3472).
+
+- Preserve unsent mobile answers when opening an ego question card, and exclude startup/help rows from fresh-session free-text questions (#1980-47b7, #1973-3d1b).
+- Preserve original spaces across terminal soft wraps in MCP text, copied selections, ego questions and mobile CLI output; keep hard line breaks (#1977-063c).
+- Preserve Claude /resume session rows and filtered results in mobile CLI output without widening agent-state parsing (#1971-5834).
+- Forward mobile key-bar arrows and Tab to waiting Claude pickers without overwriting the local answer draft (#1972-128e).
+- Route Telegram messages to the latest-connected live AI Chat when no agent has explicitly registered; keep explicit ownership authoritative and preserve in-flight replies when another chat connects (#1983-1b47).
+- Keep Settings contextual help beside its label, including repository scripts and narrow layouts (#1965-d50f).
+- Give Paper semantic branch and PR markers readable theme colors in Settings and the sidebar; keep filled merged badge labels readable independently of accent action colors (#1968-baa4).
+- Use readable identity foregrounds on agent color tiles in Settings (#1967-404e).
+- Restore Settings text, enabled action and tooltip contrast on themed surfaces (#1966-514a).
+- Let gated HTTP and IPC settings edits confirm and commit through the existing human dialog; keep HTTP approvals stable across TCP ports and require approval for tunnel forward-list replacement (#1787-4778).
+- Omit hidden answer markers when copying terminal selections or AI Chat answers, including mobile and the Answers view. (#1963-c7f6)
+- Recognize narrow ego question selectors and multiple-choice dialogs on mobile; show free-text question cards and keep checkbox toggles separate from submission (#1973-3d1b).
+- Restore contextual help for repository Design Mode and automation scripts in Settings (#1946-5de3).
+- Resolve worktree lifecycle bases for repositories without main/master, and explain when no base branch is available (#1961-bab6).
+- Prevent auto-standby from stranding foreground shell jobs; wake the recorded stopped group and retain a full timeout window after remote input, output viewing, or disconnect (#1962-4182).
+- Capture the latest soft-wrapped ego intent during composer repaint, updating the Context bar and tab title; share the intent anchor grammar with row styling (#1964-b32e).
+- Confirm Telegram chat linking, explain start and invalid codes, and clear the consumed Settings hint (#1955-2f43).
+- Recover unconfirmed ego input only from a fresh, stable empty composer; release later queued commands without replaying the uncertain payload (#1957-38c1).
+- Bound raw PTY input waits to two seconds and keep session close independent of blocked writers (#1957-38c1).
+- Expire abandoned urgent-mail notice reservations after 30 seconds so later urgent sends are not suppressed indefinitely (#1957-38c1).
+- Show the ego icon for every ego session, independent of provider, and keep provider text in sidebar tooltips (#1960-51a2).
+- Keep missing Pocket voices visible in Settings with a download action; use the installed same-language default for spoken replies.
+
+- Bind hands-free conversation start/stop to Cmd+Alt+V (Ctrl+Alt+V on Windows/Linux), with user overrides preserved (#1953-3da5).
+
+- Show tab shortcut hints after a 450 ms Cmd-only hold (Ctrl on Windows/Linux), without flashing on normal shortcuts or pointer activity (#1951-8fac).
+
+- Restyle General, Appearance and Notifications with shared Settings cards and labelled control rows, preserving existing actions and audio-device consent (#1937-c2e4).
+
+- Establish the approved wider Settings shell and reusable theme-aware presentation vocabulary (#1936-0caa).
+- Restore the theme-aware intent row highlight for ego, Claude and Codex terminals (#1948-cd16).
+
+- Add explicit addressed Claude model-alias discovery and no-launch typed model saves through settings (#1910-451e).
+
+- Share bundled font and IDE choices with Rust settings owners; add explicit theme/IDE discovery without probing during describe (#1915-d77f).
+
+- Validate keybinding records and bounded pane geometry through shared Rust owners before saving; preserve runtime tab membership and focus (#1914-cdf6).
+- Add explicit voice settings choice refresh and typed owner asset actions; input enumeration failure is unavailable rather than an empty list (#1909-0d24).
+
+- Add explicit owner-backed settings choice refresh; notification output enumeration reports unavailable separately from an empty device list (#1908-c327).
+
+- Require authenticated same-owner peers in the relay prototype and atomically enforce room and token capacity, while allowing the second peer at the room limit; terminate expired sockets and prevent stale peers from accessing recreated rooms (#1932-8398).
+
+- Restore Edge spoken replies after the service migration with the new endpoint and the live-verified existing v1 GEC handshake (#1952-bf91).
+
+- Recover failed mobile views after a server outage through automatic or manual retry, without false empty/setup states, raw network errors or desktop restart advice (#1930-f4c2).
+- Exclude projected suggestion rows from copied terminal selections, including scrollback selections, remove the duplicate blank separator around an omitted suggestion block, and classify the full received viewport (#1935-eedd).
+
+- Apply asynchronous AI Chat session option offers before the first prompt so model and mode settings become available, without stale offer snapshots reverting a confirmed selection (#1918-2ea3).
+- Close AI Chat tabs with the middle mouse button through the normal guarded close path (#1922-8027).
+- Align AI Chat Stop, Park and Send controls with the input (#1925-9e69).
+- Stop a running AI Chat turn with Escape while preserving drafts and dismissing open Find even from the composer (#1926-458a).
+
+- Remove the green answer rail and its inset from AI Chat replies; retain terminal Chat cards and real blockquotes (#1920-700e).
+
+- Attach AI Chat clipboard images when an empty text flavor accompanies the PNG (#1919-f93d).
+
+- Keep the Settings shell visible during plugin catalogue and value reads, and identify plugin pages in a separate navigation group with source IDs (#1927-9649).
+
+- Retain bounded, metadata-only slow-refresh, UI-freeze and heartbeat-gap evidence across ring overflow and restart. Add an anonymized count-based replay input builder; original real-stall reproduction remains unproven (#1638-c94c).
+
+- Keep ego attachment grants after `run` and `resume` so direct launches accept their prompt (#1833).
+
+- Grant Gemini session attachment trust without a folder prompt or global settings changes. Grant ego PTY attachments read-only access in confined sandbox modes (#1833-aa60).
+
+- Add conditional atomic Ego settings batches, executable paths and base-only write-only provider auth actions (#1907-0f9f).
+
+- Refresh expanded file-browser folders after Finder moves, copies, confirmed directory transfers and remote uploads (#1905-c1ed).
+
+- Recognize `💬` answers at the start of Markdown list items in the CLI grid, Answers view and Chat view, without including unmarked sibling items (#1904-9eef).
+
+- Fix urgent managed ego mail falling back as an unknown agent type; queue only an inbox notice without interrupting active tools (#1901-9b6b).
+
+- Fix cache keepalive draft preservation with guarded backend submissions and complete question-state replay on plugin load.
+
+
+- Await async plugin startup, surface rejected startup errors, and cancel obsolete host lifetimes on unload or reload (#1756-4d42).
+
+- GitHub OAuth now requests `read:project` for Projects v2 reads. Existing logins need reauthorization.
+
+- Add the GitHub Work adapter, account-authenticated runtime, catalog entry and recorded-fixture tests; core PR-action binding and Projects v2 success-path verification remain pending (#1693-a816).
+
+- Protect suspended tabs from worktree recycling and cleanup, and remove obsolete worktree bell actions (#1705-67b3).
+- Keep detached checkouts with a local feature branch at HEAD out of orphan cleanup, and stop reporting fresh in-sync branches as integrated (#1894-7683).
+- Repaint answer-rule strips when terminal cell metrics or projected row positions change, so font loading and theme remeasurement keep the rule aligned (#1896-f355).
+
+- Preserve GitLab endpoint and username-filter scope in small Tasks lists; align Jira and GitHub local field values, and keep Roadmap provider paging (#1851-7ade).
+- Run desktop orphan-worktree safety checks and removal on the blocking pool instead of the IPC main thread. Live heartbeat confirmation remains pending (#1638-c94c).
+- Include CSS tokens referenced by shorthand declarations in Design Mode grabs, including inline styles and adopted shadow-root sheets (#1888-14a3).
+- Allow workflow agents to launch in registered branch worktrees while preserving detached-orphan removal guards (#1883-eba0).
+
+- Preserve attached Goose session names and legacy paths without injecting a duplicate or conflicting `--name`.
+- Keep the Context preview clear of the terminal CLI/Chat switch (#1893-a053).
+
+- Apply scrollbar history-mark visibility changes immediately on idle terminals (#1891-a933).
+
+- Start status-bar agent usage blinking at 96% instead of 90%; dashboard critical colours remain at 90% (#1887-86a5).
+
+- Retract saved agent placement declarations when a linked worktree is removed or recycled (#1705-67b3).
+- AI Chat provider-retry waits now count down live to “retrying now”; user-message Copy buttons no longer wrap vertically.
+
+- Hide Markdown review Agent and Send controls after a successful send until a new change (#1881-f84a).
+
+- Preserve independent settings windows' edits when one changes agent visibility and another changes the IDE or other preferences (#1876-ceee).
+- Show cancelled story status and dependency removal actions from the API response; keep plan state visible beside cancellation counts (#1875-c3d9).
+
+- Preserve live attachment uploads when another TUIC instance starts; keep Claude attachment access with disabled instructions and preserve custom wrapper arguments (#1833-aa60).
+
+- Allow worktree removal when its branch tip is contained in any remote-tracking branch, naming that ref as proof. Offer a one-click action to keep branches with local-only commits (#1874-1758).
+- Preserve the local branch and report a warning if a concurrent fetch conflicts with the remote proof during worktree removal (#1874-1758).
+
+
+- Tasks view preferences keep the settings catalogue available and restore nullable query defaults correctly (#1852-35a8).
+- Stop answer tint before blank-separated unmarked prose, while retaining wrapped continuations and structured answer content (#1872-1870).
+- Merge adjacent marked answer paragraphs into one continuous CLI and Chat tint, including blank paragraph gaps and excluding Codex duration footers. Hide answer glyphs in the CLI grid while keeping raw copy and search text (#1872-1870).
+- Tasks board lanes show loaded counts and More controls; cards show assignees and labels with a compact keyboard-accessible Move menu (#1844-858d).
+- Preserve account metadata when saving Tasks setup, keep assignee username filters as text, and hide unsupported GitLab roadmap date filters and grouping (#1841-bbac, #1843-9b0f, #1845-66f6).
+- Hide Codex/Ink hard-wrapped intent tails with their marker rows, stopping at blank rows and new output (#1761-7249).
+
+- Tasks details display provider enum labels while retaining IDs for edits (#1839-dcbf).
+- Jira create forms support searchable Reporter and Assignee, free labels, inline required errors, and configured Project/Type values (#1859-c01f).
+
+- Keep Jira JQL parse errors visible in Tasks lists and boards, with explicit `jql:` and `text:` search prefixes (#1861-8a4c).
+- Trackpad and wheel scrolling no longer stalls while the pointer is over the CLI/Chat switch, in either view (#1847-feb9).
+- Design Mode automatically loads its own extension on cold Edge launches and opens the discovered dev server. Running profiles and unsupported branded Chrome return clear errors (#1834-f6c4).
+- Make Terminal Chat easier to read with one lightly tinted answer card per turn, whole-answer Copy, reading-width limits, collapsible terminal pastes and compact inbox notices. Keep the collapsed tool row and show Claude Bash descriptions when available (#1832-b19a).
+- GitHub Settings hides bindings for a unique account/remote, restores Logout for OAuth credentials, and keeps an environment-token disconnect effective until login or restart (#1829-54c2).
+- Ego model settings now honor the configured profile and AI Chat workspace. The internal settings service adds managed Ego configuration, readback and presence-only credentials through owner services (#1775-330c).
+- Goose returns to idle after a reply and accepts the next submission without waiting for the five-minute stale recovery (#1812-022d).
+- Aider returns to idle after a reply and accepts the next submission (#1823-8150).
+- Keep child agent MCP bridges on the spawning instance, including isolated `tuic-remote` instances and fallback sockets (#1811-a0fe).
+- Align community plugin permissions, CLI binaries and minimum app versions with shipped manifests.
+- Keep document preview panels separate for files with the same name in different repositories.
+- Cancel pending retry and wakeup decisions when session state changes during composer inspection.
+- Discard obsolete plan, story and dashboard results after repository switches or plugin unloads; refresh the MDKB ticker on repository switches.
+- Preserve beta installs in the macOS terminal installer and normalize release tag prefixes for default and pinned downloads.
+
+- Desktop dictation in terminal Chat inserts into Compose instead of the hidden CLI. The destination and selection are captured before recording yields; undelivered transcripts stay in Messages for recovery (#1773-5b69).
+- A prerelease tag such as `v2.0.0-beta.1` publishes as a GitHub prerelease, never as "latest", and does not update the Homebrew tap. The updater and plugin checks use semver precedence: a beta user is offered later betas and the final release, and a nightly user is offered later nightlies (#1799-d6be).
+
+- Mobile PWA: the shell follows the visual viewport again, so the command input sits above the iOS keyboard; the bottom tab bar is 56 px again and no longer covers the + button; session cards lose the empty space under the close button (#1795-a710).
+- Recurring cron Automations now dispatch once per due occurrence and Run Now works for them (#1794-f0bb).
+- Restored mobile dictation drafts reconcile with the current terminal line on Send or first edit, preserving words if the desktop cleared the line and avoiding duplicate replay (#1768-a83f).
+- Mobile output stops following after a small upward scroll and ignores queued follow frames after the user scrolls away (#1745-63b0).
+- Mobile ego questions show Input and open a full, wrapping question card from the header; selecting an option sends one answer (#1759-6047).
+- Native macOS Fn dictation keeps recording through window focus changes while the key is held and detects its release outside TUIC (#1763-3361).
+- Automations uses readable schedule cards, short repository names, keyboard tabs and a compact toolbar. The first definition opens automatically unless disabled in the dialog; the palette entry also matches scheduler and schedule (#1762-c772).
+- The bell no longer counts static plugin status rows; unread Progress outcomes have an explicit Mark as read action (#1764-862a).
+- Mobile AI Chat keeps Park and Stop in the composer input row, removing the archive-only row above it (#1746-aa9e).
+- Default-app URL and file opens reap their launcher child instead of leaving a zombie process (#1749-f9a0).
+- Design Mode retains a wait owner for Chrome/Edge launches, including short-lived handoff processes, independently of the launch runtime (#1707-bd40).
+- Duplicate workflow starts report the active run ID instead of a raw SQLite constraint error (#1748-47b0).
+- Design Mode delivers the first navigation after a backend restart, including before the first idle heartbeat (#1724-fe7e).
+- A console that stops reading the backend's stderr (for example the `make dev` pipe) no longer blocks every thread that logs, the main thread included; console output is now non-blocking and lossy, while retention in the existing lossy file log and bounded `/logs` ring is unchanged (#1638-c94c).
+- Design Mode lists only the dev servers of the session being edited (HTML-serving listeners of its worktree, URLs it printed, the configured URL) and excludes TUIC itself (#1723-4a21).
+
 - Reap child processes launched by built-in apps, custom tools and macOS microphone settings without waiting for the launched application to close (#1707-bd40).
 - Preserve Design Mode screenshot evidence and send retained feedback to an explicitly chosen replacement agent (#1672-cd3d).
 - Attach saved AI Chat tabs when selected, show connection failures with Retry and pending model controls, and name tabs from conversation titles or prompts (#1628-4459).
@@ -437,70 +1088,6 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Remote desktop terminal tabs now receive daemon agent identity, parsed state and OSC title/reset notifications through the owning connection (#1581-8fd0).
 
 
-### Added
-- Add Automations Runs with backend 24h/7d counts, paginated history, owner-safe terminal navigation and saved output for unavailable sessions (#1619-b84d).
-- Add the Automations dialog with backend cadence and Once previews, recent history, atomic pause/resume, Run now and confirmed deletion. Backend API integration is pending (#1618-685b).
-- Add an all-repositories toggle to the Ideas panel header: it lists every repository's ideas for cross-repo work (in memory, resets on reload). The badge and "clear completed" follow the visible list, so clearing in a single-repository view no longer deletes other repositories' completed ideas; ideas added in all-mode stay tagged with the active repository (#1598-c0a0).
-- Add a headless agent capture scenario driver with explicit fixture promotion and ordered replay expectations; record real Codex and pi turns; Claude (expired login) and goose (its banner prints the home directory) stay unverified, and a test rejects fixtures that embed `/Users/` or `/home/` paths.
-
-- Telegram draft Stop interrupts only its bound agent turn; replacement input retires stale Stop requests before writing.
-- **Mobile Markdown review** — In the mobile Files view, tapping a task-list checkbox toggles it in the file, and a block comment can be added to a paragraph, heading or list item in the desktop's `<!--tweak:...-->` format. Saves refuse to overwrite a file that changed on disk meanwhile (new `write_file_if_unchanged` command, `POST /fs/write-if-unchanged`).
-- Add a CLI | Chat switch to Claude terminals: a conversation view built from the agent's session file, with prompts apart from replies and tool calls folded into compact cards. The grid is hidden while Chat is open and never unmounted.
-- Fix missing older Claude prompts, image/PDF tool-output markers and model-change cards in Chat; validate the parser against sanitized records from real CLI transcripts.
-
-### Changed
-- Upgrade Mermaid to 12.1.0: diagrams use its new layout and appearance defaults while retaining the renderer's dark theme and strict security setting (#1590-7c6b).
-- Require macOS 12 Monterey or later for the desktop bundle, with Safari 17.4 or later for Mermaid diagrams (#1590-7c6b).
-- **Remote upload credentials** — `POST /remote/update` and `/fs/upload-copy` accept only the `tui-session` cookie; a `?token=` query answers 401 and the update client no longer puts the token in the URL. Older desktops cannot update a daemon of this release. QR pairing and WebSocket authentication are unchanged.
-- Make Compose the default input in terminal Chat: it opens focused and docked, stays open after send or queue, and preserves each tab's CLI Compose state and unsent draft when switching views (#1599-db8a).
-- Space automatic sidebar refresh starts at least five seconds apart per repository, retaining one trailing update during event bursts; explicit repository additions, checkouts and merge cleanup bypass the wait.
-- Resolve browser HTML and Markdown images through open repositories; show a clear placeholder for external images.
-- Show the existing ACP refusal text once in a plain-text AI Chat card.
-- Integrate workflow approval, plan dispatch and public story controls; public plan API starts share the daemon executor. Canonical workflow test fixtures preserve Windows ownership.
-
-- Dispatch bounded plan story waves, wait for explicit dependency integration, and require current deterministic final checks before completion.
-
-- Run pre-approval workflow checks and record independent reviewer approval; retain implementer role restrictions after exit. Execute deterministic story Gate outcomes.
-
-- Execute pinned serial workflow Agent/Judge/Loop/Pause/Notify/Join nodes in the owning daemon with durable reports and effects; refuse unsupported node publication. Manual pause time no longer consumes active run duration. Public graph start controls remain in development.
-- Start published story workflows from Plans and Stories; inspect pinned graph positions, decision evidence and full paged events. Add explicit graph resume, pause/cancel controls and the generated `workflow_run` MCP surface. Plan start remains visibly unavailable pending dispatch.
-
-- Execute pinned serial workflow Agent/Judge/Loop/Pause/Notify/Join nodes in the owning daemon with durable reports and effects; refuse unsupported node publication. Manual pause time no longer consumes active run duration. Full plan dispatch remains in development.
-- **AI Chat steering** — Text sent during a running turn joins the current query when ego advertises ACP steering, on desktop and mobile. Attachments and unsupported or rejected steering retain the queue. Delayed steering responses preserve submission order with later text and attachments.
-- Add recorded incident causes and manual next-step suggestions to Plans and Stories run history.
-- Add persisted ego profile, workspace and executable options for individual AI Chat conversations, including HTTP creation and reopen.
-- Audit MCP inbox reads with caller, owner and message ids without logging mail bodies.
-- Let MCP agents page retained terminal output without rerunning commands. Responses explain the next page, raw byte offsets work locally and remotely, and tiny raw pages cannot reconstruct masked secrets.
-- Bound repository-selected ego profiles by the machine profile over ACP and show ego's clamp warnings in AI Chat.
-- Add caller-bound MCP worktree declarations for agents using `git -C`, with same-repository validation and placement restored after restart.
-
-- Place only the same-repository MCP caller in its new worktree when no separate session is requested; preserve sibling tabs and inactive selection.
-- Separate active and idle ungrouped repositories in the rich sidebar and show working-agent counts.
-- Keep rich sidebar navigation dense at iPad width and fold returned subagent history.
-- Extend intent only for working rich sidebar agents; keep idle rows on one line and full intent in tooltips.
-- Fold old idle sessions in the rich sidebar without changing session order.
-- Hide zero PR and worktree counts in rich sidebar repository metadata.
-
-- **Workflow daemon foundation** — Recover runs only after acquiring database ownership, retain durable root positions and story reservations, require explicit graph resume, and pause idle runs at their duration deadline. Executable Agent delivery remains disabled pending later slices.
-
-- **Workflow graph foundation** — Durable serial graph positions, bounded predecessor history, decision provenance and repair counters now replay from pinned definitions. Executable validation requires final checks and explicit pause targets. This slice does not enable autonomous scheduling; older pre-contract runs remain inspectable and cancellable.
-- Fix command boundaries, prompt ticks and answers-only prompt association drifting after scrollback eviction.
-### Added
-
-- **ego launch permissions** — Choose permission mode and filesystem sandbox in Settings > Agents > ego. Terminal launches and MCP spawns use the same persisted overrides; leaving either choice unset preserves ego configuration.
-- Inspect managed-agent launch instructions from the terminal context menu: captured brief (including peer context), explicit system instruction arguments/file snapshots and MCP initialize responses, with source, original UTF-8 bytes, redaction and capture limits. Historical and agent-autoloaded instructions are explicitly unobservable.
-- Add ego Perimeter controls in Settings > AI Chat for root access, read allowlists, extra writable directories and network mode. Show ego's effective view and a measured or unverified exec-sandbox badge; writes use ego CLI.
-
-- Add terminal history back/forward (`Cmd+Alt+Left/Right`, toolbar arrows) over the last 10 activated terminals, and a Default/Recent sort on the mobile Sessions screen.
-- Navigate from parent agents to live children in other repositories.
-
-- Summarize merged idle worktrees with a guarded Clean up action.
-
-- Keep rich active/idle repository sections inside their existing groups.
-
-- Add an opt-in Telegram channel to the headless daemon with native peer mail, correlated Thinking/activity drafts, exact final replies, authored progress notices and opaque-button choices. Agents opt in with `telegram register`; registration ends with the agent or MCP session and is not persisted. With no agent, authorized chats receive "Nessun agent registrato". Live mint deployment remains pending.
-
-### Fixed
 - Prevent primary terminal presses from temporarily blurring the shared keyboard input through native canvas focus. Physical iPad keyboard retention remains to be verified.
 
 - Keep backend memory census on demand, use cheap watchdog summaries, and identify census bytes as overlapping map accounting.
@@ -546,12 +1133,6 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Build bundled WebRTC with Visual Studio for Windows MSVC targets even when MinGW is on `PATH`.
 - Restore the Windows process environment API dependency in `tuic-core` after the workspace split.
 
-## [1.8.0] - 2026-10-04
-
-- **Private secret forms** — Agents request only named sensitive fields and run user-approved argv commands with values in the child environment. Values remain in memory, output is masked, and a one-time capability supports browser or phone entry on the existing server. TUIC inspection tools are suspended while entry is open.
-- **Remote peer mail** — A flooding host has its own replay quota. Budget pressure reclaims only departed senders, and disconnect retires old shadow peers even during a reconnect handshake. A departed sender may replay once after pressure evicted its history.
-
-### Fixed
 
 - Desktop MCP now discovers and addresses configured remote terminals and peers, preserving native output and semantic submit behavior. Authenticated peer mail supports remote replies and remote-to-remote delivery through the desktop hub.
 - **Workflow recovery** — Recover each database once per process and continue past individual run failures. Later opens and runtime reconciliation preserve resumed workers instead of retrying restart recovery.
@@ -755,70 +1336,6 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - **CircleCI CI Auto-Heal** — Failed CircleCI checks can now contribute bounded, sanitised logs when a token is configured. Token removal is explicit, and remote transports use the same protected backend path.
 
-### Added
-
-- **Update and restart remote machines** — Direct and SSH connections compare
-  the daemon's running build with the binary the desktop can deploy. A
-  per-connection action confirms live session loss, updates the daemon, and
-  verifies the new build after restart. Direct uploads require the daemon
-  session token and validate size, target and SHA-256.
-
-
-- **Managed agents start in new folders** — Claude Code and direct Codex children spawned by another agent pass their workspace trust question by default. A per-agent expert setting turns this off; user-opened terminals keep their usual trust behavior.
-- **Configurable PTY capture directory** — `TUIC_CAPTURE_DIR` sends diagnostic `.tcap` files to an absolute path selected at process start. Relative paths reject capture activation.
-
-- **Editor line wrapping** — Text and Markdown files open wrapped, while code opens unwrapped. Toggle it from the editor header or with `Alt+Z`; each file kind remembers its setting.
-
-- **Settings expert mode** — An **Expert** switch in the Settings header shows or hides expert settings: settings whose default is correct for almost everyone. In basic mode an expert setting is hidden only while it has its default value, so a setting you changed is never hidden. A search result for an expert setting shows an **Expert** badge and opens it without changing the switch. The switch position is kept between restarts.
-- **Native plans and stories** — A config-directory SQLite store tracks plans, criteria, dependencies, revisions, manual claims, and guarded review transitions. Typed manual actions are available through desktop IPC, authenticated HTTP, managed-session MCP, and `tuic story`.
-- **Manual Plans and Stories dialog** — A project toolbar action opens native plans and stories on desktop or in the browser. Users can create records, start a Ready story without a terminal claim, update criteria, manage dependencies, and review or block work.
-- **Versioned workflow definitions** — Project-scoped plan and story graphs can be saved as drafts, validated, and published as immutable revisions. The built-in `Resolve plan` graph pins a version of `Story delivery`. Running and editing graphs visually are later parts of this feature.
-- **Durable workflow run foundation** — Project-scoped plan runs now store ordered events, pinned revisions, attempt and effect projections, bounded retries, and recovery state in SQLite. Desktop and HTTP clients can page history and send explicit commands; automatic scheduling and graph UI are still in progress.
-- **Plan run timeline** — Run history in Plans and Stories lists durable runs for the selected plan and pages their ordered events. Desktop and browser clients refresh on workflow run changes.
-- **Workflow review and input evidence** — Managed reviewer reports can carry criterion-indexed findings and an artifact digest without changing story status. A worker can request input, pausing the run until an operator records an idempotent answer and resumes it.
-- **Workflow draft designer** — The Plans and Stories dialog now includes a draft editor for adding and connecting graph nodes, changing agent prompts and loop limits, and publishing a validated revision. The node palette supports drag and drop and click controls.
-- **Conservative workflow dispatch** — Explicit story attempts now serialize overlapping or unknown file scopes, cap parallel workers, and record a distinct registered worktree per story before spawn. Dependent stories stay held until an integration receipt exists.
-- **Checked story integration** — TUIC records pinned command receipts from assigned story worktrees and verifies an operator-created merge with post-integration checks before releasing dependents. A changed canonical ref or tree invalidates the receipt. HTTP story actions without a managed session record local API provenance and cannot approve a story.
-- **Canonical recertification** — After an unrelated commit advances the canonical branch, TUIC can rerun pinned checks at its clean tip and record a durable receipt for previously integrated stories. Parallel workers retain valid reports even when another worker pauses the run for input.
-- **Story transition provenance** — Native story transitions now keep a durable actor and revision history. Managed MCP agents cannot approve stories; the user action remains the approval path.
-- **Workflow closure policy** — Definitions default to human approval. Automatic closure can be drafted but publication rejects it until TUIC can verify the required evidence.
-- **Pinned workflow checks** — Published definitions now retain a bounded set of direct-executable checks. The runtime receipt path will use these pinned commands rather than an agent's test claim.
-
-- **Progress Flow view** — The Progress dialog has a **List | Flow** toggle. Flow draws the journal as a sequence diagram: one column per terminal and per Claude subagent, delegations and peer messages as arrows, each child's done or blocked as its return arrow, and intents as notes. TUICommander now records `delegated` at `agent action=spawn` and `message` at `agent action=send`, redacted and capped at 500 characters. Click a label to read all of it; a subagent's full prompt or report is fetched on demand. An existing journal is migrated on first open.
-- **Hold `+` to open an agent** — A long press on the tab bar's `+` lists the enabled agents and their run configs; picking one opens a new tab in the active branch with that agent already started. A click still opens a plain terminal.
-- **Design Mode for agent terminals** — Open a dedicated Chrome window on a repository's development server, click an element to capture its selector, styles, the design tokens its rules use, source location and optional screenshot, then edit the inserted agent draft before sending. Repeated grabs accumulate; the same Chrome window can be rebound to another agent terminal in the repository. The development-server URL is a local per-repository setting.
-- **SSH remote machines deploy and install themselves** — “Deploy on connect” resolves and caches the matching `tuic-remote` release, copies it only when its hash changes, launches it on loopback with a vault-backed pairing token, and reconnects through the SSH tunnel. A configurable idle lifetime preserves sessions across short disconnects. Linux systemd user units and macOS launchd agents can be installed or removed from Remote Machines, while the SSH host picker reports shell, no-shell, authentication-failed and unreachable hosts without duplicates.
-- **Agent activity in the sidebar** — The optional nested-terminal view now expands every occupied branch into one compact card. Agent rows reuse Activity Dashboard state and show the agent icon, current intent/task, last-update age, and attention state; plain terminals remain selectable in the same card, including single-session branches.
-- **Agent toasts can jump to their repository** — A toast from another registered repository shows a keyboard-reachable “Go to repo” action. It selects that repository and focuses the originating session when the session is still open; local and stale-repository toasts do not show the action. (#835-314c)
-- **Hands-free voice conversation** — Settings > Voice binds one terminal, keeps the microphone open and sends each utterance by itself. An optional activation phrase gates which speech is sent and is stripped before sending; a configurable hold-back shows a finished utterance before it goes, so one you did not mean can be stopped. Speech is typed into the agent at once, even while it works — the way a line typed by hand is — and never waits in the Compose queue; an open permission dialog or text you are typing holds the turn until it is gone. The conversation ends by itself when the bound terminal closes, the owner disconnects or the capture device fails.
-- **Spoken replies** — Agents answer out loud through local Kokoro synthesis, over IPC, HTTP and MCP alike. Runtime library and per-language voice bundles are downloaded and verified from Settings > Voice. Replies use the language of the conversation rather than defaulting to English, and the agent is told when it may answer out loud and when to go back to text.
-- **Talking over a reply stops it** — Echo cancellation runs on the captured audio, so the reply coming out of the speaker neither interrupts itself nor becomes a turn, while the user's own speech stops playback and opens the next turn.
-- **Voice progress reaches browser and remote clients** — Model and speech-asset download progress, and every state a spoken reply passes through, are pushed on the `/events` stream as well as to the desktop window. A browser tab no longer watches a download start and finish with nothing in between, and no longer polls to learn that a reply ended.
-- **Hands-free earcons** — A short, quiet blip tells you a spoken turn reached the agent, and a softer one that the activation phrase dropped it, so you do not have to look at the screen. Works on the desktop and in a browser; only the device you are talking into plays it. A dictation setting turns them off.
-- **Custom hands-free start notice** — Settings > Voice lets you replace the notice the agent reads when a hands-free conversation starts with your own instructions. Empty, or **Reset to default**, sends the built-in text.
-- **Hands-free conversation from a browser tab** — A browser or PWA client uses its own microphone and speaker: Settings > Voice now opens outside the desktop app, and starting a conversation there is heard and answered where you are. The two sides never mix — arming from a laptop cannot open the microphone on the machine running TUICommander, and the desktop cannot take audio from a browser — and a client that has no audio connection is refused rather than quietly served the server's hardware. Closing the tab ends the conversation it held, leaving nothing queued and nothing speaking. The global dictation hotkey and the microphone-device list stay desktop-only.
-- **Start hands-free from the Command Palette** — "Start hands-free conversation" binds the active terminal and opens the microphone; while it runs the entry reads "Stop hands-free conversation". No default shortcut; `toggle-hands-free` can be bound in Settings.
-- **Leaner MCP responses for orchestrators** — `session action=output` no longer returns an empty input box and the status line or HUD below it on a tail read (`format=raw` still does). A permission dialog or a draft in the input box is never cut. `agent action=spawn` no longer repeats `monitor_with`, `status_with`, `wait_with`, `peer_monitor_with` and `peer_wait_with` call templates, which were most of each spawn response; `parent_session_id` still tells whether child-to-parent mail works.
-- **MCP `session action=rename`** — An agent can set a tab's display name directly instead of relying on an `intent:` title or the desktop UI. Sticky by default (`is_custom` true), same as a manual rename, so a later OSC/intent title update does not overwrite it unless `is_custom=false` is passed.
-
-### Changed
-
-- **Safer worktree removal and consistent warm status** — Removal without force now keeps dirty worktrees and refuses in-progress Git operations. Branch deletion checks that the branch tip has not changed since inspection. Desktop IPC, HTTP, and MCP creation all report pending build-input warming; removal stops queued warming from recreating a deleted directory.
-- **Settings navigation grouped by task** — Pages now sit under **Application**, **Workspace**, **AI**, **Integrations** and **Repositories**. **Services & MCP** is split into **MCP**, **Remote Access** and **Remote Machines**. Terminal fields from General and Appearance move to a new **Terminal** page; the ego executable and the provider list join on **AI Chat**, which replaces **AI Providers**; the shortcut editor is also a **Keyboard Shortcuts** page; **Dictation** is now **Voice**. Saved settings are unchanged.
-- **Agent list on the `+` buttons** — Right-click or long press on the tab bar `+`, and a long press on a sidebar branch `+`, list the enabled agents and open a tab running the chosen one. Right-click on a sidebar branch `+` still opens the branch menu. Before, the sidebar `+` had no long press, and right-click on the tab bar `+` opened New Tab / Split, which stay on `Cmd+T`, `Cmd+\`, the terminal context menu and the Command Palette.
-- **Sub-agent rows in the sidebar show an icon** — A nested sidebar row of an agent spawned by another one shows a small agent icon instead of `↳ <parent>`, which took up to 40% of the row. The parent's name is in the icon's tooltip.
-- **Voices download straight from Kyutai** — Speaker embeddings now come from Kyutai's ungated `pocket-tts-without-voice-cloning` repository, pinned to one commit, instead of a copy on a TUICommander release. The files are byte-identical; nothing has to be re-hosted to offer another language.
-- **Spoken replies in five more languages** — English, French, German, Portuguese and Spanish join Italian, each with the voice Kyutai lists as native to it. Every file is pinned to one upstream commit and a sha256, like Italian. French ships only as the larger 24-layer model (about 390 MB).
-- **Progress by terminal** — Opens on the active PTY, lets you switch between PTYs in the same repository, and retains an **All repo** view. Older entries remain visible there without a guessed terminal assignment.
-- **Bundled themes reviewed** — Commander, Darksun, Minimal Kiwi, Monokai, Tokyo Night, Solarized Dark, Ink and Paper separate the main area, sidebar, hover and selection more clearly and draw visible borders. Commander's chrome matches its terminal background and its accent is brighter; Minimal Kiwi's success green no longer equals its accent; Paper has readable terminal yellow and cyan. "Clean" is renamed **Ink** and "VS Code Light" **Paper** (theme keys unchanged, so saved settings keep working). VS Code Dark now follows VS Code's current default, Dark 2026 (darker, cooler greys), instead of the old Dark+ palette. Commander is now the default and the fallback for an unknown theme. The toolbar wordmark, sidebar tab selection and repository name colors follow the theme, so they stay readable on Paper.
-
-### Removed
-
-- Removed the `/agents/map` subagent map page and its `/agents/map/data` and `/agents/map/prompt` routes. The Progress dialog's Flow view replaces them.
-- Removed the Deep Black and Delicate One bundled themes: near-duplicates of Ink and of the neutral greys. An existing install keeps the files it already has in its themes folder.
-- Retired the external Voice plugin that read terminal text through Web Speech synthesis. Native Kokoro voice conversation is planned separately in Dictation.
-
-### Fixed
 
 - Agent command injection uses the longer Codex-safe Enter gap when the agent type is still unknown. MCP `session input` also separates text and Enter for Claude and other identified agents.
 - Worktree cleanup recognizes a merged GitHub PR whose head contains the local tip after a squash merge, and recognizes branches already contained in the checked-out integration branch. Warm copies retain ignored build directories while restoring owner write permission in the new worktree so sealed source caches do not block removal. MCP `repo branch_delete` safely deletes an integrated local branch without a worktree.
@@ -895,87 +1412,6 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   inherited twice, so a test instance cannot end up driving the default one's
   repositories.
 
-### Added
-
-- **SQLite databases open in a self-contained plugin viewer.** The registry's
-  SQLite Viewer claims `.db`, `.sqlite`, `.sqlite3`, `.db3`, and `.s3db` files
-  and shows tables, views, schema, indexes, per-column filters, sortable native
-  SQL pages, configurable page sizes, bounded read-only SQL, CSV copy, and visual
-  query plans. Tables with primary keys support explicit inline editing and an
-  atomic save back to the source file; encrypted/SQLCipher input gets a clear
-  unsupported-format diagnostic.
-  Its pinned sql.js JavaScript and WebAssembly ship inside the plugin: there is
-  no CDN request, system SQLite dependency, or SQLite-specific host API. The
-  engine and database live in the panel iframe and are released with the tab.
-  Generic plugin APIs now accept optional bounded binary read/write budgets, can
-  transfer `ArrayBuffer` ownership through `PanelHandle.send`, and serve `.wasm`
-  assets with the standard MIME type. Existing binary reads retain their 10 MiB
-  default; the host ceiling for an explicit budget is 512 MiB.
-
-- **PR review, changelog generation and the improvement scan are back, on ego.**
-  All three went with the embedded engine and all three now run as one unattended
-  ego turn: the whole input goes inline, ego is offered no TUICommander tools, and
-  every permission request is refused. TUICommander stores no API key and makes no
-  provider HTTP call for any of them, and none of them names a model — which model
-  runs is ego's own configuration.
-  - **PR review** reads the PR diff (at most 30 files, 300 lines each, with the
-    truncation stated in the prompt so nothing is silently dropped) and returns
-    findings with severity, path, line and confidence. The confidence gate runs in
-    Rust before the result is built — default `0.7`, `TUIC_REVIEW_CONFIDENCE_THRESHOLD`
-    overrides it — so a finding that reaches the popover has already passed it.
-    Selected findings still post to GitHub as inline review comments, and GitHub's
-    rule that a comment needs a concrete line still decides which are selectable.
-  - **Changelog generation** produces the markdown plus the structured JSON split
-    over the merged PRs since a tag. Ego answering in prose only is a valid answer,
-    not an error: the JSON half is `null` and the markdown still renders.
-  - **The improvement scan** returns at most five proposals for `refactor`,
-    `testing` or `perf`, and each one is promoted to a GitHub issue only by an
-    explicit click. Nothing files an issue by itself.
-  The three do not fail quietly. An ego that is not configured, not reachable, or
-  that ends a turn without answering produces ego's own sentence — "no ego
-  executable is configured", "ego asked to use 2 tools that an unattended turn
-  cannot grant, and produced no answer" — where the deleted version would have
-  shown an empty result that reads as "nothing to report".
-  The four surfaces are reachable over HTTP as well (`POST /repo/pr-review`,
-  `GET /repo/changelog`, `POST /repo/improvement-scan`,
-  `POST /repo/create-issue-from-proposal`) and are deliberately not desktop-gated:
-  ego is reached over ACP, so `tuic-remote` serves them too.
-- **The terminal stream is compressed over a remote connection.** HTTP bodies
-  were already compressed; the WebSocket carrying the terminal was not, and it
-  is the traffic that matters — an agent repainting a full screen sends the grid
-  many times a second. A remote client now opens the stream with
-  `?compress=deflate` and every frame arrives raw-deflated, with a one-byte tag
-  naming its encoding so a frame that does not shrink is sent as it is rather
-  than sent larger. Measured on a replay of a real Codex session: 2.2 MB of grid
-  frames become 127 KB, and a full-screen repaint costs 0.234 ms to compress
-  against a 16 ms frame budget. A client that does not ask gets exactly the old
-  framing.
-- **An SSH tunnel compresses its channel.** `Compression=yes`, on by default and
-  switchable per profile. It is also why the WebSocket refuses to deflate for a
-  loopback peer: a tunnelled client reaches the daemon through the local ssh
-  process, so its frames would otherwise be compressed twice.
-- **Smart Prompts run in `api` mode again, on ego.** The mode used to call a
-  provider directly over HTTP from TUICommander; that client, its registry and
-  its keyring entry went with the embedded engine, and none of them came back.
-  An `api` prompt now runs one unattended ego turn — launch the configured ego
-  in the active directory, one session, one prompt, shut down — and the turn's
-  final text goes to the prompt's output target. Nothing streams, because a
-  Smart Prompt runs with no panel open. A `headless` prompt whose agent resolves
-  to `api` takes the same one path. The model is ego's default, set in Settings
-  → AI Providers; with no ego binary named the mode refuses and says to name one
-  under Settings → General first.
-- **An unattended turn gets no TUICommander tools, and cannot be left waiting.**
-  Every attended ego session is handed TUICommander's own MCP server, which is
-  how ego reaches terminals and repositories. A turn with nobody at the keyboard
-  to approve a single call is opened with **no MCP server at all**, and every
-  permission request and elicitation ego makes is refused the instant it
-  arrives — a seat nobody takes is a turn that never ends. How many were refused
-  comes back with the answer, so a prompt that returned nothing because the
-  model reached for a tool says that, instead of looking like an empty reply.
-  The turn is abandoned after 300 seconds, a server-side limit no request can
-  raise.
-
-### Fixed
 
 - **Notification sounds no longer overlap during a burst.** The anti-spam gate
   used to be tracked separately for each tone, while every accepted tone opened
@@ -997,63 +1433,6 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   dropped, and the line that is actionable ("Upstream '<x>' request failed") is
   ours and unaffected.
 
-### Changed
-
-- **One MCP tool family, not two.** The 13 `ai_terminal_*` tools and the
-  `ai_terminal_mcp_enabled` flag are gone. They overlapped `session`/`repo`/
-  `agent` without being equivalent, so a model paid for both catalogues on every
-  turn and had to guess which to call, and six of them needed a filesystem
-  sandbox only the embedded agent loop creates — they refused every external
-  caller before dispatch. External clients drive terminals through `session`
-  (`action=submit|input|output|status|wait`). **Secret redaction moved with
-  them**: `session action=output` now redacts, which it never did, so every MCP
-  client — Claude Code included — gains a protection instead of losing one. The
-  mandatory native write confirmation was dropped on purpose: no remote client
-  can answer a blocking OS dialog, and `ui action=confirm` is the gate that any
-  client can answer.
-
-- **TUICommander's `/mcp` now answers the 2026-07-28 stateless lifecycle**
-  (`server/discover`, SEP-2549) beside the legacy `initialize`. A client that
-  pins the modern revision and has no fallback used to get `-32601` and reach
-  zero TUIC tools. Stateless callers send their identity in `_meta` on every
-  request, which is what keeps tool collapsing working without a handshake.
-
-- **Usage dashboards now use provider-owned APIs.** Codex usage comes through
-  the documented local App Server instead of reading OAuth credentials and
-  calling private ChatGPT endpoints. Grok gains a native usage ticker and
-  dashboard backed by its `_x.ai/billing` ACP extension. Gemini remains
-  terminal-detection only because its CLI exposes no stable account quota API;
-  missing provider data is never presented as zero usage.
-
-- **Sidebar worktree warnings now explain themselves.** Hovering or keyboard-focusing
-  a `Dirty` or `Unknown` lifecycle badge shows what the state means, what it does
-  to removal safety, and the underlying inspection error when one is available.
-
-- **Project Progress is one journal, one database and a dialog.** The feature
-  shipped in 1.7.7 asked agents to classify outcomes into five kinds, kept a
-  SQLite store inside every project, and spread the result over a sidebar panel
-  with five views. Across 39 repositories it recorded nothing. It now records
-  two things an agent can report — `done` and `blocked` — plus the `intent:`
-  marker TUICommander already parses and used to discard, so a three-hour
-  session that never called the tool still answers "where did it get to?".
-  History lives in a single append-only database in the configuration
-  directory, so a deleted workspace or a temporary clone cannot take it away,
-  and the reporting duty is stated in the connection instructions instead of
-  being left to a tool description nobody reads. The panel is now a dialog
-  showing one project's list newest-first, with a line marking where the last
-  visit ended that stays put while you read. Collection has an off switch,
-  globally and per agent.
-
-### Removed
-
-- **The `progress.md` export, and eight of the nine `repo progress_*` actions.**
-  Export, status, pause, resume, clear, correct, acknowledge and read-cursor
-  control are gone; `progress_list` remains. Existing per-project
-  `.tuic/progress.sqlite3` databases are not migrated — the old history was
-  effectively empty, and nothing reads those files any more. Delete them at
-  leisure.
-
-### Fixed
 
 - **The Progress journal no longer fills with the same intent.** A repeat of a
   project's newest intent — same text, same agent — now returns that entry
@@ -1095,79 +1474,6 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   produced the empty string, which is also the correct answer for `make dev`,
   so a broken `Makefile` passed the check and printed its tick.
 
-## [1.7.7] - 2026-09-16
-
-### Added
-
-- **Settings → AI Providers shows what `ego` is configured with, and sets the
-  model it starts from.** It replaces the provider registry deleted with the
-  embedded engine, and it is not a registry: every value is read and written by
-  running ego — `config ls`, `models`, `doctor`, and `config set model` — so
-  TUICommander stores no API key, puts nothing in the OS keyring, and makes no
-  provider HTTP call. The one call that reaches a provider is
-  `ego models --refresh`, which ego makes, and only when you press Refresh;
-  opening the tab makes none. Credential state comes from `ego doctor` and keeps
-  its distinctions: a store that could not be *read* is not an empty store, and
-  an expired credential says ego renews it on its next run instead of sending
-  you to log in again. `model` is the only writable key and it is its own
-  operation rather than a key/value pair, so no caller over IPC or HTTP can
-  reach `sandbox` or `permissions.judge`. When ego is not configured the tab
-  names the field to fill instead of rendering an empty list, and when an ego
-  command fails it shows the command, the exit code and what ego printed, word
-  for word. Offered while Experimental Features is on, beside the AI Chat panel
-  it configures.
-- **Project Progress answers "what changed since I last looked?"** Agents
-  record outcomes — capabilities, decisions, discoveries, blockers, completed
-  objectives — through one compact MCP `progress` call that persists the event
-  and shows its toast together; starting or finishing an agent task is
-  deliberately not an outcome. History belongs to the project, in a SQLite
-  store at its own root that local Git excludes cover, so closing a session or
-  deleting a temporary workspace never takes it away. A dedicated panel, opened
-  from the command palette or the notification bell, shows all projects or one:
-  since last visit, today, blockers, completed, and full history, with
-  provenance on demand. Collection can be paused and resumed per project,
-  events can be deleted, corrected, merged or re-grouped, and clearing a
-  project pauses it in the same transaction. There is no inference job and no
-  background model: grouping is exact and every sentence in the panel is one an
-  agent wrote. The optional fuller reporting prompt, and the measured
-  comparison against the short default, are in the user guide.
-- **Progress exports a readable `progress.md` when you ask it to.** One
-  deterministic snapshot of the owning project — revision, UTC time, workstream
-  states, open blockers and dated history, with source metadata off by default —
-  is previewed in the panel before anything is written. Writing succeeds only
-  while that same snapshot is current, replacing an existing file needs the
-  exact content the preview returned, and a hand edit, a removal, a symlink or a
-  directory at the target is refused instead of overwritten. The write is atomic
-  and touches nothing else: no Git staging, no change to collection or read
-  state, no scheduled re-export, and the Markdown is never read back in.
-
-### Changed
-
-- **Workspace creation now has one mechanism: linked Git worktrees.** The
-  experimental whole-repository copy-on-write workspace path, its adopt,
-  publish, recovery, and lifecycle projections, and the `mode`/`dirty` fields
-  on Tauri, HTTP, and MCP creation requests have been removed. Linked
-  worktrees still arrive warm: Git-ignored directories are copied with the
-  existing copy-on-write primitive when the filesystem supports it. Parent
-  tracked changes are deliberately not inherited.
-
-- **Project Progress can now export a safe, versionable `progress.md`.** The
-  project panel previews one deterministic backend snapshot and writes it only
-  while both the database snapshot and existing-file content still match.
-  Exports target the owning project root, optionally include bounded provenance,
-  refuse symlinks/directories, and use atomic replacement without changing
-  Progress state or Git.
-
-- **Claude and Codex status signals are launch-scoped and on by default.** TUIC adds a private Claude settings file or Codex notify adapter only to processes launched inside TUIC. Explicit CLI overrides win, Codex still calls the user's existing notify command, and each agent has an independent off switch. Global hook installation remains explicit for agents without a launch-scoped route.
-
-- **Plan Tracker and Stories Ticker are now external plugins.** The former
-  compiled built-ins are installed once as ordinary plugin packages during the
-  upgrade, preserving existing behavior while making both independently
-  uninstallable and updateable from the plugin catalog. Plan file opening now
-  uses a capability-gated background-tab host API instead of importing app
-  stores directly.
-
-### Fixed
 
 - **Plugins can no longer read legacy MCP-upstream credentials.** The
   `credentials:read` guard now rejects the historical `tuicommander-mcp`
@@ -1511,202 +1817,134 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   instead of blocking a tokio worker at three remaining call sites; link
   detection rect-tested before it runs and URL rows batched.
 
-### Added
-
-- **A workspace created for an agent comes with instructions.** The MCP
-  response says it is a linked worktree, that refs and objects are shared with
-  the parent, which ignored build directories arrived warm and how large they
-  are (so no install or full build is run to "set up"), and that tracked parent
-  changes are not carried over.
-
-- **One terminal, three addresses.** Every `session` action that takes a
-  `session_id`, and `agent action=send`'s `to`, now accept the PTY id, the
-  `tuic_session` the tab persists, or the repo-derived alias (`tu-1`)
-  interchangeably. An alias also survives a restart: the frontend replays it at
-  create time and the backend reserves it, advancing the per-prefix counter past
-  it so the next auto-assigned alias cannot collide. A terminal tab's context
-  menu shows its alias and copies it on click. An address that resolves to
-  nothing is passed through unchanged, so a session whose process has exited can
-  still be read.
-
-- **`tuic-remote` can run isolated named application instances.**
-  `--instance <id>` selects a separate platform configuration tree and OS
-  keyring vault before password setup or daemon startup. Named instances never
-  migrate or fall back to default state, and a vault failure stops a release
-  daemon before it binds. Omitting the option preserves all existing paths,
-  credentials, and migrations.
-
-- **A repo dropped by the memory budget comes back without re-indexing it.** The
-  index is written to `<data_dir>/content-index/` on the way out and reloaded on
-  the way back in, so returning to a repo costs a stat walk instead of a full
-  walk, read and re-embedding. A snapshot is always validated against the working
-  tree before use and brought up to date through the same path a live index uses,
-  so it can never serve content that disagrees with disk; one that fails to parse
-  is discarded and the repo is rebuilt. Requires a local patch to `bm25`, which
-  keeps its document embeddings private with no way to read them back
-  (`patches/bm25`, one read-only accessor).
-
-- **Spreadsheets open as tables instead of binary noise.** The registry gains
-  `xlsx-preview`, which reads `.xlsx`, `.xlsm`, `.xltx`, `.xltm`, `.xlsb`, `.xls`,
-  `.ods` and `.fods` through SheetJS and shows one sortable table per worksheet —
-  the counterpart of `csv-preview` for the formats the code editor could only
-  render as a zip. Cells carry the value the spreadsheet displays, so dates keep
-  the workbook's own format. Large sheets are capped at 2000 rows and 200 columns
-  and the panel says what it hid.
-
-- **TUICommander can now drive ego.** A supervised agent process per
-  connection, durable sessions, turns you can cancel or pause, and the
-  questions the agent asks back — all of it reachable from the desktop app and,
-  identically, from a browser or the PWA. Same request fields, same responses,
-  same errors; the only difference is that the desktop gets its turn frames on
-  a Channel and everyone else on a WebSocket.
-  The binary it launches is a setting, never an argument: no request can choose
-  what your machine runs, and correcting the setting takes effect without a
-  restart.
-
-- **Settings has a search box.** 123 controls across 13 tabs and 2 sub-panels
-  could only be found by opening each tab in turn. Selecting a result opens the
-  owning tab and scrolls to the field, falling back to its heading when the
-  field is not rendered. The index is committed rather than scanned from the
-  DOM — only one tab is mounted at a time, and mounting the rest would fire CLI
-  status, mdkb status, GitHub probes and audio enumeration on every keystroke —
-  and a drift test re-derives it from the sources, so a setting added without
-  indexing fails CI.
-
-- **The language picker exists, and translation actually works.** `t()` ignored
-  its key and always returned the inline English, with an empty `en.json`
-  behind it: the whole i18n layer was inert. It now reads the active locale map
-  and falls back to the inline string only when the map has none; `en.json` is
-  populated from all 843 call sites (756 keys), byte-identical to the fallbacks
-  it came from, so no rendered English string changed. Settings → General gains
-  the picker, offering only locales that ship a catalogue.
-
-- **The three terminal block-display settings are reachable.** Block
-  timestamps, scrollbar marks and block folding existed in the store with no
-  control, so the only way to change one was to edit `config.json` — which the
-  backend then dropped on the next save. They are toggles in General →
-  Terminal now, with scrollback reflow beside them, and all five are persisted.
-  Block folding also honours its own setting: the check moved into
-  `toggleBlockFold`, where the shortcut, the command palette and any future
-  caller converge, instead of sitting in one of them.
-
-- **A provider card says whether the endpoint answers, not just whether a key
-  is set.** A local Ollama that is not running used to look exactly like one
-  that is. The card carries a Reachable / Not detected indicator and renders
-  the backend's own explanation verbatim; a probe that could not run at all
-  reports unreachable with the error rather than showing nothing.
-
-- **Codex usage dashboard.** The same shape of data the Claude one shows, from
-  the rate-limit endpoint the Codex CLI itself polls and from the daily token
-  history, both reading the OAuth token from `~/.codex/auth.json`. Identity
-  fields — user id, email, account id, the whole profile object — are stripped
-  in the backend before either response leaves it. The usage ticker follows the
-  agent the active terminal is running instead of always showing Claude.
-
-- **Diagnostics can now name what broke.** `GET /diagnostics/memory` reports
-  entry counts for every map that grows with sessions, clients or repos,
-  measured bytes for the four that hold payloads, and the real
-  `phys_footprint_bytes` (resident *plus* compressed — `ps` read 0.52 GB while
-  the process held 40 GB). A tripwire logs that report by itself at 4 GB,
-  always on. The WebView also beats every 5 s, so a blocked main thread is
-  logged after 30 s of silence; and a separate watcher notices the window
-  landing on `about:srcdoc` after a standby memory sweep and navigates back to
-  the app on its own, which no heartbeat can detect because the app is gone
-  rather than blocked.
-
-- **The terminal answers OSC 10/11/12 colour queries** from the resolved theme.
-  An app that asks what it is painted with used to get silence, and a querier
-  with no reply retries forever. Indexed `OSC 4;n;?` queries stay unanswered on
-  purpose — that palette is not tracked, and no fence idiom waits on them.
-
-- **goose gets a ready-screen adapter.** It launches as a long-lived
-  interactive process, so OSC 133 never clears and the tab latched busy for the
-  whole turn; its spinner glyphs and whimsical, reworded messages defeat both
-  generic signals. Detection now keys on the hints at each end — `Ctrl+C to
-  interrupt` while a turn can be interrupted, `Enter to send` when the composer
-  accepts input — captured live on goose 1.49.0 and shipped as fixtures. The
-  interrupt hint is tested first so a working screen is never downgraded, and
-  Ready demands the composer footer rather than merely the absence of a
-  spinner: a false Ready is what lets auto-standby SIGSTOP a live turn.
-
-- **Both dictation speech gates are settings.** The RMS floor was hardcoded low
-  enough for room noise to clear it, which is how Whisper ends up transcribing
-  an empty room; the right value depends on the room and the microphone.
-  `rms_threshold` joins a new `no_speech_threshold`, which uses Whisper's own
-  per-segment no-speech probability and so rejects whatever the model invents,
-  not only the wordings someone remembered to list. Configs written before they
-  existed keep the defaults.
-
-- **Resume finds the conversation again.** Two halves. A tab now binds to its
-  agent through the agent's own pid→session registry (Claude's
-  `sessions/<pid>.json`, grok's `active_sessions.json`) instead of "the newest
-  unclaimed file in the folder" — measured on a live instance, 3 of 6 Claude
-  tabs held no id and one held another tab's, so every tab resumed into the
-  same conversation. And the launch command is rebuilt from the live process's
-  argv and env, because a shell alias is expanded before `exec`: a run config
-  reading `c2` is really `claude --dangerously-skip-permissions` under a
-  different `CLAUDE_CONFIG_DIR`, and resuming with the config's version sent
-  `--resume` to a binary reading the wrong directory.
-
-- **Session state is pushed, not sampled.** `list_active_sessions` ran once a
-  second for as long as any terminal existed. The backend now publishes
-  `session-state-changed` once per real transition on both transports, with the
-  same body the poll returned, so one frontend applier serves both. A push is
-  not a queue, so an SSE reconnect or a `lagged` frame triggers the same
-  catch-up read used at mount.
-
-- **Every `/dictation/*` route, and seven more, now exist.** `dictation_routes`
-  was written but never declared as a module, so it had never been compiled and
-  all twelve handlers answered 404; `shell-family`, `agents/detect-all`,
-  `agents/open-in-app`, `notification-sound`, `relay-status`, `check-update`
-  and `worktrees/run-script` had no route either. Desktop worked over IPC while
-  browser and PWA clients got 404 on all nineteen. The parity gate that should
-  have caught this could not fail — its probe read a 405 from the SPA catch-all
-  as "route present" — and is now split across both languages: Vitest snapshots
-  every `COMMAND_TABLE` path and a Rust test probes each one against the real
-  router.
-
-- **The reason a smart prompt cannot run is clickable.** It reached the user as
-  a `title=` attribute, which can never be. It is a button wired to the
-  Providers settings tab now, with the click prevented from running the prompt
-  it just said was unrunnable.
-
-- **A corrupt config file is kept, and the backups are bounded.** An
-  unparseable `config.json` was replaced with defaults, and because defaults
-  carry empty tokens the document was written back on the same startup — so the
-  broken-but-recoverable file was gone on the first restart, deterministically.
-  It is now preserved as `<name>.corrupt-<uuid>` like every other config file,
-  and the five newest backups per file stem are kept (a count, not an age: a
-  user who comes back a month later would find an age rule had deleted the very
-  file they came for).
-
-- **An AI stream reaches a detached panel.** Detaching unmounts the docked copy,
-  so a stream the main window runs for that terminal — a watcher rule, an
-  automation goal, a terminal context action — rendered nowhere at all. The
-  detached window now receives a projection of it, re-checking the chat id at
-  the receiving end so another terminal's stream stays on another screen.
-
-- **Windows works, and the suite now runs there to keep it that way.** The
-  build shipped a Windows installer that nothing had executed: the first real
-  run on the platform reported defects no unix machine could see, and they were
-  production code, not test plumbing. `~` reached the OS literally in repository
-  paths, working directories and agent commands, because tilde expansion read
-  `$HOME`, which Windows does not set. Plugin ZIP installs extracted nothing and
-  reported success over an empty directory — the archive spells its entry names
-  with `/` and the path they were stripped from is spelled with `\`. Reading
-  another process's environment always answered "not set", one oversized read
-  running off the end of the mapping and failing the whole call, so nothing that
-  depended on an agent's own environment worked. The allowlist of variables a
-  child inherits was written by analogy with POSIX and omitted `PATHEXT` — half
-  of what `PATH` means on Windows, where `claude` and `npm` are `.cmd` shims —
-  along with `APPDATA`, `LOCALAPPDATA` and `PROGRAMDATA`, where such a tool keeps
-  its configuration. The progress store refused to open while a `-shm` file was
-  locked, which there is every moment a second connection is live. Terminating a
-  process left its grandchildren running. CI now builds and tests on Windows on
-  every pull request, so the next one of these is caught before it ships rather
-  than after.
-
 ### Changed
+
+- Remove answer background tints from the terminal grid, Answers view, AI Chat and terminal Chat cards. Keep green left rules and spacing; use the darker success green for Paper answer rules; user-question styling is unchanged (#1896-f355).
+- Tasks loads complete lists of at most 1,000 items for Rust-backed all-field queries; unknown or larger lists keep server controls (#1851-7ade).
+- Discover GitHub Projects v2 in Tasks Board with visible read:project scope errors (#1846-55d7).
+
+- Tasks offers only provider-supported sort, group and filter fields, and restores the last valid selection after a rejection.
+
+- Store uploads in TUIC-owned session directories, grant supported agents access at launch, and remove files at session end without touching repositories (#1833-aa60).
+- Run saved command moves from `Cmd+R` to `Cmd+Shift+R`. `Cmd+R` now reloads the active web/preview tab (new `reload-tab` action). `edit-command` has no default shortcut because `Cmd+Alt+R` belongs to answers-only; an existing `keybindings.json` override keeps working (#1871-4cfd).
+
+- Upgrade Mermaid to 12.1.0: diagrams use its new layout and appearance defaults while retaining the renderer's dark theme and strict security setting (#1590-7c6b).
+- Require macOS 12 Monterey or later for the desktop bundle, with Safari 17.4 or later for Mermaid diagrams (#1590-7c6b).
+- **Remote upload credentials** — `POST /remote/update` and `/fs/upload-copy` accept only the `tui-session` cookie; a `?token=` query answers 401 and the update client no longer puts the token in the URL. Older desktops cannot update a daemon of this release. QR pairing and WebSocket authentication are unchanged.
+- Make Compose the default input in terminal Chat: it opens focused and docked, stays open after send or queue, and preserves each tab's CLI Compose state and unsent draft when switching views (#1599-db8a).
+- Space automatic sidebar refresh starts at least five seconds apart per repository, retaining one trailing update during event bursts; explicit repository additions, checkouts and merge cleanup bypass the wait.
+- Resolve browser HTML and Markdown images through open repositories; show a clear placeholder for external images.
+- Show the existing ACP refusal text once in a plain-text AI Chat card.
+- Integrate workflow approval, plan dispatch and public story controls; public plan API starts share the daemon executor. Canonical workflow test fixtures preserve Windows ownership.
+
+- Dispatch bounded plan story waves, wait for explicit dependency integration, and require current deterministic final checks before completion.
+
+- Run pre-approval workflow checks and record independent reviewer approval; retain implementer role restrictions after exit. Execute deterministic story Gate outcomes.
+
+- Execute pinned serial workflow Agent/Judge/Loop/Pause/Notify/Join nodes in the owning daemon with durable reports and effects; refuse unsupported node publication. Manual pause time no longer consumes active run duration. Public graph start controls remain in development.
+- Start published story workflows from Plans and Stories; inspect pinned graph positions, decision evidence and full paged events. Add explicit graph resume, pause/cancel controls and the generated `workflow_run` MCP surface. Plan start remains visibly unavailable pending dispatch.
+
+- Execute pinned serial workflow Agent/Judge/Loop/Pause/Notify/Join nodes in the owning daemon with durable reports and effects; refuse unsupported node publication. Manual pause time no longer consumes active run duration. Full plan dispatch remains in development.
+- **AI Chat steering** — Text sent during a running turn joins the current query when ego advertises ACP steering, on desktop and mobile. Attachments and unsupported or rejected steering retain the queue. Delayed steering responses preserve submission order with later text and attachments.
+- Add recorded incident causes and manual next-step suggestions to Plans and Stories run history.
+- Add persisted ego profile, workspace and executable options for individual AI Chat conversations, including HTTP creation and reopen.
+- Audit MCP inbox reads with caller, owner and message ids without logging mail bodies.
+- Let MCP agents page retained terminal output without rerunning commands. Responses explain the next page, raw byte offsets work locally and remotely, and tiny raw pages cannot reconstruct masked secrets.
+- Bound repository-selected ego profiles by the machine profile over ACP and show ego's clamp warnings in AI Chat.
+- Add caller-bound MCP worktree declarations for agents using `git -C`, with same-repository validation and placement restored after restart.
+
+- Place only the same-repository MCP caller in its new worktree when no separate session is requested; preserve sibling tabs and inactive selection.
+- Separate active and idle ungrouped repositories in the rich sidebar and show working-agent counts.
+- Keep rich sidebar navigation dense at iPad width and fold returned subagent history.
+- Extend intent only for working rich sidebar agents; keep idle rows on one line and full intent in tooltips.
+- Fold old idle sessions in the rich sidebar without changing session order.
+- Hide zero PR and worktree counts in rich sidebar repository metadata.
+
+- **Workflow daemon foundation** — Recover runs only after acquiring database ownership, retain durable root positions and story reservations, require explicit graph resume, and pause idle runs at their duration deadline. Executable Agent delivery remains disabled pending later slices.
+
+- **Workflow graph foundation** — Durable serial graph positions, bounded predecessor history, decision provenance and repair counters now replay from pinned definitions. Executable validation requires final checks and explicit pause targets. This slice does not enable autonomous scheduling; older pre-contract runs remain inspectable and cancellable.
+- Fix command boundaries, prompt ticks and answers-only prompt association drifting after scrollback eviction.
+
+- **Safer worktree removal and consistent warm status** — Removal without force now keeps dirty worktrees and refuses in-progress Git operations. Branch deletion checks that the branch tip has not changed since inspection. Desktop IPC, HTTP, and MCP creation all report pending build-input warming; removal stops queued warming from recreating a deleted directory.
+- **Settings navigation grouped by task** — Pages now sit under **Application**, **Workspace**, **AI**, **Integrations** and **Repositories**. **Services & MCP** is split into **MCP**, **Remote Access** and **Remote Machines**. Terminal fields from General and Appearance move to a new **Terminal** page; the ego executable and the provider list join on **AI Chat**, which replaces **AI Providers**; the shortcut editor is also a **Keyboard Shortcuts** page; **Dictation** is now **Voice**. Saved settings are unchanged.
+- **Agent list on the `+` buttons** — Right-click or long press on the tab bar `+`, and a long press on a sidebar branch `+`, list the enabled agents and open a tab running the chosen one. Right-click on a sidebar branch `+` still opens the branch menu. Before, the sidebar `+` had no long press, and right-click on the tab bar `+` opened New Tab / Split, which stay on `Cmd+T`, `Cmd+\`, the terminal context menu and the Command Palette.
+- **Sub-agent rows in the sidebar show an icon** — A nested sidebar row of an agent spawned by another one shows a small agent icon instead of `↳ <parent>`, which took up to 40% of the row. The parent's name is in the icon's tooltip.
+- **Voices download straight from Kyutai** — Speaker embeddings now come from Kyutai's ungated `pocket-tts-without-voice-cloning` repository, pinned to one commit, instead of a copy on a TUICommander release. The files are byte-identical; nothing has to be re-hosted to offer another language.
+- **Spoken replies in five more languages** — English, French, German, Portuguese and Spanish join Italian, each with the voice Kyutai lists as native to it. Every file is pinned to one upstream commit and a sha256, like Italian. French ships only as the larger 24-layer model (about 390 MB).
+- **Progress by terminal** — Opens on the active PTY, lets you switch between PTYs in the same repository, and retains an **All repo** view. Older entries remain visible there without a guessed terminal assignment.
+- **Bundled themes reviewed** — Commander, Darksun, Minimal Kiwi, Monokai, Tokyo Night, Solarized Dark, Ink and Paper separate the main area, sidebar, hover and selection more clearly and draw visible borders. Commander's chrome matches its terminal background and its accent is brighter; Minimal Kiwi's success green no longer equals its accent; Paper has readable terminal yellow and cyan. "Clean" is renamed **Ink** and "VS Code Light" **Paper** (theme keys unchanged, so saved settings keep working). VS Code Dark now follows VS Code's current default, Dark 2026 (darker, cooler greys), instead of the old Dark+ palette. Commander is now the default and the fallback for an unknown theme. The toolbar wordmark, sidebar tab selection and repository name colors follow the theme, so they stay readable on Paper.
+
+
+- **One MCP tool family, not two.** The 13 `ai_terminal_*` tools and the
+  `ai_terminal_mcp_enabled` flag are gone. They overlapped `session`/`repo`/
+  `agent` without being equivalent, so a model paid for both catalogues on every
+  turn and had to guess which to call, and six of them needed a filesystem
+  sandbox only the embedded agent loop creates — they refused every external
+  caller before dispatch. External clients drive terminals through `session`
+  (`action=submit|input|output|status|wait`). **Secret redaction moved with
+  them**: `session action=output` now redacts, which it never did, so every MCP
+  client — Claude Code included — gains a protection instead of losing one. The
+  mandatory native write confirmation was dropped on purpose: no remote client
+  can answer a blocking OS dialog, and `ui action=confirm` is the gate that any
+  client can answer.
+
+- **TUICommander's `/mcp` now answers the 2026-07-28 stateless lifecycle**
+  (`server/discover`, SEP-2549) beside the legacy `initialize`. A client that
+  pins the modern revision and has no fallback used to get `-32601` and reach
+  zero TUIC tools. Stateless callers send their identity in `_meta` on every
+  request, which is what keeps tool collapsing working without a handshake.
+
+- **Usage dashboards now use provider-owned APIs.** Codex usage comes through
+  the documented local App Server instead of reading OAuth credentials and
+  calling private ChatGPT endpoints. Grok gains a native usage ticker and
+  dashboard backed by its `_x.ai/billing` ACP extension. Gemini remains
+  terminal-detection only because its CLI exposes no stable account quota API;
+  missing provider data is never presented as zero usage.
+
+- **Sidebar worktree warnings now explain themselves.** Hovering or keyboard-focusing
+  a `Dirty` or `Unknown` lifecycle badge shows what the state means, what it does
+  to removal safety, and the underlying inspection error when one is available.
+
+- **Project Progress is one journal, one database and a dialog.** The feature
+  shipped in 1.7.7 asked agents to classify outcomes into five kinds, kept a
+  SQLite store inside every project, and spread the result over a sidebar panel
+  with five views. Across 39 repositories it recorded nothing. It now records
+  two things an agent can report — `done` and `blocked` — plus the `intent:`
+  marker TUICommander already parses and used to discard, so a three-hour
+  session that never called the tool still answers "where did it get to?".
+  History lives in a single append-only database in the configuration
+  directory, so a deleted workspace or a temporary clone cannot take it away,
+  and the reporting duty is stated in the connection instructions instead of
+  being left to a tool description nobody reads. The panel is now a dialog
+  showing one project's list newest-first, with a line marking where the last
+  visit ended that stays put while you read. Collection has an off switch,
+  globally and per agent.
+
+
+- **Workspace creation now has one mechanism: linked Git worktrees.** The
+  experimental whole-repository copy-on-write workspace path, its adopt,
+  publish, recovery, and lifecycle projections, and the `mode`/`dirty` fields
+  on Tauri, HTTP, and MCP creation requests have been removed. Linked
+  worktrees still arrive warm: Git-ignored directories are copied with the
+  existing copy-on-write primitive when the filesystem supports it. Parent
+  tracked changes are deliberately not inherited.
+
+- **Project Progress can now export a safe, versionable `progress.md`.** The
+  project panel previews one deterministic backend snapshot and writes it only
+  while both the database snapshot and existing-file content still match.
+  Exports target the owning project root, optionally include bounded provenance,
+  refuse symlinks/directories, and use atomic replacement without changing
+  Progress state or Git.
+
+- **Claude and Codex status signals are launch-scoped and on by default.** TUIC adds a private Claude settings file or Codex notify adapter only to processes launched inside TUIC. Explicit CLI overrides win, Codex still calls the user's existing notify command, and each agent has an independent off switch. Global hook installation remains explicit for agents without a launch-scoped route.
+
+- **Plan Tracker and Stories Ticker are now external plugins.** The former
+  compiled built-ins are installed once as ordinary plugin packages during the
+  upgrade, preserving existing behavior while making both independently
+  uninstallable and updateable from the plugin catalog. Plan file opening now
+  uses a capability-gated background-tab host API instead of importing app
+  stores directly.
+
 
 - **The MCP session and peer payloads stopped restating themselves.**
   `session action=list` drops `child_pid` and `foreground_pgid` — no action
@@ -1721,6 +1959,26 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - **`is_caller` marks the tab the caller runs in, not the one it is bound to.**
   It compares the caller's identity against the PTY that identity owns, so an
   orchestrator no longer risks closing itself.
+
+### Removed
+
+- Remove the Aider agent harness, including launch profiles, detection, screen adapters and mobile commands. Existing settings remain readable (#1849-0c19).
+
+- Remove the duplicate AI Chat control-bar + button; New chat tab still starts a conversation (#1755-7709).
+- GitHub token chain no longer reads the `gh` CLI login (`gh auth token`, `gh-token` crate); use OAuth login or `GH_TOKEN`/`GITHUB_TOKEN`. TUIC spawns no `gh` process (#1714-1c1d).
+
+
+- Removed the `/agents/map` subagent map page and its `/agents/map/data` and `/agents/map/prompt` routes. The Progress dialog's Flow view replaces them.
+- Removed the Deep Black and Delicate One bundled themes: near-duplicates of Ink and of the neutral greys. An existing install keeps the files it already has in its themes folder.
+- Retired the external Voice plugin that read terminal text through Web Speech synthesis. Native Kokoro voice conversation is planned separately in Dictation.
+
+
+- **The `progress.md` export, and eight of the nine `repo progress_*` actions.**
+  Export, status, pause, resume, clear, correct, acknowledge and read-cursor
+  control are gone; `progress_list` remains. Existing per-project
+  `.tuic/progress.sqlite3` databases are not migrated — the old history was
+  effectively empty, and nothing reads those files any more. Delete them at
+  leisure.
 
 ### Security
 

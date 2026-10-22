@@ -2,6 +2,7 @@ import type { Accessor, Setter } from "solid-js";
 import { appLogger } from "../../stores/appLogger";
 import { repoSettingsStore } from "../../stores/repoSettings";
 import { repositoriesStore } from "../../stores/repositories";
+import { closeWorktreeTerminals, removeWorktreeWorkspace } from "../../stores/terminalOwnership";
 import type { WorkspaceLifecycleStatus } from "../../stores/workspaceIdentity";
 import { reportActionError } from "../../utils/reportActionError";
 import type { RemoveWorktreeResult } from "../useRepository";
@@ -112,19 +113,15 @@ export function createWorktreeRemovalCoordinator(deps: WorktreeRemovalCoordinato
 			// the lock is held while the UI still appears clickable.
 			repositoriesStore.setWorkspace(repoPath, workspaceId, { isRemoving: true });
 
-			// Close terminals defensively: a thrown error here used to leak the
-			// removingBranches lock and left isRemoving
-			// stuck. Catch per-terminal so one bad PTY doesn't block cleanup.
-			for (const termId of branch.terminals) {
-				try {
-					await deps.closeTerminal(termId, true);
-				} catch (err) {
-					appLogger.warn("git", `handleRemoveWorkspace: closeTerminal failed`, {
-						termId,
-						workspaceId,
-						error: err instanceof Error ? err.message : String(err),
-					});
-				}
+			// Use the same live-cwd authority as backend removal events and refresh.
+			// The helper tries every resident even if a sibling close fails.
+			try {
+				await closeWorktreeTerminals(branch.worktreePath, deps.closeTerminal);
+			} catch (err) {
+				appLogger.warn("git", "handleRemoveWorkspace: terminal cleanup failed", {
+					workspaceId,
+					error: err instanceof Error ? err.message : String(err),
+				});
 			}
 
 			appLogger.info("git", `handleRemoveWorkspace: invoking remove_worktree`, {
@@ -239,7 +236,7 @@ export function createWorktreeRemovalCoordinator(deps: WorktreeRemovalCoordinato
 				return;
 			}
 			appLogger.info("git", `handleRemoveWorkspace: calling removeWorkspace on store`, { workspaceId });
-			repositoriesStore.removeWorkspace(repoPath, workspaceId);
+			removeWorktreeWorkspace(repoPath, workspaceId);
 			if (shouldClearBranchLabel) {
 				repoSettingsStore.setLabel(repoPath, branchName, null);
 			}

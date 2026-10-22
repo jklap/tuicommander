@@ -44,9 +44,30 @@ describe("settings live refresh", () => {
 		stop = store.startRemoteSync();
 		await flush();
 	});
-	afterEach(() => {
-		stop();
-		vi.useRealTimers();
+	function cleanup() {
+		try {
+			stop();
+		} finally {
+			vi.useRealTimers();
+		}
+	}
+	afterEach(cleanup);
+
+	// Catches: a failed unsubscribe leaving later tests on fake timers.
+	it("restores_real_timers_when_subscription_teardown_throws", () => {
+		const originalStop = stop;
+		stop = () => {
+			throw new Error("subscription teardown failed");
+		};
+		let timersLeaked = false;
+		try {
+			expect(cleanup).toThrow("subscription teardown failed");
+			timersLeaked = vi.isFakeTimers();
+		} finally {
+			stop = originalStop;
+			vi.useRealTimers();
+		}
+		expect(timersLeaked, "later tests must not inherit fake timers").toBe(false);
 	});
 
 	// Catches: an external write staying invisible or being echoed through save_config.
@@ -57,6 +78,55 @@ describe("settings live refresh", () => {
 		expect(store.state.theme).toBe("light");
 		await vi.advanceTimersByTimeAsync(1000);
 		expect(io.invoke.mock.calls.filter(([command]) => command === "save_config")).toEqual([]);
+	});
+
+	// Catches: PR filter owner readback failing to refresh global or repository controls.
+	it("refreshes_PR_visibility_filters_without_echoing_a_save", async () => {
+		document.pr_hide_drafts = true;
+		document.pr_hide_conflicting = true;
+		document.pr_hide_ci_failing = true;
+		event(1);
+		await flush();
+		expect(store.state).toMatchObject({ prHideDrafts: true, prHideConflicting: true, prHideCiFailing: true });
+		let repos = {
+			repos: { "/repo": { path: "/repo", pr_hide_drafts: false, pr_hide_conflicting: null, pr_hide_ci_failing: true } },
+		};
+		io.invoke.mockImplementation(async (command: string) =>
+			command === "load_repo_settings"
+				? structuredClone(repos)
+				: command === "load_config"
+					? structuredClone(document)
+					: undefined,
+		);
+		const { repoSettingsStore } = await import("../../stores/repoSettings");
+		await repoSettingsStore.hydrate();
+		const stopRepos = repoSettingsStore.startRemoteSync();
+		try {
+			await flush();
+			expect(repoSettingsStore.getEffective("/repo")).toMatchObject({
+				prHideDrafts: false,
+				prHideConflicting: true,
+				prHideCiFailing: true,
+			});
+			repos = {
+				repos: {
+					"/repo": { path: "/repo", pr_hide_drafts: true, pr_hide_conflicting: null, pr_hide_ci_failing: false },
+				},
+			};
+			handlers["settings-changed"]({ section: "repositories", generation: 1, persisted: true, applied: true });
+			await flush();
+			expect(repoSettingsStore.getEffective("/repo")).toMatchObject({
+				prHideDrafts: true,
+				prHideConflicting: true,
+				prHideCiFailing: false,
+			});
+			await vi.advanceTimersByTimeAsync(1000);
+			expect(
+				io.invoke.mock.calls.filter(([command]) => command === "save_config" || command === "save_repo_settings"),
+			).toEqual([]);
+		} finally {
+			stopRepos();
+		}
 	});
 
 	// Catches: incoming state clobbering a draft or a stale debounce overwriting the external edit.

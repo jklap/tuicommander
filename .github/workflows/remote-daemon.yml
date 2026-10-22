@@ -63,6 +63,7 @@ jobs:
 
       - name: Check tag matches version
         if: github.ref_type == 'tag'
+        shell: bash
         run: bash scripts/check-release-tag.sh "$GITHUB_REF_NAME"
 
       # Same stamp the desktop legs get, so /health.build.version of a nightly

@@ -26,7 +26,6 @@ export const NewConversationDialog: Component<{ chat: AcpChat; onClose: () => vo
 					<h4 id="new-chat-title">New conversation</h4>
 				</div>
 				<div class={d.body}>
-					<p>Leave fields empty to use the defaults. Options apply only to this conversation.</p>
 					<For each={fields}>
 						{(field) => (
 							<label>

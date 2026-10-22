@@ -192,8 +192,9 @@ describe("gridRenderer hiddenRows (#1761-7249)", () => {
 		renderer.paintGrid(rows, metrics, { fullRepaint: true, hiddenRows });
 		fillText.mockClear();
 		fillRect.mockClear();
+		rows.set(3, textRow(3, "Z"));
 		renderer.paintGrid(rows, metrics, { fullRepaint: false, dirtyIndices: new Set([3]), hiddenRows });
-		expect(fillText.mock.calls).toEqual([["D", 0, 44]]);
+		expect(fillText.mock.calls).toEqual([["Z", 0, 44]]);
 		expect(fillRect.mock.calls).toEqual([[-6, 32, 100, 16]]);
 	});
 

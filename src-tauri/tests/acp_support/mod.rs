@@ -13,10 +13,7 @@
 //! directory the child is still running in, which fails as a protocol error
 //! somewhere far from the cause.
 //!
-//! Compiled into every ACP test binary, and no binary uses all of it — a
-//! protocol test has no turns to wait on, a turn test never builds a session
-//! authority by hand. The unused half of this module in any one binary is the
-//! price of having one copy of each helper instead of five.
+//! Compiled once by the integration target and shared by its ACP test modules.
 #![allow(dead_code)]
 
 use std::path::{Path, PathBuf};
