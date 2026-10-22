@@ -224,6 +224,9 @@ jobs:
           rm -f "$APPLE_API_KEY_PATH" 2>/dev/null || true
 
   remote-daemon:
+    # tauri-action creates the draft at the end of the desktop build. Fast daemon
+    # builds must not upload by tag before that release exists.
+    needs: build
     permissions:
       contents: write
     uses: ./.github/workflows/remote-daemon.yml

@@ -101,6 +101,9 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      - name: Remote daemon release workflow contracts
+        run: python3 .github/workflows/tests/test-remote-daemon-release.py
+
       - name: Shell tests
         run: make test-shell
 
