@@ -81,6 +81,8 @@ export function createBranchSelectionCoordinator(deps: BranchSelectionCoordinato
 			// backend's `is_valid_uuid` prompt-injection guard.
 			tuicSession: randomUuid(),
 		});
+		// The tab the user was viewing before this add; the pane-docking check below needs it.
+		const previousActiveId = terminalsStore.state.activeId;
 		// This only sets the LOCAL flag — it never echoes to the backend on its
 		// own (the store's echo guard requires a `name` key alongside it). That
 		// used to leave a branch-label rename unprotected against a later
@@ -135,7 +137,7 @@ export function createBranchSelectionCoordinator(deps: BranchSelectionCoordinato
 			// Safe unconditionally now — paneLayoutStore reflects the target branch's own
 			// layout by this point either way (untouched when !needsSwitch, resolved above
 			// when needsSwitch), so docking never lands the new tab in a stale split.
-			assignTabToActiveGroup(id, "terminal");
+			assignTabToActiveGroup(id, "terminal", true, { displayedId: needsSwitch ? null : previousActiveId });
 		});
 		// Focus the new terminal after SolidJS renders and mounts the component
 		// (onMount sets ref, which happens in the next frame).

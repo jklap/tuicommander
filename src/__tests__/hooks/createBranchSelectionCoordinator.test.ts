@@ -94,6 +94,99 @@ describe("createBranchSelectionCoordinator", () => {
 		}
 	});
 
+	describe("pane docking of a terminal added to a branch", () => {
+		const setup = () => {
+			repositoriesStore.add({ path: "/Gits/alpha", displayName: "alpha" });
+			repositoriesStore.setWorkspace("/Gits/alpha", "main", { worktreePath: "/Gits/alpha" });
+			repositoriesStore.setActive("/Gits/alpha");
+			repositoriesStore.setActiveWorkspace("/Gits/alpha", "main");
+		};
+		const addViewed = (name: string) => {
+			const id = terminalsStore.add({ sessionId: null, fontSize: 14, name, cwd: null, awaitingInput: null });
+			terminalsStore.setActive(id);
+			return id;
+		};
+		const userSplitWith = (tabId?: string) => {
+			const g = paneLayoutStore.createGroup();
+			if (tabId) paneLayoutStore.addTab(g, { id: tabId, type: "terminal" });
+			paneLayoutStore.setRoot({ type: "leaf", id: g });
+			paneLayoutStore.setActiveGroup(g);
+			paneLayoutStore.split(g, "vertical");
+		};
+
+		it("docks into the split when the viewed terminal is in a pane", async () => {
+			await testInScope(async () => {
+				setup();
+				const viewed = addViewed("viewed");
+				userSplitWith(viewed);
+
+				const id = await makeCoordinator().handleAddTerminalToWorkspace("/Gits/alpha", "main");
+
+				expect(paneLayoutStore.getGroupForTab(id!)).toBeTruthy();
+			});
+		});
+
+		it("leaves the new terminal an orphan when the viewed terminal overlays the split", async () => {
+			await testInScope(async () => {
+				setup();
+				userSplitWith("pane-term");
+				addViewed("orphan");
+
+				const id = await makeCoordinator().handleAddTerminalToWorkspace("/Gits/alpha", "main");
+
+				expect(paneLayoutStore.getGroupForTab(id!)).toBeNull();
+				expect(terminalsStore.state.activeId).toBe(id);
+			});
+		});
+
+		it("keeps the new terminal out of a tmux-shim split", async () => {
+			await testInScope(async () => {
+				setup();
+				paneLayoutStore.arrangeSessionsAsLayout(["s1", "s2"], "tiled");
+
+				const id = await makeCoordinator().handleAddTerminalToWorkspace("/Gits/alpha", "main");
+
+				expect(paneLayoutStore.getGroupForTab(id!)).toBeNull();
+			});
+		});
+
+		it("ignores the previously viewed terminal when it switches to another branch", async () => {
+			await testInScope(async () => {
+				setup();
+				repositoriesStore.setWorkspace("/Gits/alpha", "feature", { worktreePath: "/Gits/alpha__wt/feature" });
+				// Viewing an orphan on `main`; the target branch has its own user split on file.
+				addViewed("orphan-on-main");
+				const live = terminalsStore.add({ sessionId: null, fontSize: 14, name: "f1", cwd: null, awaitingInput: null });
+				const live2 = terminalsStore.add({ sessionId: null, fontSize: 14, name: "f2", cwd: null, awaitingInput: null });
+				repositoriesStore.addTerminalToWorkspace("/Gits/alpha", "feature", live);
+				repositoriesStore.addTerminalToWorkspace("/Gits/alpha", "feature", live2);
+				const { savedPaneLayouts, paneLayoutKey } = await import("../../stores/savedPaneLayouts");
+				const g1 = paneLayoutStore.createGroup();
+				const g2 = paneLayoutStore.createGroup();
+				savedPaneLayouts.set(paneLayoutKey("/Gits/alpha", "feature"), {
+					root: {
+						type: "branch",
+						direction: "vertical",
+						children: [
+							{ type: "leaf", id: g1 },
+							{ type: "leaf", id: g2 },
+						],
+						ratios: [0.5, 0.5],
+					},
+					groups: {
+						[g1]: { id: g1, tabs: [{ id: live, type: "terminal" }], activeTabId: live },
+						[g2]: { id: g2, tabs: [{ id: live2, type: "terminal" }], activeTabId: live2 },
+					},
+					activeGroupId: g1,
+				});
+
+				const id = await makeCoordinator().handleAddTerminalToWorkspace("/Gits/alpha", "feature");
+
+				expect(paneLayoutStore.getGroupForTab(id!)).toBe(g1);
+			});
+		});
+	});
+
 	/**
 	 * `cwd: null` is not "the default directory" — the backend spawns the PTY in the
 	 * user's HOME. A workspace row whose `worktreePath` was never filled in (a row

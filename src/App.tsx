@@ -333,8 +333,8 @@ const App: Component = () => {
 			awaitingInput: null,
 			tuicSession: randomUuid(),
 		});
-		terminalsStore.setActive(id);
 		assignTabToActiveGroup(id, "terminal");
+		terminalsStore.setActive(id);
 		requestAnimationFrame(() => terminalsStore.get(id)?.ref?.focus());
 	};
 
