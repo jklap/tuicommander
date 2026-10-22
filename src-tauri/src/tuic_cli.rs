@@ -469,6 +469,26 @@ mod tests {
         );
     }
 
+    // Catches: the probe answers true unconditionally (or from the executable's
+    // own mode), so a read-only install directory is reported as auto-updatable.
+    #[cfg(unix)]
+    #[test]
+    fn cli_update_probe_rejects_read_only_install_directory() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+        let installed = dir.path().join("tuic");
+        std::fs::write(&installed, b"old-cli").unwrap();
+        std::fs::set_permissions(&installed, std::fs::Permissions::from_mode(0o755)).unwrap();
+        std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o555)).unwrap();
+        let root = std::fs::File::create(dir.path().join("root-check")).is_ok();
+        let writable = install_path_writable(installed.to_str().unwrap());
+        std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o755)).unwrap();
+        if root {
+            return; // permission bits do not bind root
+        }
+        assert!(!writable, "a read-only directory cannot take an atomic replacement");
+    }
+
     // Catches: a status-only O_WRONLY probe invalidates a signed Mach-O's
     // cached signature even though its bytes and mtime do not change.
     #[cfg(target_os = "macos")]
