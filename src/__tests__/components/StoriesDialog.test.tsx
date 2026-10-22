@@ -664,7 +664,7 @@ describe("StoriesDialog", () => {
 		);
 	});
 
-	it("starts only the selected published story revision and keeps plan start visibly unavailable", async () => {
+	it("starts only the selected published story revision and offers no plan start button", async () => {
 		// Catches: using an editable draft or manual story transition instead of daemon graph start.
 		const fallback = vi.mocked(invoke).getMockImplementation();
 		vi.mocked(invoke).mockImplementation(async (command, args) => {
@@ -698,9 +698,7 @@ describe("StoriesDialog", () => {
 		});
 		render(() => <StoriesDialog project="/repo" onClose={() => {}} />);
 		await screen.findByRole("heading", { name: "Implement API" });
-		expect(
-			(screen.getByRole("button", { name: "Start plan workflow · unavailable" }) as HTMLButtonElement).disabled,
-		).toBe(true);
+		expect(screen.queryByText(/Start plan workflow/)).toBeNull();
 		fireEvent.click(screen.getByRole("button", { name: "Start story workflow" }));
 		await screen.findByRole("button", { name: "Start published workflow" });
 		expect(screen.queryByRole("option", { name: /Draft only/ })).toBeNull();
