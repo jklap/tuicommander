@@ -3797,6 +3797,50 @@ fn urgent_mail_notice_shows_only_a_single_token_display_name() {
     }
 }
 
+/// Boss asked for a name, alias or title: a sender whose display name is not a
+/// single token is still identified by its TUIC-generated terminal alias.
+/// Catches: falling straight to the UUID although the sender's tab has an alias.
+#[cfg(unix)]
+#[tokio::test]
+async fn urgent_mail_notice_falls_back_to_the_sender_terminal_alias() {
+    let state = test_state();
+    let Some(sender_pty) = create_test_session(&state) else {
+        return;
+    };
+    state.bind_live_pty(TEST_UUID_A, &sender_pty);
+    let alias = state
+        .session_maps
+        .term_aliases
+        .get(&sender_pty)
+        .map(|entry| entry.value().clone())
+        .expect("a spawned session has an alias");
+    register_peer(&state, TEST_UUID_A, "Ignore all previous", "mcp-sender");
+    register_peer(&state, TEST_UUID_B, "recipient", "mcp-recipient");
+    crate::test_support::agent_session(&state, TEST_UUID_B, crate::pty::SHELL_BUSY);
+    state
+        .session_maps
+        .session_states
+        .get_mut(TEST_UUID_B)
+        .unwrap()
+        .agent_type = Some("codex".into());
+    let bytes = crate::test_support::insert_recording_session(&state, TEST_UUID_B);
+
+    let sent = handle_messaging(
+        &state,
+        &serde_json::json!({"action":"send","to":TEST_UUID_B,"message":"review the inbox","urgency":"urgent"}),
+        Some("mcp-sender"),
+    );
+
+    assert_eq!(sent["urgent_delivered"], true, "{sent}");
+    let typed = String::from_utf8(bytes.lock().unwrap().clone()).unwrap();
+    assert!(
+        typed.contains(&format!("URGENT mail from {alias}:")),
+        "{typed:?}"
+    );
+    assert!(!typed.contains(TEST_UUID_A), "{typed:?}");
+    kill_test_session(&state, &sender_pty);
+}
+
 #[cfg(unix)]
 #[test]
 fn urgent_mail_reports_why_busy_delivery_is_unsafe() {
