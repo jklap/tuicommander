@@ -1069,6 +1069,13 @@ pub(crate) fn write_external_file_impl(path: String, content: String) -> Result<
     fs::atomic_write(p, content.as_bytes()).map_err(|e| format!("Failed to write file: {e}"))
 }
 
+/// Body-free MCP tools/call outcome audit; `enabled: false` while the setting is off.
+#[cfg(feature = "desktop")]
+#[tauri::command]
+async fn get_mcp_audit(state: State<'_, Arc<AppState>>) -> Result<serde_json::Value, String> {
+    Ok(mcp_http::mcp_call_audit::snapshot(&state))
+}
+
 /// Get MCP server status (running, port, active sessions).
 /// Async to avoid blocking the Tauri IPC thread during the TCP self-test.
 #[cfg(feature = "desktop")]
@@ -2355,6 +2362,7 @@ pub fn run(mut context: tauri::Context<tauri::Wry>) {
             get_local_ips,
             updater::check_update_channel,
             get_mcp_status,
+            get_mcp_audit,
             deep_link_mcp_call,
             get_connect_url,
             regenerate_session_token,

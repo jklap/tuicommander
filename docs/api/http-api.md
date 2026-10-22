@@ -3455,6 +3455,8 @@ and IPC use the same raw 500-Unicode-scalar text limit as MCP.
 
 ### GET /mcp/audit
 
+Gated by `mcp_call_audit_enabled` (default off in release, on in debug): when off the body is `{"enabled":false,"records":[]}`. Rows add `outcome`: `replied`, `error` or `cancelled`. IPC: `get_mcp_audit`.
+
 Returns a bounded, body-free runtime MCP call outcome projection (100 newest rows,
 1024 retained per instance). Includes call/parent correlation UUIDs, recognized
 operation, target digest, UTF-8 response text bytes, application error and separate

@@ -51,6 +51,8 @@ pub(crate) struct Record {
     application_error: Option<bool>,
     transport_error: &'static str,
     effect: &'static str,
+    /// `replied`, `error` or `cancelled`. Says nothing about `effect`.
+    outcome: &'static str,
 }
 
 #[derive(Default)]
@@ -79,14 +81,25 @@ impl Audit {
     }
 }
 
+/// One projection for the HTTP route and the Tauri command, so the transports cannot drift.
+pub(crate) fn snapshot(state: &AppState) -> Value {
+    if !state.config.read().mcp_call_audit_enabled {
+        return json!({"enabled": false, "records": []});
+    }
+    let mut projection = state.mcp.call_audit.lock().projection();
+    projection["enabled"] = json!(true);
+    projection
+}
+
 pub(super) async fn endpoint(State(state): State<Arc<AppState>>) -> Json<Value> {
-    Json(state.mcp.call_audit.lock().projection())
+    Json(snapshot(&state))
 }
 
 /// Owned across dispatch. Dropping an unfinished call must not assert rollback:
 /// a blocking handler or upstream may still complete after its future is gone.
 pub(super) struct Call<'a> {
     audit: &'a Mutex<Audit>,
+    /// `None` while the audit is disabled: the call is not observed at all.
     row: Option<Record>,
 }
 
@@ -97,7 +110,10 @@ fn metadata_uuid(params: &Value, key: &str) -> Option<Uuid> {
 }
 
 impl<'a> Call<'a> {
-    pub(super) fn start(audit: &'a Mutex<Audit>, params: &Value) -> Self {
+    pub(super) fn start(audit: &'a Mutex<Audit>, params: &Value, enabled: bool) -> Self {
+        if !enabled {
+            return Self { audit, row: None };
+        }
         let name = params["name"].as_str().unwrap_or("");
         let args = if name == "call_tool" {
             &params["arguments"]["arguments"]
@@ -144,13 +160,18 @@ impl<'a> Call<'a> {
                 application_error: None,
                 transport_error: "cancelled_before_reply",
                 effect: "unknown",
+                outcome: "cancelled",
             }),
         }
     }
 
     pub(super) fn finish(mut self, raw: &Value, formatted: &Value) {
-        let mut row = self.row.take().expect("a call finishes once");
-        row.application_error = Some(formatted["isError"].as_bool().unwrap_or(false));
+        let Some(mut row) = self.row.take() else {
+            return;
+        };
+        let application_error = formatted["isError"].as_bool().unwrap_or(false);
+        row.application_error = Some(application_error);
+        row.outcome = if application_error { "error" } else { "replied" };
         row.response_text_bytes = Some(formatted["content"].as_array().map_or(0, |content| {
             content
                 .iter()
@@ -198,6 +219,7 @@ mod tests {
             drop(Call::start(
                 &audit,
                 &json!({"name":"SECRET_TOOL","_meta":{"tuic/call_id":"SECRET_ID"}}),
+                true,
             ));
         }
         let projection = audit.lock().projection();

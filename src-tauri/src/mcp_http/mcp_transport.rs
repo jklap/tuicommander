@@ -1206,7 +1206,11 @@ pub(super) async fn mcp_post(
                 .get("params")
                 .cloned()
                 .unwrap_or(serde_json::Value::Null);
-            let audit = super::mcp_call_audit::Call::start(&state.mcp.call_audit, &params);
+            let audit = super::mcp_call_audit::Call::start(
+                &state.mcp.call_audit,
+                &params,
+                state.config.read().mcp_call_audit_enabled,
+            );
             let tool_name = params["name"].as_str().unwrap_or("").to_string();
             let args = params
                 .get("arguments")
