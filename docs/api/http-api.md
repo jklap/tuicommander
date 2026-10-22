@@ -28,7 +28,7 @@ A distinct second start on a plan with a running or paused run is refused with `
 
 ## Workflow definitions
 
-`POST /workflows/definition/action?path=<absolute-project>` accepts one `WorkflowAction` object and returns `{ type, value }`. Actions are `seed_templates`, `create_draft {name,kind,graph}`, `list_drafts`, `get_draft {id}`, `update_draft {id,expected_revision,graph}`, `update_closure {id,expected_revision,closure}`, `update_checks {id,expected_revision,checks}`, `publish {id,expected_revision}`, and `get_published {id,revision}`. `closure` is `human` or `automatic`, defaults to `human`, and `automatic` cannot be published until its evidence gate exists. Each check has `id`, `argv`, and camel-case `timeoutSecs`; the published revision pins its `requiredChecks`. A graph has `nodes` and `edges`; see [Workflow definitions](../backend/workflows.md) for node, outcome, and publication rules. The path resolves to the canonical owning project. Published revisions are immutable. This endpoint defines workflows; it does not start one. Executable-graph validation errors during `publish` return HTTP 422 with `{ "error": "invalid workflow definition: ..." }`; invalid Pause targets name `resume_to`.
+`POST /workflows/definition/action?path=<absolute-project>` accepts one `WorkflowAction` object and returns `{ type, value }`. Actions are `seed_templates`, `create_draft {name,kind,graph}`, `list_drafts`, `get_draft {id}`, `update_draft {id,expected_revision,graph}`, `update_closure {id,expected_revision,closure}`, `update_checks {id,expected_revision,checks}`, `publish {id,expected_revision}`, and `get_published {id,revision}`. `closure` is `human` or `automatic`, defaults to `human`, and `automatic` cannot be published until its evidence gate exists. Each check has `id`, `argv`, and camel-case `timeoutSecs`; the published revision pins its `requiredChecks`. A graph has `nodes` and `edges`; see [Workflow definitions](../backend/workflows.md) for node, outcome, and publication rules. The path resolves to the canonical owning project. Published revisions are immutable. This endpoint defines workflows; it does not start one. Executable-graph validation errors during `publish` return HTTP 422 with `{ "error": "invalid workflow definition: ..." }`; invalid Pause targets name `resume_to`. Publishing a draft with no edit since its last publication also returns HTTP 422 (`draft revision has already been published`); each draft carries `lastPublishedDraftRevision`, and a client disables Publish while it equals `draftRevision`.
 
 ## Native stories
 
@@ -1522,6 +1522,7 @@ GET    /config/remote-connections
 PUT    /config/remote-connections
 DELETE /config/remote-connections/{id}
 PUT    /config/remote-connections/{id}/password
+PUT    /config/remote-connections/{id}/relay-pairing
 GET    /config/remote-connections/{id}/password
 POST   /config/remote-connections/{id}/token
 POST   /config/remote-connections/{id}/install
@@ -1538,6 +1539,13 @@ daemon's in-memory session token. Successful password set/clear requests publish
 a value-free `settings-changed` event for `connections` after vault persistence;
 a failed vault write publishes nothing. Deployment pairing-token creation and
 persisted deployment-mode changes invalidate the same Settings section.
+`PUT .../relay-pairing` takes `{ "bundle": "tuic-pair-v1:..." }`, the text printed
+by `tuic-remote --relay-pair`. The bundle is parsed first; an unparsable one is
+rejected, nothing is stored and nothing is published. It is kept in the vault
+only (it holds the end-to-end secret) and an empty string forgets it. A
+successful change publishes the same value-free `connections` event. The
+connection status of a `relay` connection carries `relay_failure`
+(`relay_unreachable`, `daemon_offline`, `pairing_rejected`, `link_lost`).
 `PUT /config/remote-connections` takes `{ "base": null, "connection": {...} }`
 for a new machine, or the loaded connection as `base` when editing. The server
 merges only changed fields into that connection's latest locked record.
@@ -2927,6 +2935,8 @@ reconnects after pressure evicted its history can deliver one duplicate.
 Disconnect retires that host's existing shadows synchronously, independently
 of a pending handshake or a later reconnect generation. This is a bounded replay horizon,
 not unbounded or restart-persistent exactly-once delivery.
+
+`POST /stories/action` answers a mistake the user can fix with HTTP 422 and `{ "error": "..." }`: `add_plan_source` for a missing plan file (`plan document not found: <path>`) and `submit_review` with unchecked criteria (`criteria are incomplete: unchecked indexes N`). Other failures stay HTTP 500.
 
 Workflow definition and run APIs are actorless and share the same services across transports. Story transition actors track provenance and never restrict actions. Desktop IPC and valid HTTP credentials record Human; sessionless local requests record LocalApi; managed story requests record their session. Missing ConnectInfo on Unix sockets and in-process services means local/unknown caller metadata, not HTTP 500. Local token exchange is accepted; state, revision, project and integration checks remain enforced.
 

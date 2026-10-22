@@ -322,3 +322,7 @@ A safe removal keeps a clean, integrated checkout in the archive area for reuse.
 A later worktree creation can reuse it under the new branch name without copying
 ignored build artifacts. Freshly created worktrees stay reserved even before a session
 starts. Dirty, unmerged, locked, and live worktrees are not reused.
+
+The remove confirmation says so: for such a checkout it reads "Archive workspace?"
+with an Archive button and states that the local branch is kept. The archived
+checkout still holds the branch.

@@ -366,6 +366,18 @@ A URL that points back at the TUICommander you are configuring is refused with
 compares the `instance_id` in `GET /health` against this process's own, so a
 second daemon on the same machine (a different port) is still a valid peer.
 
+### Adding a Relay Connection
+
+Use this when the remote machine accepts no inbound connection.
+
+1. On the remote machine run `tuic-remote --relay-pair <relay-url> --relay-register`, or set `TUIC_RELAY_TOKEN` instead of `--relay-register`. Add `--relay-out <file>` to write the bundle to a private file.
+2. Restart `tuic-remote` so it registers with the relay.
+3. Copy the printed `tuic-pair-v1:` bundle to this machine over a trusted channel. It holds the end-to-end secret.
+4. Open **Settings** → **Remote Machines**, click **+**, and select **Relay**.
+5. Paste the bundle and save, then click **Connect**.
+
+If the status shows `pairing_rejected`, the daemon was paired again: import the new bundle. `daemon_offline` means the daemon is not connected to the relay. After `link_lost` or `relay_unreachable` TUICommander reconnects by itself. Running `--relay-pair` again replaces the pairing.
+
 ### Connect or Install
 
 **Connect** with **Deploy on connect** is the zero-setup path. If no compatible
