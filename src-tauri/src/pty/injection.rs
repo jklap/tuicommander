@@ -1363,18 +1363,18 @@ pub(crate) const PEER_MAIL_WAKE: &str =
 pub(super) const URGENT_NOTICE_NAME_MAX_CHARS: usize = 40;
 
 /// Label a sender in the urgent notice. Display names are peer-controlled
-/// prompt text, so only letters, digits and `space - _ . @` survive, capped at
-/// `URGENT_NOTICE_NAME_MAX_CHARS`; a name with nothing left falls back to the
-/// validated UUID, or `unknown-peer` when that is not a UUID either.
+/// prompt text, so a name is shown only when it is one token of
+/// `[A-Za-z0-9._@-]` and at most `URGENT_NOTICE_NAME_MAX_CHARS` long. Anything
+/// else (spaces, markup, control bytes, too long) falls back to the validated
+/// UUID, or `unknown-peer` when that is not a UUID either.
 pub(super) fn urgent_notice_sender_label(sender_identity: &str, sender_name: &str) -> String {
-    let name: String = sender_name
-        .chars()
-        .filter(|c| c.is_alphanumeric() || matches!(c, ' ' | '-' | '_' | '.' | '@'))
-        .take(URGENT_NOTICE_NAME_MAX_CHARS)
-        .collect();
-    let name = name.trim();
-    if !name.is_empty() {
-        return name.to_string();
+    let single_token = !sender_name.is_empty()
+        && sender_name.chars().count() <= URGENT_NOTICE_NAME_MAX_CHARS
+        && sender_name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '@' | '-'));
+    if single_token {
+        return sender_name.to_string();
     }
     uuid::Uuid::parse_str(sender_identity)
         .map(|id| id.to_string())
