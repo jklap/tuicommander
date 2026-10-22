@@ -214,6 +214,21 @@ describe("CanvasTerminal wheel forwarded to a mouse-reporting app", () => {
 		expect(ptyWrites()).toEqual([]);
 	});
 
+	// Catches: resetSmoothScroll (typing, resize, scrollbar drag) cancelling the gesture-end
+	// timer without clearing the forwarded residual, so the next gesture inherits it.
+	it("drops the forwarded residual when typing cancels the gesture timer", async () => {
+		await mount(2);
+		wheel({ deltaY: 14 });
+		// Keyboard input is bound to the hidden <input> next to the canvas.
+		const keyInput = document.querySelector('input[aria-hidden="true"]');
+		if (!keyInput) throw new Error("hidden key input not mounted");
+		keyInput.dispatchEvent(new KeyboardEvent("keydown", { key: "a", bubbles: true, cancelable: true }));
+		await waitFor(() => expect(ptyWrites().join("")).toContain("a"));
+		invoke.mockClear();
+		wheel({ deltaY: 14 });
+		expect(forwardedNotches()).toEqual([0, 0]);
+	});
+
 	// Catches: wheel being swallowed or forwarded when the app does not report the mouse.
 	it("forwards nothing when mouse reporting is off", async () => {
 		await mount(0);
