@@ -2278,7 +2278,7 @@ async fn a_resize_reflows_off_the_calling_thread() {
     let caller = std::thread::current().id();
     // The session has no PTY, so this ends in "Session not found" — after the
     // grid reflow, which is precisely the work that must not run here.
-    let _ = resize_session_off_thread(&state, sid.to_string(), 40, 120).await;
+    let _ = resize_session_off_thread(&state, sid.to_string(), 40, 120, "test").await;
 
     assert!(resize_thread(sid).is_some(), "the reflow never ran at all");
     assert_ne!(
@@ -2293,8 +2293,8 @@ fn resize_rejects_zero_dims() {
     let state = crate::state::tests_support::make_test_app_state();
     // rows==0 / cols==0 are rejected before any lock, grid, or PTY work — the
     // (0,0) pair is reserved as the "never applied" sentinel inside the lock.
-    assert!(resize_session_core(&state, "s", 0, 80).is_err());
-    assert!(resize_session_core(&state, "s", 24, 0).is_err());
+    assert!(resize_session_core(&state, "s", 0, 80, "test").is_err());
+    assert!(resize_session_core(&state, "s", 24, 0, "test").is_err());
     // A rejected resize must not even create a resize_locks entry.
     assert!(!state.session_maps.resize_locks.contains_key("s"));
 }
@@ -2310,7 +2310,7 @@ fn resize_noop_guard_returns_none_on_matching_dims() {
     // Same dims → no-op returning None WITHOUT touching the (absent) session.
     // Without the guard this would fall through to sessions.get and fail with
     // "Session not found", so Ok(None) proves the guard short-circuited first.
-    assert_eq!(resize_session_core(&state, "s", 24, 80), Ok(None));
+    assert_eq!(resize_session_core(&state, "s", 24, 80, "test"), Ok(None));
 }
 
 /// Catches treating a matching grid as proof of a successful resize with no PTY.
@@ -2319,7 +2319,7 @@ fn resize_matching_grid_without_pty_reports_missing_session() {
     let state = crate::state::tests_support::make_test_app_state();
     seed_vt_grid(&state, "s", 24, 80);
     assert_eq!(
-        resize_session_core(&state, "s", 24, 80),
+        resize_session_core(&state, "s", 24, 80, "test"),
         Err("Session not found: s".to_string())
     );
 }
@@ -2414,7 +2414,7 @@ fn resize_first_request_matching_legacy_grid_reaches_child() {
     );
     seed_vt_grid(&state, sid, 24, 220);
 
-    let result = resize_session_core(&state, sid, 24, 220);
+    let result = resize_session_core(&state, sid, 24, 220, "test");
     let entry = state.session_maps.sessions.get(sid).unwrap();
     let mut session = entry.lock();
     std::fs::OpenOptions::new()
@@ -2449,12 +2449,12 @@ fn concurrent_differing_resizes_leave_grid_and_pty_consistent() {
         let (s1, b1) = (Arc::clone(&state), Arc::clone(&barrier));
         let t1 = std::thread::spawn(move || {
             b1.wait();
-            let _ = resize_session_core(&s1, sid, A.0, A.1);
+            let _ = resize_session_core(&s1, sid, A.0, A.1, "test");
         });
         let (s2, b2) = (Arc::clone(&state), Arc::clone(&barrier));
         let t2 = std::thread::spawn(move || {
             b2.wait();
-            let _ = resize_session_core(&s2, sid, B.0, B.1);
+            let _ = resize_session_core(&s2, sid, B.0, B.1, "test");
         });
         t1.join().unwrap();
         t2.join().unwrap();

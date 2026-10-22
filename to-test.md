@@ -1,3 +1,7 @@
+## PTY size on tab mount and reconnect (2128-153a) — rebuild required
+
+- [x] Isolated `agent-test-2128` instance with Claude Code 2.1.306: before the fix, a WebView reload and the first activation of a background tab left the PTY at 15x38 while the canvas drew 14x37. After the fix, the first activation sends one resize, a reload sends none, and `stty size` equals the drawn grid. Evidence: `~/Gits/.tmp/results/tuic-2128/`.
+- [ ] After Boss rebuilds and restarts the daily app, reload the WebView with a Claude tab open, then run `stty size` in a shell tab or read `PTY resize` in the debug log. The size must equal the visible grid. This peer did not restart the daily app.
 ## Telegram non-owner notifications (2119-d5de) — Rust restart required
 
 - [ ] After Boss manually rebuilds and restarts the backend, keep an inbound owner registered, send from another agent without registering, and verify its sender prefix. Reply in Telegram and verify that sender receives native mail while a new message still reaches the owner. No daily app restart was performed. Coordinator approved native cfg(test) loopback verification instead of a desktop fake-endpoint override; the native integration test checks outgoing wire text and reply delivery to the sender inbox.

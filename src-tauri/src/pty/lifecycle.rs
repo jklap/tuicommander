@@ -3680,18 +3680,25 @@ pub(crate) async fn resize_session_off_thread(
     session_id: String,
     rows: u16,
     cols: u16,
+    origin: &'static str,
 ) -> Result<Option<crate::grid_gate::GridFrame>, String> {
     let state = Arc::clone(state);
-    tokio::task::spawn_blocking(move || resize_session_core(&state, &session_id, rows, cols))
-        .await
-        .map_err(|e| format!("resize failed: {e}"))?
+    tokio::task::spawn_blocking(move || {
+        resize_session_core(&state, &session_id, rows, cols, origin)
+    })
+    .await
+    .map_err(|e| format!("resize failed: {e}"))?
 }
 
+/// `origin` names the transport that asked (`ipc`, `http`, `mcp`) for the
+/// debug log: several viewers share one PTY and the last writer wins, so the log
+/// is the only record of which viewer set the size the child reads.
 pub(crate) fn resize_session_core(
     state: &AppState,
     session_id: &str,
     rows: u16,
     cols: u16,
+    origin: &'static str,
 ) -> Result<Option<crate::grid_gate::GridFrame>, String> {
     if rows == 0 || cols == 0 {
         return Err("Invalid dimensions: rows and cols must be > 0".to_string());
@@ -3725,8 +3732,17 @@ pub(crate) fn resize_session_core(
     // the grid: a prior call that resized the grid but then failed `master.resize` leaves
     // them divergent, and a grid-only guard would skip the PTY forever (CONC-B criterion 2).
     if *applied == (rows, cols) {
+        tracing::debug!(
+            source = "pty",
+            session_id,
+            origin,
+            rows,
+            cols,
+            "PTY resize no-op: already applied"
+        );
         return Ok(None);
     }
+    let previous = *applied;
     // Resize the grid and capture a fresh full frame, holding the vt lock so no
     // PTY chunk can land between the check and the resize. `resize`
     // marks the grid fully damaged, so `serialize_dirty_rows` yields the whole
@@ -3763,8 +3779,8 @@ pub(crate) fn resize_session_core(
         .sessions
         .get(session_id)
         .ok_or_else(|| format!("Session not found: {session_id}"))?;
-    entry
-        .lock()
+    let session = entry.lock();
+    session
         .master
         .resize(PtySize {
             rows,
@@ -3773,6 +3789,21 @@ pub(crate) fn resize_session_core(
             pixel_height: 0,
         })
         .map_err(|e| format!("Failed to resize PTY: {e}"))?;
+    // TIOCGWINSZ on the master reads the same winsize the child reads.
+    let child_size = session.master.get_size().ok();
+    drop(session);
+    tracing::debug!(
+        source = "pty",
+        session_id,
+        origin,
+        rows,
+        cols,
+        previous_rows = previous.0,
+        previous_cols = previous.1,
+        child_rows = child_size.map(|s| s.rows),
+        child_cols = child_size.map(|s| s.cols),
+        "PTY resize applied"
+    );
     // Record the dims only now that they've reached the PTY, still under `applied`, so
     // a racing resize either waits behind this lock or observes a consistent value.
     // On a `master.resize` failure above we return via `?` WITHOUT updating `applied`,
