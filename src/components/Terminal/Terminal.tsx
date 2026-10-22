@@ -868,15 +868,16 @@ export const Terminal: Component<TerminalProps> = (props) => {
 			if (sessionId) {
 				try {
 					const box = gridBox(containerRef);
-					appLogger.diag.info("terminal", `resize_pty request reconnect ${grid.rows}x${grid.cols}`, {
-						sessionId,
-						caller: "reconnect",
-						viewer: isTauri() ? "desktop" : "browser",
-						rows: grid.rows,
-						cols: grid.cols,
-						boxWidth: box.width,
-						boxHeight: box.height,
-					});
+					if (isPerfDebug())
+						appLogger.diag.info("terminal", `resize_pty request reconnect ${grid.rows}x${grid.cols}`, {
+							sessionId,
+							caller: "reconnect",
+							viewer: isTauri() ? "desktop" : "browser",
+							rows: grid.rows,
+							cols: grid.cols,
+							boxWidth: box.width,
+							boxHeight: box.height,
+						});
 					await pty.resize(sessionId, grid.rows, grid.cols);
 					reconnected = true;
 					await attachSessionListeners(sessionId);

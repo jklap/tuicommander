@@ -576,19 +576,21 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 			// repopulates rowMap for real (see the decideFrameGrid handling below).
 			fullRepaintNeeded = true;
 			lastDisplayOffset = -1;
-			// Several viewers share one PTY and the last resize wins: this line is the
-			// only record of which viewer asked for which grid (story 2128-153a).
-			appLogger.diag.info("terminal", `resize_pty request canvas ${rows}x${cols}`, {
-				sessionId: props.sessionId,
-				caller: "canvas",
-				viewer: isTauri() ? "desktop" : "browser",
-				rows,
-				cols,
-				boxWidth: rect.width,
-				boxHeight: rect.height,
-				cellWidth: m.cellWidth,
-				cellHeight: m.cellHeight,
-			});
+			// Several viewers share one PTY and the last resize wins: this line records
+			// which viewer asked for which grid from which box (story 2128-153a). The
+			// backend logs every applied size and its origin without this gate.
+			if (isPerfDebug())
+				appLogger.diag.info("terminal", `resize_pty request canvas ${rows}x${cols}`, {
+					sessionId: props.sessionId,
+					caller: "canvas",
+					viewer: isTauri() ? "desktop" : "browser",
+					rows,
+					cols,
+					boxWidth: rect.width,
+					boxHeight: rect.height,
+					cellWidth: m.cellWidth,
+					cellHeight: m.cellHeight,
+				});
 			invokeRef("resize_pty", { sessionId: props.sessionId, rows, cols }).catch(ipcErr("resize_pty"));
 		}
 
