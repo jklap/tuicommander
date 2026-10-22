@@ -1214,6 +1214,7 @@
 	"stories.planState.done": "Done",
 	"stories.planState.draft": "Draft",
 	"stories.plans": "Plans",
+	"stories.pill.label": "{title}: active plans {plans}, stories in progress {working}, stories done {done} of {total}",
 	"stories.priority": "Priority",
 	"stories.remove": "Remove",
 	"stories.removeNamedDependency": "Remove {title}",
