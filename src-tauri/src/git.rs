@@ -155,10 +155,9 @@ pub(crate) fn update_from_base_impl(
             match git_cmd(&repo_path)
                 .args(["merge", &base, "--no-edit"])
                 // A `merge.ff=only` config must not fail this explicitly requested merge.
-                .args(crate::git_cli::merge_ff_override(
-                    &repo_path,
-                    Some(branch_name),
-                ))
+                // `git merge` applies the mergeOptions of the branch checked out in
+                // `repo_path`, which is not necessarily `branch_name`.
+                .args(crate::git_cli::merge_ff_override_for_head(&repo_path))
                 .run()
             {
                 Ok(_) => Ok(format!("Merged {base} into {branch_name}")),

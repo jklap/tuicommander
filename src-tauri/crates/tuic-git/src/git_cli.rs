@@ -786,6 +786,21 @@ pub fn merge_ff_override(cwd: &Path, branch: Option<&str>) -> Option<&'static st
     ff_only.then_some("--ff")
 }
 
+/// [`merge_ff_override`] for a merge run in `cwd` that merges into whatever
+/// `cwd` has checked out.
+///
+/// Git applies `branch.<name>.mergeOptions` of the branch HEAD is on, not of a
+/// branch the caller merely names, so the checked-out branch is resolved with
+/// `symbolic-ref`. A detached HEAD has no branch and falls back to `merge.ff`.
+pub fn merge_ff_override_for_head(cwd: &Path) -> Option<&'static str> {
+    let head = git_cmd(cwd)
+        .args(["symbolic-ref", "--quiet", "--short", "HEAD"])
+        .run_silent()
+        .map(|o| o.stdout.trim().to_string())
+        .filter(|b| !b.is_empty());
+    merge_ff_override(cwd, head.as_deref())
+}
+
 /// Split a config value into words the way git's `split_cmdline` does (the
 /// parser behind `branch.<name>.mergeOptions` and aliases): whitespace
 /// separates words, `'` and `"` group (and are dropped), and a backslash
@@ -1068,6 +1083,24 @@ mod tests {
         git_in(&path, &["config", "merge.ff", "only"]);
         git_in(&path, &["config", "branch.dev.mergeOptions", "--no-ff"]);
         assert_eq!(merge_ff_override(&path, Some("dev")), None);
+    }
+
+    #[test]
+    fn merge_ff_override_for_head_reads_the_checked_out_branch() {
+        let (_dir, path) = setup_test_repo();
+        git_in(&path, &["config", "merge.ff", "true"]);
+        git_in(&path, &["commit", "--allow-empty", "-m", "init"]);
+        git_in(&path, &["checkout", "-b", "feature"]);
+        // The branch a caller might name is not the one checked out here.
+        git_in(
+            &path,
+            &["config", "branch.feature.mergeOptions", "--ff-only"],
+        );
+        git_in(&path, &["config", "branch.other.mergeOptions", "--no-ff"]);
+        assert_eq!(merge_ff_override_for_head(&path), Some("--ff"));
+        // Detached HEAD: no branch, falls back to merge.ff (true here).
+        git_in(&path, &["checkout", "--detach"]);
+        assert_eq!(merge_ff_override_for_head(&path), None);
     }
 
     /// A child that outlives any deadline these tests set.
