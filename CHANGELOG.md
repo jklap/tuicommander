@@ -8,7 +8,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
-- Cancel the pending focus animation frame when a Markdown tab unmounts or re-activates, and backfill mount-test coverage for the confirm dialog, Branches tab, code editor tab, Markdown tab, remote QR dialog and sidebar repo rows.
+- Backfill mount-test coverage for the confirm dialog, Branches tab, code editor tab, Markdown tab, remote QR dialog and sidebar repo rows (test-only; no production change).
 
 - Correct Settings accent-action text, compact navigation, wrapped help badges, shortcut groups, and workspace path presentation; hide the desktop-only Local tools card in browser mode (#1945).
 
