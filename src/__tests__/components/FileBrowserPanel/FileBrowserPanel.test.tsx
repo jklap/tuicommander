@@ -587,6 +587,28 @@ describe("FileBrowserPanel create file", () => {
 		);
 	});
 
+	it("empty-area menu in flat view inside a subdirectory creates in that listed directory", async () => {
+		listings.set("/repo|.", [dir("src"), file("README.md")]);
+		listings.set("/repo|src", [file("main.ts", "src/main.ts")]);
+		const { container, queryByText } = render(() => (
+			<FileBrowserPanel visible={true} repoPath="/repo" onClose={() => {}} onFileOpen={() => {}} />
+		));
+		await waitFor(() => expect(queryByText("src")).not.toBeNull());
+		clickRow(container, "src");
+		await waitFor(() => expect(queryByText("main.ts")).not.toBeNull());
+
+		fireEvent.contextMenu(container.querySelector(".content") as HTMLElement);
+		clickMenuItem("New File\u2026");
+		const input = document.querySelector("input[placeholder='File name']") as HTMLInputElement;
+		fireEvent.input(input, { target: { value: "notes.txt" } });
+		const confirm = Array.from(document.querySelectorAll("button")).find((b) => b.textContent?.trim() === "Create");
+		fireEvent.click(confirm as HTMLButtonElement);
+
+		await waitFor(() =>
+			expect(mockInvoke).toHaveBeenCalledWith("write_file", { repoPath: "/repo", file: "src/notes.txt", content: "" }),
+		);
+	});
+
 	it("creates a dotfile typed into the New File dialog", async () => {
 		listings.set("/repo|.", [file("README.md")]);
 		const { container, queryByText } = render(() => (
