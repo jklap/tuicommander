@@ -2565,7 +2565,11 @@ async fn repo_status_with_unregistered_path_names_the_path() {
     let root = tempfile::tempdir().unwrap();
     let _config = crate::config::set_config_dir_override(root.path().join("config"));
     register_git_repo(root.path(), "known");
-    let bogus = root.path().join("not-registered").to_string_lossy().into_owned();
+    let bogus = root
+        .path()
+        .join("not-registered")
+        .to_string_lossy()
+        .into_owned();
 
     let result = handle_github(
         &test_state(),
@@ -2573,7 +2577,9 @@ async fn repo_status_with_unregistered_path_names_the_path() {
     )
     .await;
 
-    let error = result["error"].as_str().unwrap_or_else(|| panic!("expected error: {result}"));
+    let error = result["error"]
+        .as_str()
+        .unwrap_or_else(|| panic!("expected error: {result}"));
     assert!(error.contains(&bogus), "error must name the path: {error}");
 }
 
@@ -2591,7 +2597,9 @@ async fn repo_status_with_registered_path_returns_that_repo_only() {
     )
     .await;
 
-    let rows = result.as_array().unwrap_or_else(|| panic!("expected list: {result}"));
+    let rows = result
+        .as_array()
+        .unwrap_or_else(|| panic!("expected list: {result}"));
     assert_eq!(rows.len(), 1, "{result}");
     assert_eq!(rows[0]["path"], first);
 }
@@ -2626,7 +2634,9 @@ async fn repo_status_matches_registered_path_through_slash_and_symlink() {
             &serde_json::json!({"action": "status", "path": spelling}),
         )
         .await;
-        let rows = result.as_array().unwrap_or_else(|| panic!("{spelling}: {result}"));
+        let rows = result
+            .as_array()
+            .unwrap_or_else(|| panic!("{spelling}: {result}"));
         assert_eq!(rows.len(), 1, "{spelling}: {result}");
         assert_eq!(rows[0]["path"], first, "{spelling}");
     }
