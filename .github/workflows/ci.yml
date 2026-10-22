@@ -101,6 +101,12 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      - name: Release body size workflow contracts
+        run: python3 .github/workflows/tests/test-release-body-limit.py
+
+      - name: Remote daemon release workflow contracts
+        run: python3 .github/workflows/tests/test-remote-daemon-release.py
+
       - name: Shell tests
         run: make test-shell
 
@@ -189,6 +195,10 @@ jobs:
 
       - name: Third-party notices (Rust)
         run: node scripts/third-party-notices.mjs --check --only rust
+
+      - name: Desktop frontend embedding
+        shell: bash
+        run: bash scripts/check-desktop-embedding.sh
 
       - name: Clippy
         working-directory: src-tauri
@@ -432,6 +442,10 @@ jobs:
             touch "src-tauri/binaries/tuic-bridge-${target}.exe"
             touch "src-tauri/binaries/tuic-${target}.exe"
           fi
+
+      - name: Desktop frontend embedding
+        shell: bash
+        run: bash scripts/check-desktop-embedding.sh
 
       - name: Clippy
         working-directory: src-tauri

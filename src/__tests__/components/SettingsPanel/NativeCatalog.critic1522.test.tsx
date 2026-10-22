@@ -28,13 +28,16 @@ it("refreshes native switches when a later backend poll registers a tool", async
 			return Promise.resolve({
 				enabled: true,
 				running: true,
-				native_tools: registered
-					? [{ name: "telegram", summary: "Telegram backend summary", description: "Telegram backend description" }]
+				native_capabilities: registered
+					? [{ name: "telegram", title: "telegram", description: "Telegram backend description", optional: true }]
 					: [],
 			});
 		}
 		if (command === "load_config") {
-			return Promise.resolve({ disabled_native_tools: ["telegram"], collapse_tools: false });
+			return Promise.resolve({
+				mcp_capabilities: { denied: ["telegram"], migration_unknown_tools: [] },
+				collapse_tools: false,
+			});
 		}
 		return Promise.resolve({ connected: false });
 	});
@@ -46,7 +49,6 @@ it("refreshes native switches when a later backend poll registers a tool", async
 		await vi.advanceTimersByTimeAsync(3000);
 		const toggle = view.getByRole("checkbox", { name: "telegram" }) as HTMLInputElement;
 		expect(toggle.checked).toBe(false);
-		expect(view.getByText("Telegram backend summary")).toBeDefined();
 		expect(view.getByText("Telegram backend description")).toBeDefined();
 	} finally {
 		view.unmount();

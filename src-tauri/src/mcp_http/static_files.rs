@@ -8,13 +8,25 @@ use include_dir::{Dir, include_dir};
 
 /// Frontend dist/ embedded at compile time for single-binary distribution.
 /// Only compiled in desktop builds — the remote binary omits the ~5MB frontend.
-#[cfg(feature = "desktop")]
+#[cfg(all(feature = "desktop", not(test)))]
 pub(super) static FRONTEND_DIST: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/../dist");
+
+// HTTP unit tests exercise transport semantics with fixed shells, not a worktree's
+// ignored Vite bundle. Production embedding is checked separately.
+#[cfg(all(feature = "desktop", test))]
+pub(super) static FRONTEND_DIST: Dir<'_> =
+    include_dir!("$CARGO_MANIFEST_DIR/src/mcp_http/fixtures/frontend");
 
 /// In debug builds, the dist/ directory on disk at compile-time location is checked first.
 /// This lets `pnpm build` (or `vite build --watch`) update the remote UI without a Rust recompile.
-#[cfg(all(feature = "desktop", debug_assertions))]
+#[cfg(all(feature = "desktop", debug_assertions, not(test)))]
 const DEV_DIST_PATH: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../dist");
+
+#[cfg(all(feature = "desktop", debug_assertions, test))]
+const DEV_DIST_PATH: &str = concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/src/mcp_http/fixtures/frontend"
+);
 
 /// Serve embedded static files from dist/ with correct MIME types.
 /// Unknown paths fall back to index.html for SPA client-side routing.

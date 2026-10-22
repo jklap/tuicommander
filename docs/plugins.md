@@ -1198,6 +1198,8 @@ if (credJson) {
 
 #### `host.httpFetch(url, options?) -> Promise<HttpResponse>`
 
+`httpFetch(url, { signal })` accepts a host-local `AbortSignal`. A pre-aborted signal starts no request; abort cancels the Rust request while waiting for headers or collecting the body and rejects with `AbortError`. Unloading the plugin also cancels its active HTTP requests. Signals never cross IPC/HTTP: the host sends a generated UUID and a plugin-scoped cancel command. Requests without a signal keep the same response contract.
+
 Make an HTTP request. Non-2xx status codes are returned normally (not thrown as errors). **Requires `"net:http"` capability.**
 
 Plugins can only fetch URLs matching their manifest's `allowedUrls` patterns. A manifest declaring `net:http` with empty or omitted `allowedUrls` is rejected. An empty list never grants unrestricted access, including localhost or private destinations.
@@ -1466,6 +1468,12 @@ Never use emoji — they render inconsistently across platforms.
 
 ## Hot Reload
 
+Reload batches deduplicate changed enabled IDs and run one discovery request for
+that batch. Concurrent notifications share a serialized reload queue. Only the
+selected plugin roots are read; payload hashing reuses unchanged file hashes by
+modification time and size. Same-version source edits still change the computed
+payload digest. Full discovery remains available at startup.
+
 When any file in a plugin directory changes, the app:
 1. Emits a `plugin-changed` event with the plugin ID
 2. Calls `pluginRegistry.unregister(id)` (runs `onunload`, disposes all registrations)
@@ -1571,7 +1579,7 @@ The Settings panel has a **Plugins** tab with two sub-tabs:
 
 - Shows plugins from the community registry (fetched from GitHub)
 - "Install" button downloads and installs directly
-- "Update available" badge when a newer version exists
+- "Update available" badge when a newer version exists or equal-version payloads differ
 - "Refresh" button forces a new registry fetch (normally cached for 1 hour)
 
 ### Enable/Disable
@@ -1609,9 +1617,11 @@ TUICommander registers the `tuic://` URL scheme for external integration:
 
 The registry is a JSON file hosted on GitHub (`sstraus/tuicommander-plugins` repo). The app fetches it on demand (Browse tab) with a 1-hour TTL cache.
 
-Registry entries include: `id`, `name`, `description`, `author`, `latestVersion`, `minAppVersion`, `capabilities`, `downloadUrl`.
+Registry entries include: `id`, `name`, `description`, `author`, `latestVersion`, `minAppVersion`, `capabilities`, `downloadUrl`, and optional `contentSha256`.
 
-The Browse tab compares installed versions to detect available updates.
+The Browse and Installed tabs compare versions and, at the same version, payload identities. Rust recomputes installed `contentSha256` during discovery; a manifest cannot supply it. A missing identity keeps version-only behavior, and a newer installed version is never downgraded.
+
+The community packager generates `contentSha256` from sorted UTF-8 relative paths (using `/`), NUL, each file's lowercase hexadecimal SHA-256, and LF. It hashes that complete sequence again with SHA-256. Directories named `data`, `node_modules`, `scripts`, `.claude`, `.git`, and files matching `package*.json` are excluded. Thus user settings and ZIP timestamps do not cause updates. Internal symlinks or unreadable files leave the installed identity unknown; the plugin can still load. This is content identity, not publisher authentication. The raw source catalogue can precede release completion; wait for the plugin release workflow before installing.
 
 ## Per-Plugin Error Logging
 
@@ -2106,4 +2116,5 @@ No live write or desktop-load verification is implied by recorded-fixture tests.
 
 ### Settings startup is not a plugin capability
 
-Plugin-scoped settings do not confer host account, executable or provider-login authority. Runtime shortcut-ID publication is metadata, not permission to invoke authentication or arbitrary commands. The host [startup contract](backend/settings-startup.md) documents the separate owner workflows and current publication limits.
+Plugin-scoped settings do not confer host account, executable or provider-login authority. Runtime shortcut-ID publication is metadata, not permission to invoke authentication or arbitrary commands. The host [startup contract](backend/settings-startup.md) documents typed GitHub enumeration and Ego human-login owner workflows; these do not grant plugins host authentication authority.
+Jira and GitLab expose a default project in their schema-driven plugin settings page. Jira uses a project ID; GitLab accepts a project path or ID. A project saved for an account in Tasks setup takes precedence. The default applies after the plugin reloads; empty means no fallback project. Account bindings remain in `data/work-items.json`, while these defaults use the settings service in `data/config.json`.

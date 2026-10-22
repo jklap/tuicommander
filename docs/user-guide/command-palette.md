@@ -85,8 +85,8 @@ These appear as regular commands in the palette — type "Search" to find them.
 
 Paste an issue, pull request or ticket URL into the palette. When an installed work-item plugin recognises it, the palette shows one entry above the commands:
 
-- **Open worktree <branch> (<key>)** — a worktree is already linked to that item; the palette switches to it and creates nothing.
-- **Start work on <key>: <title>** — creates a worktree for the item in the active repository and opens an agent with the item as a draft brief. Review the brief and press Enter to send it.
+- **Open worktree &lt;branch&gt; (&lt;key&gt;)** — a worktree is already linked to that item; the palette switches to it and creates nothing.
+- **Start work on &lt;key&gt;: &lt;title&gt;** — creates a worktree for the item in the active repository and opens an agent with the item as a draft brief. Review the brief and press Enter to send it.
 
 With no work-item plugin installed, a pasted URL is searched like any other text.
 

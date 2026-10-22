@@ -16,12 +16,6 @@
   color: var(--fg-primary);
 }
 
-.hint {
-  font-size: var(--font-sm);
-  color: var(--fg-muted);
-  margin: 0 0 4px;
-}
-
 .grid {
   display: flex;
   flex-direction: column;

@@ -136,7 +136,7 @@ export const TerminalTabView: Component<TerminalTabViewProps> = (props) => {
 					!awaitingInput() && !isBusy() && isUnseen() && s.shellUnseen,
 					!awaitingInput() && isIdle() && !isUnseen() && s.shellIdle,
 					isExited() && s.shellExited,
-					terminal()?.isRemote && s.remoteTab,
+					terminal()?.isExternallyCreated && s.remoteTab,
 					terminal()?.standby && s.standby,
 					terminal()?.suspended && s.suspended,
 					...dragClasses(props),
@@ -174,7 +174,7 @@ export const TerminalTabView: Component<TerminalTabViewProps> = (props) => {
 					when={props.isEditing}
 					fallback={
 						<span class={s.tabName}>
-							<Show when={terminal()?.isRemote && terminal()?.agentType}>
+							<Show when={terminal()?.isExternallyCreated && terminal()?.agentType}>
 								<span class={s.ptyPrefix}>PTY · </span>
 							</Show>
 							{terminal()?.name}
