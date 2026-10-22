@@ -517,8 +517,10 @@ Recorded retained runtime ownership: Chrome PID 46762, fixture PID 39420, plus
 the isolated agent-test supervisor recorded in
 `~/Gits/.tmp/results/design-optionc-supervisor.pid`. Harness metadata is in
 `~/Gits/.tmp/design-web/optionc/pids.json`; verify ownership again before stopping.
-These are intentionally retained for Boss's pending click, not an abandoned daily
-instance. The matching stop target remains `make agent-test-stop
+Chrome and the fixture are intentionally retained for Boss's pending click. At the
+final PID check, supervisor 89047 and the desktop PID file were already absent;
+backend shutdown attribution remains unknown. Resume the authorized isolated
+backend before the later MCP comparison. The matching stop target remains `make agent-test-stop
 AGENT_TEST_INSTANCE=agent-test-design AGENT_TEST_PORT=19885`.
 
 The feature and consent flow require extension reload/reinstall from a rebuilt
