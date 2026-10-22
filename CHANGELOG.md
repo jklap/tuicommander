@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+- Handle denied clipboard writes (NotAllowedError, common in browser/PWA mode) in the Branches "Copy Name" menu, Remote QR "copy URL", Generators copy buttons and the terminal "Copy Block Output" item: they now log instead of raising an unhandled rejection, and no longer show a false "Copied" state; the app logger also serializes `DOMException` name/message instead of `{}`.
+
 ## [2.0.0-beta.1] - 2026-10-22
 
 - Keep the terminal mobile composer's bottom safe-area inset inside its painted surface, above the Home Indicator; the separately reported iPhone shell-height band still needs device evidence (#2116-0213).
@@ -130,8 +132,6 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - Publish typed Settings account enumeration and configured Ego interactive login start/status, with human terminal authentication and separate credential readback (#1790-1011).
 ### Fixed
-
-- Handle denied clipboard writes (NotAllowedError, common in browser/PWA mode) in the Branches "Copy Name" menu, Remote QR "copy URL", Generators copy buttons and the terminal "Copy Block Output" item: they now log instead of raising an unhandled rejection, and no longer show a false "Copied" state; the app logger also serializes `DOMException` name/message instead of `{}`.
 
 - Preserve Claude follow-up suggestions through Stop-hook repaints after an early idle hook, so mobile receives the chips and can consume the list after a tap (#2029-994d).
 
