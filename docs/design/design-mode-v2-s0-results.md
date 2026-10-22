@@ -680,3 +680,89 @@ not copied extension source files.
 Cleanup: mode stopped, throwaway owner deleted, and matching agent-test stop used.
 Recorded Chrome 15598, fixture 5969, desktop 3459, supervisor 92408, owner 4792
 and isolated Edge 5521/99846 were all absent; desktop PID file was absent.
+
+## Round 12: live S0 crop, tab return and cancellation (2026-10-22)
+
+This round used the real installed MV3 extension and native host in the owned
+Chrome for Testing 149.0.7827.54 profile, with isolated `agent-test-design` on
+19885. The owner was `120212b6-478c-476d-9060-50ea93d8e48f`; instance
+`7ca9d54e-38bf-4e32-8aef-5d6411c3b936`. The normal agent-test bridge installer
+wrote all 16 installed asset files byte-identical to current source in this run.
+The earlier stale-bridge observation was not reproduced here, but its cause is
+still unknown. No extension files were copied from source to mask provenance.
+
+Evidence is under `~/Gits/.tmp/design-web/s0/`; harnesses are under the sibling
+`harness/` directory. Each visual/input phase checked ioreg and ran unlocked.
+Browser-owned CDP input was used, not OS screenshot/input automation. The product
+launcher was unchanged and did not receive CDP flags. No draft, permission,
+action-history or image state was manufactured.
+
+| S0 item | Observed result | Evidence |
+| --- | --- | --- |
+| (a) install/persistence | Flag loading works. After a browser-UI directory-drop attempt and a graceful restart with **no `--load-extension`**, `Extensions.getExtensions` was empty both immediately and after startup settled. A second drop attempt without flag loading produced the browser's `Error: No dragged path`. This does not prove a genuine native chooser install fails. | `no-load-argv.json`, `persistence-result.json`, `persistence-settled.json`, `drag-events.json`, `drag-noflag-before.json`, `drag-noflag-immediate.json` |
+| (b) side panel/tab return | The actual browser-action side panel showed the real native-host connection and owner. A second real tab had zero picks. Returning to the original tab restored both cards and the comment entered with trusted browser input: `S0 retained comment 20261022`. Snapshot and rendered textarea were independently checked. | `continuation.json`, `other-tab-panel.png`, `returned-panel.png` |
+| (e) trusted top/frame picks | Trusted page input selected `#target`. A later trusted out-of-process, cross-origin iframe pick selected `#frame-target`, retained a nonzero DOM rectangle and returned the intentional frame-screenshot omission notice. | `chronology.json`, `continuation.json`, `frame-panel.png` |
+| (f) real top-pick crop | The worker returned an actual PNG crop, **728 x 191**, with 139048 nontransparent pixels and 1059 distinct pixel colors. It was decoded through `createImageBitmap` and `OffscreenCanvas`; it was not a placeholder. This uses the existing real all-sites capture grant, not a newly proved temporary `activeTab` grant. | `top-crop.png`, `crop-decode.json`, `one-shot-panel.png` |
+
+### Independent cancellation chronology
+
+The scratch page button increments a visible counter through its ordinary
+`onclick` handler. The first picking press left that counter at **0** and added
+one pick; the next ordinary press advanced it to **1**, with the pick count still
+**1**. This proves consumption of the picking gesture and normal browsing after
+one-shot completion.
+
+An initial harness attempt sent Escape before asynchronous arming had completed;
+the next press made another real pick. It is not a product cancellation defect.
+The corrected continuation waits for the actual picker overlay before sending
+Escape, and for its removal before the next click. With two existing picks,
+Escape then an ordinary click advanced the counter **1 -> 2**, keeping two picks.
+Multi-pick, Stop, confirmed overlay removal and an ordinary click advanced it
+**2 -> 3**, still keeping two picks. The frame pick subsequently raised the pick
+count to three without advancing the top-page counter. No drafts were reset to
+make these assertions pass. The successful continuation log is
+`~/Gits/.tmp/results/design-s0-continuation.log`.
+
+The first browser setup also raced restored tabs from the owned profile; the
+corrected setup closed those owned tabs and opened one uniquely addressed test
+window. An immediate post-reload Runtime evaluation timed out in an earlier
+harness attempt. The final checks use an already-loaded document and explicit
+state boundaries. These harness failures are retained; no production fix or
+regression-test claim is based on them.
+
+### Remaining browser-chrome installation boundary
+
+The installed browser's own CDP protocol describes `Extensions.loadUnpacked` as
+similar to the `--load-extension` flag; it exposes a path and an incognito option,
+not a persistent-install option (`extensions-protocol.json`). The installed
+`chrome://extensions` script was inspected through `Debugger.getScriptSource`
+(`installed-chrome-extensions.js`): normal Load unpacked calls the browser's
+`developerPrivate.loadUnpacked`; directory-drop uses `useDraggedPath:true`.
+Trusted CDP drag events reached that real directory-drop path with the actual
+extension directory, but the browser rejected it as **No dragged path**. The
+harness did not substitute a fake drag registry, a retry token, browser profile
+preferences or installation state.
+
+The remaining unproved step is a genuine browser-native **Load unpacked folder
+selection**, followed by a no-load-flag restart. It needs an authorized native
+folder-selection surface. The existing OS automation permission block was not
+bypassed, and no native chooser was left open. This is one identified remaining
+route, not a claim that every possible browser installation API was exhausted.
+S0 AC1 remains unchecked for that persistence requirement; tab return, crop and
+cancellation no longer depend on native GUI access. No product defect was
+established in this round, so no production code or application tests changed.
+
+### Runtime and cleanup
+
+The first readiness controller reported healthy startup, but its app and
+supervisor were gone before session creation (curl exit 7); attribution is
+unknown. A second run retained a detached monitor and the supervisor exit status,
+and stayed healthy for the checks. Both agent-test builds used mbx after doctor
+reported zero failures; the second build was a runtime-recovery attempt, not an
+extra test gate. Logs are `design-s0-instance.log` and `s0/instance-retry.log`.
+
+Mode was stopped, the throwaway owner deleted, Chrome closed gracefully, the
+fixture stopped and the matching `make agent-test-stop` used. Recorded app,
+owner, Edge, Chrome, fixture and supervisor/monitor PIDs were all absent; the
+desktop PID file was absent (`cleanup-api.json`, `cleanup-pids.json`). No daily
+application restart, reload, configuration or session change was made.
