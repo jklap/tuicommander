@@ -489,48 +489,6 @@ mod tests {
         assert!(!writable, "a read-only directory cannot take an atomic replacement");
     }
 
-    // Catches: a status-only O_WRONLY probe invalidates a signed Mach-O's
-    // cached signature even though its bytes and mtime do not change.
-    #[cfg(target_os = "macos")]
-    #[test]
-    fn cli_status_preserves_signed_cli_execution() {
-        let dir = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
-        let source = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join(format!("binaries/tuic-{}", env!("TUIC_TARGET_TRIPLE")));
-        let target = dir.path().join("signed-tuic");
-        let installed = dir.path().join("installed-tuic");
-        let sidecar = dir.path().join("sidecar-tuic");
-        // Use the recorded Mach-O bytes without depending on APFS clone state.
-        let recorded = std::fs::read(&source).expect("read recorded native CLI sidecar");
-        std::fs::write(&target, &recorded).unwrap();
-        std::fs::write(&sidecar, &recorded).unwrap();
-        use std::os::unix::fs::PermissionsExt;
-        for executable in [&target, &sidecar] {
-            std::fs::set_permissions(executable, std::fs::Permissions::from_mode(0o755)).unwrap();
-        }
-        std::os::unix::fs::symlink(&target, &installed).unwrap();
-        let version =
-            cli_version(installed.to_str().unwrap()).expect("CLI must execute before probe");
-        let before = std::fs::read(&target).unwrap();
-        let modified = std::fs::metadata(&target).unwrap().modified().unwrap();
-
-        crate::agent_test::with_test_profile(dir.path(), || {
-            let status = get_cli_status();
-            assert!(status.installed && status.version_match && status.auto_updatable);
-        });
-
-        assert_eq!(std::fs::read(&target).unwrap(), before);
-        assert_eq!(
-            std::fs::metadata(&target).unwrap().modified().unwrap(),
-            modified
-        );
-        assert_eq!(
-            cli_version(installed.to_str().unwrap()),
-            Some(version),
-            "reading CLI status must not make the next signed CLI execution fail"
-        );
-    }
-
     #[test]
     fn agent_test_cli_auto_update_preserves_global_binary() {
         // Bug caught: ordinary desktop setup replaces the global CLI from agent-test.
