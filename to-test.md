@@ -1,6 +1,6 @@
 ## Telegram non-owner notifications (2119-d5de) — Rust restart required
 
-- [ ] After Boss manually rebuilds and restarts the backend, keep an inbound owner registered, send from another agent without registering, and verify its sender prefix. Reply in Telegram and verify that sender receives native mail while a new message still reaches the owner. No daily app restart was performed. Isolated fake-Bot live verification remains pending: agent-test disables Telegram, and the production Bot API has no loopback override.
+- [ ] After Boss manually rebuilds and restarts the backend, keep an inbound owner registered, send from another agent without registering, and verify its sender prefix. Reply in Telegram and verify that sender receives native mail while a new message still reaches the owner. No daily app restart was performed. Coordinator approved native cfg(test) loopback verification instead of a desktop fake-endpoint override; the native integration test checks outgoing wire text and reply delivery to the sender inbox.
 
 ## Detached command peer isolation (2100-c249) — CLI update and backend restart required
 

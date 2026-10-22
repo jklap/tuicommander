@@ -39,6 +39,33 @@ async fn non_owner_send_preserves_owner_and_prefixes_server_identity() {
         "[coordinator] [target-mcp] release ready"
     );
     assert_eq!(server.requests()[0].1["chat_id"], 1111111);
+    // Complete the loopback boundary: reply to the bytes the fake Bot API received,
+    // not a second independently chosen attribution string.
+    let mut reply: Value =
+        serde_json::from_str(include_str!("fixtures/reply-to-sender.json")).unwrap();
+    reply["message"]["reply_to_message"]["text"] = server.requests()[0].1["text"].clone();
+    reply["message"]["reply_to_message"]["message_id"] = result.unwrap()["message_ids"][0].clone();
+    let mail = Update::parse(
+        &reply,
+        &runtime.outbound.paths.allowlist().unwrap(),
+        "test-bot",
+        "",
+    )
+    .unwrap()
+    .mail
+    .unwrap();
+    runtime.deliver(mail).await.unwrap();
+    for (sid, expected) in [("sender-mcp", 1), ("target-mcp", 0)] {
+        let inbox = crate::mcp_http::mcp_transport::local_peer_call_with_message_id(
+            &runtime.state,
+            &json!({"action":"inbox","since":0}),
+            Some(sid),
+            None,
+        )
+        .await;
+        assert_eq!(inbox["count"], expected, "{sid}: {inbox}");
+    }
+    assert_eq!(runtime.registered_peer(), Some(PEER));
 }
 
 // Catches: reply_to_message is lost before delivery, so replies go to the owner.

@@ -990,20 +990,20 @@ async fn correlated_reply_tools_keep_the_original_chat_until_explicit_takeover()
             .unwrap_err(),
         super::Error::NotRegistered
     );
-    assert_eq!(
-        runtime
-            .tool(
-                PEER,
-                "target-mcp",
-                Input::Send {
-                    text: "Unsolicited".into(),
-                    buttons: vec![],
-                }
-            )
-            .await
-            .unwrap_err(),
-        super::Error::NotRegistered
-    );
+    // Non-owner notifications no longer require inbound ownership (2119), but
+    // must not transfer this pending request or its reply authority.
+    runtime
+        .tool(
+            PEER,
+            "target-mcp",
+            Input::Send {
+                text: "Unsolicited".into(),
+                buttons: vec![],
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(runtime.requests[0].peer, PEER);
     runtime
         .tool(
             PEER,
@@ -1031,7 +1031,10 @@ async fn correlated_reply_tools_keep_the_original_chat_until_explicit_takeover()
     finish(&mut runtime, "tg:test-bot:7", "Duplicate")
         .await
         .unwrap();
-    assert_eq!(finals(&server), ["Original answer"]);
+    assert_eq!(
+        finals(&server),
+        ["[target-mcp] Unsolicited", "Original answer"]
+    );
     runtime.deliver(mail(8)).await.unwrap();
     assert_eq!(runtime.requests[1].peer, other);
 
@@ -1050,7 +1053,10 @@ async fn correlated_reply_tools_keep_the_original_chat_until_explicit_takeover()
             .unwrap_err(),
         super::Error::NotRegistered
     );
-    assert_eq!(finals(&server), ["Original answer"]);
+    assert_eq!(
+        finals(&server),
+        ["[target-mcp] Unsolicited", "Original answer"]
+    );
 }
 
 // Catches: saved chat identities without a live connection suppress the no-agent response.
