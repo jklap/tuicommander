@@ -2110,6 +2110,7 @@ pub fn run(mut context: tauri::Context<tauri::Wry>) {
             remote_connection::save_remote_connection,
             remote_connection::delete_remote_connection,
             remote_connection::set_remote_connection_password,
+            remote_connection::set_remote_connection_relay_pairing,
             remote_connection::remote_connection_password_exists,
             remote_connection::fetch_remote_connection_token,
             remote_runtime::connect_remote_connection,

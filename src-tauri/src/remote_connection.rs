@@ -382,6 +382,26 @@ pub(crate) fn set_relay_bundle(id: &str, text: &str) -> Result<(), String> {
     )
 }
 
+/// Store the bundle text, or remove the pairing when `text` is empty — the same
+/// convention as [`set_pairing_token`].
+pub(crate) fn set_relay_pairing(id: &str, text: &str) -> Result<(), String> {
+    if text.is_empty() {
+        return crate::credentials::delete(crate::credentials::Credential::RelayPairing(id));
+    }
+    set_relay_bundle(id, text)
+}
+
+/// Both the IPC command and the HTTP route import a bundle through this.
+pub(crate) fn set_relay_pairing_with_refresh(
+    state: &crate::AppState,
+    id: &str,
+    text: &str,
+) -> Result<(), String> {
+    set_relay_pairing(id, text)?;
+    crate::settings::api::publish_change(state, "connections", true);
+    Ok(())
+}
+
 pub(crate) fn relay_bundle(
     id: &str,
 ) -> Result<Option<crate::relay_tunnel::bundle::PairingBundle>, String> {
@@ -532,6 +552,16 @@ pub async fn set_remote_connection_password(
     password: String,
 ) -> Result<(), String> {
     set_connection_password_with_refresh(&state, &id, &password)
+}
+
+#[cfg(feature = "desktop")]
+#[tauri::command]
+pub async fn set_remote_connection_relay_pairing(
+    state: tauri::State<'_, std::sync::Arc<crate::AppState>>,
+    id: String,
+    bundle: String,
+) -> Result<(), String> {
+    set_relay_pairing_with_refresh(&state, &id, &bundle)
 }
 
 #[cfg(feature = "desktop")]

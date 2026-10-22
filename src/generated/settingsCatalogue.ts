@@ -4510,7 +4510,8 @@ export const settingsCatalogue = {
         "type": "string",
         "enum": [
           "Ssh",
-          "Direct"
+          "Direct",
+          "Relay"
         ]
       },
       "nullable": false,
@@ -4521,7 +4522,8 @@ export const settingsCatalogue = {
         "kind": "static",
         "values": [
           "Ssh",
-          "Direct"
+          "Direct",
+          "Relay"
         ]
       },
       "sensitivity": "public",
@@ -12006,6 +12008,19 @@ export const settingsCatalogue = {
                 "required": [
                   "type",
                   "url"
+                ]
+              },
+              {
+                "description": "Reached through a relay. Everything that identifies the pairing lives in\nthe vault bundle keyed by the connection id, not in this plain-text record.",
+                "type": "object",
+                "properties": {
+                  "type": {
+                    "type": "string",
+                    "const": "Relay"
+                  }
+                },
+                "required": [
+                  "type"
                 ]
               }
             ]

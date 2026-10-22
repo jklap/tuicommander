@@ -64,6 +64,7 @@ export function transportSummary(transport: RemoteTransport): string {
 	if (transport.type === "Ssh") {
 		return `${transport.ssh_user}@${transport.ssh_host}:${transport.ssh_port}`;
 	}
+	if (transport.type === "Relay") return "via relay";
 	return transport.url;
 }
 
@@ -71,13 +72,14 @@ export function transportSummary(transport: RemoteTransport): string {
 export function emptyRemoteForm() {
 	return {
 		name: "",
-		transportType: "Ssh" as "Ssh" | "Direct",
+		transportType: "Ssh" as "Ssh" | "Direct" | "Relay",
 		sshHost: "",
 		sshPort: 22,
 		sshUser: "",
 		identityFile: "",
 		remoteDaemonPort: 9876,
 		directUrl: "",
+		relayBundle: "",
 		authUsername: "",
 		authPassword: "",
 		deploy: "never" as DeployMode,
@@ -155,6 +157,10 @@ export const RemoteMachinesPanel: Component = () => {
 			setError("URL is required");
 			return;
 		}
+		if (f.transportType === "Relay" && !f.relayBundle.trim()) {
+			setError("Pairing bundle is required");
+			return;
+		}
 
 		const transport: RemoteTransport =
 			f.transportType === "Ssh"
@@ -166,13 +172,15 @@ export const RemoteMachinesPanel: Component = () => {
 						identity_file: f.identityFile.trim() || null,
 						remote_daemon_port: f.remoteDaemonPort,
 					}
-				: { type: "Direct", url: f.directUrl.trim() };
+				: f.transportType === "Relay"
+					? { type: "Relay" }
+					: { type: "Direct", url: f.directUrl.trim() };
 
 		const conn: RemoteConnection = {
 			id: crypto.randomUUID(),
 			name,
 			transport,
-			auth_username: f.authUsername.trim(),
+			auth_username: f.transportType === "Relay" ? "relay" : f.authUsername.trim(),
 			enabled: true,
 			auto_update: f.autoUpdate,
 			deploy: f.transportType === "Ssh" ? f.deploy : "never",
@@ -186,6 +194,7 @@ export const RemoteMachinesPanel: Component = () => {
 			// After the connection exists: the vault key is its id, so a password
 			// stored first would belong to an id nothing would ever look up again.
 			if (f.authPassword) await remoteConnectionsStore.setPassword(conn.id, f.authPassword);
+			if (f.transportType === "Relay") await remoteConnectionsStore.setRelayPairing(conn.id, f.relayBundle.trim());
 			setForm(emptyRemoteForm());
 			setShowAdd(false);
 		} catch (e) {
@@ -209,6 +218,7 @@ export const RemoteMachinesPanel: Component = () => {
 			identityFile: conn.transport.type === "Ssh" ? (conn.transport.identity_file ?? "") : "",
 			remoteDaemonPort: conn.transport.type === "Ssh" ? conn.transport.remote_daemon_port : 9876,
 			directUrl: conn.transport.type === "Direct" ? conn.transport.url : "",
+			relayBundle: "",
 			authUsername: conn.auth_username,
 			authPassword: "",
 			deploy: conn.deploy,
@@ -229,13 +239,15 @@ export const RemoteMachinesPanel: Component = () => {
 						identity_file: f.identityFile.trim() || null,
 						remote_daemon_port: f.remoteDaemonPort,
 					}
-				: { type: "Direct", url: f.directUrl.trim() };
+				: f.transportType === "Relay"
+					? { type: "Relay" }
+					: { type: "Direct", url: f.directUrl.trim() };
 
 		const updated: RemoteConnection = {
 			...connState.connection,
 			name: f.name.trim(),
 			transport,
-			auth_username: f.authUsername.trim(),
+			auth_username: f.transportType === "Relay" ? "relay" : f.authUsername.trim(),
 			deploy: f.transportType === "Ssh" ? f.deploy : "never",
 			survive_secs: Math.max(60, Math.round(f.surviveMinutes * 60)),
 			auto_update: f.autoUpdate,
@@ -251,6 +263,9 @@ export const RemoteMachinesPanel: Component = () => {
 			await remoteConnectionsStore.addConnection(updated);
 			// Blank means "keep what is in the vault" — the field can never show it.
 			if (f.authPassword) await remoteConnectionsStore.setPassword(updated.id, f.authPassword);
+			if (f.transportType === "Relay" && f.relayBundle.trim()) {
+				await remoteConnectionsStore.setRelayPairing(updated.id, f.relayBundle.trim());
+			}
 			setEditingId(null);
 		} catch (e) {
 			setError(String(e));
@@ -385,11 +400,11 @@ export const RemoteMachinesPanel: Component = () => {
 								class={s.input}
 								value={props.formData.transportType}
 								onChange={(e) =>
-									props.setFormData((f) => ({ ...f, transportType: e.currentTarget.value as "Ssh" | "Direct" }))
+									props.setFormData((f) => ({ ...f, transportType: e.currentTarget.value as "Ssh" | "Direct" | "Relay" }))
 								}
 							>
 								<For
-									each={settingOptions("connections.connections.{id}.transport.type", { Ssh: "SSH", Direct: "Direct" })}
+									each={settingOptions("connections.connections.{id}.transport.type", { Ssh: "SSH", Direct: "Direct", Relay: "Relay" })}
 								>
 									{(option) => <option value={option.value}>{option.label}</option>}
 								</For>
@@ -515,6 +530,27 @@ export const RemoteMachinesPanel: Component = () => {
 							)}
 						</SettingRow>
 					</Show>
+					<Show when={props.formData.transportType === "Relay"}>
+						<SettingRow label="Pairing bundle">
+							{(id, descriptionId) => (
+								<textarea
+									id={id}
+									aria-describedby={descriptionId()}
+									class={s.input}
+									rows={3}
+									autocomplete="off"
+									spellcheck={false}
+									placeholder="Paste the bundle printed by tuic-remote --relay-pair (stored in the OS vault; leave blank to keep the stored one)"
+									value={props.formData.relayBundle}
+									onInput={(e) => props.setFormData((f) => ({ ...f, relayBundle: e.currentTarget.value }))}
+								/>
+							)}
+						</SettingRow>
+						<p class={s.hint} style={{ margin: 0 }}>
+							Run <code>tuic-remote --relay-pair wss://your-relay --relay-register</code> on the remote machine, paste
+							its output here, and delete any file you saved it to. The bundle holds a secret the relay never sees.
+						</p>
+					</Show>
 				</SectionCard>
 				<SectionCard title="Deployment and lifetime" help={<ContextualHelp label="Deployment and lifetime" />}>
 					<Show when={props.formData.transportType === "Ssh"}>
@@ -577,6 +613,7 @@ export const RemoteMachinesPanel: Component = () => {
 							/>
 						)}
 					</SettingRow>
+					<Show when={props.formData.transportType !== "Relay"}>
 					<SettingRow label="Auth username">
 						{(id, descriptionId) => (
 							<Input
@@ -611,6 +648,7 @@ export const RemoteMachinesPanel: Component = () => {
 						session token on every connect — <code>tuic-remote</code> authenticates every request, so a connection
 						without one reaches only <code>/health</code>.
 					</p>
+					</Show>
 				</SectionCard>
 			</>
 		);
@@ -803,7 +841,7 @@ export const RemoteMachinesPanel: Component = () => {
 												color: conn().transport.type === "Ssh" ? "var(--activity)" : "var(--success)",
 											}}
 										>
-											{conn().transport.type === "Ssh" ? "SSH" : "DIRECT"}
+											{conn().transport.type === "Ssh" ? "SSH" : conn().transport.type === "Relay" ? "RELAY" : "DIRECT"}
 										</span>
 										<Show when={connState.status !== "disconnected"}>
 											<span style={{ "font-size": "11px", color: remoteStatusColor(connState.status) }}>
