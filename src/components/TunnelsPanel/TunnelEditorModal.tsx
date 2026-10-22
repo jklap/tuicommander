@@ -10,6 +10,7 @@ import s from "../SettingsPanel/Settings.module.css";
 import d from "../shared/dialog.module.css";
 import { Input } from "../ui/Input";
 import { Select } from "../ui/Select";
+import layout from "./TunnelEditorModal.module.css";
 
 interface AgentKey {
 	fingerprint: string;
@@ -184,7 +185,7 @@ export const TunnelEditorModal: Component<TunnelEditorModalProps> = (props) => {
 				</div>
 
 				<div
-					class={d.body}
+					class={`${d.body} ${layout.body}`}
 					style={{
 						display: "flex",
 						"flex-direction": "column",
@@ -193,7 +194,7 @@ export const TunnelEditorModal: Component<TunnelEditorModalProps> = (props) => {
 						"overflow-y": "auto",
 					}}
 				>
-					<div class={s.group}>
+					<div class={`${s.group} ${layout.field}`}>
 						<label class={s.label}>Name</label>
 						<Input
 							data-setting-id="tunnels.profiles.{id}.name"
@@ -203,7 +204,7 @@ export const TunnelEditorModal: Component<TunnelEditorModalProps> = (props) => {
 					</div>
 
 					<div style={{ display: "flex", gap: "8px" }}>
-						<div class={s.group} style={{ flex: "1" }}>
+						<div class={`${s.group} ${layout.field}`} style={{ flex: "1" }}>
 							<label class={s.label}>Host</label>
 							<Input
 								data-setting-id="tunnels.profiles.{id}.host"
@@ -215,7 +216,7 @@ export const TunnelEditorModal: Component<TunnelEditorModalProps> = (props) => {
 								<For each={sshHosts()}>{(h) => <option value={h} />}</For>
 							</datalist>
 						</div>
-						<div class={s.group} style={{ width: "80px" }}>
+						<div class={`${s.group} ${layout.field}`} style={{ width: "80px" }}>
 							<label class={s.label}>Port</label>
 							<Input
 								data-setting-id="tunnels.profiles.{id}.port"
@@ -226,7 +227,7 @@ export const TunnelEditorModal: Component<TunnelEditorModalProps> = (props) => {
 						</div>
 					</div>
 
-					<div class={s.group}>
+					<div class={`${s.group} ${layout.field}`}>
 						<label class={s.label}>User</label>
 						<Input
 							data-setting-id="tunnels.profiles.{id}.user"
@@ -235,7 +236,7 @@ export const TunnelEditorModal: Component<TunnelEditorModalProps> = (props) => {
 						/>
 					</div>
 
-					<div class={s.group}>
+					<div class={`${s.group} ${layout.field}`}>
 						<label class={s.label}>Identity / Authentication</label>
 						<div style={{ display: "flex", gap: "6px" }}>
 							<Input
@@ -300,7 +301,10 @@ export const TunnelEditorModal: Component<TunnelEditorModalProps> = (props) => {
 						</div>
 						<For each={forwards()}>
 							{(fw, idx) => (
-								<div class={s.group} style={{ display: "flex", gap: "6px", "align-items": "center" }}>
+								<div
+									class={`${s.group} ${layout.field}`}
+									style={{ display: "flex", gap: "6px", "align-items": "center" }}
+								>
 									<Select
 										data-setting-id="tunnels.profiles.{id}.forwards"
 										compact
@@ -388,7 +392,7 @@ export const TunnelEditorModal: Component<TunnelEditorModalProps> = (props) => {
 
 					{/* Options */}
 					<div style={{ display: "flex", gap: "8px" }}>
-						<div class={s.group} style={{ flex: "1" }}>
+						<div class={`${s.group} ${layout.field}`} style={{ flex: "1" }}>
 							<label class={s.label}>ServerAliveInterval</label>
 							<Input
 								data-setting-id="tunnels.profiles.{id}.options.server_alive_interval"
@@ -402,7 +406,7 @@ export const TunnelEditorModal: Component<TunnelEditorModalProps> = (props) => {
 								}
 							/>
 						</div>
-						<div class={s.group} style={{ width: "160px" }}>
+						<div class={`${s.group} ${layout.field}`} style={{ width: "160px" }}>
 							<label class={s.label}>StrictHostKeyChecking</label>
 							<Select
 								data-setting-id="tunnels.profiles.{id}.options.strict_host_key_checking"

@@ -7,10 +7,56 @@
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::process::Stdio;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use serde_json::Value;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+
+/// Shared five-minute freshness and thirty-minute stale fallback for CLI usage.
+pub(crate) struct UsageCache<T>(parking_lot::Mutex<Option<(T, Instant)>>);
+
+impl<T: Clone> UsageCache<T> {
+    pub(crate) const fn new() -> Self {
+        Self(parking_lot::Mutex::new(None))
+    }
+
+    pub(crate) fn fresh(&self) -> Option<T> {
+        self.get(Duration::from_secs(300))
+    }
+
+    pub(crate) fn stale(&self) -> Option<T> {
+        self.get(Duration::from_secs(1800))
+    }
+
+    fn get(&self, max_age: Duration) -> Option<T> {
+        let guard = self.0.lock();
+        let (value, at) = guard.as_ref()?;
+        (at.elapsed() < max_age).then(|| value.clone())
+    }
+
+    pub(crate) fn put(&self, value: &T) {
+        *self.0.lock() = Some((value.clone(), Instant::now()));
+    }
+}
+
+pub(crate) fn looks_like_auth_failure(message: &str) -> bool {
+    let lower = message.to_ascii_lowercase();
+    lower.contains("not logged in")
+        || lower.contains("authentication")
+        || lower.contains("unauthorized")
+        || lower.contains("401")
+        || lower.contains("403")
+}
+
+pub(crate) fn looks_like_contract_failure(message: &str) -> bool {
+    let lower = message.to_ascii_lowercase();
+    message.contains("Failed to parse")
+        || message.contains("returned no result")
+        || message.contains("returned no response")
+        || lower.contains("method not found")
+        || lower.contains("unknown method")
+        || lower.contains("unsupported method")
+}
 
 fn record_response(line: &str, wanted: &HashSet<u64>, responses: &mut HashMap<u64, Value>) {
     let Ok(value) = serde_json::from_str::<Value>(line) else {

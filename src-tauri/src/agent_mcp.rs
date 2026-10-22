@@ -1721,6 +1721,9 @@ pub(crate) fn ensure_mcp_configs(disabled: &[String]) {
 }
 
 fn launch_owns_agent_configs(exe: &std::path::Path) -> bool {
+    if crate::agent_test::active() {
+        return false;
+    }
     if std::env::var("TUIC_MCP_CONFIG_OWNER").as_deref() == Ok("1") {
         return true;
     }
@@ -1841,6 +1844,9 @@ pub(crate) fn install_agent_mcp(
     agent_type: String,
     state: tauri::State<'_, std::sync::Arc<crate::state::AppState>>,
 ) -> Result<(), String> {
+    if crate::agent_test::active() {
+        return Err("Global MCP configuration is disabled in agent-test".into());
+    }
     let source = locate_bridge_binary().ok_or_else(|| "No usable tuic-bridge found".to_string())?;
     let bridge_path = install_bridge_binary(&source)?
         .to_string_lossy()
@@ -1858,6 +1864,9 @@ pub(crate) fn install_agent_mcp(
 }
 
 fn install_spec(spec: &McpConfigSpec, bridge_path: &str, agent_label: &str) -> Result<(), String> {
+    if crate::agent_test::active() {
+        return Err("Global MCP configuration is disabled in agent-test".into());
+    }
     if entry_has_custom_transport(spec) {
         return Err(format!(
             "MCP entry at {} uses a custom transport; remove it explicitly before installing a stdio bridge",
@@ -1928,6 +1937,9 @@ pub(crate) fn remove_agent_mcp(
 
 /// Drop the bridge entry from one target's config, dispatching on its format.
 fn remove_spec_entry(spec: &McpConfigSpec, agent_label: &str) -> Result<(), String> {
+    if crate::agent_test::active() {
+        return Err("Global MCP configuration is disabled in agent-test".into());
+    }
     match spec.format {
         McpFormat::Toml { .. } => remove_toml_mcp_entry(&spec.config_path, agent_label),
         McpFormat::Yaml => remove_yaml_mcp_entry(

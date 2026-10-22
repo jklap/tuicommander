@@ -79,3 +79,9 @@
   font-size: 0.8em;
   font-family: var(--font-mono);
 }
+
+.embedded {
+  position: static;
+  max-height: 35vh;
+  border-radius: 0;
+}

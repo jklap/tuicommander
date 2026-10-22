@@ -288,12 +288,7 @@ const fontOptions = Object.keys(FONT_FAMILIES).map((value) => ({ value, label: v
 export const TerminalTab: Component = () => {
 	return (
 		<div class={`${s.section} ${w.page}`}>
-			<SettingPageHeader
-				title="Terminal"
-				description="Configure terminal typography, preview, and behavior."
-				scope="Application defaults"
-				breadcrumb="Workspace / Terminal"
-			/>
+			<SettingPageHeader title="Terminal" scope="Application defaults" breadcrumb="Workspace / Terminal" />
 			<SectionCard title={t("appearance.heading.theme", "Theme")}>
 				<SettingSelect
 					settingId="app.theme"

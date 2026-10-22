@@ -254,14 +254,19 @@ fn effective_text_follows_overrides_and_toggles() {
             ..Default::default()
         },
     );
-    assert_eq!(effective_text(&app, &agents, "grok"), "grok only");
-    assert_eq!(
-        effective_text(&app, &agents, "claude"),
-        format!("global v{}", env!("CARGO_PKG_VERSION"))
+    assert!(effective_text(&app, &agents, "grok").ends_with("grok only"));
+    assert!(effective_text(&app, &agents, "grok").contains("global v"));
+    assert!(
+        effective_text(&app, &agents, "claude")
+            .ends_with(&format!("global v{}", env!("CARGO_PKG_VERSION")))
     );
 
-    // An empty text turns injection off for that agent, and only that agent.
-    agents.agents.get_mut("grok").unwrap().launch_instructions = Some(String::new());
+    // Explicit off disables modules and both additions for that agent only.
+    agents
+        .agents
+        .get_mut("grok")
+        .unwrap()
+        .launch_instructions_disabled = true;
     let dir = tempfile::TempDir::new().unwrap();
     write_files_with(dir.path(), &app, &agents).unwrap();
     assert_eq!(
@@ -294,7 +299,9 @@ fn text_flags_keep_a_dash_led_text_attached() {
             "{agent}: the instructions were not injected: {launched:?}"
         );
         assert!(
-            launched.iter().any(|arg| arg.ends_with("=- intent: first")),
+            launched.iter().any(|arg| arg.ends_with("- intent: first")
+                && arg.starts_with("--")
+                && arg.contains("=")),
             "{agent}: a dash-led value must be glued to its flag: {launched:?}"
         );
     }
@@ -308,9 +315,120 @@ fn saving_agents_config_rewrites_the_launch_files() {
     let mut edited = base.clone();
     edited.launch_instructions = Some("edited".into());
     crate::config::save_agents_config(base, edited).unwrap();
-    assert_eq!(text_of(dir.path(), "claude"), "edited");
-    assert_eq!(
-        std::fs::read_to_string(file_path(dir.path(), "codex")).unwrap(),
-        "developer_instructions=\"edited\""
+    assert!(text_of(dir.path(), "claude").ends_with("edited"));
+    let parsed: toml::Table = toml::from_str(&text_of(dir.path(), "codex")).unwrap();
+    assert!(
+        parsed["developer_instructions"]
+            .as_str()
+            .unwrap()
+            .ends_with("edited")
     );
+}
+
+/// Catches: global additions replacing generated modules or agent additions replacing global ones.
+#[test]
+fn generated_modules_append_both_user_layers_and_obey_off() {
+    let app = AppConfig::default();
+    let mut agents = AgentsConfig {
+        launch_instructions: Some("GLOBAL ADDITION".into()),
+        ..Default::default()
+    };
+    agents
+        .agents
+        .entry("ego".into())
+        .or_default()
+        .launch_instructions = Some("AGENT ADDITION".into());
+    let root = effective_text(&app, &agents, "ego");
+    assert!(root.contains("## Working with the user"));
+    assert!(root.ends_with("GLOBAL ADDITION\n\nAGENT ADDITION"));
+    assert!(!root.contains("## Child agents"));
+    let child = effective_text_for(&app, &agents, "ego", true);
+    assert!(child.contains("## Child agents"));
+    assert!(!child.contains("suggest:"));
+    agents.launch_modules.insert("waiting".into(), false);
+    agents
+        .agents
+        .get_mut("ego")
+        .unwrap()
+        .launch_modules
+        .insert("markers".into(), false);
+    let text = effective_text(&app, &agents, "ego");
+    assert!(!text.contains("## Waiting and long work"));
+    assert!(!text.contains("## TUIC output markers"));
+    assert!(text.contains("## Process safety"));
+    assert!(text.contains("except through `make agent-test`, which isolates port, config folder, binary name, shortcuts and microphone."));
+    agents.launch_instructions_disabled = true;
+    assert!(effective_text_for(&app, &agents, "ego", true).is_empty());
+}
+
+/// Catches: saved default copies appended twice, custom additions lost, or migration rerun on new empty additions.
+#[test]
+fn migration_drops_only_exact_legacy_defaults_once() {
+    for intent in [false, true] {
+        for suggest in [false, true] {
+            let mut agents = AgentsConfig {
+                launch_instructions: Some(marker_text(intent, suggest).replace("{VER}", "1.7.99")),
+                ..Default::default()
+            };
+            agents
+                .agents
+                .entry("ego".into())
+                .or_default()
+                .launch_instructions = Some("CUSTOM".into());
+            assert!(migrate_additions(&mut agents));
+            assert_eq!(agents.launch_instructions, None);
+            assert_eq!(
+                agents.agents["ego"].launch_instructions.as_deref(),
+                Some("CUSTOM")
+            );
+            agents.launch_instructions = Some(String::new());
+            assert!(!migrate_additions(&mut agents));
+            assert!(!agents.launch_instructions_disabled);
+        }
+    }
+    let mut agents = AgentsConfig {
+        launch_instructions: Some(String::new()),
+        ..Default::default()
+    };
+    migrate_additions(&mut agents);
+    assert!(agents.launch_instructions_disabled);
+}
+
+/// Catches: a child launch overwriting root files or delivering parent-only markers instead of child scope.
+#[test]
+fn child_launch_files_are_isolated_and_codex_receives_child_text() {
+    let (dir, _guard) = config_dir();
+    let root_before = text_of(dir.path(), "claude");
+    let child = args_for("claude", vec![], dir.path(), true);
+    assert!(child[1].contains("instructions-claude-child.md"));
+    let text = std::fs::read_to_string(&child[1]).unwrap();
+    assert!(text.contains("## Child agents"));
+    assert!(!text.contains("suggest:"));
+    assert_eq!(text_of(dir.path(), "claude"), root_before);
+    let codex = args_for("codex", vec![], dir.path(), true);
+    let parsed: toml::Table = toml::from_str(&codex[1]).unwrap();
+    assert!(
+        parsed["developer_instructions"]
+            .as_str()
+            .unwrap()
+            .contains("## Child agents")
+    );
+}
+
+/// Catches: generated user guidance demanding progress after the user disabled its journal.
+#[test]
+fn user_module_respects_progress_flags_without_losing_other_guidance() {
+    let mut app = AppConfig::default();
+    let mut agents = AgentsConfig::default();
+    assert!(effective_text(&app, &agents, "ego").contains("progress type=done"));
+    agents
+        .agents
+        .entry("ego".into())
+        .or_default()
+        .progress_tracking = Some(false);
+    let disabled = effective_text(&app, &agents, "ego");
+    assert!(!disabled.contains("progress type=done"));
+    assert!(disabled.contains("ui action=tab"));
+    app.progress_tracking = false;
+    assert!(!effective_text(&app, &agents, "claude").contains("progress type=done"));
 }

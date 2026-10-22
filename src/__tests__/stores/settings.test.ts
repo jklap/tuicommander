@@ -803,7 +803,8 @@ describe("settingsStore", () => {
 			});
 		});
 
-		it("setPrHideDrafts updates state", () => {
+		it("setPrHideDrafts updates state", async () => {
+			await hydrateStore();
 			testInScope(() => {
 				store.setPrHideDrafts(true);
 				expect(store.state.prHideDrafts).toBe(true);
@@ -825,14 +826,16 @@ describe("settingsStore", () => {
 			});
 		});
 
-		it("setPrHideConflicting updates state", () => {
+		it("setPrHideConflicting updates state", async () => {
+			await hydrateStore();
 			testInScope(() => {
 				store.setPrHideConflicting(true);
 				expect(store.state.prHideConflicting).toBe(true);
 			});
 		});
 
-		it("setPrHideCiFailing updates state", () => {
+		it("setPrHideCiFailing updates state", async () => {
+			await hydrateStore();
 			testInScope(() => {
 				store.setPrHideCiFailing(true);
 				expect(store.state.prHideCiFailing).toBe(true);

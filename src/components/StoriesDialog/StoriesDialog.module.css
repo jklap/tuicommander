@@ -1,11 +1,12 @@
 .dialog { display: flex; flex-direction: column; width: min(1120px, calc(100vw - 32px)); max-height: min(82vh, 860px); background: var(--bg-secondary); border: 1px solid var(--border); border-radius: var(--radius-xl); box-shadow: var(--shadow-popup); overflow: hidden; color: var(--fg-primary); font-family: var(--font-ui); }
-.header { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 12px 16px; background: var(--bg-tertiary); border-bottom: 1px solid var(--border); }
+.header { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; align-items: start; gap: 16px; padding: 12px 16px; background: var(--bg-tertiary); border-bottom: 1px solid var(--border); }
+.header > div:first-child { min-width: 0; }
 .header h2 { margin: 0 0 2px; font-size: var(--font-xl); }
 .headerActions { display: flex; flex-wrap: wrap; justify-content: flex-end; align-items: center; gap: 8px; }
 .headerActions button { border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--bg-tertiary); color: var(--fg-secondary); padding: 5px 9px; font: var(--font-xs) var(--font-ui); cursor: pointer; }
 .headerActions button[aria-pressed="true"] { color: var(--fg-primary); border-color: var(--accent); }
 .headerActions button:disabled { opacity: .5; cursor: default; }
-.project { color: var(--fg-muted); font: var(--font-xs) var(--font-mono); overflow-wrap: anywhere; }
+.project { display: block; color: var(--fg-muted); font: var(--font-xs) var(--font-mono); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .iconButton { display: flex; align-items: center; justify-content: center; width: 28px; height: 28px; border: 0; border-radius: var(--radius-sm); background: transparent; color: var(--fg-secondary); cursor: pointer; }
 .iconButton:hover { background: var(--bg-highlight); color: var(--fg-primary); }
 .content { display: grid; grid-template-columns: minmax(170px, 22%) minmax(210px, 26%) minmax(0, 1fr); flex: 1; min-height: 0; }
@@ -24,6 +25,7 @@
 .planColumn, .storyColumn, .detail { min-width: 0; overflow-y: auto; }
 .planColumn, .storyColumn { border-right: 1px solid var(--border); }
 .columnHeader { position: sticky; top: 0; z-index: 1; display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 12px; background: var(--bg-secondary); border-bottom: 1px solid var(--border); }
+.columnHeader > button { flex-shrink: 0; white-space: nowrap; }
 .columnHeader h3 { margin: 0; font-size: var(--font-sm); font-weight: 600; }
 .columnHeader button, .form button, .actions button, .inline button, .error button { border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--bg-tertiary); color: var(--fg-secondary); padding: 8px 12px; font: inherit; font-size: var(--font-xs); cursor: pointer; }
 .form button[type="submit"], .actions button:first-child { background: var(--accent); border-color: var(--accent); color: var(--text-on-accent); }
@@ -84,3 +86,12 @@
 .incidentIds { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 4px 12px; margin: 8px 0; color: var(--fg-muted); font: var(--font-xs) var(--font-mono); }
 .incidentIds dd { margin: 0; overflow-wrap: anywhere; }
 .incidentNext { margin: 12px 0 0; color: var(--fg-secondary); font-size: var(--font-sm); white-space: pre-wrap; overflow-wrap: anywhere; }
+
+.error button { flex-shrink: 0; white-space: nowrap; }
+
+@media (max-width: 760px) {
+	.header { grid-template-columns: minmax(0, 1fr) auto; gap: 8px; }
+	.headerActions { grid-column: 1 / -1; grid-row: 2; justify-content: flex-start; }
+	.header > .iconButton { grid-column: 2; grid-row: 1; }
+	.headerActions button { white-space: nowrap; }
+}

@@ -64,7 +64,7 @@ them. Turn them off with the **Earcons** setting.
 | Hold-back before sending | How long a finished utterance stays visible before it goes to the terminal, so you can stop one you did not mean. With an activation phrase, the effective delay is at least five seconds to include a continuation. It applies to the next conversation, not to the one already running. |
 | Earcons | Plays the short sounds described below when a turn is sent or dropped. On by default. |
 | Notify model when hands-free changes | Tells the agent that it can answer out loud when the conversation starts, and to go back to text when it ends. |
-| Start notice | Shown while **Notify model** is on. The text the agent reads when the conversation starts; the built-in text is shown in grey. Write your own instructions here; leave it empty or press **Reset to default** to send the built-in text. Line breaks are sent as spaces. When the dictation language is set explicitly, TUICommander adds "Reply in <language>." to the notice itself. |
+| Start notice | Shown while **Notify model** is on. The text the agent reads when the conversation starts; the built-in text is shown in grey. Write your own instructions here; leave it empty or press **Reset to default** to send the built-in text. Line breaks are sent as spaces. When the dictation language is set explicitly, TUICommander adds "Reply in &lt;language&gt;." to the notice itself. |
 
 Speech is typed straight into the bound terminal. It does not wait for the
 agent to finish: a turn is typed at once, even while the agent is working, the

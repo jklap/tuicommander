@@ -31,6 +31,10 @@ groups the pages by task:
 The **AI Chat** page is shown only while **Experimental Features** is on (see
 [AI Chat](#ai-chat)).
 
+Settings uses short labels and behavior descriptions. Implementation ownership and persistence details stay in the documentation rather than page introductions. Repeated scope chips and permanent usage walkthroughs are omitted. Catalogue labels have space above their controls, and header scope badges stay within the page width. Catalogue actions use a wrapping row with 8px gaps and 8px clearance below the field separator; the field effect appears once beneath its name, while the status line reports only the value source.
+
+On narrow screens, the page selector truncates long names before its arrow. Settings reserves the same scrollbar space on every page, including plugin loading and error states. Help badges follow the final line of wrapped labels, and repository color actions keep the shared right alignment.
+
 Plugin pages show their source plugin ID below the page title and in the navigation tooltip. The Settings header, navigation and footer stay visible while plugin values load. Loading and read errors appear only inside the native editor; switching pages does not load a plugin iframe. Unloading a plugin removes its page and search entries.
 
 ## Search
@@ -246,11 +250,11 @@ keep a managed child open, and its parent receives an idle-timeout notice before
 closure. A child can also be marked keep-open at spawn or through the agent or
 session tool.
 
-**Launch instructions** is the TUIC output-marker text that TUIC passes to an
-agent at every launch and resume. Each agent row has its own override. Empty
-turns it off. A warning names every required marker (`intent:`, `suggest:`,
-`💬 `) that an edit removes. **Reset to default** removes the override. See
-[AI Agents](ai-agents.md#launch-instructions-tuic-output-markers).
+**Launch instructions** combines generated modules with user additions. Select Markers, Working with the user, Waiting and long work, Git and worktrees, Process safety, and Children. Children applies only to spawned children. Global switches are ceilings for the per-agent switches. **Turn all launch instructions off** suppresses the complete text, including additions.
+
+**Add instructions** and **Add instructions for <agent>** open empty user-addition fields, not copies of the generated text. TUIC appends global additions and then agent additions after enabled modules. Save on blur; clear a layer with **Clear global additions** or **Clear agent additions**. Empty adds nothing. `{VER}` becomes the TUIC version.
+
+Read-only effective previews follow the selected machine and draft changes. While its configuration loads, or if it fails, previews stay unavailable and **Add instructions** is disabled; text from the previous machine is not reused. Legacy default copies migrate away without duplication; custom text remains an addition. See [AI Agents](ai-agents.md#launch-instructions-tuic-output-markers).
 
 Each supported agent has an expandable row showing detection status, version, and MCP badge.
 
@@ -414,7 +418,7 @@ Native tools exposed to AI agents via MCP. Each tool can be individually enabled
 
 **Collapse tools** (checkbox) — when enabled, replaces the full tool list sent to AI agents with 3 lazy-discovery meta-tools (`search_tools`, `get_tool_schema`, `call_tool`). Cuts the baseline MCP context cost the agent carries every turn. Measured 2026-09-13 against the running desktop instance with 190 tools connected: the full list is 154,117 bytes / 35,104 tokens, the collapsed list 2,810 bytes / 615 tokens — and the collapsed figure does not move with the number of upstream tools, because they are no longer in the list. The agent fetches schemas on demand via BM25-ranked search. (Tokenizer: tiktoken 0.14.0 `o200k_base`, a GPT tokenizer used as a proxy; Anthropic publishes no offline tokenizer. Method and full table: [`mcp-http.md`](../backend/mcp-http.md#measuring-the-surfaces).) Native semantics do not change: a managed command is still one `call_tool` request for `session action=submit`, and its bounded receipt comes back in that response. Default: off. Grok sessions receive this compact surface automatically for compatibility with Grok's tool-name parser, without changing the checkbox or other clients. Toggling emits `notifications/tools/list_changed`; compatible clients refresh automatically, while clients that ignore the notification may require a reconnect.
 
-**Native tools** — the list and descriptions come from the backend MCP registry, including disabled tools. Newly registered tools appear automatically, without a separate Settings list. Each row shows a dedicated short English summary of what agents can do; hover over its information badge for the full description and actions. All native tools can be disabled, including `progress`. The progress tool also requires the global **Progress tracking** setting. The list does not include upstream tools or the collapse-mode meta-tools.
+**Capabilities** — optional switches control Secrets, Telegram, Settings access, Diagnostics / JS inspection, Remote daemon deployment and Progress tracking. **Additional restrictions** contains terminal sessions, peers, tasks, repositories, workflows and member actions, UI, Design Mode, voice and plugin reference. The backend owns this inventory; unavailable features remain configurable. A parent restriction also denies its member actions. Progress still requires global Progress tracking, and Settings requires trusted UI opt-in. Saved tool denials migrate once without re-enabling their new actions. Unknown old names remain visible as migration diagnostics. See [Capability cutover](../backend/mcp-http.md#capability-cutover-and-client-migration) for the breaking tool-name changes and reconnect requirements.
 
 #### Upstream MCP Servers
 
@@ -649,11 +653,11 @@ Reads show owner state and a revision. Save changes only that field with its rea
 
 General also exposes content-index memory budget, attachment byte limit and background WebView unload delay as expert resource controls. Enum-backed shared selects use catalogue values while retaining their existing readable labels. Search includes the inspector descriptors. In browser mode, these results open machine-owned fields in the HTTP-capable inspector; they do not open desktop-only controls such as the native global-hotkey recorder.
 
-The explicit source ledgers distinguish read-only identities, derived credentials, legacy snapshots and separate domain controls. CircleCI credentials and dictation corrections still use owners outside the catalogue (1991-bd88, 1992-d4fa). Global/repository PR visibility filters remain transient pending 1993-e7af; their presence is not a durable-persistence guarantee.
+The explicit source ledgers distinguish read-only identities, derived credentials, legacy snapshots and separate domain controls. CircleCI credentials use the write-only `circleci.token` owner. Dictation corrections use stable heard-text keys in the machine-owned `corrections` collection; edits reuse TextCorrector and refresh open Voice pages without microphone access. Global PR visibility filters persist in config.json. Nullable repository overrides persist in repo-settings.json; null inherits the global filter and false explicitly shows matching PRs.
 
 ## Assisted startup
 
-The [Settings startup contract](../backend/settings-startup.md) describes discoverable GitHub device/Enterprise workflows and Ego settings/readback. Interactive Ego login still requires the human AI Chat Settings workflow and has no published Settings login action. Native inventory completeness does not mean every onboarding or live UI check is complete.
+The [Settings startup contract](../backend/settings-startup.md) describes discoverable GitHub device/Enterprise workflows and Ego settings/readback. GitHub `list_accounts` discovers existing account IDs and credential presence. Typed Ego `begin_login` opens a terminal for you to authenticate; `login_status` reports process lifetime and owner credential readback separately. Native inventory completeness does not mean every onboarding or live UI check is complete.
 
 ### CircleCI Settings owner (#1991-bd88)
 
@@ -664,3 +668,13 @@ MCP, IPC and HTTP. Readback reports stored presence only (`set`, `unset`,
 removing a stored token leaves environment and CircleCI CLI fallbacks unchanged.
 
 On narrow screens, search and page selection share one compact navigation row. The workspace path in AI Chat is a read-only field; select or scroll its text to inspect the full path.
+
+### Mobile font sizes
+
+In mobile Settings, use the Terminal and Chat minus/plus controls under Appearance to set each size from 10 to 24 px. Each value is saved on this device. Terminal changes CLI output; Chat changes Session Chat and AI Chat transcripts. The defaults remain 14 px for terminal output and Chat body text. Composers, UI controls and desktop fonts stay unchanged. CLI text wraps to the available width without changing the shared terminal size.
+
+### Abandoned shells
+
+Desktop sidebar session rows and mobile session cards mark a parentless plain shell as **Abandoned** after one idle hour and show its idle age. The five-second backend sweep requires a fresh OS process inventory: the PTY child must be an interactive shell with no child processes. An unknown inventory, script, foreground command, background child, detached TUIC job, managed identity, live child session, pending input or keep-open hold prevents closure. Unsupported or incomplete OS process observations fail closed.
+
+Settings → Agents → Idle agent hibernation (Expert Mode) includes **Close abandoned shells after (hours)** (`agents.abandoned_shell_hours`). The machine-owned value defaults to **0 (off)**; whole hours from 1 to 65535 enable closure. Idle age is measured from the most recent input, output or semantic activity, including elapsed time while the machine sleeps. Closure rechecks the process inventory and activity at the destructive boundary, and uses the normal session close/tombstone path. The sweep can lag the threshold by one five-second tick. A remote daemon applies its own setting, not the desktop host's value.
