@@ -7,7 +7,10 @@ const WAIT: Duration = Duration::from_secs(5);
 
 fn channels() -> (SecureChannel, SecureChannel) {
     let p = PairingSecret::generate().unwrap();
-    let b = ChannelBinding { pairing_id: "p", room: "r", relay_origin: "wss://x" };
+    let b = ChannelBinding {
+        pairing_id: "p",
+        room: "r",
+    };
     let mut i = Handshake::initiator(&p, &b).unwrap();
     let mut r = Handshake::responder(&p, &b).unwrap();
     r.read(&i.write().unwrap()).unwrap();
@@ -61,7 +64,11 @@ fn pair() -> (Mux, Mux) {
 }
 
 async fn accept(m: &mut Mux) -> IncomingStream {
-    match tokio::time::timeout(WAIT, m.inbound.recv()).await.unwrap().unwrap() {
+    match tokio::time::timeout(WAIT, m.inbound.recv())
+        .await
+        .unwrap()
+        .unwrap()
+    {
         Inbound::Stream(s) => s,
         Inbound::Credential(_) => panic!("expected a stream"),
     }
@@ -88,7 +95,13 @@ async fn open_accepted(i: &Mux, r: &mut Mux) -> (MuxStream, MuxStream) {
 async fn read_exactly(s: &MuxStream, n: usize) -> Vec<u8> {
     let mut out = Vec::new();
     while out.len() < n {
-        out.extend(tokio::time::timeout(WAIT, s.read()).await.unwrap().unwrap().unwrap());
+        out.extend(
+            tokio::time::timeout(WAIT, s.read())
+                .await
+                .unwrap()
+                .unwrap()
+                .unwrap(),
+        );
     }
     out
 }
@@ -96,7 +109,10 @@ async fn read_exactly(s: &MuxStream, n: usize) -> Vec<u8> {
 #[tokio::test]
 async fn bytes_cross_in_order_in_both_directions() {
     let (i, mut r) = pair();
-    tokio::spawn(async move { spawn_echo(accept(&mut r).await.accept()); r });
+    tokio::spawn(async move {
+        spawn_echo(accept(&mut r).await.accept());
+        r
+    });
     let s = i.handle.open().await.unwrap();
     // 300 KiB: many chunks and several credit refills.
     let payload: Vec<u8> = (0..300 * 1024).map(|n| (n % 251) as u8).collect();
@@ -148,13 +164,21 @@ async fn reset_and_drop_abort_the_peer_stream() {
     let (i, mut r) = pair();
     let (s, theirs) = open_accepted(&i, &mut r).await;
     drop(s);
-    assert_eq!(tokio::time::timeout(WAIT, theirs.read()).await.unwrap(), Err(StreamError::Reset));
+    assert_eq!(
+        tokio::time::timeout(WAIT, theirs.read()).await.unwrap(),
+        Err(StreamError::Reset)
+    );
 }
 
 #[tokio::test]
 async fn a_refused_open_reports_the_reason() {
     let (i, mut r) = pair();
-    tokio::spawn(async move { accept(&mut r).await.reject(OpenFailure::UpstreamUnreachable); r });
+    tokio::spawn(async move {
+        accept(&mut r)
+            .await
+            .reject(OpenFailure::UpstreamUnreachable);
+        r
+    });
     assert_eq!(
         i.handle.open().await.err(),
         Some(OpenError::Refused(OpenFailure::UpstreamUnreachable))
@@ -164,7 +188,10 @@ async fn a_refused_open_reports_the_reason() {
 // Catches an unbounded stream table on the daemon side.
 #[tokio::test]
 async fn the_responder_refuses_streams_beyond_its_limit() {
-    let r_cfg = MuxConfig { max_streams: 2, ..cfg() };
+    let r_cfg = MuxConfig {
+        max_streams: 2,
+        ..cfg()
+    };
     let (i, mut r) = joined(cfg(), r_cfg, |_| true);
     tokio::spawn(async move {
         let mut kept = Vec::new();
@@ -211,7 +238,10 @@ async fn resetting_a_stream_returns_its_connection_credit() {
         }
     });
     for _ in 0..10 {
-        let s = tokio::time::timeout(WAIT, i.handle.open()).await.expect("open hung").unwrap();
+        let s = tokio::time::timeout(WAIT, i.handle.open())
+            .await
+            .expect("open hung")
+            .unwrap();
         tokio::time::timeout(WAIT, s.write_all(&vec![0u8; STREAM_CREDIT]))
             .await
             .expect("connection credit leaked")
@@ -234,7 +264,11 @@ impl RawPeer {
         let (raw_tx, i_rx) = mpsc::channel(64);
         (
             start(Role::Initiator, ci, i_tx, i_rx, cfg),
-            RawPeer { channel: cr, tx: raw_tx, rx: raw_rx },
+            RawPeer {
+                channel: cr,
+                tx: raw_tx,
+                rx: raw_rx,
+            },
         )
     }
     async fn send(&mut self, f: Frame) {
@@ -242,7 +276,10 @@ impl RawPeer {
         self.tx.send(rec).await.unwrap();
     }
     async fn recv(&mut self) -> Frame {
-        let rec = tokio::time::timeout(WAIT, self.rx.recv()).await.unwrap().unwrap();
+        let rec = tokio::time::timeout(WAIT, self.rx.recv())
+            .await
+            .unwrap()
+            .unwrap();
         Frame::decode(&self.channel.open(&rec).unwrap()).unwrap()
     }
 }
@@ -255,11 +292,17 @@ async fn data_beyond_the_granted_credit_ends_the_session() {
         let h = i.handle.clone();
         async move { h.open().await }
     });
-    let Frame::Open { stream } = raw.recv().await else { panic!() };
+    let Frame::Open { stream } = raw.recv().await else {
+        panic!()
+    };
     raw.send(Frame::Opened { stream }).await;
     let _keep_unread = open.await.unwrap().unwrap();
-    for _ in 0..(STREAM_CREDIT / MAX_DATA_CHUNK + 1) {
-        raw.send(Frame::Data { stream, bytes: vec![0; MAX_DATA_CHUNK] }).await;
+    for _ in 0..=STREAM_CREDIT / MAX_DATA_CHUNK {
+        raw.send(Frame::Data {
+            stream,
+            bytes: vec![0; MAX_DATA_CHUNK],
+        })
+        .await;
     }
     let mut h = i.handle.clone();
     assert_eq!(
@@ -278,7 +321,10 @@ async fn a_silent_peer_times_out() {
     };
     let (i, _raw) = RawPeer::against_initiator(c);
     let mut h = i.handle.clone();
-    assert_eq!(tokio::time::timeout(WAIT, h.closed()).await.unwrap(), CloseReason::HeartbeatTimeout);
+    assert_eq!(
+        tokio::time::timeout(WAIT, h.closed()).await.unwrap(),
+        CloseReason::HeartbeatTimeout
+    );
 }
 
 // Catches forged records keeping a dead peer "alive": only authenticated
@@ -310,7 +356,9 @@ async fn a_record_dropped_by_the_relay_ends_the_session() {
     let _ = s.write_all(b"after").await; // record 3: breaks the sequence
     assert_eq!(
         tokio::time::timeout(WAIT, theirs.read()).await.unwrap(),
-        Err(StreamError::Closed(CloseReason::Crypto(SecureError::Record)))
+        Err(StreamError::Closed(CloseReason::Crypto(
+            SecureError::Record
+        )))
     );
 }
 
@@ -318,7 +366,11 @@ async fn a_record_dropped_by_the_relay_ends_the_session() {
 async fn the_credential_arrives_only_through_the_channel() {
     let (mut i, r) = pair();
     r.handle.send_credential(b"daemon-token".to_vec());
-    match tokio::time::timeout(WAIT, i.inbound.recv()).await.unwrap().unwrap() {
+    match tokio::time::timeout(WAIT, i.inbound.recv())
+        .await
+        .unwrap()
+        .unwrap()
+    {
         Inbound::Credential(c) => assert_eq!(c, b"daemon-token"),
         Inbound::Stream(_) => panic!("unexpected stream"),
     }
@@ -333,5 +385,8 @@ async fn local_shutdown_ends_open_streams_with_the_reason() {
         tokio::time::timeout(WAIT, s.read()).await.unwrap(),
         Err(StreamError::Closed(CloseReason::LocalShutdown))
     );
-    assert!(matches!(i.handle.open().await.err(), Some(OpenError::Closed(_))));
+    assert!(matches!(
+        i.handle.open().await.err(),
+        Some(OpenError::Closed(_))
+    ));
 }

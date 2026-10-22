@@ -22,28 +22,53 @@ pub(crate) enum OpenFailure {
 
 #[derive(Clone, PartialEq, Eq)]
 pub(crate) enum Frame {
-    Open { stream: u32 },
-    Opened { stream: u32 },
-    OpenFailed { stream: u32, reason: OpenFailure },
-    Data { stream: u32, bytes: Vec<u8> },
+    Open {
+        stream: u32,
+    },
+    Opened {
+        stream: u32,
+    },
+    OpenFailed {
+        stream: u32,
+        reason: OpenFailure,
+    },
+    Data {
+        stream: u32,
+        bytes: Vec<u8>,
+    },
     /// Receive credit: the sender may send this many more bytes on `stream`.
-    WindowUpdate { stream: u32, credit: u32 },
+    WindowUpdate {
+        stream: u32,
+        credit: u32,
+    },
     /// The sender finished writing; the other direction stays open.
-    Fin { stream: u32 },
+    Fin {
+        stream: u32,
+    },
     /// Abort both directions.
-    Reset { stream: u32 },
-    Ping { nonce: u64 },
-    Pong { nonce: u64 },
+    Reset {
+        stream: u32,
+    },
+    Ping {
+        nonce: u64,
+    },
+    Pong {
+        nonce: u64,
+    },
     /// The daemon API credential D, sent once per attachment, only inside the
     /// authenticated channel. It grants nothing beyond what D grants over HTTP.
-    Credential { bytes: Vec<u8> },
+    Credential {
+        bytes: Vec<u8>,
+    },
 }
 
 impl fmt::Debug for Frame {
     // Never print Data or Credential bodies: they carry terminal output and D.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Data { stream, bytes } => write!(f, "Data{{stream:{stream},len:{}}}", bytes.len()),
+            Self::Data { stream, bytes } => {
+                write!(f, "Data{{stream:{stream},len:{}}}", bytes.len())
+            }
             Self::Credential { bytes } => write!(f, "Credential{{len:{}}}", bytes.len()),
             Self::Open { stream } => write!(f, "Open{{{stream}}}"),
             Self::Opened { stream } => write!(f, "Opened{{{stream}}}"),
@@ -102,7 +127,9 @@ impl Frame {
         Ok(match self {
             Self::Open { stream } => put(kind::OPEN, *stream, &[]),
             Self::Opened { stream } => put(kind::OPENED, *stream, &[]),
-            Self::OpenFailed { stream, reason } => put(kind::OPEN_FAILED, *stream, &[*reason as u8]),
+            Self::OpenFailed { stream, reason } => {
+                put(kind::OPEN_FAILED, *stream, &[*reason as u8])
+            }
             Self::Data { stream, bytes } => {
                 if bytes.len() > MAX_DATA_CHUNK {
                     return Err(FrameError::TooLarge);
@@ -131,23 +158,49 @@ impl Frame {
         }
         let stream = u32::from_be_bytes(buf[1..HEADER_LEN].try_into().expect("4 bytes"));
         let body = &buf[HEADER_LEN..];
-        let needs_stream = |s: u32| if s == 0 { Err(FrameError::BadStream) } else { Ok(s) };
-        let connection_level = |s: u32| if s != 0 { Err(FrameError::BadStream) } else { Ok(()) };
-        let empty = |b: &[u8]| if b.is_empty() { Ok(()) } else { Err(FrameError::TooLarge) };
+        let needs_stream = |s: u32| {
+            if s == 0 {
+                Err(FrameError::BadStream)
+            } else {
+                Ok(s)
+            }
+        };
+        let connection_level = |s: u32| {
+            if s != 0 {
+                Err(FrameError::BadStream)
+            } else {
+                Ok(())
+            }
+        };
+        let empty = |b: &[u8]| {
+            if b.is_empty() {
+                Ok(())
+            } else {
+                Err(FrameError::TooLarge)
+            }
+        };
         let u32_body = |b: &[u8]| -> Result<u32, FrameError> {
-            <[u8; 4]>::try_from(b).map(u32::from_be_bytes).map_err(|_| FrameError::Truncated)
+            <[u8; 4]>::try_from(b)
+                .map(u32::from_be_bytes)
+                .map_err(|_| FrameError::Truncated)
         };
         let u64_body = |b: &[u8]| -> Result<u64, FrameError> {
-            <[u8; 8]>::try_from(b).map(u64::from_be_bytes).map_err(|_| FrameError::Truncated)
+            <[u8; 8]>::try_from(b)
+                .map(u64::from_be_bytes)
+                .map_err(|_| FrameError::Truncated)
         };
         Ok(match buf[0] {
             kind::OPEN => {
                 empty(body)?;
-                Self::Open { stream: needs_stream(stream)? }
+                Self::Open {
+                    stream: needs_stream(stream)?,
+                }
             }
             kind::OPENED => {
                 empty(body)?;
-                Self::Opened { stream: needs_stream(stream)? }
+                Self::Opened {
+                    stream: needs_stream(stream)?,
+                }
             }
             kind::OPEN_FAILED => {
                 let reason = match body {
@@ -156,13 +209,19 @@ impl Frame {
                     [] => return Err(FrameError::Truncated),
                     _ => return Err(FrameError::TooLarge),
                 };
-                Self::OpenFailed { stream: needs_stream(stream)?, reason }
+                Self::OpenFailed {
+                    stream: needs_stream(stream)?,
+                    reason,
+                }
             }
             kind::DATA => {
                 if body.len() > MAX_DATA_CHUNK {
                     return Err(FrameError::TooLarge);
                 }
-                Self::Data { stream: needs_stream(stream)?, bytes: body.to_vec() }
+                Self::Data {
+                    stream: needs_stream(stream)?,
+                    bytes: body.to_vec(),
+                }
             }
             kind::WINDOW_UPDATE => Self::WindowUpdate {
                 stream: needs_stream(stream)?,
@@ -170,26 +229,36 @@ impl Frame {
             },
             kind::FIN => {
                 empty(body)?;
-                Self::Fin { stream: needs_stream(stream)? }
+                Self::Fin {
+                    stream: needs_stream(stream)?,
+                }
             }
             kind::RESET => {
                 empty(body)?;
-                Self::Reset { stream: needs_stream(stream)? }
+                Self::Reset {
+                    stream: needs_stream(stream)?,
+                }
             }
             kind::PING => {
                 connection_level(stream)?;
-                Self::Ping { nonce: u64_body(body)? }
+                Self::Ping {
+                    nonce: u64_body(body)?,
+                }
             }
             kind::PONG => {
                 connection_level(stream)?;
-                Self::Pong { nonce: u64_body(body)? }
+                Self::Pong {
+                    nonce: u64_body(body)?,
+                }
             }
             kind::CREDENTIAL => {
                 connection_level(stream)?;
                 if body.len() > MAX_CREDENTIAL_LEN {
                     return Err(FrameError::TooLarge);
                 }
-                Self::Credential { bytes: body.to_vec() }
+                Self::Credential {
+                    bytes: body.to_vec(),
+                }
             }
             other => return Err(FrameError::UnknownType(other)),
         })
@@ -209,28 +278,45 @@ mod tests {
     fn every_frame_round_trips() {
         round_trip(Frame::Open { stream: 1 });
         round_trip(Frame::Opened { stream: 1 });
-        round_trip(Frame::OpenFailed { stream: 2, reason: OpenFailure::TooManyStreams });
-        round_trip(Frame::Data { stream: 3, bytes: vec![0, 1, 255] });
-        round_trip(Frame::WindowUpdate { stream: 3, credit: 65_536 });
+        round_trip(Frame::OpenFailed {
+            stream: 2,
+            reason: OpenFailure::TooManyStreams,
+        });
+        round_trip(Frame::Data {
+            stream: 3,
+            bytes: vec![0, 1, 255],
+        });
+        round_trip(Frame::WindowUpdate {
+            stream: 3,
+            credit: 65_536,
+        });
         round_trip(Frame::Fin { stream: 3 });
         round_trip(Frame::Reset { stream: 3 });
         round_trip(Frame::Ping { nonce: u64::MAX });
         round_trip(Frame::Pong { nonce: 7 });
-        round_trip(Frame::Credential { bytes: b"token".to_vec() });
+        round_trip(Frame::Credential {
+            bytes: b"token".to_vec(),
+        });
     }
 
     // Catches a full data chunk not fitting in one secure record, which would
     // fail only under load when a PTY fills a chunk.
     #[test]
     fn a_full_data_frame_fits_one_secure_record() {
-        let frame = Frame::Data { stream: 1, bytes: vec![9; MAX_DATA_CHUNK] };
+        let frame = Frame::Data {
+            stream: 1,
+            bytes: vec![9; MAX_DATA_CHUNK],
+        };
         assert!(frame.encode().unwrap().len() <= MAX_RECORD_PLAINTEXT);
     }
 
     // Catches an unbounded allocation from a peer-chosen body.
     #[test]
     fn oversized_bodies_are_refused_in_both_directions() {
-        let big = Frame::Data { stream: 1, bytes: vec![0; MAX_DATA_CHUNK + 1] };
+        let big = Frame::Data {
+            stream: 1,
+            bytes: vec![0; MAX_DATA_CHUNK + 1],
+        };
         assert_eq!(big.encode(), Err(FrameError::TooLarge));
         let mut wire = put(kind::DATA, 1, &vec![0; MAX_DATA_CHUNK + 1]);
         assert_eq!(Frame::decode(&wire), Err(FrameError::TooLarge));
@@ -242,23 +328,44 @@ mod tests {
     // smuggled onto one: stream 0 is reserved for the connection.
     #[test]
     fn stream_zero_is_reserved_for_connection_frames() {
-        assert_eq!(Frame::decode(&put(kind::OPEN, 0, &[])), Err(FrameError::BadStream));
-        assert_eq!(Frame::decode(&put(kind::DATA, 0, b"x")), Err(FrameError::BadStream));
+        assert_eq!(
+            Frame::decode(&put(kind::OPEN, 0, &[])),
+            Err(FrameError::BadStream)
+        );
+        assert_eq!(
+            Frame::decode(&put(kind::DATA, 0, b"x")),
+            Err(FrameError::BadStream)
+        );
         assert_eq!(
             Frame::decode(&put(kind::PING, 5, &1u64.to_be_bytes())),
             Err(FrameError::BadStream)
         );
-        assert_eq!(Frame::decode(&put(kind::CREDENTIAL, 5, b"d")), Err(FrameError::BadStream));
+        assert_eq!(
+            Frame::decode(&put(kind::CREDENTIAL, 5, b"d")),
+            Err(FrameError::BadStream)
+        );
     }
 
     #[test]
     fn malformed_frames_are_errors_not_panics() {
         assert_eq!(Frame::decode(&[]), Err(FrameError::Truncated));
         assert_eq!(Frame::decode(&[4, 0, 0]), Err(FrameError::Truncated));
-        assert_eq!(Frame::decode(&put(99, 1, &[])), Err(FrameError::UnknownType(99)));
-        assert_eq!(Frame::decode(&put(kind::WINDOW_UPDATE, 1, &[1])), Err(FrameError::Truncated));
-        assert_eq!(Frame::decode(&put(kind::OPEN, 1, b"x")), Err(FrameError::TooLarge));
-        assert_eq!(Frame::decode(&put(kind::OPEN_FAILED, 1, &[9])), Err(FrameError::TooLarge));
+        assert_eq!(
+            Frame::decode(&put(99, 1, &[])),
+            Err(FrameError::UnknownType(99))
+        );
+        assert_eq!(
+            Frame::decode(&put(kind::WINDOW_UPDATE, 1, &[1])),
+            Err(FrameError::Truncated)
+        );
+        assert_eq!(
+            Frame::decode(&put(kind::OPEN, 1, b"x")),
+            Err(FrameError::TooLarge)
+        );
+        assert_eq!(
+            Frame::decode(&put(kind::OPEN_FAILED, 1, &[9])),
+            Err(FrameError::TooLarge)
+        );
     }
 
     // Catches terminal output or D reaching a log line through `{:?}`.
@@ -266,8 +373,13 @@ mod tests {
     fn debug_never_prints_payload_bytes() {
         let shown = format!(
             "{:?} {:?}",
-            Frame::Data { stream: 1, bytes: b"hunter2-output".to_vec() },
-            Frame::Credential { bytes: b"daemon-token".to_vec() }
+            Frame::Data {
+                stream: 1,
+                bytes: b"hunter2-output".to_vec()
+            },
+            Frame::Credential {
+                bytes: b"daemon-token".to_vec()
+            }
         );
         assert!(!shown.contains("hunter2") && !shown.contains("daemon-token"));
     }

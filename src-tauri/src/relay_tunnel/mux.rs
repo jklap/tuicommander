@@ -181,7 +181,15 @@ pub(crate) fn start(
         config,
         role,
     });
-    pump::spawn(core.clone(), channel, link_tx, link_rx, data_rx, ctl_rx, inbound_tx);
+    pump::spawn(
+        core.clone(),
+        channel,
+        link_tx,
+        link_rx,
+        data_rx,
+        ctl_rx,
+        inbound_tx,
+    );
     Mux {
         handle: MuxHandle { core, closed_rx },
         inbound,
@@ -324,9 +332,7 @@ impl MuxStream {
                 });
                 Ok(Some(bytes))
             }
-            Some(Event::Fin) => {
-                Ok(None)
-            }
+            Some(Event::Fin) => Ok(None),
             Some(Event::Reset) => Err(StreamError::Reset),
             None => Err(self.closed_error()),
         }

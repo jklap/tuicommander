@@ -104,7 +104,8 @@ async fn read_loop(
     inbound_tx: &mpsc::Sender<Inbound>,
 ) -> CloseReason {
     let config = core.config;
-    let mut ping = tokio::time::interval_at(Instant::now() + config.ping_interval, config.ping_interval);
+    let mut ping =
+        tokio::time::interval_at(Instant::now() + config.ping_interval, config.ping_interval);
     ping.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     let mut last_rx = Instant::now();
     let mut nonce = 0u64;
@@ -142,7 +143,11 @@ async fn read_loop(
     }
 }
 
-fn dispatch(core: &Arc<Core>, frame: Frame, inbound_tx: &mpsc::Sender<Inbound>) -> Result<(), CloseReason> {
+fn dispatch(
+    core: &Arc<Core>,
+    frame: Frame,
+    inbound_tx: &mpsc::Sender<Inbound>,
+) -> Result<(), CloseReason> {
     let ctl = |f: Frame| {
         let _ = core.ctl_tx.send(f);
     };
@@ -155,7 +160,10 @@ fn dispatch(core: &Arc<Core>, frame: Frame, inbound_tx: &mpsc::Sender<Inbound>) 
         Frame::Open { stream } => open_requested(core, stream, inbound_tx)?,
         Frame::Opened { stream } => {
             let mut shared = core.lock();
-            let opened = shared.streams.get_mut(&stream).and_then(|e| e.opened.take());
+            let opened = shared
+                .streams
+                .get_mut(&stream)
+                .and_then(|e| e.opened.take());
             match opened {
                 Some(tx) => {
                     let _ = tx.send(Ok(()));
@@ -164,7 +172,11 @@ fn dispatch(core: &Arc<Core>, frame: Frame, inbound_tx: &mpsc::Sender<Inbound>) 
             }
         }
         Frame::OpenFailed { stream, reason } => {
-            let opened = core.lock().streams.get_mut(&stream).and_then(|e| e.opened.take());
+            let opened = core
+                .lock()
+                .streams
+                .get_mut(&stream)
+                .and_then(|e| e.opened.take());
             match opened {
                 Some(tx) => {
                     core.remove(stream);
@@ -217,7 +229,11 @@ fn dispatch(core: &Arc<Core>, frame: Frame, inbound_tx: &mpsc::Sender<Inbound>) 
     Ok(())
 }
 
-fn open_requested(core: &Arc<Core>, stream: u32, inbound_tx: &mpsc::Sender<Inbound>) -> Result<(), CloseReason> {
+fn open_requested(
+    core: &Arc<Core>,
+    stream: u32,
+    inbound_tx: &mpsc::Sender<Inbound>,
+) -> Result<(), CloseReason> {
     if core.role != Role::Responder {
         return Err(CloseReason::Protocol("Open sent to the initiator"));
     }
@@ -251,13 +267,13 @@ fn open_requested(core: &Arc<Core>, stream: u32, inbound_tx: &mpsc::Sender<Inbou
         events
     };
     let incoming = IncomingStream::new(MuxStream::new(core.clone(), stream, events));
-    if let Err(rejected) = inbound_tx.try_send(Inbound::Stream(incoming)) {
-        // Nobody is accepting (or the backlog is full): answer, don't hang.
-        if let mpsc::error::TrySendError::Full(Inbound::Stream(s))
-        | mpsc::error::TrySendError::Closed(Inbound::Stream(s)) = rejected
-        {
-            s.reject(OpenFailure::TooManyStreams);
-        }
+    // Nobody is accepting (or the backlog is full): answer, don't hang.
+    if let Err(
+        mpsc::error::TrySendError::Full(Inbound::Stream(s))
+        | mpsc::error::TrySendError::Closed(Inbound::Stream(s)),
+    ) = inbound_tx.try_send(Inbound::Stream(incoming))
+    {
+        s.reject(OpenFailure::TooManyStreams);
     }
     Ok(())
 }

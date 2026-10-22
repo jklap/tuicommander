@@ -102,10 +102,12 @@ fn valid_id(value: &str) -> bool {
 fn valid_relay_url(url: &url::Url) -> bool {
     match url.scheme() {
         "wss" => url.host_str().is_some(),
-        "ws" => matches!(
-            url.host(),
-            Some(url::Host::Ipv4(a)) if a.is_loopback()
-        ) || matches!(url.host(), Some(url::Host::Domain("localhost"))),
+        "ws" => {
+            matches!(
+                url.host(),
+                Some(url::Host::Ipv4(a)) if a.is_loopback()
+            ) || matches!(url.host(), Some(url::Host::Domain("localhost")))
+        }
         _ => false,
     }
 }
@@ -120,11 +122,9 @@ fn random_id() -> Result<String, BundleError> {
 
 impl PairingBundle {
     /// A fresh pairing: new room, pairing id and secret, independent of R.
-    pub(crate) fn generate(
-        relay_url: &str,
-        relay_token: RelayBearer,
-    ) -> Result<Self, BundleError> {
-        let relay_url = url::Url::parse(relay_url).map_err(|_| BundleError::InvalidField("relay_url"))?;
+    pub(crate) fn generate(relay_url: &str, relay_token: RelayBearer) -> Result<Self, BundleError> {
+        let relay_url =
+            url::Url::parse(relay_url).map_err(|_| BundleError::InvalidField("relay_url"))?;
         if !valid_relay_url(&relay_url) {
             return Err(BundleError::InvalidField("relay_url"));
         }
@@ -141,12 +141,6 @@ impl PairingBundle {
         &self.relay_url
     }
 
-    /// scheme://host[:port], lowercase: the form both endpoints bind into the
-    /// handshake, so it must not depend on how the URL was typed.
-    pub(crate) fn relay_origin(&self) -> String {
-        self.relay_url.origin().ascii_serialization()
-    }
-
     pub(crate) fn to_text(&self) -> Zeroizing<String> {
         let wire = Zeroizing::new(
             serde_json::to_string(&Wire {
@@ -159,7 +153,10 @@ impl PairingBundle {
             })
             .expect("bundle serialization is infallible"),
         );
-        Zeroizing::new(format!("{PREFIX}{}", URL_SAFE_NO_PAD.encode(wire.as_bytes())))
+        Zeroizing::new(format!(
+            "{PREFIX}{}",
+            URL_SAFE_NO_PAD.encode(wire.as_bytes())
+        ))
     }
 
     pub(crate) fn parse(text: &str) -> Result<Self, BundleError> {
@@ -247,13 +244,12 @@ mod tests {
         assert_eq!(parsed.pairing_id, original.pairing_id);
         assert_eq!(parsed.relay_token.expose(), "relay-bearer-token");
         assert_eq!(parsed.secret.as_bytes(), original.secret.as_bytes());
-        assert_eq!(parsed.relay_origin(), "wss://relay.example");
     }
 
     // Catches pasted text with a trailing newline being refused.
     #[test]
     fn surrounding_whitespace_from_a_paste_is_ignored() {
-        let text = format!("  {}\n", &*bundle().to_text());
+        let text = format!("  {}\n", *bundle().to_text());
         assert!(PairingBundle::parse(&text).is_ok());
     }
 
@@ -280,7 +276,10 @@ mod tests {
     #[test]
     fn an_unknown_version_is_refused_not_guessed() {
         let future = wire_with("v", serde_json::json!(2));
-        assert_eq!(PairingBundle::parse(&future).unwrap_err(), BundleError::UnsupportedVersion);
+        assert_eq!(
+            PairingBundle::parse(&future).unwrap_err(),
+            BundleError::UnsupportedVersion
+        );
         assert_eq!(
             PairingBundle::parse("tuic-pair-v2:AAAA").unwrap_err(),
             BundleError::UnsupportedVersion
@@ -290,7 +289,12 @@ mod tests {
     // Catches a plaintext relay to a remote host, which would expose R.
     #[test]
     fn only_wss_or_loopback_ws_relays_are_accepted() {
-        for bad in ["ws://relay.example", "http://relay.example", "wss://", "ftp://a"] {
+        for bad in [
+            "ws://relay.example",
+            "http://relay.example",
+            "wss://",
+            "ftp://a",
+        ] {
             let text = wire_with("relay_url", serde_json::json!(bad));
             assert_eq!(
                 PairingBundle::parse(&text).unwrap_err(),
@@ -298,8 +302,15 @@ mod tests {
                 "{bad}"
             );
         }
-        for ok in ["ws://127.0.0.1:9000", "ws://localhost:9000", "wss://relay.example:8443"] {
-            assert!(PairingBundle::parse(&wire_with("relay_url", serde_json::json!(ok))).is_ok(), "{ok}");
+        for ok in [
+            "ws://127.0.0.1:9000",
+            "ws://localhost:9000",
+            "wss://relay.example:8443",
+        ] {
+            assert!(
+                PairingBundle::parse(&wire_with("relay_url", serde_json::json!(ok))).is_ok(),
+                "{ok}"
+            );
         }
     }
 
@@ -317,7 +328,11 @@ mod tests {
     // Catches a short or malformed secret being padded or accepted.
     #[test]
     fn the_secret_must_be_exactly_32_bytes() {
-        for bad in [URL_SAFE_NO_PAD.encode([1u8; 31]), URL_SAFE_NO_PAD.encode([1u8; 33]), "!!".into()] {
+        for bad in [
+            URL_SAFE_NO_PAD.encode([1u8; 31]),
+            URL_SAFE_NO_PAD.encode([1u8; 33]),
+            "!!".into(),
+        ] {
             assert_eq!(
                 PairingBundle::parse(&wire_with("secret", serde_json::json!(bad))).unwrap_err(),
                 BundleError::InvalidField("secret")
@@ -327,7 +342,10 @@ mod tests {
 
     #[test]
     fn garbage_and_oversized_input_are_malformed() {
-        assert_eq!(PairingBundle::parse("hello").unwrap_err(), BundleError::Malformed);
+        assert_eq!(
+            PairingBundle::parse("hello").unwrap_err(),
+            BundleError::Malformed
+        );
         assert_eq!(
             PairingBundle::parse(&format!("{PREFIX}{}", "A".repeat(5000))).unwrap_err(),
             BundleError::Malformed
@@ -342,13 +360,5 @@ mod tests {
     fn the_bearer_rejects_empty_or_spaced_tokens() {
         assert!(RelayBearer::new(String::new()).is_err());
         assert!(RelayBearer::new("a b".into()).is_err());
-    }
-
-    // Catches the origin depending on how the URL was typed: both endpoints
-    // bind it into the handshake and must compute the same string.
-    #[test]
-    fn the_origin_ignores_case_path_and_default_port() {
-        let text = wire_with("relay_url", serde_json::json!("WSS://Relay.Example:443/some/path"));
-        assert_eq!(PairingBundle::parse(&text).unwrap().relay_origin(), "wss://relay.example");
     }
 }

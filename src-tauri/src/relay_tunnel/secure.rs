@@ -7,8 +7,10 @@
 //! to open, and the channel refuses every later record (the caller closes it).
 //!
 //! The relay holds the bearer R and the room, never P, so nothing it sees can
-//! derive these keys. The prologue binds protocol version, pairing id, room
-//! and relay origin; a mismatch in any of them fails the first message.
+//! derive these keys. The prologue binds protocol version, pairing id and
+//! room; a mismatch in any of them fails the first message. The relay hostname
+//! is deliberately not bound: the two ends may reach one relay under different
+//! names.
 
 use std::fmt;
 
@@ -89,7 +91,6 @@ impl fmt::Debug for PairingSecret {
 pub(crate) struct ChannelBinding<'a> {
     pub pairing_id: &'a str,
     pub room: &'a str,
-    pub relay_origin: &'a str,
 }
 
 /// Every field is length-prefixed so no two bindings share an encoding.
@@ -97,7 +98,7 @@ fn prologue(binding: &ChannelBinding<'_>) -> Vec<u8> {
     let mut out = Vec::new();
     out.extend_from_slice(PROLOGUE_TAG);
     out.push(PROTOCOL_VERSION);
-    for field in [binding.pairing_id, binding.room, binding.relay_origin] {
+    for field in [binding.pairing_id, binding.room] {
         out.extend_from_slice(&(field.len() as u32).to_be_bytes());
         out.extend_from_slice(field.as_bytes());
     }
@@ -237,7 +238,6 @@ mod tests {
         ChannelBinding {
             pairing_id: "pair-1",
             room: "room-1",
-            relay_origin: "wss://relay.example",
         }
     }
 
@@ -279,16 +279,24 @@ mod tests {
     }
 
     // Catches a prologue that forgets one field, or encodes two fields
-    // ambiguously: moving a byte between room and origin must still fail.
+    // ambiguously: moving a byte between pairing id and room must still fail.
     #[test]
     fn every_binding_field_is_authenticated() {
         let p = PairingSecret::generate().unwrap();
         let base = binding();
         let variants = [
-            ChannelBinding { pairing_id: "pair-2", ..base },
-            ChannelBinding { room: "room-2", ..base },
-            ChannelBinding { relay_origin: "wss://evil.example", ..base },
-            ChannelBinding { room: "room-", relay_origin: "1wss://relay.example", ..base },
+            ChannelBinding {
+                pairing_id: "pair-2",
+                ..base
+            },
+            ChannelBinding {
+                room: "room-2",
+                ..base
+            },
+            ChannelBinding {
+                pairing_id: "pair-1r",
+                room: "oom-1",
+            },
         ];
         for other in variants {
             assert!(
