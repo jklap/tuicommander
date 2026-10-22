@@ -1161,7 +1161,7 @@ mod tests {
             .remove_dependency(&dependent.id, &target.id, dependent.revision, Some("agent"))
             .expect("managed removal");
         assert_eq!(released.status, StoryStatus::Ready);
-        assert!(released.dependencies.is_empty());
+        assert_eq!(released.dependencies, [] as [std::string::String; 0]);
         assert_eq!(released.revision, dependent.revision + 1);
     }
 }

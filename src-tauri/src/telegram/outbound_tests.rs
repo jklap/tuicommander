@@ -335,7 +335,10 @@ async fn tool_requires_bound_caller_and_pending_request() {
             .await
             .is_err()
     );
-    assert!(server.requests().is_empty());
+    assert_eq!(
+        server.requests(),
+        [] as [(std::string::String, serde_json::Value); 0]
+    );
 }
 
 // Catches: partial or failed final delivery starts streaming again or permits

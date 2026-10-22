@@ -153,7 +153,10 @@ async fn unregistered_caller_cannot_send_and_restart_has_no_registration() {
     )
     .unwrap();
     assert!(fresh.registered_peer().is_none());
-    assert!(server.requests().is_empty());
+    assert_eq!(
+        server.requests(),
+        [] as [(std::string::String, serde_json::Value); 0]
+    );
 }
 
 // Catches: a registered agent retains phone authority after its MCP transport

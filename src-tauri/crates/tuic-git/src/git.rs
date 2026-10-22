@@ -2483,7 +2483,10 @@ mod tests {
     #[test]
     fn list_remotes_empty_for_non_repo() {
         let dir = tempfile::tempdir().expect("tempdir");
-        assert!(list_remotes(dir.path()).is_empty());
+        assert_eq!(
+            list_remotes(dir.path()),
+            [] as [(std::string::String, std::string::String); 0]
+        );
     }
 
     // --- canonical_repo_root ---
@@ -2649,7 +2652,7 @@ mod tests {
     fn sort_branches_empty_input() {
         let mut branches: Vec<serde_json::Value> = vec![];
         sort_branches(&mut branches);
-        assert!(branches.is_empty());
+        assert_eq!(branches, [] as [serde_json::Value; 0]);
     }
 
     #[test]
@@ -3169,14 +3172,14 @@ mod tests {
         assert_eq!(status.staged.len(), 1);
         assert_eq!(status.staged[0].path, "src/main.rs");
         assert_eq!(status.staged[0].status, "M");
-        assert!(status.unstaged.is_empty());
+        assert_eq!(status.unstaged, [] as [StatusEntry; 0]);
     }
 
     #[test]
     fn parse_porcelain_v2_unstaged_modified() {
         let output = "1 .M N... 100644 100644 100644 abc123 def456 src/lib.rs\n";
         let status = parse_porcelain_v2(output);
-        assert!(status.staged.is_empty());
+        assert_eq!(status.staged, [] as [StatusEntry; 0]);
         assert_eq!(status.unstaged.len(), 1);
         assert_eq!(status.unstaged[0].path, "src/lib.rs");
         assert_eq!(status.unstaged[0].status, "M");
@@ -3238,10 +3241,10 @@ mod tests {
         assert_eq!(status.ahead, 0);
         assert_eq!(status.behind, 0);
         assert_eq!(status.stash_count, 0);
-        assert!(status.staged.is_empty());
-        assert!(status.unstaged.is_empty());
-        assert!(status.untracked.is_empty());
-        assert!(status.conflicted.is_empty());
+        assert_eq!(status.staged, [] as [StatusEntry; 0]);
+        assert_eq!(status.unstaged, [] as [StatusEntry; 0]);
+        assert_eq!(status.untracked, [] as [std::string::String; 0]);
+        assert_eq!(status.conflicted, [] as [StatusEntry; 0]);
     }
 
     #[test]
@@ -3254,8 +3257,8 @@ mod tests {
         assert_eq!(status.conflicted[0].path, "src/conflict.rs");
         assert_eq!(status.conflicted[0].status, "UU");
         // Conflicted files must not leak into staged/unstaged.
-        assert!(status.staged.is_empty());
-        assert!(status.unstaged.is_empty());
+        assert_eq!(status.staged, [] as [StatusEntry; 0]);
+        assert_eq!(status.unstaged, [] as [StatusEntry; 0]);
     }
 
     #[test]
@@ -3894,8 +3897,8 @@ mod tests {
     fn parse_commit_log_line_no_parents_no_refs() {
         let line = "abc123\x00\x00\x00Bob\x002024-01-15T10:30:00Z\x00Root commit";
         let entry = parse_commit_log_line(line).expect("should parse");
-        assert!(entry.parents.is_empty());
-        assert!(entry.refs.is_empty());
+        assert_eq!(entry.parents, [] as [std::string::String; 0]);
+        assert_eq!(entry.refs, [] as [std::string::String; 0]);
         assert!(entry.body.is_none());
     }
 
@@ -3923,7 +3926,7 @@ mod tests {
         assert_eq!(commits[0].hash.len(), 40);
         assert!(commits[0].hash.chars().all(|c| c.is_ascii_hexdigit()));
         assert_eq!(commits[0].author_name, "Test");
-        assert!(!commits[0].author_date.is_empty());
+        assert_ne!(commits[0].author_date, "");
         assert_eq!(commits[0].subject, "commit 8", "newest commit comes first");
     }
 

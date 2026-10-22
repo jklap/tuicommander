@@ -2034,7 +2034,7 @@ mod tests {
         let dir = incremental_repo();
         let index = built(dir.path());
         let slots_before = index.read().entries.len();
-        assert!(hits(&index, "kumquat").is_empty());
+        assert_eq!(hits(&index, "kumquat"), [] as [std::string::String; 0]);
 
         fs::write(
             dir.path().join("file_7.rs"),
@@ -2096,7 +2096,7 @@ mod tests {
 
         assert!(hits(&index, "axolotl").contains(&"later.rs".to_string()));
         assert_eq!(index.read().entries.len(), slots_before);
-        assert!(index.read().free_ids.is_empty());
+        assert_eq!(index.read().free_ids, [] as [u32; 0]);
     }
 
     #[test]
