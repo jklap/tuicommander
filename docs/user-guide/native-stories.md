@@ -67,17 +67,20 @@ The Designer refuses new publications containing unsupported Gate or plan create
 
 ### Designer actions without a UI control
 
-These actions exist in the backend and have no Designer or dialog control. They are **not** MCP tools: the MCP `workflow` tool offers only `story`, `run`, `proposal_create`, `report` and `launch`. Use the HTTP API (`POST /workflows/definition/action`, `POST /workflows/run/action`) or the matching desktop IPC commands, `workflow_definition_action` and `workflow_run_action`.
+These actions exist in the backend and have no Designer or dialog control. Two surfaces reach them:
 
-| Action | Where it exists | Designer limit |
+- **HTTP and desktop IPC only:** `POST /workflows/definition/action` and `workflow_definition_action`. The MCP `workflow` tool has no definition action, so agents cannot call these.
+- **HTTP, desktop IPC and MCP:** `POST /workflows/run/action` and `workflow_run_action`. The MCP `workflow action=run` takes the same run actions.
+
+| Action | Surface | Designer limit |
 |---|---|---|
-| Remove one edge | `update_draft` with the full new graph | **Remove node** drops that node's edges. **Connect** replaces an edge with the same source and outcome. No control removes a single edge. |
-| Agent role and capabilities | `update_draft` (fields of an Agent node) | The palette preset sets both when you add the node. The inspector edits only the prompt template. |
-| Closure policy | `update_closure` | No control. New drafts use `human`. |
-| Required checks | `update_checks` | No control. |
-| `execute_check` | `workflow_run_action` | No control. Runs one pinned check in the story worktree. |
-| `record_integration` | `workflow_run_action` | No control. Records a completed merge. |
-| `recertify_canonical` | `workflow_run_action` | No control. |
+| Remove one edge | `update_draft` with the full new graph (HTTP/IPC only) | **Remove node** drops that node's edges. **Connect** replaces an edge with the same source and outcome. No control removes a single edge. |
+| Agent role and capabilities | `update_draft` (fields of an Agent node; HTTP/IPC only) | The palette preset sets both when you add the node. The inspector edits only the prompt template. |
+| Closure policy | `update_closure` (HTTP/IPC only) | No control. New drafts use `human`. |
+| Required checks | `update_checks` (HTTP/IPC only) | No control. |
+| `execute_check` | run action (HTTP, IPC, MCP) | No control. Runs one pinned check in the story worktree. |
+| `record_integration` | run action (HTTP, IPC, MCP) | No control. Records a completed merge. |
+| `recertify_canonical` | run action (HTTP, IPC, MCP) | No control. |
 
 
 ### Workflow story policy (slice D)
