@@ -3946,3 +3946,27 @@ fn guarded_keepalive_serializes_user_input_through_bookkeeping() {
         "draft"
     );
 }
+
+/// Catches: a hostile display name carrying control bytes or markup reaching the
+/// recipient's composer, and an unusable name leaving the sender unidentified.
+#[test]
+fn urgent_notice_label_uses_a_sanitized_name_and_falls_back_to_the_uuid() {
+    let uuid = "550e8400-e29b-41d4-a716-446655440a01";
+    assert_eq!(urgent_notice_sender_label(uuid, "tuic-2144"), "tuic-2144");
+    assert_eq!(
+        urgent_notice_sender_label(uuid, "x\n\x1b[31m<run>`rm`"),
+        "x31mrunrm"
+    );
+    assert_eq!(urgent_notice_sender_label(uuid, "\n\x1b[<>`"), uuid);
+    assert_eq!(urgent_notice_sender_label(uuid, ""), uuid);
+    assert_eq!(
+        urgent_notice_sender_label("not-a-uuid", "  "),
+        "unknown-peer"
+    );
+    assert_eq!(
+        urgent_notice_sender_label(uuid, &"a".repeat(100))
+            .chars()
+            .count(),
+        URGENT_NOTICE_NAME_MAX_CHARS
+    );
+}
