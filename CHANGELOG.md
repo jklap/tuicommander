@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+- Let any live MCP-bound agent send Telegram notifications without taking inbound ownership. Non-owner messages carry a server-derived sender name, are limited to one send per 30 seconds, and route Telegram Replies to the unique live sender; buttons remain owner-only (#2119-d5de).
+
 ## [2.0.0-beta.1] - 2026-10-22
 
 - Keep the terminal mobile composer's bottom safe-area inset inside its painted surface, above the Home Indicator; the separately reported iPhone shell-height band still needs device evidence (#2116-0213).
