@@ -5,6 +5,8 @@ import { githubStore } from "../../stores/github";
 import type { RepositoryState, WorkspaceState } from "../../stores/repositories";
 import { repositoriesStore } from "../../stores/repositories";
 import { type TerminalState, terminalsStore } from "../../stores/terminals";
+import { toastsStore } from "../../stores/toasts";
+import { getSessionConnection } from "../../transportRuntime";
 import { writeClipboard } from "../../utils/clipboard";
 import { _resetMergedActivityAccum, activePrStatus } from "../../utils/mergedPrGrace";
 import { effectiveMergeMethod } from "../../utils/prMerge";
@@ -409,6 +411,114 @@ const CrossRepoChildren: Component<{ parent: TerminalState; repoPath: string }> 
 
 /** Collapsible activity card for the terminals attached to a branch. */
 const BranchTabList: Component<{ terminalIds: string[]; repoPath: string }> = (props) => {
+	const sessionMenu = createContextMenu();
+	const [menuTerminalId, setMenuTerminalId] = createSignal<string | null>(null);
+	type SessionIdentity = {
+		session_id: string;
+		child_pid?: number | null;
+		alias?: string | null;
+		connection_id?: string;
+	};
+	const [identity, setIdentity] = createSignal<SessionIdentity | null>(null);
+	const menuTerminal = () => terminalsStore.get(menuTerminalId() ?? "");
+	const liveSessionId = () => {
+		const term = menuTerminal();
+		return term && term.shellState !== "exited" && !term.suspended ? term.sessionId : null;
+	};
+	const readIdentity = async (sessionId: string) => {
+		const connectionId = getSessionConnection(sessionId);
+		const rows = await invoke<SessionIdentity[]>("list_active_sessions");
+		return rows.find((row) => row.session_id === sessionId && row.connection_id === connectionId) ?? null;
+	};
+	createEffect(() => {
+		setIdentity(null);
+		if (!sessionMenu.visible()) return;
+		const sessionId = liveSessionId();
+		if (!sessionId) return;
+		let cancelled = false;
+		onCleanup(() => {
+			cancelled = true;
+		});
+		void readIdentity(sessionId)
+			.then((row) => {
+				if (!cancelled) setIdentity(row);
+			})
+			.catch((error) => appLogger.warn("app", "Could not read session identifiers", error));
+	});
+	const copyId = async (kind: "session" | "process" | "alias") => {
+		const sessionId = menuTerminal()?.sessionId;
+		if (!sessionId) return;
+		try {
+			const row = kind !== "session" && liveSessionId() === sessionId ? await readIdentity(sessionId) : null;
+			const value = kind === "session" ? sessionId : kind === "process" ? row?.child_pid : row?.alias;
+			if (value == null || value === "")
+				throw new Error(t("sidebar.identifierUnavailable", "Session identifier unavailable"));
+			await writeClipboard(String(value));
+			toastsStore.add(
+				kind === "process"
+					? t("sidebar.processIdCopied", "Process ID copied")
+					: kind === "alias"
+						? t("sidebar.aliasCopied", "Alias copied")
+						: t("sidebar.sessionIdCopied", "Session ID copied"),
+				String(value),
+				"info",
+				false,
+				undefined,
+				undefined,
+				undefined,
+				undefined,
+				false,
+			);
+		} catch (error) {
+			toastsStore.add(
+				kind === "process"
+					? t("sidebar.copyProcessIdFailed", "Could not copy process ID")
+					: kind === "alias"
+						? t("sidebar.copyAliasFailed", "Could not copy alias")
+						: t("sidebar.copySessionIdFailed", "Could not copy session ID"),
+				String(error),
+				"error",
+				false,
+				undefined,
+				undefined,
+				undefined,
+				undefined,
+				false,
+			);
+		}
+	};
+	const sessionMenuItems = (): ContextMenuItem[] => [
+		{
+			label: t("sidebar.copySessionId", "Copy session ID"),
+			title: menuTerminal()?.sessionId ?? undefined,
+			disabled: !menuTerminal()?.sessionId,
+			action: () => {
+				void copyId("session");
+			},
+		},
+		...(liveSessionId() && identity()?.child_pid != null
+			? [
+					{
+						label: t("sidebar.copyProcessId", "Copy process ID"),
+						title: String(identity()!.child_pid),
+						action: () => {
+							void copyId("process");
+						},
+					},
+				]
+			: []),
+		...(liveSessionId() && identity()?.alias
+			? [
+					{
+						label: t("sidebar.copyAlias", "Copy alias"),
+						title: identity()!.alias!,
+						action: () => {
+							void copyId("alias");
+						},
+					},
+				]
+			: []),
+	];
 	const density = useSidebarDensity();
 	const rich = () => density() === "rich";
 	// Only rich ticks; compact reads the age once per render, as it always did.
@@ -526,6 +636,11 @@ const BranchTabList: Component<{ terminalIds: string[]; repoPath: string }> = (p
 								nested && s.branchTabNested,
 							)}
 							onClick={() => navigateToTerminal(id)}
+							onContextMenu={(event) => {
+								event.stopPropagation();
+								setMenuTerminalId(id);
+								sessionMenu.open(event);
+							}}
 							aria-label={accessibleLabel()}
 							data-tooltip={[
 								rich() ? accessibleLabel() : `${t().name} · ${agentTooltip(t())}`,
@@ -558,7 +673,12 @@ const BranchTabList: Component<{ terminalIds: string[]; repoPath: string }> = (p
 									<SubAgentIcon parent={parent()} class={s.branchSubAgentTag} iconClass={s.branchSubAgentIcon} />
 								)}
 							</Show>
-							<span class={s.branchAgentTime}>{compactActivityAge(t().lastActivityAt, clock())}</span>
+							<Show when={t().abandonedSinceMs}>
+								<span class={s.branchAgentActivity}>Abandoned</span>
+							</Show>
+							<span class={s.branchAgentTime}>
+								{compactActivityAge(t().abandonedSinceMs ?? t().lastActivityAt, clock())}
+							</span>
 							{/* Rich: what the agent is doing, in words, under the tab title. */}
 							<Show when={rich() && agentRow(t()).state === "working" ? agentRow(t()) : null}>
 								{(facts) => (
@@ -590,6 +710,13 @@ const BranchTabList: Component<{ terminalIds: string[]; repoPath: string }> = (p
 	};
 	return (
 		<div class={s.branchTabList} role="group" aria-label="Terminal tabs">
+			<ContextMenu
+				items={sessionMenuItems()}
+				x={sessionMenu.position().x}
+				y={sessionMenu.position().y}
+				visible={sessionMenu.visible()}
+				onClose={sessionMenu.close}
+			/>
 			<For each={topLevel()}>{(id) => renderTab(id, false)}</For>
 			<Show when={idleIds().length > 0}>
 				<button
@@ -638,8 +765,8 @@ export const BranchItem: Component<{
 	const ctxMenu = createContextMenu();
 	// Long press only. The agent list on right click waits for Boss's approval of a
 	// change to a sidebar click (AGENTS.md "Sidebar clicks"), so right click keeps
-	// opening the row menu. Shell rows have no agents, so a long press does nothing.
-	const agentLaunchMenu = createAgentLaunchMenu(() => (props.branch.isShell ? [] : (props.agentMenuItems?.() ?? [])), {
+	// opening the row menu. Agent launches also work in non-git shell folders.
+	const agentLaunchMenu = createAgentLaunchMenu(() => props.agentMenuItems?.() ?? [], {
 		rightClick: false,
 	});
 
@@ -797,12 +924,10 @@ export const BranchItem: Component<{
 			quick.push({ label: "Open in GitHub", action: () => handleOpenUrl(prUrl || branchUrl) });
 		}
 		quick.push({ label: "Add Terminal", action: props.onAddTerminal });
-		if (!isShell) {
-			const agentItems = props.agentMenuItems?.();
-			if (agentItems && agentItems.length > 0) quick.push(...agentItems);
-		}
+		const agentItems = props.agentMenuItems?.();
+		if (agentItems && agentItems.length > 0) quick.push(...agentItems);
 		// "Switch Branch" submenu — only on the main worktree row.
-		if (isMainWorktree && props.onSwitchBranch && props.switchBranchList && props.currentBranch) {
+		if (hasBranch && isMainWorktree && props.onSwitchBranch && props.switchBranchList && props.currentBranch) {
 			const switchBranch = props.onSwitchBranch;
 			const current = props.currentBranch();
 			const branchList = props.switchBranchList();
@@ -854,7 +979,7 @@ export const BranchItem: Component<{
 
 		// Group 3 — PR / workflow actions (plugin + built-in smart prompts).
 		const workflow: ContextMenuItem[] = [];
-		const branchActions = contextMenuActionsStore.getContextActions("branch");
+		const branchActions = isShell ? [] : contextMenuActionsStore.getContextActions("branch");
 		if (branchActions.length > 0) {
 			const ctx = { target: "branch" as const, repoPath: props.repoPath, branchName: props.branch.branchName };
 			for (const a of branchActions) {

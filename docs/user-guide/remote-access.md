@@ -98,6 +98,8 @@ In **Sessions → New session**, the Agent picker lists installed CLI agents fro
 
 ### Add to Home Screen
 
+The terminal composer keeps the bottom safe-area inset inside its background so its controls stay above the Home Indicator. Shell height and position still follow `visualViewport.height` and `visualViewport.offsetTop` when the keyboard opens. This padding change does not establish the cause of a separate empty band below the shell; capture a full-screen device screenshot before reloading if that band occurs.
+
 The mobile UI supports PWA (Progressive Web App) installation:
 
 - **iOS Safari**: Tap Share → "Add to Home Screen"
@@ -106,6 +108,8 @@ The mobile UI supports PWA (Progressive Web App) installation:
 The app launches in standalone mode (no browser chrome) for a native-like experience.
 
 **The title can look faded on an iPhone.** In the installed PWA the "TUICommander" title in the top bar may look soft or faded, strongest at the top edge. We attribute this to the iOS status-bar edge effect, not to the app. Evidence: in a 390x844 mobile emulation with a 62 px top safe-area inset, the computed styles of the title and every ancestor up to `html` have `opacity: 1`, and `filter`, `backdrop-filter`, `text-shadow`, `mask-image` and `mix-blend-mode` all `none`, so nothing in our CSS fades it. Limit: this is an inference from the absence of a CSS cause; no iPhone layer inspection was possible, so it is not confirmed on a device.
+
+Long file paths in mobile **CLI** output wrap inline with the surrounding text and keep the line's hanging indent. Tap a path to open it, or focus it and press Enter or Space.
 
 At phone widths up to 430 px, the session header keeps CLI/Chat one tap away.
 Open **More session actions** for **Start voice call** / **Stop voice call** (with the same handset icon as the header) and session tasks. Tablet
@@ -879,3 +883,7 @@ Typed Ego startup login returns a session on the explicitly selected daemon.
 Open that session in the owning client's terminal view to authenticate, then
 request status and refresh providers on that same daemon. Never read a local
 credential owner to infer the result of remote authentication.
+
+### Remote session closure
+
+MCP `session action=close` accepts a remote `connection_id` or connection-qualified session reference. The host resolves aliases on the owning daemon and sends authenticated `DELETE /sessions/{id}`. The caller's own PTY remains protected from self-close, and non-loopback MCP callers cannot invoke destructive close actions. A disconnected connection reports an error; it never falls back to a local session. HTTP DELETE and local MCP close use the same teardown, session-closed events and retained output tombstone. Repeating a close of a retained tombstone succeeds. Explicit close remains user-directed and is not limited to abandoned shells.

@@ -3351,7 +3351,10 @@ mod tests {
         /// track those colours — a guess would be worse than silence here.
         #[test]
         fn stays_silent_for_indexed_palette_queries() {
-            assert!(replies_to(b"\x1b]4;3;?\x1b\\", palette()).is_empty());
+            assert_eq!(
+                replies_to(b"\x1b]4;3;?\x1b\\", palette()),
+                [] as [std::string::String; 0]
+            );
         }
 
         #[test]
@@ -4725,7 +4728,7 @@ mod tests {
     fn process_simple_text() {
         let mut grid = TerminalGrid::new(24, 80, 1000);
         let changed = grid.process(b"hello world");
-        assert!(!changed.is_empty());
+        assert_ne!(changed, [] as [crate::vt_log::ChangedRow; 0]);
         let first = &changed[0];
         assert_eq!(first.row_index, 0);
         assert_eq!(first.text, "hello world");
@@ -4736,7 +4739,7 @@ mod tests {
         let mut grid = TerminalGrid::new(24, 80, 1000);
         let _ = grid.process(b"hello");
         let changed = grid.process(b"");
-        assert!(changed.is_empty());
+        assert_eq!(changed, [] as [crate::vt_log::ChangedRow; 0]);
     }
 
     #[test]
@@ -4873,7 +4876,7 @@ mod tests {
         let _ = grid.process(b"hello");
         // Move cursor to beginning of line and overwrite
         let changed = grid.process(b"\rworld");
-        assert!(!changed.is_empty());
+        assert_ne!(changed, [] as [crate::vt_log::ChangedRow; 0]);
         assert_eq!(changed[0].text, "world");
     }
 
@@ -4982,7 +4985,10 @@ mod tests {
         let mut grid = TerminalGrid::new(2, 10, 0);
         let _ = grid.process(b"cafe");
         let plain = grid.serialize_dirty_rows();
-        assert!(decode_cell_extras(&plain).is_empty());
+        assert_eq!(
+            decode_cell_extras(&plain),
+            [] as [(u16, u16, std::vec::Vec<u32>); 0]
+        );
 
         let changed = grid.process("\u{0301}\u{0327}".as_bytes());
         assert_eq!(
@@ -5015,7 +5021,10 @@ mod tests {
 
         let _ = grid.process(b"\x1b[1;10HX");
         let partial = grid.serialize_dirty_rows();
-        assert!(decode_cell_extras(&partial).is_empty());
+        assert_eq!(
+            decode_cell_extras(&partial),
+            [] as [(u16, u16, std::vec::Vec<u32>); 0]
+        );
 
         assert_eq!(
             decode_cell_extras(&grid.serialize_full_frame()),
@@ -5101,7 +5110,7 @@ mod tests {
         let mut grid = TerminalGrid::new(5, 10, 0);
         let _ = grid.process(b"Hi");
         let buf = grid.serialize_dirty_rows();
-        assert!(!buf.is_empty());
+        assert_ne!(buf, [] as [u8; 0]);
 
         let (num_rows, cursor_row, cursor_col, cursor_visible) = decode_header(&buf);
         assert!(num_rows >= 1, "at least row 0 dirty");
@@ -5292,7 +5301,7 @@ mod tests {
         let _ = grid.process(b"\x1b[?1000h\x1b[?1006h\x1b[?1004h");
         let _ = grid.process(b"X");
         let buf = grid.serialize_dirty_rows();
-        assert!(!buf.is_empty());
+        assert_ne!(buf, [] as [u8; 0]);
 
         // frame_flags is at offset 17 in the 22-byte header
         let frame_flags = buf[TEST_FRAME_FLAGS_OFFSET];
@@ -6208,14 +6217,14 @@ mod tests {
         let _ = grid.process(b"line1\r\nline2\r\nline3\r\nline4\r\nline5");
         let count = grid.scrollback_count();
         let lines = grid.read_scrollback_lines(count + 100, 10);
-        assert!(lines.is_empty());
+        assert_eq!(lines, [] as [std::string::String; 0]);
     }
 
     #[test]
     fn read_scrollback_no_history_returns_empty() {
         let grid = TerminalGrid::new(24, 80, 100);
         let lines = grid.read_scrollback_lines(0, 10);
-        assert!(lines.is_empty());
+        assert_eq!(lines, [] as [std::string::String; 0]);
     }
 
     #[test]
@@ -6904,7 +6913,7 @@ mod tests {
         // ESC[38;5;4m = indexed fg 4 (blue), ESC[48;5;3m = indexed bg 3 (yellow)
         let _ = grid.process(b"\x1b[38;5;4m\x1b[48;5;3mABCDEFGHIJKLMNO\x1b[0m");
         let buf = grid.serialize_dirty_rows();
-        assert!(!buf.is_empty());
+        assert_ne!(buf, [] as [u8; 0]);
 
         let off0 = find_cell_offset(&buf, 0, 0).expect("row 0 present");
         let (ch0, fg_r0, fg_g0, fg_b0, bg_r0, bg_g0, bg_b0, attrs0) = decode_cell(&buf, off0);
@@ -6943,7 +6952,7 @@ mod tests {
         let mut grid = TerminalGrid::new(5, 10, 0);
         let _ = grid.process(b"\x1b[34m\x1b[43mABCDEFGHIJKLMNO\x1b[0m");
         let buf = grid.serialize_dirty_rows();
-        assert!(!buf.is_empty());
+        assert_ne!(buf, [] as [u8; 0]);
 
         let off0 = find_cell_offset(&buf, 0, 0).expect("row 0 present");
         let (ch0, fg_r0, fg_g0, fg_b0, bg_r0, bg_g0, bg_b0, attrs0) = decode_cell(&buf, off0);
@@ -6982,7 +6991,7 @@ mod tests {
         let mut grid = TerminalGrid::new(5, 10, 0);
         let _ = grid.process(b"\x1b[1;34m\x1b[43mABCDEFGHIJKLMNO\x1b[0m");
         let buf = grid.serialize_dirty_rows();
-        assert!(!buf.is_empty());
+        assert_ne!(buf, [] as [u8; 0]);
 
         let off0 = find_cell_offset(&buf, 0, 0).expect("row 0 present");
         let (ch0, fg_r0, fg_g0, fg_b0, _, _, _, attrs0) = decode_cell(&buf, off0);
@@ -7020,7 +7029,7 @@ mod tests {
         // Scroll up to view history
         grid.scroll(5);
         let buf = grid.serialize_dirty_rows();
-        assert!(!buf.is_empty());
+        assert_ne!(buf, [] as [u8; 0]);
 
         // Find cells — the reflowed content should be in the first rows
         // Row 0 should have the first 10 chars, row 1 the remaining 5
@@ -7072,7 +7081,7 @@ mod tests {
             \x1b[49m\x1b[33m\xee\x82\xb0\x1b[39m ";
         let _ = grid.process(redraw);
         let buf = grid.serialize_dirty_rows();
-        assert!(!buf.is_empty());
+        assert_ne!(buf, [] as [u8; 0]);
 
         // The prompt is ~82 chars. At 60 cols, it wraps.
         // Find 'P' of "POC-00001" in the git segment (skip past "DGQT92CJFP" at col ~25)
@@ -7164,7 +7173,7 @@ mod tests {
             \x1b[49m\x1b[33m\xee\x82\xb0\x1b[39m ";
         let _ = grid.process(redraw);
         let buf = grid.serialize_dirty_rows();
-        assert!(!buf.is_empty());
+        assert_ne!(buf, [] as [u8; 0]);
 
         // Find git segment cells on both rows — prompt wraps around col 50-60
         // Row 1: start of git segment text ("POC-00001...")

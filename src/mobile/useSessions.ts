@@ -15,6 +15,7 @@ export interface SessionState {
 	usage_limit_pct?: number;
 	shell_state?: string;
 	agent_state?: string;
+	abandoned_since_ms?: number;
 	last_activity_ms: number;
 	agent_type?: string;
 	last_error?: string;
@@ -57,6 +58,8 @@ export interface ChoiceOption {
 
 /** Session info returned by GET /sessions (matches Rust SessionInfo) */
 export interface SessionInfo {
+	/** Live PTY child PID; omitted when unavailable or exited. */
+	child_pid?: number;
 	session_id: string;
 	/** A completion this phone has not opened yet; derived from agent_state. */
 	unseen?: boolean;

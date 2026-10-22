@@ -1200,14 +1200,6 @@ describe("transport", () => {
 			expect(result.transform?.({ text: "$ " })).toBe("$ ");
 		});
 
-		it("maps terminal_hyperlink_at to GET with transform", () => {
-			const result = mapCommandToHttp("terminal_hyperlink_at", { sessionId: "s1", row: 2, col: 10 });
-			expect(result.method).toBe("GET");
-			expect(result.path).toBe("/sessions/s1/terminal/hyperlink?row=2&col=10");
-			expect(result.transform?.({ url: "https://example.com" })).toBe("https://example.com");
-			expect(result.transform?.({ url: null })).toBeNull();
-		});
-
 		it("maps terminal_request_frame to POST /sessions/{id}/terminal/request-frame", () => {
 			const result = mapCommandToHttp("terminal_request_frame", { sessionId: "s1" });
 			expect(result.method).toBe("POST");
@@ -1882,7 +1874,12 @@ describe("transport", () => {
 			expect(mapCommandToHttp("github_disconnect", {}).path).toBe("/github/auth/disconnect");
 			expect(mapCommandToHttp("github_auth_status", {}).path).toBe("/github/auth/status");
 			expect(mapCommandToHttp("github_auth_status", {}).method).toBe("GET");
-			expect(mapCommandToHttp("github_diagnostics", {}).path).toBe("/github/diagnostics");
+			expect(mapCommandToHttp("github_diagnostics", {})).toEqual({ method: "GET", path: "/github/diagnostics" });
+			// Catches manual refresh being mapped to the read-only diagnostics route.
+			expect(mapCommandToHttp("github_diagnostics", { refresh: true })).toEqual({
+				method: "POST",
+				path: "/github/diagnostics",
+			});
 		});
 
 		// Catches: the {request} wrapper being forwarded as the body, or the launch reaching a different endpoint.

@@ -298,6 +298,9 @@ handler, which is what the technique avoids.
 GET /sessions
 ```
 
+Session rows include optional `child_pid`: the live PTY child PID, not the foreground agent leaf. It is omitted when unavailable or exited. `list_active_sessions` returns the same field over desktop IPC; mirrored rows retain their owning `connection_id`.
+
+
 Returns array of active session info (ID, cwd, worktree path, branch,
 `display_name`, `display_name_is_custom`, `display_name_from_spawn`,
 `is_remote`, optional `pty_description`, optional terminal `alias`, optional
@@ -3332,7 +3335,7 @@ Telegram replies now use TUIC-driven receipt (👀), working (👨‍💻), wait
 
 ### Styled terminal log wrap boundaries
 
-Rows returned by session `format=log` output and the `format=log|text` WebSocket include `wrapped: boolean` alongside `spans` and `cols`. True means the next row continues this logical line: concatenate span text verbatim, with no added space or newline. False means a hard line boundary. A finalized log row can wrap into the first current-screen row. Wrapped rows preserve real trailing spaces. The field is also present in the desktop `read_vt_log` response. MCP session text output applies these boundaries before redaction.
+Rows returned by session `format=log` output and the `format=log|text` WebSocket include `wrapped: boolean` alongside `spans` and `cols`. True means the next row continues this logical line: concatenate span text verbatim, with no added space or newline. False means a hard line boundary. A finalized log row can wrap into the first current-screen row. Wrapped rows preserve real trailing spaces. MCP session text output applies these boundaries before redaction.
 
 ### Settings change stream
 
@@ -3499,3 +3502,19 @@ clipped Claude form. Its `↑`, `↓`, and `↵` option keys denote previous, ne
 and select-highlighted controls, not native answer labels. Send one Up, Down, or
 Enter respectively; never append Enter to a navigation key. The same payload
 and semantics apply to desktop IPC state.
+
+### Remote session closure
+
+MCP `session action=close` accepts a remote `connection_id` or connection-qualified session reference. The host resolves aliases on the owning daemon and sends authenticated `DELETE /sessions/{id}`. The caller's own PTY remains protected from self-close, and non-loopback MCP callers cannot invoke destructive close actions. A disconnected connection reports an error; it never falls back to a local session. HTTP DELETE and local MCP close use the same teardown, session-closed events and retained output tombstone. Repeating a close of a retained tombstone succeeds. Explicit close remains user-directed and is not limited to abandoned shells.
+
+GitHub diagnostics (`GET /github/diagnostics`) also returns `repo_access_errors`:
+owner/account/host groups with `repos: [{repo, reason, message}]` and an
+optional `oauth_app_url` for every github.com OAuth group, regardless of reason.
+`reason` is `not_found`, `forbidden` or `unknown`. Messages are the exact per-alias GraphQL errors.
+Only confirmed root `NOT_FOUND` responses enter `repos_not_found` and its 24-hour
+exclusion. Other denials are eligible for the next monitoring poll.
+
+Manual GitHub diagnostics refresh uses `POST /github/diagnostics` (no body). It
+clears the NOT_FOUND cooldown for all accounts and returns the same diagnostics
+DTO. `GET /github/diagnostics` remains read-only. This maps to
+`github_diagnostics` with `refresh: true` over IPC; omitted or false is read-only.

@@ -208,6 +208,8 @@ pub(crate) mod tunnels;
 #[cfg(feature = "desktop")]
 mod updater;
 pub(crate) mod webview_recovery;
+#[cfg(feature = "desktop")]
+pub(crate) mod webview_url;
 pub(crate) mod workflows;
 pub(crate) mod workitem_links;
 pub(crate) mod worktree;
@@ -2128,7 +2130,6 @@ pub fn run(mut context: tauri::Context<tauri::Wry>) {
             pty::force_retry_provider_recovery_command,
             pty::write_pty,
             pty::write_pty_parts,
-            attachments::upload_attachment,
             pty::get_input_buffer_content,
             pty::send_agent_input_if_empty,
             pty::resize_pty,
@@ -2171,7 +2172,6 @@ pub fn run(mut context: tauri::Context<tauri::Wry>) {
             pty::list_queued_agent_commands,
             pty::remove_queued_agent_command,
             pty::get_process_stats,
-            pty::read_vt_log,
             pty::subscribe_terminal_grid,
             pty::unsubscribe_terminal_grid,
             pty::terminal_request_frame,
@@ -2184,7 +2184,6 @@ pub fn run(mut context: tauri::Context<tauri::Wry>) {
             pty::terminal_scroll_to_anchor,
             pty::terminal_styled_rows,
             pty::terminal_scroll_to,
-            pty::terminal_get_block_rows,
             pty::terminal_scroll_info,
             pty::terminal_search,
             pty::terminal_search_buffer,
@@ -2193,7 +2192,6 @@ pub fn run(mut context: tauri::Context<tauri::Wry>) {
             pty::terminal_get_selection_text,
             pty::terminal_get_lines,
             pty::terminal_get_cursor_line,
-            pty::terminal_hyperlink_at,
             pty::terminal_hyperlink_span,
             pty::set_session_visible,
             pty::set_session_name,
@@ -2202,7 +2200,6 @@ pub fn run(mut context: tauri::Context<tauri::Wry>) {
             pty::get_session_foreground_process,
             pty::get_session_leaf_pid,
             pty::has_foreground_process,
-            pty::debug_agent_detection,
             pty_capture::get_pty_capture,
             pty_capture::set_pty_capture,
             load_config,
@@ -2249,7 +2246,6 @@ pub fn run(mut context: tauri::Context<tauri::Wry>) {
             git::check_is_main_branch,
             git::get_initials,
             git::run_git_command,
-            git::get_git_panel_context,
             git::get_working_tree_status,
             git::git_stage_files,
             git::git_unstage_files,
@@ -2712,7 +2708,6 @@ pub fn run(mut context: tauri::Context<tauri::Wry>) {
                         // End every ego AI Chat started: `std::process::exit`
                         // skips the destructors that would kill them.
                         tauri::async_runtime::block_on(state.acp.shutdown_all());
-                        crate::ai_agent::knowledge::flush_dirty(state.inner());
                     }
                     // Flush the last buffered log lines to disk before the
                     // process exits (story #672-c1a3) — the lines a shutdown
@@ -2756,7 +2751,6 @@ fn spawn_background_tasks(state: &Arc<AppState>) {
     // loop, and the CPU watchdog must not be able to hang behind it.
     #[cfg(feature = "desktop")]
     webview_recovery::spawn(state.clone());
-    ai_agent::knowledge::spawn_persist_task(state.clone());
 }
 
 /// Interactive CLI to set username + password for headless auth.
@@ -2846,11 +2840,6 @@ fn spawn_daemon_background_tasks(state: &Arc<AppState>) {
     //
     // - `webview_recovery::spawn` — `#[cfg(feature = "desktop")]`, so it does
     //   not exist in this build. There is no WebView whose document can be lost.
-    // - `ai_agent::knowledge::spawn_persist_task` — `build_remote_router`
-    //   serves no route that exposes command knowledge. Deleting the embedded
-    //   AI engine (#784-0aec) took its last reader too, so the desktop build
-    //   keeps recording while nothing consumes it yet; the daemon has no reason
-    //   to write files no one asks it for.
 }
 
 /// Run the tuic-remote server.
@@ -3265,12 +3254,12 @@ mod tests {
         assert!(state.grid.gates.is_empty());
         assert!(!crate::pty::grid_has_subscriber(&state, "one"));
         assert!(!crate::pty::grid_has_subscriber(&state, "two"));
-        assert!(
+        assert_eq!(
             state
                 .plugin_output_watchers
                 .read()
-                .matching_ids("old document")
-                .is_empty()
+                .matching_ids("old document"),
+            [] as [std::string::String; 0]
         );
     }
 
@@ -3297,7 +3286,10 @@ mod tests {
         assert!(crate::pty::grid_has_subscriber(&state, "main-terminal"));
         let watchers = state.plugin_output_watchers.read();
         assert_eq!(watchers.matching_ids("main line"), vec!["main-client/w"]);
-        assert!(watchers.matching_ids("panel line").is_empty());
+        assert_eq!(
+            watchers.matching_ids("panel line"),
+            [] as [std::string::String; 0]
+        );
     }
 
     #[cfg(feature = "desktop")]
@@ -3366,7 +3358,10 @@ mod tests {
         let watchers = state.plugin_output_watchers.read();
         assert_eq!(watchers.matching_ids("browser line"), vec!["browser/w"]);
         assert_eq!(watchers.matching_ids("new line"), vec!["new-document/w"]);
-        assert!(watchers.matching_ids("old line").is_empty());
+        assert_eq!(
+            watchers.matching_ids("old line"),
+            [] as [std::string::String; 0]
+        );
     }
 
     #[cfg(feature = "desktop")]
@@ -3385,7 +3380,10 @@ mod tests {
         }
         let watchers = state.plugin_output_watchers.read();
         for i in 0..9 {
-            assert!(watchers.matching_ids(&format!("line-{i}")).is_empty());
+            assert_eq!(
+                watchers.matching_ids(&format!("line-{i}")),
+                [] as [std::string::String; 0]
+            );
         }
         assert_eq!(watchers.matching_ids("line-9"), vec!["document-9/w"]);
     }
@@ -3680,14 +3678,23 @@ mod tests {
             vec!["/b".to_string()]
         );
         // An active repo that is not registered (or parked) warms nothing.
-        assert!(repos_to_prewarm(known(), Some("/gone".to_string()), "active_only").is_empty());
-        assert!(repos_to_prewarm(known(), None, "active_and_switch").is_empty());
+        assert_eq!(
+            repos_to_prewarm(known(), Some("/gone".to_string()), "active_only"),
+            [] as [std::string::String; 0]
+        );
+        assert_eq!(
+            repos_to_prewarm(known(), None, "active_and_switch"),
+            [] as [std::string::String; 0]
+        );
         // `all_sequential` warms every repo, active first so it is ready first.
         assert_eq!(
             repos_to_prewarm(known(), Some("/c".to_string()), "all_sequential"),
             vec!["/c".to_string(), "/b".to_string(), "/a".to_string()]
         );
-        assert!(repos_to_prewarm(Vec::new(), Some("/a".to_string()), "all_sequential").is_empty());
+        assert_eq!(
+            repos_to_prewarm(Vec::new(), Some("/a".to_string()), "all_sequential"),
+            [] as [std::string::String; 0]
+        );
     }
 
     #[test]

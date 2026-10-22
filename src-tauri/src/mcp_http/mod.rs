@@ -1212,10 +1212,6 @@ fn shared_routes() -> Router<Arc<AppState>> {
             get(session::terminal_get_cursor_line),
         )
         .route(
-            "/sessions/{id}/terminal/hyperlink",
-            get(session::terminal_hyperlink_at),
-        )
-        .route(
             "/sessions/{id}/terminal/hyperlink-span",
             get(session::terminal_hyperlink_span),
         )
@@ -1490,7 +1486,6 @@ fn shared_routes() -> Router<Arc<AppState>> {
             "/repo/recent-commits",
             get(git_routes::get_recent_commits_http),
         )
-        .route("/repo/panel-context", get(git_routes::git_panel_context))
         .route("/repo/run-git", post(git_routes::run_git_command_http))
         .route(
             "/repo/working-tree-status",
@@ -1847,7 +1842,7 @@ pub fn build_router(state: Arc<AppState>, remote_auth: bool, mcp_enabled: bool) 
         )
         .route(
             "/github/diagnostics",
-            get(github_routes::github_diagnostics),
+            get(github_routes::github_diagnostics).post(github_routes::github_refresh_diagnostics),
         )
         // Multi-account repo bindings (IPC/HTTP parity). Accounts + repo resolution
         // are gated to desktop below — their impls are #[cfg(feature = "desktop")].
@@ -6573,7 +6568,7 @@ mod tests {
                 // Catches: HTTP status retaining description prefixes while Settings
                 // switches to dedicated, concise native registry summaries.
                 let summary = entry["summary"].as_str().unwrap();
-                assert!(!summary.trim().is_empty());
+                assert_ne!(summary.trim(), "");
                 assert!(summary.chars().count() <= 70);
                 assert!(
                     !definition["description"]
@@ -7394,11 +7389,10 @@ mod tests {
             }),
         )
         .await;
-        assert!(
-            result["error"]
-                .as_str()
-                .unwrap()
-                .contains("workspace_id was renamed to branch")
+        // Catches: a removed alias starts removal without a supported target.
+        assert_eq!(
+            crate::test_support::mcp_argument_constraint(&result, "", "anyOf"),
+            &serde_json::json!([{"required": ["branch"]}, {"required": ["worktree_path"]}])
         );
     }
 
@@ -10016,7 +10010,7 @@ mod tests {
 
         let (removed, retained) = evict_peers_for_reaped_mcp_session(&state, "mcp-3");
         assert_eq!(removed, vec!["ghost".to_string()]);
-        assert!(retained.is_empty());
+        assert_eq!(retained, [] as [std::string::String; 0]);
         assert!(!state.peer_agents.contains_key("ghost"));
         assert!(!state.orchestrator_peers.contains("ghost"));
     }
@@ -10061,8 +10055,8 @@ mod tests {
             .insert("mcp-live".to_string(), live_channel);
 
         let (removed, retained) = evict_peers_for_reaped_mcp_session(&state, "mcp-old");
-        assert!(removed.is_empty());
-        assert!(retained.is_empty());
+        assert_eq!(removed, [] as [std::string::String; 0]);
+        assert_eq!(retained, [] as [std::string::String; 0]);
         assert_eq!(
             state.peer_agents.get("shared").unwrap().mcp_session_id,
             "mcp-live"

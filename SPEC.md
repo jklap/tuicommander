@@ -5,10 +5,12 @@ Agent desktop verification (#2086-269b): `make agent-test` uses a dedicated macO
 MCP capability cutover (#2068-63b9): persist `mcp_capabilities`, migrate saved tool denials once with visible unknown-name diagnostics, enforce parent/member restrictions on discovery and dispatch, and remove retired names without aliases. Clients must reconnect and review external allow rules.
 
 Native MCP guidance (#2069-7347): session, agent, repo, ui, voice, telegram and automations expose compact agent-facing action contracts. Their action=help returns every displaced rule from the full native guide. Existing action validation, conditional availability, disabled-tool gates and Settings copy remain unchanged.
+Design Mode optional capture (#1724-fe7e): the extension declares `<all_urls>` only in optional host permissions. **Let agents capture any site** requests that grant from a user click; after consent Chrome capture needs no further action gesture. Without consent, preserve `activeTab` capture and return a typed error naming the option. Capture consent does not grant agent eval or opt into remote error injection. Remote error reads require explicit host consent; the panel confirms actual eval grant origins instead of trusting request success alone.
 UI Design Mode actions (#2067-e708): `ui design_start/stop/status/reload/navigate/screenshot/errors/eval` reuse the Design Mode owner, armed caller/repository checks and extension host grants. Saved `design_mode` denials apply to the grouped actions. The old tool is removed by the 2068 capability cutover; use `ui design_*`.
 
 
 Conditional MCP tools (#2066-516c, conditional portion of #2067-e708): remote requires a live authenticated connected server; voice requires persisted dictation enabled and spoken replies enabled; Telegram requires enabled setup, a bot alias and its private token file. Shared predicates gate listing, search, schema lookup and calls. Owner changes invalidate the catalogue. Configuration does not replace conversation binding, Telegram registration or deployment consent. Design Mode uses grouped `ui design_*` actions after the catalogue cutover.
+- [x] Mobile CLI answer bars occupy a separate gutter outside the text box, including column-zero ego rows, without adding Claude text indentation (#2110-734c).
 - [x] Mobile CLI answers reuse the desktop answer planner and green gutter style instead of displaying protocol speech bubbles; prompts and fenced examples stay literal (#2070-773d).
 
 - [x] Native MCP Settings rows use domain sections without changing tool names, saved disabled values or effective denials (#2063-baa9).
@@ -36,7 +38,7 @@ Agent capture tooling: `scripts/agent_capture/run.py` records real installed CLI
 
 Published story workflows can start in Plans and Stories through the owning daemon. Run history renders graph positions, decisions, evidence and paged event payloads, with explicit graph recovery and cancellation. IPC/HTTP and the generated `workflow action=run` MCP schema share the native run service. Plan start remains visibly unavailable pending plan dispatch. The grouped `workflow` MCP tool exposes typed story, run, proposal_create, report and launch actions through existing service owners. Proposal retries preserve coordinator ownership and proposal-key idempotency. Legacy workflow tool names are removed without aliases; scheduled automations stay separate. `tuic workflow` forwards the same envelope.
 
-**Version:** 2.0.0
+**Version:** 2.0.0-beta.1
 **Last Updated:** 2026-09-16
 
 ## Shared form controls — Implemented (#1815-01c9)
@@ -689,6 +691,7 @@ Some frontend-only stores persist to localStorage:
 - [x] Split pane layout
 - [x] Touch branch action trays: left swipe reveals existing actions; vertical scrolling and desktop hover controls remain unchanged
 - [x] Multi-repository sidebar
+- [x] Sidebar session context menu copies the PTY session ID, live child PID, and owning session-list alias through the shared clipboard path; unknown PID and absent alias entries are hidden.
 - [x] Rich parent-agent links reveal and select live children in other repositories without moving sessions
 - [x] Git diff panel
 - [x] Interactive agent prompts UI
@@ -775,6 +778,7 @@ Some frontend-only stores persist to localStorage:
 - [x] Notes/Ideas: mark as used, badge count in status bar
 - [x] Notes/Ideas: image paste support (Ctrl+V), thumbnails, send absolute paths to terminal
 - [x] Inter-Agent Messaging (`messaging` MCP tool: register, list_peers, send, inbox with channel push + polling fallback)
+- [x] Opt-in interrupting mail (`agent send urgency=interrupt`): safe Esc, ten-second confirmed-idle wait, full input submission and explicit urgent fallback; interrupted tools may leave partial work.
 - [x] Smart Prompts (29 built-in AI prompts with context variable resolution, shell/inject/headless-CLI execution, toolbar dropdown, SmartButtonStrip, Command Palette integration). The `api` execution mode runs one unattended ego turn over ACP (#787-ee50): a session with no MCP server, every question refused, the final text routed to the prompt's output target. Its old executor — a direct provider call from TUICommander — went with the embedded engine (#784-0aec) and did not come back
 - [x] AI Chat panel (`Cmd+Alt+A`) — ego over ACP (#785-58ca), bound to a repository and ACP session rather than a terminal. TUICommander renders the journal, permissions, elicitation forms, plans and session controls while carrying no LLM client or provider API key of its own. The selected session is saved per root and restored after restart; the picker lists ego's durable sessions by title and activity time (#1071-46c9)
 - [x] AI Chat conversation deletion — capability-gated row controls confirm the conversation name, call ACP session/delete, remove successful deletions from tabs and the list, and retain refused conversations with the agent error (#1917).
@@ -793,7 +797,7 @@ Some frontend-only stores persist to localStorage:
 - [x] AI Chat composer polish — text grows to a bounded height and pastes over 200 words stay compact until the full text is sent
 - [x] AI Chat prompt parking — Ctrl+S or the composer control parks text and images per chat tab, swaps or restores them, and returns the parked draft after the next Send
 - [~] AI Agent loop (ReAct) — shipped, then deleted in #784-0aec with no TUICommander-side successor. ego runs its own tool loop and reaches terminals from outside, through the `session` MCP tool family, exactly as Claude Code does
-- [x] Session knowledge store — per-session command outcomes, error→fix pairs, CWD history, TUI apps seen; fed by OSC 133 with silence-timer fallback; persisted with 2s debounce
+- [~] Session knowledge store — removed in #2115-1333 after its last reader was removed; no command-outcome recording or periodic flush remains. Existing history files stay untouched.
 - [x] TUI app detection — alternate-screen tracking classifies terminal as Shell or FullscreenTui with app hint (vim/htop/lazygit/…)
 - [~] Private secret forms (#1435-6e1d) — in-memory zeroizing store, separate field-schema form, exact argv consent, pipe output masking, HTTP nonce entry and inspection gating; security review pending. Headless initiation is not part of this slice. Browser entry uses the existing app origin/auth/transport; origin isolation, enforced TLS and in-flight inspection withholding are accepted omissions.
 - [~] `ai_terminal_*` MCP tools — shipped, then deleted in #f6ed. Two overlapping tool families cost tokens on every turn and made the model guess; external clients now drive terminals through the `session` tool. Secret redaction moved to `session action=output`; the mandatory native confirmation was dropped on purpose (a remote client cannot answer it — `ui action=confirm` can)
@@ -886,7 +890,7 @@ excluded from this protocol and local mail survives hub loss.
 
 ## Telegram channel implementation status (#1438-79b4)
 
-The headless daemon provides native Telegram mail, correlated drafts, exact final replies, done/blocked notices and opaque callbacks. Any MCP-bound TUIC agent opts in with `telegram register`; one volatile registration replaces the previous agent with one mail notice. Registration ends on MCP session end, PTY close or agent exit while its shell remains. No configured agent UUID is required. Without explicit registration, allowed inbound reaches the latest-connected live AI Chat peer; connection order, not selected tab, resolves multiple live chats. Explicit registration always wins. Allowed inbound with neither kind of agent replies "No agent is listening. Ask an agent in TUICommander to register for Telegram." and drops; strangers stay silent. Only the cursor persists, so restart may lose unread mail and requires registration again. Single-destination sends and private token/allowlist authorization remain. See [Telegram channel](docs/design/telegram-channel.md). Live mint deployment remains pending.
+The headless daemon provides native Telegram mail, correlated drafts, exact final replies, done/blocked notices and opaque callbacks. Any MCP-bound TUIC agent opts in with `telegram register`; one volatile registration replaces the previous agent with one mail notice. Registration ends on MCP session end, PTY close or agent exit while its shell remains. No configured agent UUID is required. Without explicit registration, allowed inbound reaches the latest-connected live AI Chat peer; connection order, not selected tab, resolves multiple live chats. Explicit registration always wins. Allowed inbound with neither kind of agent replies "No agent is listening. Ask an agent in TUICommander to register for Telegram." and drops; strangers stay silent. Only the cursor persists, so restart may lose unread mail and requires registration again. Any live MCP-bound agent may send without registration or changing inbound ownership. Non-owner sends have server-derived name prefixes on every chunk, owner-only buttons, and a 30-second per-peer interval. Telegram Replies select the unique live exact-name peer from replied-to text, otherwise the inbound owner; no message-ID cache is retained. Owner text remains byte-exact, including leading brackets. Single-destination sends and private token/allowlist authorization remain. See [Telegram channel](docs/design/telegram-channel.md). Live mint deployment remains pending.
 
 Workflow safety: pinned checks own process trees and stop on timeout, run cancellation, and shutdown. Operator decisions and workflow policy mutations require host Human authority (desktop IPC or credential-authenticated HTTP). Workflow plan Done requires current integration evidence for every approved story; stale canonical refs reopen its derived state until recertification.
 
@@ -1324,3 +1328,11 @@ Consumer retry enforcement remains a separate live ego verification requirement.
 Implemented (#2023-54c4): mobile Settings has separate Terminal and Chat controls with smaller/larger buttons and current values, without explanatory text. Each preference has its own localStorage key and 10–24 px range with 1 px steps. The existing defaults stay 14 px for CLI output and Chat body text. Chat changes apply only within Session Chat and AI Chat transcripts. Composers, UI chrome, desktop fonts and other devices are unchanged. CLI rows rewrap locally without resizing the shared PTY and keep the visible row when scrolled back.
 
 Mobile offers the **Chat** tab only when the host has a configured ego executable, using the same availability predicate as desktop. Host settings changes update the tab without reloading. Removing ego configuration returns an open Chat view to **Sessions**; unavailable saved Chat links also stay on **Sessions**.
+
+### Abandoned shells
+
+Desktop sidebar session rows and mobile session cards mark a parentless plain shell as **Abandoned** after one idle hour and show its idle age. The five-second backend sweep requires a fresh OS process inventory: the PTY child must be an interactive shell with no child processes. An unknown inventory, script, foreground command, background child, detached TUIC job, managed identity, live child session, pending input or keep-open hold prevents closure. Unsupported or incomplete OS process observations fail closed.
+
+Settings → Agents → Idle agent hibernation (Expert Mode) includes **Close abandoned shells after (hours)** (`agents.abandoned_shell_hours`). The machine-owned value defaults to **0 (off)**; whole hours from 1 to 65535 enable closure. Idle age is measured from the most recent input, output or semantic activity, including elapsed time while the machine sleeps. Closure rechecks the process inventory and activity at the destructive boundary, and uses the normal session close/tombstone path. The sweep can lag the threshold by one five-second tick. A remote daemon applies its own setting, not the desktop host's value.
+
+GitHub Settings preserves per-alias API access errors by owner/account. Only explicit root NOT_FOUND responses receive the 24-hour exclusion; other denials retry on the normal poll and clear on success.

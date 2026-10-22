@@ -259,11 +259,7 @@ the panel's composer and open it. They write the question; you send it.
 
 ## The session knowledge store
 
-Command outcomes are still recorded per terminal — exit codes from OSC 133 where
-the shell supports it, an `Inferred` outcome from the PTY silence timer where it
-does not — and persist to `<config_dir>/ai-sessions/<session_id>.json`. Nothing
-reads them today. They are kept because the recording has nothing to do with a
-model and re-deriving the history later is impossible.
+The write-only command knowledge store was removed in #2115-1333. TUICommander no longer records or periodically saves command outcomes for AI context. Existing `<config_dir>/ai-sessions/<session_id>.json` files remain untouched. Shell activity and command blocks still use OSC 133 markers.
 
 ## Not here
 

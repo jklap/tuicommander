@@ -2,7 +2,7 @@
 
 ## Prerequisites
 
-The macOS desktop app supports macOS 12 Monterey or later and requires system WebKit updated to Safari 17.4 or later for Mermaid diagrams. The bundle declares macOS 12.0 as its minimum; this does not guarantee that Safari updates are installed. The Rust deployment target stays at 10.15 for binary compilation. Windows uses the Evergreen WebView2 runtime; Linux builds use WebKitGTK 4.1 API packages.
+The macOS desktop app supports macOS 12 Monterey or later and requires system WebKit updated to Safari 17.4 or later for Mermaid diagrams. The bundle declares macOS 12.0 as its minimum; this does not guarantee that Safari updates are installed. `src-tauri/.cargo/config.toml` forces `MACOSX_DEPLOYMENT_TARGET=12.0` for Rust and native dependencies, including WebRTC and whisper.cpp, overriding inherited shell defaults. The Cargo config also forces `CMAKE_OSX_DEPLOYMENT_TARGET=12.0` so whisper.cpp updates existing CMake caches instead of retaining an older target. Make does not set a separate default. `scripts/test-macos-deployment-target.sh` checks both values against the bundle minimum and runs with system Python without extra dependencies. The installed Xcode SDK's libc++ `__configuration/availability.h` warns for macOS deployment targets below 11.0, so 12.0 needs no increase. Windows uses the Evergreen WebView2 runtime; Linux builds use WebKitGTK 4.1 API packages.
 
 - **Node.js 24+** (the repository version is pinned in [`.nvmrc`](https://github.com/sstraus/tuicommander/blob/main/.nvmrc))
 - **Rust** (stable toolchain via rustup)

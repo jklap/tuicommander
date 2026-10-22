@@ -19,6 +19,7 @@ use crate::worktree::{
     WorktreeConfig, WorktreeResult, create_worktree_with_stale_recovery, remove_worktree_internal,
 };
 
+mod bg_wake_diagnostics;
 pub(crate) mod frame_priority;
 mod injection;
 mod lifecycle;
@@ -736,7 +737,6 @@ fn spawn_silence_timer(
                     emit_shell_state(&state, &session_id, "idle");
                     reevaluate_orchestrator_mail_wake(&state, &session_id);
                     flush_pending_injections(&state, &session_id);
-                    record_inferred_outcome_if_no_osc133(&state, &session_id);
                 } else if transition.screen_confirms_idle
                     && !shell_is_busy
                     && queued_command_count(&state, &session_id) > 0
@@ -1334,14 +1334,6 @@ struct ChunkProcessor {
     pub(crate) in_alt_buffer: bool,
     /// Structured terminal mode with nesting depth and app detection.
     terminal_mode: crate::ai_agent::tui_detect::TerminalMode,
-    /// One-shot flag: inject ESC[2J before the next ESC[H cursor-home.
-    /// Set on alt-buffer entry and when content may have shrunk (detected via
-    /// cursor-up ESC[nA with n > previous). Consumed after inject fires.
-    alt_buffer_needs_clear: bool,
-    /// Tracks the largest cursor-up (ESC[nA) value seen since last clear.
-    /// When a new ESC[nA arrives with n < last_cursor_up_n, content has shrunk
-    /// and we need a clear to prevent ghost artifacts.
-    last_cursor_up_n: u16,
     /// Last VtLogBuffer total_lines observed — distinguishes a chunk that
     /// scrolled in new output from one that only repainted existing rows.
     last_vt_log_total: usize,
@@ -1351,11 +1343,6 @@ struct ChunkProcessor {
     startup_deadline: std::time::Instant,
     /// The startup toast is shown once per PTY.
     alt_screen_toasted: bool,
-    /// Command text captured on OSC 133 C — used when the matching D arrives
-    /// to build a `CommandOutcome`. Cleared after D.
-    pending_command: Option<String>,
-    /// `Instant` when OSC 133 C arrived; used for `duration_ms`.
-    pending_command_started: Option<std::time::Instant>,
     /// TUIC_SESSION UUID for this PTY — used to create flag files that
     /// signal the shell wrapper to stop injecting `--session-id`.
     tuic_session: Option<String>,
@@ -1474,14 +1461,10 @@ impl ChunkProcessor {
             gaveup_planfiles: std::collections::HashSet::new(),
             in_alt_buffer: false,
             terminal_mode: crate::ai_agent::tui_detect::TerminalMode::Shell,
-            alt_buffer_needs_clear: false,
-            last_cursor_up_n: 0,
             last_vt_log_total: 0,
             alt_screen_warned: false,
             startup_deadline: std::time::Instant::now() + ALT_SCREEN_STARTUP_WINDOW,
             alt_screen_toasted: false,
-            pending_command: None,
-            pending_command_started: None,
             tuic_session,
             last_session_conflict_mark: None,
             last_agent_block_line: None,
@@ -1502,20 +1485,14 @@ impl ChunkProcessor {
         transition_explicit_shell_state(state, session_id, target, label, true);
     }
 
-    /// Handle a single OSC 133 event from the VTE handler.
-    /// On 'C' captures the command text; on 'D' builds a `CommandOutcome`.
+    /// Apply shell activity transitions from OSC 133 markers.
     fn handle_osc133_event(
         &mut self,
         command: char,
-        params: &str,
+        _params: &str,
         session_id: &str,
         state: &AppState,
     ) {
-        use crate::ai_agent::knowledge::{CommandOutcome, OutcomeClass, classify_error};
-
-        // Deterministic state transitions from shell integration markers.
-        // A = prompt shown (idle), C = command execution started (busy).
-        // These bypass the silence timer entirely when OSC 133 is available.
         match command {
             'A' => {
                 crate::codex_binding::revoke(state, session_id);
@@ -1523,82 +1500,13 @@ impl ChunkProcessor {
             }
             'C' => {
                 transition_explicit_shell_state(state, session_id, SHELL_BUSY, "busy", false);
-                let cmd = state
-                    .session_maps
-                    .input_buffers
-                    .get(session_id)
-                    .map(|b| b.lock().content())
-                    .unwrap_or_default();
-                self.pending_command = Some(cmd);
-                self.pending_command_started = Some(std::time::Instant::now());
-            }
-            'D' => {
-                // A 'D' (command finished) with no preceding 'C' (command
-                // started) means no command actually ran — e.g. Enter on an
-                // empty prompt, where the shell still emits D carrying the
-                // previous command's exit code. Recording it would create a
-                // phantom outcome with an empty command and "unknown" error
-                // type, polluting both the knowledge panel and the agent's
-                // injected prompt. Skip it.
-                if self.pending_command_started.is_none() {
-                    self.pending_command = None;
-                    return;
-                }
-                let exit_code = params.parse::<i32>().unwrap_or(0);
-                let command = self.pending_command.take().unwrap_or_default();
-                let duration_ms = self
-                    .pending_command_started
-                    .take()
-                    .map(|t| t.elapsed().as_millis() as u64)
-                    .unwrap_or(0);
-                let cwd = self.session_cwd.clone().unwrap_or_default();
-                let output_snippet = state
-                    .grid
-                    .vt_log_buffers
-                    .get(session_id)
-                    .map(|b| {
-                        let buf = b.lock();
-                        buf.screen_rows().join("\n")
-                    })
-                    .unwrap_or_default();
-                let mut tail_start = output_snippet.len().saturating_sub(500);
-                while tail_start > 0 && !output_snippet.is_char_boundary(tail_start) {
-                    tail_start += 1;
-                }
-                let output_snippet = output_snippet[tail_start..].to_string();
-
-                let classification = if exit_code == 0 {
-                    OutcomeClass::Success
-                } else if let Some(error_type) = classify_error(&output_snippet) {
-                    OutcomeClass::Error { error_type }
-                } else {
-                    OutcomeClass::Error {
-                        error_type: "unknown".into(),
-                    }
-                };
-
-                let outcome = CommandOutcome {
-                    timestamp: std::time::SystemTime::now()
-                        .duration_since(std::time::UNIX_EPOCH)
-                        .map(|d| d.as_secs())
-                        .unwrap_or(0),
-                    command,
-                    cwd,
-                    exit_code: Some(exit_code),
-                    output_snippet,
-                    classification,
-                    duration_ms,
-                    id: 0,
-                };
-                state.knowledge_entry(session_id).lock().terminal_mode = self.terminal_mode.clone();
-                state.record_outcome(session_id, outcome);
             }
             _ => {}
         }
     }
 
     /// Classify an inline TUI (mouse reporting on the primary screen) the same
-    /// way `transform_xterm` classifies `1049h`. Alt-screen nesting still owns
+    /// way `observe_alt_buffer` classifies `1049h`. Alt-screen nesting still owns
     /// `terminal_mode` once `1049h` has been seen; this only covers the
     /// `grok --no-alt-screen` case that never sends it.
     fn apply_inline_tui_mode(
@@ -1627,55 +1535,15 @@ impl ChunkProcessor {
         }
     }
 
-    /// Colorize `intent:` tokens and apply alternate-buffer fixes on the xterm
-    /// stream. Suggest tokens are NOT concealed here — the frontend's
-    /// `eraseSuggestFromBuffer()` handles that via rAF after xterm renders.
-    fn transform_xterm<'a>(&mut self, data: &'a str) -> Option<std::borrow::Cow<'a, str>> {
-        // Track alternate screen buffer state for the clear-before-home fix below.
+    /// Track terminal mode without changing the bytes sent to output watchers.
+    fn observe_alt_buffer(&mut self, data: &str) {
         if data.contains("\x1b[?1049h") {
             self.in_alt_buffer = true;
-            self.alt_buffer_needs_clear = true;
             self.terminal_mode = self.terminal_mode.on_alt_enter();
         } else if data.contains("\x1b[?1049l") {
             self.in_alt_buffer = false;
-            self.alt_buffer_needs_clear = false;
             self.terminal_mode = self.terminal_mode.on_alt_exit();
         }
-
-        // Detect render-height change in alternate buffer: when Ink's cursor-up
-        // (ESC[nA) value changes, the chrome area may have shifted vertically.
-        // Ink never sends ESC[K (erase to end of line), so rows that were chrome
-        // in the previous render but aren't overwritten in the new one persist as
-        // ghost artifacts — starting from the bottom and expanding upward.
-        if self.in_alt_buffer
-            && let Some(n) = extract_largest_cursor_up(data)
-        {
-            if n != self.last_cursor_up_n && self.last_cursor_up_n > 0 {
-                self.alt_buffer_needs_clear = true;
-            }
-            self.last_cursor_up_n = n;
-        }
-
-        // Inject ESC[2J (clear screen) before the first positioning sequence when
-        // needed. Tries cursor-home (ESC[H) first, then falls back to cursor-up
-        // (ESC[nA). Ink re-renders use cursor-up for repositioning, not cursor-home,
-        // so the fallback is essential — without it the flag accumulates forever.
-        // Borrowed unless an injection actually fires: the overwhelming majority
-        // of chunks pass straight through, and this used to copy every one.
-        if !self.alt_buffer_needs_clear {
-            return Some(std::borrow::Cow::Borrowed(data));
-        }
-        let injected = inject_clear_before_cursor_home(data);
-        if injected.len() != data.len() {
-            self.alt_buffer_needs_clear = false;
-            return Some(std::borrow::Cow::Owned(injected));
-        }
-        let injected = inject_clear_before_cursor_up(data);
-        if injected.len() != data.len() {
-            self.alt_buffer_needs_clear = false;
-            return Some(std::borrow::Cow::Owned(injected));
-        }
-        Some(std::borrow::Cow::Borrowed(data))
     }
 
     /// Resolve a relative plan-file path to absolute using session CWD.
@@ -1786,7 +1654,7 @@ impl ChunkProcessor {
     /// silence state, last_output_ms, and shell state transitions.
     ///
     /// Returns true when the chunk was non-empty, i.e. the caller should hand
-    /// the SAME borrowed bytes to `transform_xterm`. It used to return an owned
+    /// the SAME borrowed bytes to the output watchers. It used to return an owned
     /// copy of the chunk, which allocated and memcpy'd up to 64 KB per PTY read
     /// for a value the caller already held.
     /// `app` is Some for desktop mode (emits Tauri IPC), None for headless.
@@ -3702,196 +3570,6 @@ type VtProcessResult = (
 #[cfg(feature = "dictation")]
 pub use tuic_dictation::continuous::{VoiceHold, VoiceWrite};
 
-/// Detect anomalous ANSI sequences that may cause scroll-jump-to-top or viewport resets.
-/// Returns a list of human-readable labels for each detected sequence.
-/// These are logged as warnings for diagnostic purposes — data is never modified.
-fn detect_anomalous_sequences(data: &str) -> Vec<&'static str> {
-    let bytes = data.as_bytes();
-    let len = bytes.len();
-    let mut found = Vec::new();
-    let mut i = 0;
-
-    while i < len {
-        if bytes[i] == 0x1b && i + 1 < len && bytes[i + 1] == b'[' {
-            i += 2; // skip ESC[
-
-            // Check for ESC[? private mode sequences (alt screen)
-            if i < len && bytes[i] == b'?' {
-                i += 1;
-                let num_start = i;
-                while i < len && bytes[i].is_ascii_digit() {
-                    i += 1;
-                }
-                if i < len {
-                    let num_str = std::str::from_utf8(&bytes[num_start..i]).unwrap_or("");
-                    match (num_str, bytes[i]) {
-                        ("1049", b'h') => found.push("ESC[?1049h (Alt Screen Enter)"),
-                        ("1049", b'l') => found.push("ESC[?1049l (Alt Screen Exit)"),
-                        _ => {}
-                    }
-                    i += 1;
-                }
-                // No continue — let the outer while loop re-evaluate i < len
-            } else {
-                // Parse numeric params: n or n;m
-                let num_start = i;
-                while i < len && (bytes[i].is_ascii_digit() || bytes[i] == b';') {
-                    i += 1;
-                }
-                if i < len {
-                    let params = std::str::from_utf8(&bytes[num_start..i]).unwrap_or("");
-                    match bytes[i] {
-                        b'J' => match params {
-                            "2" => found.push("ESC[2J (Clear Screen)"),
-                            "3" => found.push("ESC[3J (Clear Scrollback)"),
-                            _ => {}
-                        },
-                        b'H' => {
-                            // ESC[H or ESC[1;1H = Cursor Home
-                            if params.is_empty() {
-                                found.push("ESC[H (Cursor Home)");
-                            } else if params == "1;1" {
-                                found.push("ESC[1;1H (Cursor Home)");
-                            }
-                            // Other ESC[n;mH = regular cursor position, not anomalous
-                        }
-                        _ => {}
-                    }
-                    i += 1;
-                }
-            }
-        } else {
-            i += 1;
-        }
-    }
-
-    found
-}
-
-/// Extract the largest ESC[nA (cursor-up) value from `data`.
-/// Ink emits ESC[nA where n equals the previous render height before redrawing.
-/// A decrease in n between consecutive redraws signals content shrinkage.
-fn extract_largest_cursor_up(data: &str) -> Option<u16> {
-    let bytes = data.as_bytes();
-    let len = bytes.len();
-    let mut i = 0;
-    let mut max_n: Option<u16> = None;
-
-    while i < len {
-        if bytes[i] == 0x1b && i + 1 < len && bytes[i + 1] == b'[' {
-            i += 2;
-            let num_start = i;
-            while i < len && bytes[i].is_ascii_digit() {
-                i += 1;
-            }
-            if i < len
-                && bytes[i] == b'A'
-                && i > num_start
-                && let Ok(n) = std::str::from_utf8(&bytes[num_start..i])
-                    .unwrap_or("")
-                    .parse::<u16>()
-            {
-                max_n = Some(max_n.map_or(n, |prev: u16| prev.max(n)));
-            }
-            if i < len {
-                i += 1;
-            }
-        } else {
-            i += 1;
-        }
-    }
-    max_n
-}
-
-/// Inject ESC[2J (clear screen) before the first ESC[H or ESC[1;1H (cursor home) in `data`.
-///
-/// Ink-based TUIs render differentially: they position the cursor at home and overwrite
-/// changed cells but never send ESC[K (erase to end of line). When output shrinks between
-/// redraws, old characters — especially box-drawing separators — persist as ghost artifacts.
-///
-/// Injecting a single ESC[2J before the cursor-home ensures the screen is blank before
-/// the redraw starts. Because xterm.js processes the entire write() atomically (clear +
-/// cursor home + new content happen before the next paint), no intermediate blank frame
-/// is ever rendered to the user.
-///
-/// Only injects once per call (before the first cursor-home) to avoid unnecessary clears
-/// for chunks that contain multiple ESC[H sequences (common in Ink's rapid redraws).
-fn inject_clear_before_cursor_home(data: &str) -> String {
-    let bytes = data.as_bytes();
-    let len = bytes.len();
-    let mut i = 0;
-
-    while i < len {
-        if bytes[i] == 0x1b && i + 1 < len && bytes[i + 1] == b'[' {
-            let seq_start = i;
-            i += 2; // skip ESC[
-            // Parse optional numeric parameters
-            let num_start = i;
-            while i < len && (bytes[i].is_ascii_digit() || bytes[i] == b';') {
-                i += 1;
-            }
-            if i < len && bytes[i] == b'H' {
-                let params = std::str::from_utf8(&bytes[num_start..i]).unwrap_or("");
-                // ESC[H (no params) or ESC[1;1H — both mean cursor home
-                if params.is_empty() || params == "1;1" {
-                    // Inject ESC[2J before this cursor-home sequence
-                    let mut result = String::with_capacity(len + 4);
-                    result.push_str(&data[..seq_start]);
-                    result.push_str("\x1b[2J");
-                    result.push_str(&data[seq_start..]);
-                    return result;
-                }
-            }
-            if i < len {
-                i += 1; // skip command byte
-            }
-        } else {
-            i += 1;
-        }
-    }
-
-    // No cursor-home found — return as-is
-    data.to_string()
-}
-
-/// Inject ESC[2J before the first ESC[nA (cursor-up, n > 0) in `data`.
-///
-/// Fallback for `inject_clear_before_cursor_home`: Ink re-renders reposition via
-/// cursor-up (ESC[nA), not cursor-home (ESC[H). Without this path the
-/// `alt_buffer_needs_clear` flag is set but never consumed, and ghost rows
-/// from previous renders accumulate from the bottom upward.
-fn inject_clear_before_cursor_up(data: &str) -> String {
-    let bytes = data.as_bytes();
-    let len = bytes.len();
-    let mut i = 0;
-
-    while i < len {
-        if bytes[i] == 0x1b && i + 1 < len && bytes[i + 1] == b'[' {
-            let seq_start = i;
-            i += 2; // skip ESC[
-            let num_start = i;
-            while i < len && bytes[i].is_ascii_digit() {
-                i += 1;
-            }
-            if i < len && bytes[i] == b'A' && i > num_start {
-                // ESC[nA with n > 0 — inject ESC[2J before it
-                let mut result = String::with_capacity(len + 4);
-                result.push_str(&data[..seq_start]);
-                result.push_str("\x1b[2J");
-                result.push_str(&data[seq_start..]);
-                return result;
-            }
-            if i < len {
-                i += 1; // skip command byte
-            }
-        } else {
-            i += 1;
-        }
-    }
-
-    data.to_string()
-}
-
 /// Spawn a reader thread that reads from a PTY, processes output, and emits events.
 /// Unified for both desktop (Tauri IPC) and headless (event_bus only) modes.
 /// 1-minute system load average divided by the online CPU count — a measure of
@@ -4421,30 +4099,8 @@ pub(crate) fn spawn_reader_thread(
 
                         process_kitty_actions(&kitty_actions, &session_id, &state);
 
-                        if processor.process_chunk(&data, &silence, &session_id, &state)
-                            && let Some(xterm_data) = processor.transform_xterm(&data)
-                        {
-                            let clamped_data = xterm_data;
-
-                            let agent_active = state
-                                .session_maps
-                                .session_states
-                                .get(&session_id)
-                                .map(|s| s.agent_type.is_some())
-                                .unwrap_or(false);
-                            // Also diagnostic-only: the ESC scan plus
-                            // `detect_anomalous_sequences` ran on every shell-session
-                            // chunk purely to emit a warning nothing acts on.
-                            if crate::cpu_watchdog::diagnostic_mode()
-                                && !processor.in_alt_buffer
-                                && !agent_active
-                                && clamped_data.as_bytes().contains(&0x1b)
-                            {
-                                let anomalies = detect_anomalous_sequences(&clamped_data);
-                                for label in &anomalies {
-                                    tracing::warn!(source = "terminal", session_id = %session_id, "Anomalous ANSI sequence: {label}");
-                                }
-                            }
+                        if processor.process_chunk(&data, &silence, &session_id, &state) {
+                            processor.observe_alt_buffer(&data);
 
                             // Plugin OutputWatcher matching. The canvas renders
                             // from grid frames and never read this text; the only
@@ -4460,7 +4116,7 @@ pub(crate) fn spawn_reader_thread(
                             assemble_watcher_lines(
                                 &state,
                                 &session_id,
-                                &clamped_data,
+                                &data,
                                 &mut watcher_lines,
                                 &watcher_batcher,
                                 false,
@@ -4589,14 +4245,6 @@ pub(crate) fn spawn_reader_thread(
             mark_session_exited(&sid_for_panic, &state_for_panic);
         }
     });
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct VtLogChunk {
-    pub lines: Vec<crate::state::LogLine>,
-    pub screen: Vec<crate::state::LogLine>,
-    pub total_lines: usize,
-    pub oldest: usize,
 }
 
 /// Consume the coalesced scroll target a client left for this session.

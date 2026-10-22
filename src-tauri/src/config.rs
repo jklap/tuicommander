@@ -2177,6 +2177,10 @@ pub(crate) struct AgentsConfig {
     #[serde(default = "default_hibernate_minutes")]
     #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Hibernates unattended resumable agents after awake idle minutes; zero disables.","operations":["get","set"],"confirmationClass":"ordinary"}))]
     pub(crate) hibernate_idle_minutes: u32,
+    /// Zero disables automatic closure; abandoned markers still appear after one hour.
+    #[serde(default)]
+    #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Closes verified abandoned shells after idle hours; zero disables.","operations":["get","set"],"confirmationClass":"ordinary"}))]
+    pub(crate) abandoned_shell_hours: u16,
     #[serde(default)]
     #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Selects whether idle agents hibernate only in background or always.","operations":["get","set"],"confirmationClass":"ordinary"}))]
     pub(crate) hibernate_scope: HibernateScope,
@@ -2255,6 +2259,7 @@ impl Default for AgentsConfig {
             launch_modules: HashMap::new(),
             launch_instructions_disabled: false,
             hibernate_idle_minutes: default_hibernate_minutes(),
+            abandoned_shell_hours: 0,
             hibernate_scope: HibernateScope::default(),
         }
     }
@@ -4929,7 +4934,10 @@ mod tests {
             .clear();
         save_agents_config(initial, removed).unwrap();
         let disabled = load_agents_config();
-        assert!(disabled.agents["codex"].run_configs[0].args.is_empty());
+        assert_eq!(
+            disabled.agents["codex"].run_configs[0].args,
+            [] as [std::string::String; 0]
+        );
         let mut enabled = disabled.clone();
         enabled.agents.get_mut("codex").unwrap().run_configs[0].args =
             vec!["--dangerously-bypass-approvals-and-sandbox".into()];
@@ -6103,7 +6111,7 @@ mod tests {
         // for a JSON object that omits both keys.
         let mut incoming = AppConfig::default();
         assert_eq!(incoming.services.relay.token_exists, None);
-        assert!(incoming.services.relay.token.is_empty());
+        assert_eq!(incoming.services.relay.token, "");
 
         preserve_redacted_app_config_secrets(&mut incoming, &current);
 
@@ -6124,11 +6132,11 @@ mod tests {
 
         let mut incoming = AppConfig::default();
         incoming.services.relay.token_exists = Some(false);
-        assert!(incoming.services.relay.token.is_empty());
+        assert_eq!(incoming.services.relay.token, "");
 
         preserve_redacted_app_config_secrets(&mut incoming, &current);
 
-        assert!(incoming.services.relay.token.is_empty());
+        assert_eq!(incoming.services.relay.token, "");
         assert_eq!(incoming.services.relay.token_exists, Some(false));
     }
 
@@ -6771,10 +6779,9 @@ mod tests {
             .args
             .clear();
         save_agents_config(base, desired).unwrap();
-        assert!(
-            load_agents_config().agents["codex"].run_configs[0]
-                .args
-                .is_empty()
+        assert_eq!(
+            load_agents_config().agents["codex"].run_configs[0].args,
+            [] as [std::string::String; 0]
         );
         let disk: serde_json::Value =
             serde_json::from_slice(&fs::read(dir.path().join("agents.json")).unwrap()).unwrap();
@@ -9561,7 +9568,7 @@ mod tests {
             crate::credentials::get(crate::credentials::Credential::PushVapidPrivateKey).unwrap(),
             Some("old-vapid".to_string())
         );
-        assert!(state.config.read().services.auth.session_token.is_empty());
+        assert_eq!(state.config.read().services.auth.session_token, "");
     }
 
     #[test]

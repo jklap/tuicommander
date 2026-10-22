@@ -17,6 +17,7 @@ The binary is installed to:
 
 The CLI auto-updates silently when TUICommander starts — no manual update needed.
 Install and update stage the new executable beside the installed path, then rename it into place. A running `tuic` process keeps its original executable; installing over a symlink replaces the link without changing its target.
+The CLI status check probes the install directory with a temporary sibling file. It does not open the installed executable for writing: on macOS, even a write-open without changed bytes can invalidate its cached signature.
 
 ## Opening Files and Repos
 
@@ -188,6 +189,14 @@ on macOS, Linux, and Windows.
 tuic bg "$HOME/Gits/.tmp/build.log" -- make check
 ```
 
+The detached command does not inherit `TUIC_SESSION` or `TUIC_PARENT`. It is
+not the foreground peer: `TUIC_BG_COMMAND=1` marks the command tree as an
+ancestry boundary, including when an agent scrubs its bridge environment. Its progress reports and agent hooks must not change
+the foreground composer state. The runner retains the original caller identity
+for completion queueing and mail. Socket, app-instance and other environment
+settings remain inherited. A command that needs a peer identity must establish
+its own binding instead of using the foreground caller.
+
 On Windows, the detached runner does not inherit the launcher's input or output pipes. Capturing the launcher output therefore returns before the background command completes.
 
 Each background runner generates one completion key and reuses it on queue
@@ -197,6 +206,17 @@ A recognized acceptance remains `queued` in the wake file even after the queue
 has drained. If every queue receipt is lost and mail also fails, the wake file
 reports `uncertain`, not a proven delivery failure; inspect backend state before
 retrying manually. `uncertain` also prevents automatic child closure.
+
+If a BG DONE entry remains in the backend queue for 60 seconds, the backend
+records one warning under source `bg-wake`. Read `/logs?source=bg-wake` on the
+owning instance. Its JSON data reports the composer, question, uncertainty and
+foreground gates, process-probe generations, and a fresh process tree for the
+foreground group and matching detached runner. It records at most 128 process
+rows, marks truncation, and distinguishes an unavailable inventory from an empty
+tree. It excludes argv, prompt text and environment values. This warning uses
+the normal bounded log ring, not durable delivery storage; collect it before
+ring overflow or restart. It does not retry a possibly submitted message or
+clear `background_work`.
 
 `TUIC_SESSION` is required; without it, `tuic bg` exits 2 before starting a
 command. The launcher prints the wake-status path and removes stale `.exit`

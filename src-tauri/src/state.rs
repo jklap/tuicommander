@@ -39,7 +39,12 @@ pub(crate) enum PendingInjection {
     InitialPrompt { id: u64, text: String },
     /// The id is what the Compose panel deletes by: a queue position would shift
     /// under the caller as the FIFO drains on the next idle window.
-    UserCommand { id: u64, text: String },
+    UserCommand {
+        id: u64,
+        text: String,
+        queued_at: std::time::Instant,
+        overdue_reported: bool,
+    },
 }
 
 /// Ids are unique per process, not per session — a Compose delete carries both.
@@ -68,7 +73,28 @@ impl PendingInjection {
         Self::UserCommand {
             id: next_injection_id(),
             text: text.into(),
+            queued_at: std::time::Instant::now(),
+            overdue_reported: false,
         }
+    }
+
+    /// Claim diagnostic ownership, never delivery ownership. Requeue keeps this metadata.
+    pub(crate) fn claim_overdue_bg_wake(&mut self, now: std::time::Instant) -> Option<u64> {
+        let Self::UserCommand {
+            text,
+            queued_at,
+            overdue_reported,
+            ..
+        } = self
+        else {
+            return None;
+        };
+        let age = now.saturating_duration_since(*queued_at);
+        if *overdue_reported || !text.starts_with("BG DONE exit=") || age.as_secs() < 60 {
+            return None;
+        }
+        *overdue_reported = true;
+        Some(age.as_secs())
     }
 
     pub(crate) fn id(&self) -> u64 {
@@ -247,6 +273,10 @@ pub enum AppEvent {
     /// [`crate::pty::ACTIVITY_PULSE_WINDOW`] for why dropping pulses is sound.
     #[serde(rename = "pty-activity")]
     PtyActivity { session_id: String },
+    ShellAbandoned {
+        session_id: String,
+        since_ms: Option<u64>,
+    },
     /// Assembled PTY lines for the plugin OutputWatchers, carrying the ids Rust
     /// already matched. The frontend re-runs the real `RegExp` on the cleaned
     /// text to hand the plugin a genuine `RegExpExecArray`, and scans the line
@@ -562,6 +592,7 @@ impl AppEvent {
             | AppEvent::PluginWatcherLines { session_id, .. }
             | AppEvent::PtyExit { session_id }
             | AppEvent::PtyActivity { session_id }
+            | AppEvent::ShellAbandoned { session_id, .. }
             | AppEvent::PtyTitle { session_id, .. }
             | AppEvent::PtyBell { session_id }
             | AppEvent::PtyOsc133 { session_id, .. }
@@ -633,6 +664,9 @@ pub(crate) struct SessionState {
     /// are excluded by the PTY process-tree classifier.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub background_work: bool,
+    /// Last I/O time of a freshly verified abandoned shell.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub abandoned_since_ms: Option<u64>,
     /// Turn whose confirmed-ready observation is waiting for a process snapshot
     /// newer than `background_probe_after_generation`.
     #[serde(skip)]
@@ -878,6 +912,7 @@ impl PartialEq for SessionState {
             && self.shell_state == other.shell_state
             && self.agent_state == other.agent_state
             && self.background_work == other.background_work
+            && self.abandoned_since_ms == other.abandoned_since_ms
             && self.agent_type == other.agent_type
             && self.codex_binding == other.codex_binding
             && self.last_error == other.last_error
@@ -1954,26 +1989,6 @@ pub(crate) struct GridState {
     pub(crate) pending_scroll: DashMap<String, Arc<AtomicI64>>,
 }
 
-/// What a terminal session has learnt about its own commands (#678-9a75).
-///
-/// This is all that is left of the embedded agent subsystem after the engine was
-/// deleted (#784-0aec): no loop, no sandbox, no watcher, no scheduler. The two
-/// fields below are written by `pty.rs` from OSC 133 boundaries and read back by
-/// the same file to explain a failed command, so they outlived the LLM that used
-/// to consume them as well.
-///
-/// `Default` is derived: both fields start empty.
-#[derive(Default)]
-pub(crate) struct AiAgentState {
-    /// Per-session command outcome + error/fix knowledge store.
-    /// Populated by pty.rs OSC 133 hooks and SessionState transitions.
-    pub(crate) session_knowledge:
-        DashMap<String, Mutex<crate::ai_agent::knowledge::SessionKnowledge>>,
-    /// Sessions with unpersisted knowledge changes. Flushed to disk every 2s
-    /// by the background knowledge-persist task.
-    pub(crate) knowledge_dirty: DashMap<String, ()>,
-}
-
 /// The per-session side tables of [`AppState`] (#678-9a75).
 ///
 /// Every one is keyed by session id and starts empty, so the group derives its
@@ -2341,9 +2356,6 @@ pub struct AppState {
     pub(crate) desktop_window_focused: std::sync::atomic::AtomicBool,
     /// Server start time for uptime calculation in health endpoint.
     pub(crate) server_start_time: std::time::Instant,
-    /// TUIC's own AI agent: per-session knowledge, sandboxes, the watcher
-    /// engine, the cron scheduler and the suggestion triggers.
-    pub(crate) ai: AiAgentState,
     /// SSH tunnel manager — owns running tunnel supervisors.
     /// No outer Mutex needed: `TunnelManager` uses `DashMap` for interior mutability
     /// and all its methods take `&self`. Wrapping in `Mutex` would prevent holding
@@ -3799,7 +3811,6 @@ impl AppState {
             managed_trust_dialogs: DashSet::new(),
             active_agent_waiters: DashMap::new(),
             orchestrator_peers: DashSet::new(),
-            ai: AiAgentState::default(),
             #[cfg(unix)]
             bound_socket_path: parking_lot::RwLock::new(std::path::PathBuf::new()),
             tailscale_state: parking_lot::RwLock::new(
@@ -4110,37 +4121,6 @@ impl AppState {
             .min()
             .map(|(_, identity)| identity)
     }
-
-    /// This session's knowledge record, read off disk when it is not resident.
-    ///
-    /// The startup load is capped at `MAX_RESIDENT_SESSIONS`, so a session with
-    /// a file on disk is not necessarily in memory. Starting a blank record for
-    /// it is how resuming an older session erased its own history: the next
-    /// flush persists what is in memory, over a file nothing had read.
-    pub(crate) fn knowledge_entry(
-        &self,
-        session_id: &str,
-    ) -> dashmap::mapref::one::RefMut<'_, String, Mutex<crate::ai_agent::knowledge::SessionKnowledge>>
-    {
-        self.ai
-            .session_knowledge
-            .entry(session_id.to_string())
-            .or_insert_with(|| {
-                Mutex::new(crate::ai_agent::knowledge::load_or_start_fresh(session_id))
-            })
-    }
-
-    /// Record a command outcome into this session's knowledge store and mark it
-    /// dirty for the background persister. Creates the entry on first use.
-    pub(crate) fn record_outcome(
-        &self,
-        session_id: &str,
-        outcome: crate::ai_agent::knowledge::CommandOutcome,
-    ) -> u64 {
-        let id = self.knowledge_entry(session_id).lock().record(outcome);
-        self.ai.knowledge_dirty.insert(session_id.to_string(), ());
-        id
-    }
 }
 
 /// Derive a short prefix from a repo directory name.
@@ -4325,14 +4305,14 @@ pub(crate) struct GitCacheState {
     pub(crate) branches_detail: GitCache<Vec<crate::git::BranchDetail>>,
     pub(crate) github_status: GitCache<Vec<crate::github::BranchPrStatus>>,
     pub(crate) git_status: GitCache<crate::github::GitHubStatus>,
-    pub(crate) git_panel_context: GitCache<crate::git::GitPanelContext>,
     pub(crate) worktree_paths:
         GitCache<std::collections::HashMap<String, crate::worktree::WorkspaceWorktree>>,
-    /// Repos that returned null from GitHub GraphQL (not found / no access).
+    /// Repos explicitly reported NOT_FOUND by GitHub GraphQL.
     /// Keyed by "owner/name", value is the cooldown expiry time.
-    /// Excluded from batch queries until the cooldown expires (1 hour).
+    /// Excluded from batch queries until the cooldown expires (24 hours).
     /// NOT a TTL value cache — kept as a plain `DashMap` set with custom expiry.
     pub(crate) github_repo_cooldown: DashMap<String, Instant>,
+    pub(crate) github_repo_access_errors: DashMap<String, crate::github::RepoAccessFailure>,
     /// Settled review-thread totals of PRs with more threads than the batch poll reads, keyed by
     /// "host/owner/name#number". Not a TTL cache: an entry is valid while the PR's `updatedAt` and head
     /// are unchanged and it is younger than `SETTLED_THREADS_TTL`.
@@ -4352,9 +4332,9 @@ impl GitCacheState {
             branches_detail: build_git_cache(GIT_CACHE_TTL, Arc::clone(&ttl_fallbacks)),
             github_status: build_git_cache(GITHUB_CACHE_TTL, Arc::clone(&ttl_fallbacks)),
             git_status: build_git_cache(GIT_CACHE_TTL, Arc::clone(&ttl_fallbacks)),
-            git_panel_context: build_git_cache(GIT_CACHE_TTL, Arc::clone(&ttl_fallbacks)),
             worktree_paths: build_git_cache(GIT_CACHE_TTL, Arc::clone(&ttl_fallbacks)),
             github_repo_cooldown: DashMap::new(),
+            github_repo_access_errors: DashMap::new(),
             settled_review_threads: DashMap::new(),
             ttl_fallbacks,
         }
@@ -4372,7 +4352,6 @@ impl GitCacheState {
         self.branches_detail.invalidate_all();
         self.github_status.invalidate_all();
         self.git_status.invalidate_all();
-        self.git_panel_context.invalidate_all();
         self.worktree_paths.invalidate_all();
     }
 
@@ -4386,7 +4365,6 @@ impl GitCacheState {
         // changes don't affect remote PRs. The poller and head-changed → pollRepo
         // handle remote refreshes on their own cadence.
         self.git_status.invalidate(path);
-        self.git_panel_context.invalidate(path);
         self.worktree_paths.invalidate(path);
     }
 }
@@ -4723,6 +4701,11 @@ impl AppState {
         } else {
             Some("starting".to_string())
         };
+        if state.agent_type.is_some()
+            || crate::idle_close::shell_last_io_ms(self, session_id) != state.abandoned_since_ms
+        {
+            state.abandoned_since_ms = None;
+        }
         Some(state)
     }
 
@@ -5062,6 +5045,11 @@ impl AppState {
                         session.seed_configured_agent(agent_type.clone());
                         session
                     });
+            }
+            AppEvent::ShellAbandoned { session_id, since_ms } => {
+                if let Some(mut session) = state.session_maps.session_states.get_mut(session_id) {
+                    session.abandoned_since_ms = *since_ms;
+                }
             }
             AppEvent::PtyDescriptionChanged { .. } => {}
             AppEvent::ChatViewChanged { .. } => {}
@@ -6376,7 +6364,7 @@ mod tests {
         );
         drop(inbox);
         let finish = state.finish_agent_wait(recipient, lease, 0, false);
-        assert!(finish.terminal_handoff.is_empty());
+        assert_eq!(finish.terminal_handoff, [] as [std::string::String; 0]);
     }
 
     #[test]
@@ -6971,18 +6959,18 @@ mod tests {
         let finish = state.finish_agent_wait(recipient, lease, 0, true);
         assert_eq!(finish.fresh_count, 1);
         assert_eq!(finish.messages, vec![make_msg("during-wait")]);
-        assert!(finish.terminal_handoff.is_empty());
+        assert_eq!(finish.terminal_handoff, [] as [std::string::String; 0]);
         assert_eq!(
             state.agent_delivery_owner(recipient, "during-wait"),
             Some(AgentDeliveryOwner::WaiterObserved)
         );
 
         let lease = state.begin_agent_wait(recipient);
-        assert!(
+        assert_eq!(
             state
                 .finish_agent_wait(recipient, lease, 1, false)
-                .terminal_handoff
-                .is_empty()
+                .terminal_handoff,
+            [] as [std::string::String; 0]
         );
         state.push_agent_inbox(
             recipient,
@@ -8096,14 +8084,14 @@ mod tests {
     fn test_utf8_buffer_ascii() {
         let mut buf = Utf8ReadBuffer::new();
         assert_eq!(buf.push(b"hello world"), "hello world");
-        assert!(buf.remainder.is_empty());
+        assert_eq!(buf.remainder, [] as [u8; 0]);
     }
 
     #[test]
     fn test_utf8_buffer_complete_multibyte() {
         let mut buf = Utf8ReadBuffer::new();
         assert_eq!(buf.push("€100".as_bytes()), "€100");
-        assert!(buf.remainder.is_empty());
+        assert_eq!(buf.remainder, [] as [u8; 0]);
     }
 
     #[test]
@@ -8115,7 +8103,7 @@ mod tests {
 
         let result2 = buf.push(&[0x82, 0xAC]);
         assert_eq!(result2, "€");
-        assert!(buf.remainder.is_empty());
+        assert_eq!(buf.remainder, [] as [u8; 0]);
     }
 
     #[test]
@@ -8131,7 +8119,7 @@ mod tests {
 
         let result2 = buf.push(&bytes[2..]);
         assert_eq!(result2, "🦀");
-        assert!(buf.remainder.is_empty());
+        assert_eq!(buf.remainder, [] as [u8; 0]);
     }
 
     #[test]
@@ -8147,7 +8135,7 @@ mod tests {
         chunk2.extend_from_slice(b" world");
         let result2 = buf.push(&chunk2);
         assert_eq!(result2, "€ world");
-        assert!(buf.remainder.is_empty());
+        assert_eq!(buf.remainder, [] as [u8; 0]);
     }
 
     #[test]
@@ -8199,7 +8187,7 @@ mod tests {
         let out = buf.push(&binary);
         assert_eq!(out.chars().count(), 64 * 1024);
         assert!(out.chars().all(|c| c == '\u{FFFD}'));
-        assert!(buf.remainder.is_empty());
+        assert_eq!(buf.remainder, [] as [u8; 0]);
     }
 
     /// `len()` must track what `read_last` would actually return, which stops
@@ -8256,7 +8244,7 @@ mod tests {
     fn test_ring_buffer_empty() {
         let rb = OutputRingBuffer::new(16);
         let (data, total) = rb.read_last(16);
-        assert!(data.is_empty());
+        assert_eq!(data, [] as [u8; 0]);
         assert_eq!(total, 0);
     }
 
@@ -8366,7 +8354,7 @@ mod tests {
         let mut rb = OutputRingBuffer::new(16);
         rb.write(b"abc");
         let (data, _) = rb.read_since(3);
-        assert!(data.is_empty());
+        assert_eq!(data, [] as [u8; 0]);
     }
 
     #[test]
@@ -8374,7 +8362,7 @@ mod tests {
         let mut rb = OutputRingBuffer::new(16);
         rb.write(b"abc");
         let (data, total) = rb.read_since(999);
-        assert!(data.is_empty());
+        assert_eq!(data, [] as [u8; 0]);
         assert_eq!(total, 3);
     }
 
@@ -8766,7 +8754,7 @@ mod tests {
     fn test_strip_kitty_plain_text_passthrough() {
         let (out, actions) = strip_kitty_sequences("hello world");
         assert_eq!(out, "hello world");
-        assert!(actions.is_empty());
+        assert_eq!(actions, [] as [crate::state::KittyAction; 0]);
     }
 
     #[test]
@@ -8820,7 +8808,7 @@ mod tests {
         let input = "\x1b[<0;35;16M";
         let (out, actions) = strip_kitty_sequences(input);
         assert_eq!(out, input);
-        assert!(actions.is_empty());
+        assert_eq!(actions, [] as [crate::state::KittyAction; 0]);
     }
 
     #[test]
@@ -8829,7 +8817,7 @@ mod tests {
         let input = "\x1b[?1049h";
         let (out, actions) = strip_kitty_sequences(input);
         assert_eq!(out, input);
-        assert!(actions.is_empty());
+        assert_eq!(actions, [] as [crate::state::KittyAction; 0]);
     }
 
     #[test]
@@ -8838,7 +8826,7 @@ mod tests {
         let input = "\x1b[31mRed\x1b[0m";
         let (out, actions) = strip_kitty_sequences(input);
         assert_eq!(out, input);
-        assert!(actions.is_empty());
+        assert_eq!(actions, [] as [crate::state::KittyAction; 0]);
     }
 
     #[test]
@@ -8847,7 +8835,7 @@ mod tests {
         let input = "\x1b[31m\x1b[0mhello";
         let (out, actions) = strip_kitty_sequences(input);
         assert_eq!(out, input);
-        assert!(actions.is_empty());
+        assert_eq!(actions, [] as [crate::state::KittyAction; 0]);
     }
 
     #[test]
@@ -8864,7 +8852,7 @@ mod tests {
         let (out, actions) = strip_kitty_sequences(input);
         // The ESC is emitted, then [>u follows as normal text
         assert_eq!(out, input);
-        assert!(actions.is_empty());
+        assert_eq!(actions, [] as [crate::state::KittyAction; 0]);
     }
 
     #[test]
@@ -8873,7 +8861,7 @@ mod tests {
         let input = "╭──────╮\n│ hello │\n╰──────╯";
         let (out, actions) = strip_kitty_sequences(input);
         assert_eq!(out, input);
-        assert!(actions.is_empty());
+        assert_eq!(actions, [] as [crate::state::KittyAction; 0]);
     }
 
     #[test]
@@ -8906,7 +8894,7 @@ mod tests {
         use std::borrow::Cow;
         let input = "hello world";
         let (out, actions) = strip_kitty_sequences(input);
-        assert!(actions.is_empty());
+        assert_eq!(actions, [] as [crate::state::KittyAction; 0]);
         assert!(
             matches!(out, Cow::Borrowed(_)),
             "fast path should return Cow::Borrowed"
@@ -8919,7 +8907,7 @@ mod tests {
         use std::borrow::Cow;
         let input = "before\x1b[>1uafter";
         let (out, actions) = strip_kitty_sequences(input);
-        assert!(!actions.is_empty());
+        assert_ne!(actions, [] as [crate::state::KittyAction; 0]);
         assert!(
             matches!(out, Cow::Owned(_)),
             "slow path should return Cow::Owned"

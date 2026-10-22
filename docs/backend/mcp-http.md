@@ -987,7 +987,6 @@ worktree for tracked or untracked changes, a HEAD reachable from a branch and
 live sessions inside it; an unsafe or stale request is refused. The frontend consumes the answer and
 closes the dialog before removal.
 
-Removed MCP actions report the replacement route in their error: `agent detect` → `GET /agents`, `agent stats` → `GET /stats`, `agent metrics` → `GET /metrics`, `session process_stats` → `GET /process/stats`, `repo prs` → `GET /repo/prs`, `repo issues` → `GET /repo/issues`, `repo close_issue` → `POST /repo/issues/close`, `repo reopen_issue` → `POST /repo/issues/reopen`, and `repo ci_logs` → `GET /repo/ci-failure-logs`. `repo active/status`, `session pause/resume/status`, and `agent task_get/task_cancel` remain because their behavior has no equivalent single-call replacement.
 
 #### Conditional native tools
 
@@ -1967,6 +1966,24 @@ bar also keeps repo-scoped tabs visible when a repository has no active workspac
    real managed PTY, `recipient_state` contains only its current `shell_state` and `agent_state`;
    external generated peers omit `recipient_state`.
 4. **Receive** — the following paths surface buffered mail:
+   - **Interrupting mail (explicit opt-in)**: `agent action=send urgency="interrupt"`
+     buffers the message first. For Claude Code, Codex and ego, a safe working
+     session receives one bare Esc. TUIC waits up to **10 seconds** for independently
+     confirmed idle, then submits the full message as one input through the shared
+     agent submit writer. An already idle session skips Esc. This explicit request
+     also applies to registered orchestrators. Normal and urgent behavior is unchanged.
+     A dialog/approval, draft, unknown foreground owner or uncertain earlier input
+     prevents injection. A dialog or draft appearing during the wait aborts it.
+     Unsupported agent types, missing PTYs and idle timeouts fall back to the existing
+     urgent notice/inbox paths; a dialog or draft keeps the composer untouched.
+     The response adds `interrupt_delivered` and `interrupt_fallback_reason`
+     (for example `unknown_agent_type`, `dialog_open`, `composer_has_user_text`,
+     `idle_timeout`, or `waiter_owns_delivery`). `delivery_path=interrupt_payload_and_inbox`
+     means the complete input was written, not that the model accepted or acted on it.
+     An active waiter receives the buffered body without an interrupt. A partial
+     payload write is reported as `write_uncertain` and is not followed by a notice
+     or automatic replay. **Risk:** an interrupted tool can leave partial work, and
+     its child processes may continue; this is not a rollback or a process-tree kill.
    - **Urgent notice**: `agent send urgency="urgent"` retains the peer body only
      in the inbox. A busy managed Claude Code, Codex or ego session with a safe,
      empty composer gets a payload-free notice through the guarded PTY writer.
@@ -2865,3 +2882,24 @@ measurement is not a claim about product-wide token or latency savings.
 This updates or clears the context-bar description without sending PTY bytes.
 
 Managed `agent action=launch` uses the same private pre-dispatch static contract as other native actions. Discovery describes the disjoint receipt-read and creation forms, workspace alternatives, and nested spawn argument types; the server enforces exclusivity. Invalid calls return structured `invalid_arguments` with `effect=not_started` before the launch journal or PTY is touched.
+
+## Client tool identity
+
+Server instructions use TUIC protocol names as shorthand. Claude Code exposes the configured `tuicommander` server tool as `mcp__tuicommander__agent`; Codex 0.163.0 exposes namespace member `mcp__tuicommander.agent`. A different configured server alias changes that prefix. These are not the client native `Agent` tool. Use the actual exposed schema; a bare `tool_name=agent` is valid inside TUIC lazy `call_tool`, not as a guessed direct client call.
+
+The recorded client names and localhost-only capture script are in `src-tauri/src/mcp_http/fixtures/tool-names-2108.*`. The probe advertises one MCP tool and captures only outgoing tool names, with isolated homes and dummy keys; it rejects the model request without a vendor call. This records client qualification, not a production TUIC server handshake.
+
+### Remote session closure
+
+MCP `session action=close` accepts a remote `connection_id` or connection-qualified session reference. The host resolves aliases on the owning daemon and sends authenticated `DELETE /sessions/{id}`. The caller's own PTY remains protected from self-close, and non-loopback MCP callers cannot invoke destructive close actions. A disconnected connection reports an error; it never falls back to a local session. HTTP DELETE and local MCP close use the same teardown, session-closed events and retained output tombstone. Repeating a close of a retained tombstone succeeds. Explicit close remains user-directed and is not limited to abandoned shells.
+
+### Detached command identity boundary
+
+Native `tuic bg` removes `TUIC_SESSION` and `TUIC_PARENT` from the command
+environment and sets `TUIC_BG_COMMAND=1`. Headerless MCP identity recovery
+checks each process up to its 16-hop bound and stops at this marker before
+reading an identity or reaching the foreground runner. This also covers a
+bridge whose agent removed the marker from the bridge environment. Ordinary
+foreground ego ancestry recovery and explicit identity headers are unchanged.
+The detached runner keeps its caller identity for completion queueing and mail.
+This is an identity boundary, not a security sandbox or a delivery-policy bypass.

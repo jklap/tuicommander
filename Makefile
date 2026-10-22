@@ -27,10 +27,6 @@ SIGN_IDENTITY?=-
 TAURI_TARGET=src-tauri/target/release/bundle/macos
 APP_BUNDLE=$(TAURI_TARGET)/$(APP_NAME).app
 
-# whisper-rs-sys bundles whisper.cpp which uses std::filesystem::path (macOS 10.15+).
-# Must be exported so CMake subprocesses inherit it (.cargo/config.toml [env] alone is insufficient).
-export MACOSX_DEPLOYMENT_TARGET ?= 10.15
-
 # Distribution output
 DIST_DIR=dist-release
 

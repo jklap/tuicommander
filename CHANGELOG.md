@@ -6,6 +6,49 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+- Clear NOT_FOUND retry delays for all GitHub accounts when Refresh status is selected, without changing read-only diagnostics (#2133-9213).
+- Preserve GitHub repository access errors by owner and distinguish confirmed NOT_FOUND from retriable access denials, with an OAuth recovery action even for NOT_FOUND groups (#2127-97f5).
+- Let any live MCP-bound agent send Telegram notifications without taking inbound ownership. Non-owner messages carry a server-derived sender name, are limited to one send per 30 seconds, and route Telegram Replies to the unique live sender; buttons remain owner-only (#2119-d5de).
+- Keep remote Design Mode error reads behind explicit host consent and avoid claiming eval consent when Chrome does not add it (#1724-fe7e).
+- Add the optional Design Mode **Let agents capture any site** grant. Without it, screenshots retain temporary browser-action access and explain how to enable capture; capture consent does not enable agent eval (#1724-fe7e).
+- Initialize every terminal grid at its PTY spawn size and seed the first resize no-op guard from the kernel PTY size, not the grid (#2130-2ca2).
+
+### Fixed
+- Keep long mobile CLI file links inline with surrounding text and its hanging indent instead of centering wrapped paths (#2011-86b5).
+- Read nullable macOS WebView URLs without Wry unwraps in document recovery and detached-panel snapshots; a missing URL no longer reaches that panic path (#2120-9f3f).
+- Stop opening the installed CLI for writing during status checks; probe its install directory instead to avoid macOS signature invalidation without changed binary bytes (#2129-1dfd).
+- Offer Add Agent on non-git shell-folder rows using the folder as the working directory, without Git branch or worktree actions (#2125-13fe).
+
+- Clamp context menus using their unscaled layout size, constrain narrow-window menus, and hide branch workflow actions on non-git shell rows (#2124-1866).
+
+- Hide agent-mail wake notices in terminal Chat while keeping interruption notices and real user messages unchanged (#2123-8f17).
+
+- **BREAKING:** remove MCP migration hints for `agent detect/stats/metrics` (use `GET /agents`, `/stats`, `/metrics`), `session process_stats` (use `GET /process/stats`), and `repo prs/issues/close_issue/reopen_issue/ci_logs` (use `GET /repo/prs`, `GET /repo/issues`, `POST /repo/issues/close`, `POST /repo/issues/reopen`, `GET /repo/ci-failure-logs`). These actions now use ordinary unsupported-input errors; no compatibility alias or replacement hint remains (#2115-1333).
+
+## [2.0.0-beta.1] - 2026-10-22
+
+- Keep the terminal mobile composer's bottom safe-area inset inside its painted surface, above the Home Indicator; the separately reported iPhone shell-height band still needs device evidence (#2116-0213).
+- Remove the unused command-knowledge recorder, xterm-only watcher clear injection, orphan desktop commands and git panel-context endpoint. Removed MCP action and workspace-parameter migration hints now use ordinary input errors; no compatibility aliases remain (#2115-1333).
+
+- Add opt-in `agent send urgency=interrupt`: Esc for safe working Claude/Codex/ego sessions, a ten-second confirmed-idle wait, then complete message submission, with explicit urgent fallback receipts (#2113-c419).
+- Remove inherited foreground peer identity from detached `tuic bg` commands and stop MCP ancestry recovery at their command boundary so background progress cannot block the parent composer and strand its completion wake; preserve runner wake and mail routing (#2100-c249).
+### Added
+- Mark verified abandoned shells with their idle age on desktop and mobile. Add an optional machine-owned idle-hours close setting, disabled by default (#2111-131f).
+
+### Fixed
+- Add Copy alias to sidebar session menus using the owning session-list value, and hide unknown process IDs instead of offering an unavailable action (#2112-8a79).
+- Route MCP remote session close to the owning daemon, with self-close protection and retained final output (#2111-131f).
+
+
+- Keep the mobile CLI green answer bar in its own gutter so column-zero ego text stays clear without adding a second Claude text margin (#2110-734c).
+
+- Distinguish TUIC MCP protocol names from client-callable Claude Code and Codex tool names, including native Agent versus TUIC agent (#2108-465b).
+
+- Add a sidebar session context menu to copy the PTY session ID or live child PID, with copy confirmation and unavailable-process handling (#2107-bbda).
+- Capture held injection gates and a bounded fresh process tree when a BG DONE wake remains queued for 60 seconds, without changing delivery policy (#2100-c249).
+
+- Align the native macOS Rust and CMake deployment targets with the bundle minimum of 12.0, overriding older shell defaults and removing Make's separate target (#2106-e647).
+
 - Keep macOS App Nap off for the whole desktop process while still allowing idle system sleep. A controlled hidden-window replay under CPU contention reduced the maximum WebView callback gap from 36.753 s to 2.561 s with the activity alone; this does not attribute the historical backend outage to App Nap (#1638-c94c).
 - Export ego approval titles and all five native choices when the footer spans three or more rows, including newline-bearing printf rules (#2102-98ab).
 - Bind Grok Chat to the registered native process behind the npm launcher without guessing another terminal's transcript (#2104-0523).
@@ -1289,7 +1332,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - **Mobile session and feed repair** — Connected remote sessions open live output and close through their owning machine. Mobile Progress discovers projects with journal entries, and Activity loads saved events when opened.
 
 - **Progress toast dismissal** — Tapping a toast closes it without switching repositories or terminals. The dedicated **Go to repo** button still navigates to the reporting workspace.
-- **BREAKING: smaller native MCP tools** — `agent register/list_peers` now takes `path` instead of `project`; `repo worktree_lifecycle/worktree_remove` now takes `branch` instead of `workspace_id`. Removed `agent detect/stats/metrics`, `session process_stats`, and `repo prs/issues/close_issue/reopen_issue/ci_logs` in favor of their single-call HTTP routes. Each removed action returns an error naming its replacement. This saves tool tokens by keeping one name per concept and removing duplicate actions from schemas and output choices. The `worktree_create` response still carries `workspace_id` alongside `branch` for HTTP parity. `tuic agent list-peers --path` and `tuic repo worktree-remove <path> <branch>` use the new names.
+- **BREAKING: smaller native MCP tools** — `agent register/list_peers` now takes `path` instead of `project`; `repo worktree_lifecycle/worktree_remove` now takes `branch` instead of `workspace_id`. Removed `agent detect/stats/metrics`, `session process_stats`, and `repo prs/issues/close_issue/reopen_issue/ci_logs` in favor of their single-call HTTP routes. Migration hints for these removed actions were later removed in #2115-1333; clients must use the HTTP routes directly. This saves tool tokens by keeping one name per concept and removing duplicate actions from schemas and output choices. The `worktree_create` response still carries `workspace_id` alongside `branch` for HTTP parity. `tuic agent list-peers --path` and `tuic repo worktree-remove <path> <branch>` use the new names.
 
 - **Remote repository terminals and browsing** — New remote terminals attach to their owning machine's stream and show launch failures in the pane or stream failures in a persistent toast. Remote PTY creation rejects a missing working directory instead of registering an empty terminal. The remote folder picker starts at the host's reported home directory and shows readable permission errors while keeping path entry available.
 

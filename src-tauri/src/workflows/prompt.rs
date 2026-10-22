@@ -411,7 +411,7 @@ mod tests {
         assert_eq!(package.contract_version, 1);
         assert_eq!(package.role, AgentRole::Implementer);
         assert_eq!(package.prompt_sha256.len(), 64);
-        assert!(!package.audit_preview.is_empty());
+        assert_ne!(package.audit_preview, "");
     }
 
     #[test]
