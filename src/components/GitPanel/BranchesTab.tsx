@@ -629,11 +629,26 @@ export const BranchesTab: Component<BranchesTabProps> = (props) => {
 		onSuccess?.();
 	}
 
+	/** Split a short remote ref ("origin/feature/foo") into remote and branch; null if it has no remote part. */
+	function splitRemoteRef(ref: string | null): { remote: string; branch: string } | null {
+		if (!ref) return null;
+		const slash = ref.indexOf("/");
+		if (slash <= 0 || slash === ref.length - 1) return null;
+		return { remote: ref.slice(0, slash), branch: ref.slice(slash + 1) };
+	}
+
 	async function doPush(branch: BranchDetail) {
-		const args = branch.upstream ? ["push"] : ["push", "-u", "origin", branch.name];
-		await runGitAction(args, "Push failed", `Could not push "${branch.name}"`, () =>
-			appLogger.info("git", `Pushed ${branch.name}`),
-		);
+		// A bare `git push` pushes the *checked-out* branch, so right-clicking any
+		// other branch silently pushed the wrong thing ("Everything up-to-date").
+		// Always name the branch explicitly, targeting its configured upstream.
+		const target = branch.upstream ? splitRemoteRef(branch.upstream) : null;
+		const args = target
+			? ["push", target.remote, `${branch.name}:${target.branch}`]
+			: ["push", "-u", "origin", branch.name];
+		await runGitAction(args, "Push failed", `Could not push "${branch.name}"`, () => {
+			appLogger.info("git", `Pushed ${branch.name}`);
+			toastsStore.add("Pushed", `Pushed "${branch.name}"`, "info");
+		});
 	}
 
 	async function doPull(branch: BranchDetail) {
@@ -663,7 +678,13 @@ export const BranchesTab: Component<BranchesTabProps> = (props) => {
 	}
 
 	async function doFetch(branch: BranchDetail) {
-		await runGitAction(["fetch", "origin", branch.name], "Fetch failed", `Could not fetch "${branch.name}"`, () =>
+		// `branch.name` of a remote branch is "origin/foo" — git wants remote and
+		// ref as separate args ("fetch origin origin/foo" fails: couldn't find remote
+		// ref). A local branch fetches its upstream; with none there is no remote ref
+		// to name, so fetch the whole remote.
+		const target = splitRemoteRef(branch.is_remote ? branch.name : branch.upstream);
+		const args = target ? ["fetch", target.remote, target.branch] : ["fetch", "origin"];
+		await runGitAction(args, "Fetch failed", `Could not fetch "${branch.name}"`, () =>
 			appLogger.info("git", `Fetched ${branch.name}`),
 		);
 	}

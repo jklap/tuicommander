@@ -622,15 +622,136 @@ describe("BranchesTab", () => {
 			});
 		});
 
-		it("pushes plainly when an upstream is already set", async () => {
+		it("pushes the named branch to its upstream when one is set", async () => {
 			const { findByText, getByText } = render(() => <BranchesTab repoPath={REPO} />);
 			await findByText("main");
 			openContextMenuFor(getByText, "main");
 			fireEvent.click(getByText("Push"));
 
 			await waitFor(() => {
-				expect(h.invoke).toHaveBeenCalledWith("run_git_command", { path: REPO, args: ["push"] });
+				expect(h.invoke).toHaveBeenCalledWith("run_git_command", {
+					path: REPO,
+					args: ["push", "origin", "main:main"],
+				});
+				expect(h.toastAdd).toHaveBeenCalledWith("Pushed", expect.stringContaining("main"), "info");
 			});
+		});
+
+		it("pushes a NON-current branch by name, never a bare `git push` (regression: bare push hit the checked-out branch)", async () => {
+			const tracked: BranchDetail = { ...FEATURE, upstream: "origin/feature/foo", ahead: 2 };
+			mockInvokeDefaults({ get_branches_detail: () => [MAIN, tracked] });
+			const { findByText, getByText } = render(() => <BranchesTab repoPath={REPO} />);
+			await findByText("feature/foo");
+			openContextMenuFor(getByText, "feature/foo");
+			fireEvent.click(getByText("Push"));
+
+			await waitFor(() => {
+				expect(h.invoke).toHaveBeenCalledWith("run_git_command", {
+					path: REPO,
+					args: ["push", "origin", "feature/foo:feature/foo"],
+				});
+			});
+			const pushCalls = h.invoke.mock.calls.filter(
+				([cmd, a]) => cmd === "run_git_command" && (a as { args: string[] }).args[0] === "push",
+			);
+			expect(pushCalls).toHaveLength(1);
+			expect((pushCalls[0][1] as { args: string[] }).args).not.toEqual(["push"]);
+		});
+
+		it("pushes a branch checked out in a worktree the same way (is_current is false from the main checkout)", async () => {
+			const wtBranch: BranchDetail = { ...FEATURE, name: "wt-branch", is_current: false, upstream: "origin/wt-branch" };
+			mockInvokeDefaults({ get_branches_detail: () => [MAIN, wtBranch] });
+			const { findByText, getByText } = render(() => <BranchesTab repoPath={REPO} />);
+			await findByText("wt-branch");
+			openContextMenuFor(getByText, "wt-branch");
+			fireEvent.click(getByText("Push"));
+
+			await waitFor(() => {
+				expect(h.invoke).toHaveBeenCalledWith("run_git_command", {
+					path: REPO,
+					args: ["push", "origin", "wt-branch:wt-branch"],
+				});
+			});
+		});
+
+		it("targets the upstream's remote and branch name when they differ from the local branch", async () => {
+			const odd: BranchDetail = { ...FEATURE, name: "local-name", upstream: "fork/other/remote-name" };
+			mockInvokeDefaults({ get_branches_detail: () => [MAIN, odd] });
+			const { findByText, getByText } = render(() => <BranchesTab repoPath={REPO} />);
+			await findByText("local-name");
+			openContextMenuFor(getByText, "local-name");
+			fireEvent.click(getByText("Push"));
+
+			await waitFor(() => {
+				expect(h.invoke).toHaveBeenCalledWith("run_git_command", {
+					path: REPO,
+					args: ["push", "fork", "local-name:other/remote-name"],
+				});
+			});
+		});
+
+		it("toasts success and bumps the git revision after a push", async () => {
+			const { repositoriesStore } = await import("../../stores/repositories");
+			const bumpSpy = vi.spyOn(repositoriesStore, "bumpGitRevision");
+			const { findByText, getByText } = render(() => <BranchesTab repoPath={REPO} />);
+			await findByText("feature/foo");
+			openContextMenuFor(getByText, "feature/foo");
+			fireEvent.click(getByText("Push"));
+
+			await waitFor(() => {
+				expect(h.toastAdd).toHaveBeenCalledWith("Pushed", expect.stringContaining("feature/foo"), "info");
+			});
+			expect(bumpSpy).toHaveBeenCalledWith(REPO);
+			expect(h.appLoggerInfo).toHaveBeenCalledWith("git", "Pushed feature/foo");
+		});
+
+		it("toasts git's stderr and does not report success when the push is rejected", async () => {
+			mockInvokeDefaults({
+				run_git_command: () => ({
+					success: false,
+					stdout: "",
+					stderr: "! [rejected] feature/foo -> feature/foo (non-fast-forward)",
+					exit_code: 1,
+				}),
+			});
+			const { findByText, getByText } = render(() => <BranchesTab repoPath={REPO} />);
+			await findByText("feature/foo");
+			openContextMenuFor(getByText, "feature/foo");
+			fireEvent.click(getByText("Push"));
+
+			await waitFor(() => {
+				expect(h.toastAdd).toHaveBeenCalledWith(
+					"Push failed",
+					expect.stringContaining("non-fast-forward"),
+					"error",
+					true,
+				);
+			});
+			expect(h.toastAdd).not.toHaveBeenCalledWith("Pushed", expect.anything(), "info");
+		});
+
+		it("toasts a generic failure when the push IPC call itself rejects", async () => {
+			h.invoke.mockImplementation((cmd: string) => {
+				if (cmd === "run_git_command") return Promise.reject(new Error("ipc down"));
+				if (cmd === "get_branches_detail") return Promise.resolve([MAIN, FEATURE]);
+				return Promise.resolve([]);
+			});
+			const { findByText, getByText } = render(() => <BranchesTab repoPath={REPO} />);
+			await findByText("feature/foo");
+			openContextMenuFor(getByText, "feature/foo");
+			fireEvent.click(getByText("Push"));
+
+			await waitFor(() => {
+				expect(h.toastAdd).toHaveBeenCalledWith("Push failed", 'Could not push "feature/foo"', "error", true);
+			});
+			expect(h.toastAdd).not.toHaveBeenCalledWith("Pushed", expect.anything(), "info");
+		});
+
+		it("never offers Push on a remote-only branch", async () => {
+			const { findByText, getByText, queryByText } = render(() => <BranchesTab repoPath={REPO} />);
+			await findByText("origin/feature/bar");
+			openContextMenuFor(getByText, "origin/feature/bar");
+			expect(queryByText("Push")).toBeNull();
 		});
 
 		it("pulls only for the current branch", async () => {
@@ -653,7 +774,89 @@ describe("BranchesTab", () => {
 			await waitFor(() => {
 				expect(h.invoke).toHaveBeenCalledWith("run_git_command", {
 					path: REPO,
-					args: ["fetch", "origin", "origin/feature/bar"],
+					args: ["fetch", "origin", "feature/bar"],
+				});
+			});
+		});
+
+		it("fetches a local branch's upstream remote ref, not the local name", async () => {
+			const tracked: BranchDetail = { ...FEATURE, upstream: "fork/other/remote-name" };
+			mockInvokeDefaults({ get_branches_detail: () => [MAIN, tracked] });
+			const { findByText, getByText } = render(() => <BranchesTab repoPath={REPO} />);
+			await findByText("feature/foo");
+			openContextMenuFor(getByText, "feature/foo");
+			fireEvent.click(getByText("Fetch"));
+
+			await waitFor(() => {
+				expect(h.invoke).toHaveBeenCalledWith("run_git_command", {
+					path: REPO,
+					args: ["fetch", "fork", "other/remote-name"],
+				});
+			});
+		});
+
+		it("fetches the whole origin for a local branch with no upstream", async () => {
+			const { findByText, getByText } = render(() => <BranchesTab repoPath={REPO} />);
+			await findByText("feature/foo");
+			openContextMenuFor(getByText, "feature/foo");
+			fireEvent.click(getByText("Fetch"));
+
+			await waitFor(() => {
+				expect(h.invoke).toHaveBeenCalledWith("run_git_command", { path: REPO, args: ["fetch", "origin"] });
+			});
+		});
+
+		it("fetches the current branch's upstream from the current-branch menu", async () => {
+			const { findByText, getByText } = render(() => <BranchesTab repoPath={REPO} />);
+			await findByText("main");
+			openContextMenuFor(getByText, "main");
+			fireEvent.click(getByText("Fetch"));
+
+			await waitFor(() => {
+				expect(h.invoke).toHaveBeenCalledWith("run_git_command", {
+					path: REPO,
+					args: ["fetch", "origin", "main"],
+				});
+			});
+		});
+
+		it("toasts git's stderr and logs no success when fetch fails", async () => {
+			mockInvokeDefaults({
+				run_git_command: () => ({
+					success: false,
+					stdout: "",
+					stderr: "fatal: couldn't find remote ref",
+					exit_code: 128,
+				}),
+			});
+			const { findByText, getByText } = render(() => <BranchesTab repoPath={REPO} />);
+			await findByText("origin/feature/bar");
+			openContextMenuFor(getByText, "origin/feature/bar");
+			fireEvent.click(getByText("Fetch"));
+
+			await waitFor(() => {
+				expect(h.toastAdd).toHaveBeenCalledWith(
+					"Fetch failed",
+					expect.stringContaining("couldn't find remote ref"),
+					"error",
+					true,
+				);
+			});
+			expect(h.appLoggerInfo).not.toHaveBeenCalledWith("git", expect.stringContaining("Fetched"));
+		});
+
+		it("falls back to a bare `push -u origin` when the upstream has no remote part", async () => {
+			const odd: BranchDetail = { ...FEATURE, name: "odd", upstream: "noslash" };
+			mockInvokeDefaults({ get_branches_detail: () => [MAIN, odd] });
+			const { findByText, getByText } = render(() => <BranchesTab repoPath={REPO} />);
+			await findByText("odd");
+			openContextMenuFor(getByText, "odd");
+			fireEvent.click(getByText("Push"));
+
+			await waitFor(() => {
+				expect(h.invoke).toHaveBeenCalledWith("run_git_command", {
+					path: REPO,
+					args: ["push", "-u", "origin", "odd"],
 				});
 			});
 		});
