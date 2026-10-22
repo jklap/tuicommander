@@ -724,12 +724,21 @@ pub fn merge_ff_override(cwd: &Path, branch: Option<&str>) -> Option<&'static st
 /// Git applies `branch.<name>.mergeOptions` of the branch HEAD is on, not of a
 /// branch the caller merely names, so the checked-out branch is resolved with
 /// `symbolic-ref`. A detached HEAD has no branch and falls back to `merge.ff`.
+///
+/// The full ref is read and `refs/heads/` stripped by hand: `--short` prints
+/// `heads/<name>` when a tag of the same name exists, which would look up
+/// `branch.heads/<name>.mergeOptions` instead of the real branch's.
 pub fn merge_ff_override_for_head(cwd: &Path) -> Option<&'static str> {
     let head = git_cmd(cwd)
-        .args(["symbolic-ref", "--quiet", "--short", "HEAD"])
+        .args(["symbolic-ref", "--quiet", "HEAD"])
         .run_silent()
-        .map(|o| o.stdout.trim().to_string())
-        .filter(|b| !b.is_empty());
+        .and_then(|o| {
+            o.stdout
+                .trim()
+                .strip_prefix("refs/heads/")
+                .filter(|b| !b.is_empty())
+                .map(str::to_string)
+        });
     merge_ff_override(cwd, head.as_deref())
 }
 
@@ -1033,6 +1042,22 @@ mod tests {
         // Detached HEAD: no branch, falls back to merge.ff (true here).
         git_in(&path, &["checkout", "--detach"]);
         assert_eq!(merge_ff_override_for_head(&path), None);
+    }
+
+    #[test]
+    fn merge_ff_override_for_head_survives_a_tag_named_like_the_branch() {
+        let (_dir, path) = setup_test_repo();
+        git_in(&path, &["config", "merge.ff", "true"]);
+        git_in(&path, &["commit", "--allow-empty", "-m", "init"]);
+        git_in(&path, &["checkout", "-b", "feature"]);
+        // With a tag `feature` too, `symbolic-ref --short HEAD` prints
+        // `heads/feature`.
+        git_in(&path, &["tag", "feature"]);
+        git_in(
+            &path,
+            &["config", "branch.feature.mergeOptions", "--ff-only"],
+        );
+        assert_eq!(merge_ff_override_for_head(&path), Some("--ff"));
     }
 
     /// A child that outlives any deadline these tests set.

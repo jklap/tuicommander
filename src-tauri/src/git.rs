@@ -1016,6 +1016,47 @@ mod tests {
             stats.last_commit_ts.keys().collect::<Vec<_>>()
         );
     }
+    /// `update_from_base` with the merge strategy must merge a diverged base even
+    /// when `merge.ff=only` and the checked-out branch's `mergeOptions` say
+    /// `--ff-only`: the explicit `--ff` it forwards is the last word.
+    #[test]
+    fn update_from_base_merge_succeeds_on_diverged_history_under_ff_only() {
+        let (_dir, path) = setup_test_repo_with_commit();
+        let repo = path.to_string_lossy().to_string();
+        let git = |args: &[&str]| {
+            git_cmd(&path).args(args).run().unwrap();
+        };
+        git(&["branch", "-M", "main"]);
+        git(&["checkout", "-b", "feat"]);
+        std::fs::write(path.join("feat.txt"), "feat").unwrap();
+        git(&["add", "."]);
+        git(&["commit", "-m", "feat work"]);
+        git(&["checkout", "main"]);
+        std::fs::write(path.join("main.txt"), "main").unwrap();
+        git(&["add", "."]);
+        git(&["commit", "-m", "main moves on"]);
+        git(&["checkout", "feat"]);
+        git(&["config", "branch.feat.tuicommander-base", "main"]);
+        git(&["config", "merge.ff", "only"]);
+        git(&["config", "branch.feat.mergeOptions", "--ff-only"]);
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+
+        let msg = update_from_base_impl(&state, &repo, "feat", Some("merge"))
+            .unwrap_or_else(|e| panic!("diverged merge under --ff-only: {e}"));
+        assert_eq!(msg, "Merged main into feat");
+        assert!(path.join("main.txt").exists());
+        assert!(path.join("feat.txt").exists());
+        let parents = git_cmd(&path)
+            .args(["rev-list", "--parents", "-n", "1", "HEAD"])
+            .run()
+            .unwrap()
+            .stdout
+            .split_whitespace()
+            .count()
+            - 1;
+        assert_eq!(parents, 2, "a diverged merge makes a merge commit");
+    }
+
     // Catches a cached sidebar dirty badge surviving watcher invalidation.
     #[tokio::test]
     async fn monitoring_gitpoll_diff_cache_refreshes_dirty_badges_after_invalidation() {
