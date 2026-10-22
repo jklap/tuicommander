@@ -1,6 +1,7 @@
 ## Optional Design Mode all-sites capture (1724-fe7e) — rebuilt bridge and extension reload required
 
-- [ ] After deploying a rebuilt `tuic-bridge` and reopening Design Mode with the updated extension, click **Let agents capture any site** and accept Chrome's real optional permission prompt. Verify an agent screenshot and pick crop without another browser-action gesture, then revoke the grant and verify the error names the option while temporary browser-action capture still works. Boss accepted the real prompt and the isolated real-Chrome production boundary passed with a saved PNG. The later normal agent-test bridge installed stale extension assets; a verified bridge-only build restored them, but the old manifest had removed the literal capture grant. The genuine new Allow prompt is pending. MCP matching-image/crop/revocation and post-capture host/eval checks remain open; see S0 results Rounds 9–10. No daily app was restarted.
+- [x] Isolated real Chrome consent, actual MCP screenshot and matching browser PNG, live sidebar history, and post-capture **Allow eval on this host** click/eval. _(verified: S0 results Round 11; 1628 × 1596 PNGs have identical SHA256 and zero differing pixels; actual Chrome added the host origin and MCP eval succeeded.)_
+- [ ] Normal deployment still needs a rebuilt `tuic-bridge` whose installed extension assets match source. The multi-package agent-test build returned old bridge assets twice; the verified package-only installer worked. Pick-crop, revoke/activeTab recovery, and a fresh-profile capture-only host/eval sequence remain unverified. No daily app was restarted.
 
 ## Detached command peer isolation (2100-c249) — CLI update and backend restart required
 

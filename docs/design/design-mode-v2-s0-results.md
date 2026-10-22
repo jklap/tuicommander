@@ -631,3 +631,52 @@ pending Allow click.
   `8d2404b1-6f8f-4e8a-b45a-7fb317ce894e`, supervisor 92408, desktop PID 3459,
   owner `fd35d011-8234-4ef6-9bf8-31392ce9d596`. After Allow, verify MCP screenshot
   matching and the real host/eval click before claiming either acceptance.
+
+
+## Round 11: matching actual MCP screenshot and host/eval check (2026-10-22)
+
+The earlier pending-consent state is superseded. After the provider interruption,
+Chrome had no page targets; a new owned extension document was opened and the real
+capture button clicked. Chrome returned success and `getAll()` then included
+literal `<all_urls>`. No permission was written by the harness. The profile also
+retained broad HTTP/HTTPS origins from the older-manifest round, so this is not a
+fresh-profile capture-only consent experiment.
+
+A real **Allow eval on this host** click subsequently added `*://127.0.0.1/*` to
+Chrome's origins. The panel reported the host grant. Production eval returned
+`Design web verification`; the actual MCP `ui design_eval` did too. Evidence:
+`optionc/critic-host-click.json` and `optionc/accepted-design_eval.json`. Thus this
+observed Chrome request added an origin rather than reproducing the critic's
+hypothesized no-op. The panel's no-op protection remains covered by unit tests;
+no failing real Chrome no-op is claimed.
+
+After re-arming the expired mode, the actual initialized owner MCP connection
+successfully navigated the fixture and requested a screenshot over the real native
+host. A separate browser-page screenshot matched exactly: **1628 × 1596 pixels,
+zero differing pixels, identical PNG SHA256**
+`31875551b7f884bb03bdd7e46b6baac01c7eeb2874dd703863e7f3f866ce3ca6`.
+The decoded comparison used browser `createImageBitmap`/`OffscreenCanvas`; no new
+image dependency was installed after Python PIL was found unavailable. Files:
+`optionc/accepted-mcp.png`, `accepted-browser.png`, `accepted-comparison.json`,
+and the actual RPC responses `accepted-design_navigate.json` and
+`accepted-design_screenshot.json`. The page text contains the recorded fixture
+token `DESIGN-WEB-20261022`.
+
+The real sidebar history displays owner
+`fd35d011-8234-4ef6-9bf8-31392ce9d596`, navigate at 14:03:12 and screenshot at
+14:03:13, both done. Its actual screenshot is `optionc/accepted-panel.png`; DOM
+and snapshot evidence are retained alongside it. The matching screenshots and
+history were presented in TUIC's **Design Mode screenshot evidence** tab, backed
+by `optionc/accepted-visual-evidence.md`. Each visual step checked ioreg once and
+ran unlocked. No OS Screen Recording permission bypass was used.
+
+1724 AC5/19/20 now have installed-extension reality evidence, together with the
+previous recorded routing/handler GREEN. This does not close its remaining ego
+refresh gap or S0's persistence/tab-return/crop/cancellation chronology. The
+normal multi-package bridge artifact mismatch also remains a recorded build
+provenance issue; the live run used the verified package-only rebuilt installer,
+not copied extension source files.
+
+Cleanup: mode stopped, throwaway owner deleted, and matching agent-test stop used.
+Recorded Chrome 15598, fixture 5969, desktop 3459, supervisor 92408, owner 4792
+and isolated Edge 5521/99846 were all absent; desktop PID file was absent.
