@@ -70,13 +70,14 @@ describe("RemoteQrDialog", () => {
 		expect(h.toDataURL).not.toHaveBeenCalled();
 	});
 
-	it("keeps the placeholder and never requests a connect URL when there are no local IPs", async () => {
+	it("says the QR is not available and never requests a connect URL when there are no local IPs", async () => {
 		mockRpc({ localIps: [] });
-		const { getByText, queryByAltText } = render(() => <RemoteQrDialog onClose={vi.fn()} />);
+		const { findByText, queryByAltText } = render(() => <RemoteQrDialog onClose={vi.fn()} />);
 
 		await waitFor(() => expect(h.rpc).toHaveBeenCalledWith("get_local_ips"));
 		await waitFor(() => expect(h.rpc).toHaveBeenCalledWith("load_config"));
-		expect(getByText("Generating QR…")).toBeTruthy();
+		// Once discovery settles with no addresses the placeholder stops claiming it is generating.
+		expect(await findByText("Not available")).toBeTruthy();
 		expect(queryByAltText("QR code for remote mobile connection")).toBeNull();
 		expect(h.rpc).not.toHaveBeenCalledWith("get_connect_url", expect.anything());
 	});
