@@ -16,6 +16,8 @@ pub(crate) mod settings;
 mod stop;
 mod streaming;
 mod tool;
+#[cfg(test)]
+mod sender_tests;
 pub(crate) use native::start;
 pub(crate) use tool::{definition as tool_definition, handle as handle_tool};
 
