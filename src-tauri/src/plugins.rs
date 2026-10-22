@@ -2614,7 +2614,7 @@ mod tests {
         std::fs::create_dir_all(&leftover).unwrap();
         std::fs::write(leftover.join("manifest.json"), valid_manifest_json("x")).unwrap();
 
-        assert!(list_user_plugins().is_empty());
+        assert!(list_user_plugins(None).is_empty());
     }
 
     /// A first install (no prior dir) has nothing to back up.
