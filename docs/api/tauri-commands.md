@@ -4,7 +4,7 @@
 
 `plugin_settings_action(plugin_id: String, action: PluginAction)` returns catalogue descriptors, a redacted snapshot, or a commit reply. Actions: describe, get with paths, set/reset with path and expectedRevision, patch with operations and expectedRevision. The backend binds the plugin owner and config file; unloaded or schema-less plugins are unavailable. HTTP twin: `POST /api/plugins/{id}/settings`.
 
-Slice F exposes `start_graph {target:{type:story|plan,id},expected_revision?,definition_id,definition_revision,request_id,limits?}` through the existing owning-daemon service. Story starts require the current native revision and pin the selected publication; the request ID is bound to its payload. Omitted limits use Rust defaults. Plan dispatch remains unavailable in this build and its start control says so. The `workflow_run` MCP tool uses an inline schema generated from `RunAction` and the public `RunCommand` variants; it returns the same scoped snapshots and cursor-ordered events as IPC/HTTP. Run history shows pinned activations, decisions/evidence, repair counters, pause targets and complete event payloads across pages. Graph recovery uses `resume_graph {execution_id,activation_id,resolution}` after answering pending input; pause and cancel use the existing sequence-fenced commands. Legacy runs offer inspection and cancellation in the UI. No new persistence or client scheduler is added.
+Slice F exposes `start_graph {target:{type:story|plan,id},expected_revision?,definition_id,definition_revision,request_id,limits?}` through the existing owning-daemon service. Story starts require the current native revision and pin the selected publication; the request ID is bound to its payload. Omitted limits use Rust defaults. Plan dispatch remains unavailable in this build and its start control says so. The `workflow action=run` MCP entry uses an inline schema generated from `RunAction` and the public `RunCommand` variants; it returns the same scoped snapshots and cursor-ordered events as IPC/HTTP. Run history shows pinned activations, decisions/evidence, repair counters, pause targets and complete event payloads across pages. Graph recovery uses `resume_graph {execution_id,activation_id,resolution}` after answering pending input; pause and cancel use the existing sequence-fenced commands. Legacy runs offer inspection and cancellation in the UI. No new persistence or client scheduler is added.
 
 ## Workflow runs
 
@@ -78,7 +78,6 @@ grid-cell coordinates. Both match the stored sequence without normalization.
 | `get_last_prompt` | `session_id` | `Option<String>` | Get last user-typed prompt from input line buffer |
 | `get_shell_state` | `session_id` | `Option<String>` | Get current shell state ("busy", "idle", or null); agent-specific semantic Working markers can repair a transient false-idle state |
 | `has_foreground_process` | `session_id: String` | `bool` | Checks if a non-shell foreground process is running |
-| `debug_agent_detection` | `session_id: String` | `AgentDiagnostics` | Returns diagnostic breakdown of agent detection pipeline |
 | `get_pty_capture` | -- | `JSON` | Raw PTY capture tap state: enabled, session filter, directory, bytes per session. Browser parity: `GET /diagnostics/capture`. |
 | `set_pty_capture` | `enabled: bool, session_id: Option<String>` | `JSON` | Start/stop recording raw PTY bytes to `<config dir>/captures/<id>.tcap` or the absolute `TUIC_CAPTURE_DIR` override; a relative override returns an error and leaves recording disabled. Starting begins a fresh file. Surfaced as **Capture Session** in the tab context menu under `isPerfDebug()`. Browser parity: `POST /diagnostics/capture`. |
 | `set_session_name` | `session_id, name, is_custom?` | `()` | Set a session display name and whether it represents an explicit user rename |
@@ -91,12 +90,9 @@ grid-cell coordinates. Both match the stored sequence without normalization.
 | `chat_view_snapshot` | `session_id, epoch: Option<u64>, from_seq: Option<u64>` | `ChatViewSnapshot` | Chat view of a Claude or Grok terminal: transcript entries from the bound session file as ACP updates, with a bounded log, epoch and `reset` flag. Errors `not_bound: <reason>` for a terminal with no bound Claude or Grok agent. Browser parity: `GET /sessions/:id/chat-view` |
 | `terminal_styled_rows` | `session_id, start, count` | `Result<Response, String>` (packed bytes) | A range of styled rows by absolute index, filling the client-side scroll cache. Raw bytes for the same reason as grid frames. Browser parity: `GET /sessions/:id/terminal/styled-rows` (`application/octet-stream`) |
 
-Every terminal grid **read** — the two rows above plus `terminal_get_block_rows`,
 `terminal_scroll_info`, `terminal_search`, `terminal_search_buffer`,
-`terminal_get_row_text`, `terminal_get_logical_line`, `terminal_get_lines`,
-`terminal_get_cursor_line`, `terminal_hyperlink_at` and
-`terminal_hyperlink_span` and `read_vt_log` — is an `async fn` that runs on the blocking pool via
-`pty::vt_try_read`, so it returns `Result<T, String>` rather than a bare `T`.
+`terminal_get_row_text`, `terminal_get_logical_line`, and `terminal_get_lines`
+use `pty::vt_try_read`, so each returns `Result<T, String>` rather than a bare `T`.
 The `Err` arm means the pool task itself failed; a session that is gone is still
 the old default (or a 404 over HTTP). See
 [`docs/backend/command-threading.md`](../backend/command-threading.md).
@@ -158,7 +154,6 @@ receive it on `/events`.
 | `get_repo_structure` | `repo_path` | `RepoStructure` | Fast phase: worktree paths + merged branches only (Phase 1 of progressive loading) |
 | `get_repo_diff_stats` | `repo_path` | `RepoDiffStats` | Slow phase: per-worktree diff stats, last commit timestamps, and `workspace_statuses` keyed by opaque workspace id (Phase 2 of progressive loading) |
 | `run_git_command` | `path, args` | `GitCommandResult` | Run allowlisted git command (success, stdout, stderr, exit_code) |
-| `get_git_panel_context` | `path` | `GitPanelContext` | Rich context for Git Panel (branch, ahead/behind, staged/changed/stash counts, last commit, rebase/cherry-pick state). Cached 5s TTL. |
 | `get_working_tree_status` | `path` | `WorkingTreeStatus` | Full porcelain v2 status: branch, upstream, ahead/behind, stash count, staged/unstaged entries, untracked files |
 | `update_from_base` | `path, branch_name, strategy?` | `String` | Fetch configured base ref and rebase or merge the branch onto it. Conflict cleanup reports `(aborted)` only after abort succeeds; abort failure includes manual recovery guidance. |
 | `git_stage_files` | `path, files` | `()` | Stage files (`git add`). Path-traversal validated |
@@ -271,7 +266,7 @@ reached is an error carrying ego's own sentence, never an empty result.
 | `show_native_notification` | `title, body, target` | `()` | macOS desktop-only alert that retains the Notification Center click and emits `native-notification-click` for a terminal or Progress target; browser/remote clients cannot call it |
 | `load_ui_prefs` | -- | `UIPrefsConfig` | Load UI preferences |
 | `save_ui_prefs` | `base, config` | `()` | Save UI preferences |
-| `get_config_defaults` | -- | `ConfigDefaults` | Read-only defaults for Settings "expert mode" |
+| `get_config_defaults` | `preview?: LaunchPreview` | `ConfigDefaults` | Read-only defaults and resolved launch instruction previews; optional draft agent config and global marker flags |
 | `load_repo_settings` | -- | `RepoSettingsMap` | Load per-repo settings |
 | `save_repo_settings` | `base, config` | `()` | Save per-repo settings |
 | `check_has_custom_settings` | `path` | `bool` | Has non-default settings |
@@ -324,7 +319,7 @@ reached is an error carrying ego's own sentence, never an empty result.
 | `list_remote_connections` | -- | `Vec<RemoteConnection>` | Load every configured remote machine from `connections.json` |
 | `save_remote_connection` | `base, connection` | `()` | Create with null base or update a remote machine from its loaded snapshot; merges changed fields into the latest record under the config file lock |
 | `delete_remote_connection` | `id` | `()` | Tear down and delete a remote machine, both vault credentials, and its ephemeral daemon best-effort; an installed service is left for explicit uninstall |
-| `set_remote_connection_password` | `id, password` | `()` | Store the Basic Auth password in the OS credential vault, or forget it when `password` is empty. Never written to `connections.json` |
+| `set_remote_connection_password` | `id, password` | `()` | Store the Basic Auth password in the OS credential vault, or forget it when `password` is empty. Never written to `connections.json`. Publishes a value-free `connections` Settings change only after vault persistence, through the same owner as HTTP |
 | `remote_connection_password_exists` | `id` | `bool` | Whether a password is stored. The password itself is never readable — this and the token exchange are the only answers given about it |
 | `fetch_remote_connection_token` | `id, baseUrl, username` | `String` | Trade the stored password for the daemon's in-memory session token over `GET /api/auth/session-token`. Runs in the backend so the password never reaches the WebView. Re-run on every connect: the daemon mints a new token on restart |
 | `install_remote_daemon` | `id` | `()` | Stage the matching daemon and install/start a systemd user unit or launchd agent, then persist `deploy = installed` |
@@ -362,7 +357,7 @@ remote daemon.
 
 | Command | Args | Returns | Description |
 |---------|------|---------|-------------|
-| `discover_agent_session` | `agent_type, cwd, claimed_ids, agent_pid, env_overrides` | `Option<{ sessionId, launchCommand, provider }>` | Discover the agent's session UUID for session-aware resume. Claude and grok resolve it exactly from their pid→session registry when `agent_pid` is known; every other agent (and any Claude/grok too old to publish one) falls back to the newest unclaimed session file, which cannot tell two tabs in one folder apart. `launchCommand` is the command the live process really runs, rebuilt from its argv and env (`CLAUDE_CONFIG_DIR=… claude --dangerously-skip-permissions`) — a shell alias is expanded before `exec`, so it is the only record of which config dir holds the session. `null` for agents with no verified session-flag list, and on Windows, where argv is unreadable. `provider` is the model provider the session runs on, for ego only: the first segment of `model` in the pid-leased `<EGO_HOME>/sessions/<id>/manifest.json`; the sidebar shows it as tooltip text (`null` when unreadable). The session always uses the ego icon, regardless of provider |
+| `discover_agent_session` | `agent_type, cwd, claimed_ids, agent_pid, env_overrides` | `Option<{ sessionId, launchCommand, provider }>` | Discover the agent's session UUID for session-aware resume. IPC and HTTP run filesystem and process reads on the blocking pool. Ego bindings are cached by sessions root and pid, with one-lease pid and writer-lock validation; a miss scans for the latest matching heartbeat. Claude and grok resolve it exactly from their pid→session registry when `agent_pid` is known; every other agent (and any Claude/grok too old to publish one) falls back to the newest unclaimed session file, which cannot tell two tabs in one folder apart. `launchCommand` is the command the live process really runs, rebuilt from its argv and env (`CLAUDE_CONFIG_DIR=… claude --dangerously-skip-permissions`) — a shell alias is expanded before `exec`, so it is the only record of which config dir holds the session. `null` for agents with no verified session-flag list, and on Windows, where argv is unreadable. `provider` is the model provider the session runs on, for ego only: the first segment of `model` in the pid-leased `<EGO_HOME>/sessions/<id>/manifest.json`; the sidebar shows it as tooltip text (`null` when unreadable). The session always uses the ego icon, regardless of provider |
 | `verify_agent_session` | `agent_type, session_id, cwd, agent_pid, env_overrides` | `bool` | Verify that the session file exists in the agent's selected profile. A live PID can supply process environment; saved launch environment selects the profile after restart. HTTP parity: `POST /agents/verify-session` |
 
 ## Panel Windows (`panel_window.rs`)
@@ -378,24 +373,9 @@ Activity Dashboard and the Git panel.
 
 ## The embedded AI engine is gone (#784-0aec)
 
-There is no `ai_chat.rs`, `ai_chat_registry.rs`, `provider_registry.rs`,
-`llm_api.rs`, `diff_triage.rs`, `improvement_scan.rs` or `changelog.rs`, and
-`ai_agent/` holds only `knowledge.rs` and `tui_detect.rs`. Every command those
-modules registered is unregistered, every `/ai/*` route is unmounted, and the
-matching `COMMAND_TABLE` entries are removed from `src/transport.ts`.
-TUICommander makes no provider HTTP call and stores no model API key.
+The embedded ReAct loop, provider registry and model-key storage were removed. `ego` supplies intelligence over ACP — see **ACP client for ego** below. PR review, changelog generation and improvement scanning use unattended ego turns.
 
-`ego` supplies the intelligence over ACP — see **ACP client for ego** below.
-What comes back where is tabulated in [`docs/sync-matrix.md`](../sync-matrix.md)
-under *What #784-0aec removed*.
-
-Command knowledge is the one thing that stayed, because recording it involves no
-model: `pty.rs` still writes `CommandOutcome` rows per session and
-`ai_agent::knowledge::spawn_persist_task` still flushes them to
-`<config_dir>/ai-sessions/<session_id>.json`. No command reads them back — the
-`get_session_knowledge`, `list_knowledge_sessions` and
-`get_knowledge_session_detail` accessors went with the UI that called them.
-
+`ai_agent/` retains only `tui_detect.rs`, which classifies terminal activity. The write-only command knowledge store and its persistence task were removed in #2115-1333. No knowledge accessor command remains.
 
 ## MCP OAuth 2.1 (`mcp_oauth/commands.rs`)
 
@@ -556,10 +536,6 @@ are unaffected (they build `NSAlert`) and stay as they are.
 
 ## Filesystem (`fs.rs`)
 
-`upload_attachment` is the desktop IPC twin of `POST /attachments/upload`.
-It accepts `kind`, `id`, optional `session` (required for ACP), `name`, and
-binary `bytes`, returns the same `{ path, size, notice? }` receipt, and uses the same destination, cap, and cleanup rules.
-
 | Command | Args | Returns | Description |
 |---------|------|---------|-------------|
 | `resolve_terminal_path` | `cwd, candidate` | `Option<ResolvedFilePath>` | Resolve one terminal path candidate against `cwd`; `null` on a miss |
@@ -599,7 +575,7 @@ JavaScript `String.slice` semantics for ASCII, accented text, and non-BMP emoji.
 
 | Command | Args | Returns | Description |
 |---------|------|---------|-------------|
-| `list_user_plugins` | -- | `Vec<PluginManifest>` | List valid plugin manifests |
+| `list_user_plugins` | `pluginIds?: string[]` | `Vec<PluginManifest>` | List valid plugin manifests with backend-derived optional `contentSha256` |
 | `get_plugin_readme_path` | `id` | `Option<String>` | Get plugin README.md path |
 | `read_plugin_data` | `plugin_id, path` | `Option<String>` | Read plugin data file |
 | `write_plugin_data` | `plugin_id, path, content` | `()` | Write plugin data file |
@@ -631,7 +607,8 @@ JavaScript `String.slice` semantics for ASCII, accented text, and non-BMP emoji.
 | Command | Args | Returns | Description |
 |---------|------|---------|-------------|
 | `plugin_github_action` | `plugin_id, account, reference, request` | `Value` | Account-scoped B6/B7 bridge; requires net:http, manifest github provider consent and matching PR reference |
-| `plugin_http_fetch` | `url, method?, headers?, body?, account?, plugin_id` | `HttpResponse` | Make HTTP request (validated against the on-disk manifest `allowedUrls`; with `account`, Rust injects that account's credential under the account host rule) |
+| `plugin_http_fetch` | `url, method?, headers?, body?, account?, plugin_id, request_id?` | `HttpResponse` | Make HTTP request (validated against the on-disk manifest `allowedUrls`; with `account`, Rust injects that account's credential under the account host rule) |
+| `plugin_http_cancel` | `plugin_id, request_id` | `()` | Cancel a plugin-scoped HTTP request, including its response body. |
 
 ## Code Intelligence / MDKB (`mdkb_commands.rs`)
 
@@ -1039,7 +1016,7 @@ the error to the caller. HTTP equivalent: `POST /sessions/{id}/force-retry`.
 
 ## Settings startup ownership
 
-`settings_action` shares its envelope and recovery behavior with HTTP and MCP; native caller trust does not bypass owner CAS or human confirmation. [Settings startup workflows](../backend/settings-startup.md) distinguishes published GitHub operations, configured Ego settings/readback and the unpublished interactive Ego-login boundary.
+`settings_action` shares its envelope and recovery behavior with HTTP and MCP; native caller trust does not bypass owner CAS or human confirmation. [Settings startup workflows](../backend/settings-startup.md) describes GitHub `list_accounts` and configured Ego `begin_login`/`login_status`, including owner revision checks, a human-operated terminal and credential readback distinct from process completion.
 
 ### CircleCI credential settings (#1991-bd88)
 
@@ -1053,3 +1030,31 @@ or `operation:{action:"clear_token"}`. Both actions use the existing CircleCI
 owner; replies contain only token presence. Clearing the stored token does not
 remove `CIRCLE_TOKEN` or the CircleCI CLI configuration. The Git & GitHub page
 continues to show the effective token source. No transport returns the token.
+
+### Managed launch transaction
+
+`managed_agent_launch(request: object) -> object` creates or reads a durable managed-child launch. It shares validation, journal and execution with `POST /agents/launch` and MCP `agent action=launch`. See [HTTP API](http-api.md#durable-managed-agent-launch) for the request, receipt and retry contract. The explicit registered parent, stable name and keep-open policy are set before the prompt can run.
+
+MCP passthrough calls use the same native inbox/output byte-budget validator and
+snapshot pager as `POST /mcp` and HTTP MCP-compatible output; no separate IPC
+paging implementation is added. See [the paging contract](../backend/mcp-http.md#compact-inventories-and-byte-bounded-response-snapshots).
+
+Output snapshot references issued through IPC MCP passthrough and HTTP
+MCP-compatible output intentionally share local `ipc` scope for the same
+target. They are not authorization tokens; endpoint admission is unchanged.
+
+### Frame workload evidence
+
+`save_frame_workload(recording: String) -> Result<String, String>` writes bounded schema-v1 live grid workload JSON through the same serialized blocking-pool writer as `POST /debug/frame-workload`. Returns the instance-local capture path. It does not enable capture.
+
+Dictation corrections are also available through `settings_action` with machine
+target and store `corrections`: discover `/replacements` records keyed by `from`,
+create/remove records and edit replacement `to` values with an owner revision.
+`set_correction_map(map)` retains its public arguments and shared TextCorrector
+persistence; its host-injected state publishes a value-free change after saving.
+
+The upstream credential save/delete commands retain their public arguments;
+host-injected state routes both through the shared value-free Settings publisher
+only after owner persistence. Their HTTP equivalents use the same adapters.
+
+Progress reporting rejects text longer than 500 raw Unicode scalar values before trimming, consistently with HTTP and the native MCP schema (#2007-59f6).

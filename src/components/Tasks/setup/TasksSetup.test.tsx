@@ -38,9 +38,13 @@ afterEach(() => {
 
 describe("Tasks setup", () => {
 	// Catches: an empty Tasks tab that says "install a plugin" without offering the install.
-	it("offers to install each work-item plugin that is missing", async () => {
+	it("rejects provider narration while retaining every install control", async () => {
 		render(() => <TasksSetup />);
-		fireEvent.click(await screen.findByRole("button", { name: "Install GitHub Work" }));
+		const install = await screen.findByRole("button", { name: "Install GitHub Work" });
+		for (const narration of ["GitHub Work shows", "GitLab shows", "Jira shows"]) {
+			expect(screen.queryByText(new RegExp(narration))).not.toBeInTheDocument();
+		}
+		fireEvent.click(install);
 		await waitFor(() =>
 			expect(invoke).toHaveBeenCalledWith("install_plugin_from_url", {
 				url: "https://example.invalid/github-work.zip",

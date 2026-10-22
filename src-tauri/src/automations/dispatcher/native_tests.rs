@@ -106,7 +106,9 @@ async fn shared_runtime_recovers_once_and_manual_dispatch_records_native_spawn_f
     assert_eq!(saved.precheck_outcome, Some(PrecheckOutcome::Bypassed));
     assert_eq!(
         saved.reason.as_deref(),
-        Some("Automation run configuration 'missing-automation-profile' not found")
+        Some(
+            "Automation run configuration 'missing-automation-profile' not found. Choose a saved run configuration: Codex Default"
+        )
     );
     assert!(state.session_maps.sessions.is_empty());
 }

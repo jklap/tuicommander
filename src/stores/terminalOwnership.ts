@@ -5,8 +5,28 @@ import { globalWorkspaceStore, MANUAL_SCOPE } from "./globalWorkspace";
 import { placementWorkspaceFor, repositoriesStore, resolveRepoOwner } from "./repositories";
 import { terminalsStore } from "./terminals";
 
+/** A validated declaration owns display placement, never cwd or removal authority. */
+export function getDeclaredTerminalWorkspace(terminalId: string): { repoPath: string; workspaceId: string } | null {
+	const peer = terminalsStore.get(terminalId)?.tuicSession;
+	if (!peer) return null;
+	// Reconnect initially derives repoPath from actual cwd, which may now be in
+	// another repo or unregistered. The stable declaration owns its containing repo.
+	for (const repoPath of repositoriesStore.getPaths()) {
+		const repo = repositoriesStore.get(repoPath);
+		const declaration = repo?.declaredWorktrees?.[peer];
+		if (!declaration) continue;
+		const workspace = repo?.workspaces[declaration.workspaceId];
+		// Removed or replaced checkouts retract the association before a refresh saves it.
+		if (!workspace || workspace.worktreePath !== declaration.worktreePath || workspace.worktreePath === repoPath) {
+			continue;
+		}
+		return { repoPath, workspaceId: declaration.workspaceId };
+	}
+	return null;
+}
+
 /**
- * Re-home terminals whose branch placement disagrees with their own cwd.
+ * Re-home terminals from an explicit declaration, otherwise their own cwd.
  *
  * A terminal whose cwd matched no registered repo is parked in the Global
  * Workspace, with `repoPath: null` recording that it has no owner yet. Nothing
@@ -34,7 +54,8 @@ export function reconcileTerminalOwnership(terminalId?: string): void {
 		const terminal = terminalsStore.get(terminalId);
 		if (!terminal) continue;
 
-		const owner = resolveRepoOwner(terminal.cwd);
+		const declared = getDeclaredTerminalWorkspace(terminalId);
+		const owner = declared ?? resolveRepoOwner(terminal.cwd);
 		// Still unclaimed. Leave the parked tab where it is — moving it nowhere
 		// would only make it invisible.
 		if (!owner) continue;

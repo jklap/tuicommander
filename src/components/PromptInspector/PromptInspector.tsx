@@ -46,10 +46,6 @@ export const PromptInspector: Component<{ sessionId: string | null; onClose: () 
 						<h4>Prompt inspector</h4>
 					</div>
 					<div class={d.body}>
-						<p class={s.note}>
-							Launch-time observations from this session, never current settings. Bytes measure the original UTF-8
-							payload before redaction. Sent and served mean TUIC supplied the payload; model consumption is unverified.
-						</p>
 						<Show when={receipt.loading}>
 							<p>Loading launch receipt…</p>
 						</Show>

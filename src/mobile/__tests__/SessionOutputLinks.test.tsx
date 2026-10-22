@@ -12,19 +12,24 @@ const { rpc, subscribePty, output } = vi.hoisted(() => ({
 	output: { text: "" },
 }));
 
-vi.mock("../../transport", () => ({ rpc, subscribePty, isTauri: () => false }));
+vi.mock("../../transport", () => ({
+	rpc,
+	subscribePty,
+	subscribeEvents: vi.fn(async () => () => {}),
+	isTauri: () => false,
+}));
 vi.mock("../../invoke", () => ({ invoke: vi.fn() }));
 vi.mock("../../stores/appLogger", () => ({ appLogger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() } }));
 vi.mock("../../stores/ideas", () => ({ ideasStore: { hydrate: vi.fn() } }));
 vi.mock("../useSessions", () => ({
 	useSessions: () => ({
+		aiChatAvailable: () => true,
 		sessions: () => [session],
 		loading: () => false,
 		refreshing: () => false,
 		error: () => null,
 		authError: () => false,
 		refresh: vi.fn(),
-		questionCount: () => 0,
 	}),
 }));
 vi.mock("../useMobileNotifications", () => ({ useMobileNotifications: vi.fn() }));
@@ -70,7 +75,7 @@ beforeEach(async () => {
 			if (args?.repoPath === "/repo" && args?.file === "docs/guide.md") return guide;
 			throw new Error("Read outside the expected repository");
 		}
-		if (command === "list_directory") return [];
+		if (command === "list_directory" || command === "list_open_markdown_tabs") return [];
 		throw new Error(`Unexpected command: ${command}`);
 	});
 	vi.stubGlobal(
