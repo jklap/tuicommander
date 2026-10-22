@@ -1717,7 +1717,7 @@ mod tests {
         buf.feed("\x1b"); // Write 1: Escape → esc_state = Esc
         buf.feed("/"); // Write 2: "/" consumed as unknown ESC sequence
         // Buffer is empty — "/" was NOT inserted
-        assert_eq!(buf.content().len(), 0);
+        assert_eq!(buf.content(), "");
         assert!(!buf.content().starts_with('/'));
     }
 

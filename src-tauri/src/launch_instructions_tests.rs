@@ -358,7 +358,7 @@ fn generated_modules_append_both_user_layers_and_obey_off() {
     assert!(text.contains("## Process safety"));
     assert!(text.contains("except through `make agent-test`, which isolates port, config folder, binary name, shortcuts and microphone."));
     agents.launch_instructions_disabled = true;
-    assert!(effective_text_for(&app, &agents, "ego", true).is_empty());
+    assert_eq!(effective_text_for(&app, &agents, "ego", true), "");
 }
 
 /// Catches: saved default copies appended twice, custom additions lost, or migration rerun on new empty additions.

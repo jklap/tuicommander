@@ -522,7 +522,7 @@ mod tests {
             FrameOrder::Stale,
             "an order claimed by the other transport must still reject an older frame"
         );
-        assert_eq!(tx.frame.len(), 0);
+        assert_eq!(tx.frame, [] as [u8; 0]);
     }
 
     #[test]

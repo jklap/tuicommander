@@ -170,9 +170,8 @@ fn desktop_open_and_close_publish_invalidation_and_replace_the_snapshot() {
         events.try_recv().unwrap(),
         AppEvent::OpenMarkdownTabsChanged
     ));
-    assert!(
-        select_tabs(&state.open_markdown_tabs.read(), "/repo", &config())
-            .unwrap()
-            .is_empty()
+    assert_eq!(
+        select_tabs(&state.open_markdown_tabs.read(), "/repo", &config()).unwrap(),
+        [] as [crate::open_markdown_tabs::OpenMarkdownTab; 0]
     );
 }

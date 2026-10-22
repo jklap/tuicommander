@@ -2169,11 +2169,17 @@ mod tests {
             live_sessions_in(&state, &checkout)[0].session_id,
             "placed-tab"
         );
-        assert!(live_sessions_in(&state, &sibling).is_empty());
+        assert_eq!(
+            live_sessions_in(&state, &sibling),
+            [] as [crate::worktree::WorktreeLiveSession; 0]
+        );
         assert!(guard_suspended_workspace(repo.path(), "placement-sibling").is_ok());
         fs::write(cfg.path().join("suspended-sessions.json"), "not json").unwrap();
         assert!(guard_suspended_workspace(repo.path(), "placement").is_err());
-        assert!(!live_sessions_in(&state, &checkout).is_empty());
+        assert_ne!(
+            live_sessions_in(&state, &checkout),
+            [] as [crate::worktree::WorktreeLiveSession; 0]
+        );
         assert_eq!(
             fs::read_to_string(cfg.path().join("suspended-sessions.json")).unwrap(),
             "not json"
@@ -2842,10 +2848,10 @@ mod tests {
                 .output()
                 .unwrap();
             assert!(rescue.status.success(), "{rescue:?}");
-            assert!(
+            assert_eq!(
                 assess_orphan_cleanup_with_sessions(&state, &repo.path().to_string_lossy(),)
-                    .unwrap()
-                    .is_empty()
+                    .unwrap(),
+                [] as [crate::worktree::OrphanCleanupReview; 0]
             );
 
             let result = remove_orphan_checkout(
@@ -2980,7 +2986,10 @@ mod tests {
                     .expect("orphan listed")
             };
             assert!(row_of(&idle).assessment.safe);
-            assert!(row_of(&idle).live_sessions.is_empty());
+            assert_eq!(
+                row_of(&idle).live_sessions,
+                [] as [crate::worktree::WorktreeLiveSession; 0]
+            );
             assert!(!row_of(&busy).assessment.safe);
             assert_eq!(row_of(&busy).live_sessions.len(), 1);
         }

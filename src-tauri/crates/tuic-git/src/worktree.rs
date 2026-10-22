@@ -4959,7 +4959,7 @@ mod tests {
             ])
             .run()
             .unwrap();
-        assert_ne!(refs.stdout.trim().len(), 0);
+        assert_ne!(refs.stdout.trim(), "");
     }
 
     // Catches: archive errors leave the sidebar and registry pointing at a moved checkout.
@@ -6562,7 +6562,10 @@ mod tests {
                 .count(),
             1
         );
-        assert_ne!(integration_bases(&repo, "origin/trunk").len(), 0);
+        assert_ne!(
+            integration_bases(&repo, "origin/trunk"),
+            [] as [std::string::String; 0]
+        );
     }
 
     /// Catches stale configuration hiding a valid master branch.
@@ -7113,7 +7116,7 @@ branch refs/heads/feat
 
 ";
         let orphans = super::parse_orphan_worktrees(porcelain);
-        assert_eq!(orphans.len(), 0);
+        assert_eq!(orphans, [] as [std::string::String; 0]);
     }
 
     #[tokio::test]
@@ -7130,7 +7133,7 @@ branch refs/heads/feat
             .await
             .expect("detect orphan worktrees");
 
-        assert_eq!(orphans.len(), 0);
+        assert_eq!(orphans, [] as [std::string::String; 0]);
     }
 
     /// Build a linked-worktree fixture: `<root>/wt` with a `.git` file pointing at
@@ -7352,7 +7355,10 @@ branch refs/heads/feat
         );
         let porcelain = detached_porcelain(&wt);
 
-        assert_eq!(super::parse_orphan_worktrees(&porcelain).len(), 0);
+        assert_eq!(
+            super::parse_orphan_worktrees(&porcelain),
+            [] as [std::string::String; 0]
+        );
         assert_eq!(
             super::map_worktree_workspace_paths(&porcelain)
                 .get("feat-auth")
@@ -7370,7 +7376,10 @@ branch refs/heads/feat
         );
         let porcelain = detached_porcelain(&wt);
 
-        assert_eq!(super::parse_orphan_worktrees(&porcelain).len(), 0);
+        assert_eq!(
+            super::parse_orphan_worktrees(&porcelain),
+            [] as [std::string::String; 0]
+        );
         assert_eq!(
             super::map_worktree_workspace_paths(&porcelain)
                 .get("feat-am")
@@ -7867,7 +7876,7 @@ branch refs/heads/feat
     fn public_name_commands_return_valid_noncolliding_names_1450() {
         let existing = vec!["xyzzy".to_string()];
         let name = generate_worktree_name_cmd(existing.clone());
-        assert_ne!(name.len(), 0);
+        assert_ne!(name, "");
         assert!(!existing.contains(&name));
         assert!(name.rsplit('-').next().unwrap().parse::<u16>().unwrap() < 1000);
         let clone = generate_clone_branch_name_cmd("feat/auth".into(), existing);
@@ -9053,7 +9062,7 @@ branch refs/heads/feat
             ])
             .run()
             .unwrap();
-        assert_ne!(refs.stdout.trim().len(), 0);
+        assert_ne!(refs.stdout.trim(), "");
         assert!(
             refs.stdout
                 .lines()
@@ -9214,9 +9223,8 @@ branch refs/heads/feat
                 .run()
                 .unwrap()
                 .stdout
-                .trim()
-                .len(),
-            0
+                .trim(),
+            ""
         );
     }
 
@@ -10707,8 +10715,8 @@ branch refs/heads/feat
                 crate::git_reads::git_reads().diff_stats(Path::new(&workspace.path), None);
             }
             assert_eq!(
-                crate::git::get_merged_branches_impl(&repo).unwrap().len(),
-                0
+                crate::git::get_merged_branches_impl(&repo).unwrap(),
+                [] as [std::string::String; 0]
             );
         }
         let after = crate::git_cli::take_command_counts();
@@ -12287,18 +12295,14 @@ branch refs/heads/feat
             rev_at(&repo, "active-detached").unwrap()
         );
         assert_eq!(
-            detect_orphan_worktrees_blocking(repo.to_string_lossy().into_owned())
-                .unwrap()
-                .len(),
-            0
+            detect_orphan_worktrees_blocking(repo.to_string_lossy().into_owned()).unwrap(),
+            [] as [std::string::String; 0]
         );
         assert!(path.exists());
         fs::write(path.join("unsaved.txt"), "work in progress\n").unwrap();
         assert_eq!(
-            assess_orphan_worktrees(&repo.to_string_lossy())
-                .unwrap()
-                .len(),
-            0
+            assess_orphan_worktrees(&repo.to_string_lossy()).unwrap(),
+            [] as [OrphanCleanupAssessment; 0]
         );
         git_cmd(&repo)
             .args(["branch", "-D", "active-detached"])
@@ -13093,10 +13097,8 @@ branch refs/heads/feat
             .run()
             .unwrap();
         assert_eq!(
-            assess_orphan_worktrees(&repo.to_string_lossy())
-                .unwrap()
-                .len(),
-            0
+            assess_orphan_worktrees(&repo.to_string_lossy()).unwrap(),
+            [] as [OrphanCleanupAssessment; 0]
         );
         assert!(
             path.exists(),

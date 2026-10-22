@@ -3252,12 +3252,12 @@ mod tests {
         assert!(state.grid.gates.is_empty());
         assert!(!crate::pty::grid_has_subscriber(&state, "one"));
         assert!(!crate::pty::grid_has_subscriber(&state, "two"));
-        assert!(
+        assert_eq!(
             state
                 .plugin_output_watchers
                 .read()
-                .matching_ids("old document")
-                .is_empty()
+                .matching_ids("old document"),
+            [] as [std::string::String; 0]
         );
     }
 
@@ -3284,7 +3284,10 @@ mod tests {
         assert!(crate::pty::grid_has_subscriber(&state, "main-terminal"));
         let watchers = state.plugin_output_watchers.read();
         assert_eq!(watchers.matching_ids("main line"), vec!["main-client/w"]);
-        assert!(watchers.matching_ids("panel line").is_empty());
+        assert_eq!(
+            watchers.matching_ids("panel line"),
+            [] as [std::string::String; 0]
+        );
     }
 
     #[cfg(feature = "desktop")]
@@ -3353,7 +3356,10 @@ mod tests {
         let watchers = state.plugin_output_watchers.read();
         assert_eq!(watchers.matching_ids("browser line"), vec!["browser/w"]);
         assert_eq!(watchers.matching_ids("new line"), vec!["new-document/w"]);
-        assert!(watchers.matching_ids("old line").is_empty());
+        assert_eq!(
+            watchers.matching_ids("old line"),
+            [] as [std::string::String; 0]
+        );
     }
 
     #[cfg(feature = "desktop")]
@@ -3372,7 +3378,10 @@ mod tests {
         }
         let watchers = state.plugin_output_watchers.read();
         for i in 0..9 {
-            assert!(watchers.matching_ids(&format!("line-{i}")).is_empty());
+            assert_eq!(
+                watchers.matching_ids(&format!("line-{i}")),
+                [] as [std::string::String; 0]
+            );
         }
         assert_eq!(watchers.matching_ids("line-9"), vec!["document-9/w"]);
     }
@@ -3667,14 +3676,23 @@ mod tests {
             vec!["/b".to_string()]
         );
         // An active repo that is not registered (or parked) warms nothing.
-        assert!(repos_to_prewarm(known(), Some("/gone".to_string()), "active_only").is_empty());
-        assert!(repos_to_prewarm(known(), None, "active_and_switch").is_empty());
+        assert_eq!(
+            repos_to_prewarm(known(), Some("/gone".to_string()), "active_only"),
+            [] as [std::string::String; 0]
+        );
+        assert_eq!(
+            repos_to_prewarm(known(), None, "active_and_switch"),
+            [] as [std::string::String; 0]
+        );
         // `all_sequential` warms every repo, active first so it is ready first.
         assert_eq!(
             repos_to_prewarm(known(), Some("/c".to_string()), "all_sequential"),
             vec!["/c".to_string(), "/b".to_string(), "/a".to_string()]
         );
-        assert!(repos_to_prewarm(Vec::new(), Some("/a".to_string()), "all_sequential").is_empty());
+        assert_eq!(
+            repos_to_prewarm(Vec::new(), Some("/a".to_string()), "all_sequential"),
+            [] as [std::string::String; 0]
+        );
     }
 
     #[test]

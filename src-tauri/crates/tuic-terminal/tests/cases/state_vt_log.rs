@@ -350,7 +350,7 @@ mod state {
             assert_eq!(off1, total);
             // Second fetch: nothing new
             let (batch2, off2) = buf.lines_since_owned(off1, usize::MAX);
-            assert_eq!(batch2.len(), 0);
+            assert_eq!(batch2, [] as [LogLine; 0]);
             assert_eq!(off2, total);
         }
 
@@ -412,7 +412,7 @@ mod state {
             }
             // Fetch with an offset past the end — empty
             let (empty, off2) = buf.lines_since_owned(off, usize::MAX);
-            assert_eq!(empty.len(), 0);
+            assert_eq!(empty, [] as [LogLine; 0]);
             assert_eq!(off2, off);
         }
 
@@ -823,7 +823,7 @@ mod state {
         fn test_mark_agent_chrome_empty_batch() {
             let mut lines: Vec<LogLine> = Vec::new();
             mark_agent_chrome(&mut lines);
-            assert_eq!(lines.len(), 0);
+            assert_eq!(lines, [] as [LogLine; 0]);
         }
 
         /// Regression: a markdown blockquote is prose, not a prompt. Everything after

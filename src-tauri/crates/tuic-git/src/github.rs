@@ -1091,10 +1091,13 @@ mod tests {
 
     #[test]
     fn dedup_rollup_handles_missing_nodes() {
-        assert_eq!(dedup_rollup_nodes(&serde_json::json!({})).len(), 0);
         assert_eq!(
-            dedup_rollup_nodes(&serde_json::json!({"nodes": []})).len(),
-            0
+            dedup_rollup_nodes(&serde_json::json!({})),
+            [] as [serde_json::Value; 0]
+        );
+        assert_eq!(
+            dedup_rollup_nodes(&serde_json::json!({"nodes": []})),
+            [] as [serde_json::Value; 0]
         );
     }
 
