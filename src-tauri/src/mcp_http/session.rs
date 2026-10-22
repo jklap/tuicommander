@@ -516,8 +516,14 @@ pub(super) async fn resize_session(
     }
     // Shared core: grid-before-SIGWINCH ordering + same-dims no-op (056-7545),
     // on the blocking pool — a whole-ring rewrap must not sit on a tokio worker.
-    match crate::pty::resize_session_off_thread(&state, session_id.clone(), body.rows, body.cols)
-        .await
+    match crate::pty::resize_session_off_thread(
+        &state,
+        session_id.clone(),
+        body.rows,
+        body.cols,
+        "http",
+    )
+    .await
     {
         Ok(Some(frame)) => {
             crate::pty::send_grid_frame(&state, &session_id, frame);
@@ -5001,7 +5007,7 @@ mod tests {
             148,
             "registration must preserve the requested width"
         );
-        crate::pty::resize_session_off_thread(&state, session_id.clone(), 24, 148)
+        crate::pty::resize_session_off_thread(&state, session_id.clone(), 24, 148, "test")
             .await
             .expect("same-size resize");
         assert_eq!(
