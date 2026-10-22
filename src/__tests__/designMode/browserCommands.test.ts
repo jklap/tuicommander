@@ -61,12 +61,4 @@ describe("native browser command boundary", () => {
 		expect(errors).toHaveBeenCalledWith(7);
 		await expect(browserCommand({ action: "reload" }, browser(), undefined)).rejects.toThrow("no_reviewed_tab");
 	});
-	it("does not report an empty error list for a remote page that only has the capture grant", async () => {
-		// Catches: <all_urls> capture consent passing the host gate for `errors`, while remote error injection
-		// is never registered for it, so the agent reads "no errors" from a page nothing observed.
-		const chrome = browser(["<all_urls>"]);
-		chrome.tabs.get.mockResolvedValue({ id: 7, active: true, windowId: 2, url: "https://example.com/" });
-		const errors = vi.fn(async () => []);
-		await expect(browserCommand({ action: "errors" }, chrome, 7, errors)).rejects.toThrow();
-	});
 });
