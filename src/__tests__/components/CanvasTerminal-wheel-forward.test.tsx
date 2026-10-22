@@ -190,6 +190,19 @@ describe("CanvasTerminal wheel forwarded to a mouse-reporting app", () => {
 		expect(ptyWrites()).toEqual([]);
 	});
 
+	// Catches: a handler that merely drops Shift+wheel instead of handing it to TUIC's scrollback.
+	it("scrolls TUIC's scrollback on Shift+wheel instead of forwarding it", async () => {
+		await mount(2, 1000);
+		wheel({ deltaY: -100, shiftKey: true });
+		await waitFor(() =>
+			expect(invoke).toHaveBeenCalledWith(
+				"terminal_scroll_to_offset",
+				expect.objectContaining({ sessionId: "wheel-1" }),
+			),
+		);
+		expect(ptyWrites()).toEqual([]);
+	});
+
 	// Catches: a Shift+wheel event (scrollback branch) replacing the forwarded gesture's idle
 	// timer, so the sub-notch residual survives the 200 ms idle gap and fires a notch early.
 	it("drops the forwarded residual after idle even when a Shift+wheel arrived in between", async () => {
