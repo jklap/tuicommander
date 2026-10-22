@@ -97,7 +97,7 @@ export const McpAuditPanel: Component = () => {
 						<table class={css.table}>
 							<colgroup>
 								<col class={css.colTime} />
-								<col class={css.colOperation} />
+								<col />
 								<col class={css.colTarget} />
 								<col class={css.colOutcome} />
 								<col class={css.colBytes} />
