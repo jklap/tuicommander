@@ -766,3 +766,25 @@ fixture stopped and the matching `make agent-test-stop` used. Recorded app,
 owner, Edge, Chrome, fixture and supervisor/monitor PIDs were all absent; the
 desktop PID file was absent (`cleanup-api.json`, `cleanup-pids.json`). No daily
 application restart, reload, configuration or session change was made.
+
+## Round 13: bounded native-folder-input attempt (2026-10-22)
+
+At the coordinator's request, an owned CFT149 launch opened
+`chrome://extensions/` without the load flag, using only the existing scratch
+profile. Developer mode was already on from Round 12. The console was unlocked.
+Before native input, `maccontrol__list_windows` with
+`{app:"Google Chrome for Testing"}` returned exactly:
+
+> Screen Recording permission required. Grant access in System Settings > Privacy & Security > Screen Recording
+
+The attempt stopped at that refusal, before pressing Load unpacked or opening a
+folder chooser. No key input, capture retry or alternative OS-input transport
+was used. This is a current Screen Recording refusal, not an inferred
+Accessibility failure. The required next step is the MacControl Screen Recording
+grant, then the owned Chrome Load unpacked folder selection and no-load-flag
+restart. AC1 remains unchecked; Round 12's other live evidence is unchanged.
+
+The owned Chrome was closed through its own browser connection and its exact
+recorded PID was absent afterward. No backend, fixture server or owner session
+was started in this round. Evidence: `~/Gits/.tmp/design-web/s0-native/`
+(`argv.json`, `pid.json`, `refusal.json`, `cleanup.json`).
