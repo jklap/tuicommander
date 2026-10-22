@@ -4566,7 +4566,7 @@ describe("Sidebar", () => {
 			// Sidebar hardwires RepoSection's onShowChanges to the git panel opener
 			// internally (not an overridable prop) — spy on the real uiStore methods
 			// it calls rather than trying to inject a fake handler.
-			const isDetachedSpy = vi.spyOn(uiStore, "isDetached").mockReturnValue(false);
+			vi.spyOn(uiStore, "isDetached").mockReturnValue(false);
 			const openGitPanelSpy = vi.spyOn(uiStore, "openGitPanelOnTab").mockImplementation(() => {});
 			setRepos({
 				"/repo1": makeRepo({
