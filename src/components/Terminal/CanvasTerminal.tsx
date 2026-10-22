@@ -76,6 +76,7 @@ import {
 	type DecodedFrame,
 	type DecodedRow,
 	decideFrameGrid,
+	decideSizeReclaim,
 	decodeBinaryFrame,
 	decodeStyledRange,
 	GUTTER_PX,
@@ -384,7 +385,29 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 		});
 	}
 
+	// The backend frame carries the size the child sees; when another viewer took
+	// it, this viewer (the one in use) asks for its own back (story 2131-aa75).
+	let reclaimAskedFor = "";
+	function reclaimSize() {
+		if (!currentFrame || !invokeRef) return;
+		const mine = { rows: lastResizeRows, cols: lastResizeCols };
+		const d = decideSizeReclaim(currentFrame, mine, reclaimAskedFor);
+		reclaimAskedFor = d.askedFor;
+		if (!d.send) return;
+		if (isPerfDebug())
+			appLogger.diag.info("terminal", `resize_pty reclaim canvas ${mine.rows}x${mine.cols}`, {
+				sessionId: props.sessionId,
+				caller: "canvas-reclaim",
+				viewer: isTauri() ? "desktop" : "browser",
+				...mine,
+				childRows: currentFrame.screenRows,
+				childCols: currentFrame.screenCols,
+			});
+		invokeRef("resize_pty", { sessionId: props.sessionId, ...mine }).catch(ipcErr("resize_pty"));
+	}
+
 	function writePty(data: string) {
+		reclaimSize();
 		// Typing jumps to the bottom — abandon any in-flight smooth scroll gesture so
 		// its transient transform/cache render doesn't fight the programmatic jump.
 		resetSmoothScroll();
@@ -1877,6 +1900,8 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 		}
 
 		currentFrame = frame;
+		// A frame at our own size confirms the reclaim: release the once-per-foreign-size latch.
+		if (frame.screenRows === lastResizeRows && frame.screenCols === lastResizeCols) reclaimAskedFor = "";
 		clearSelectionIfEvicted(frame);
 
 		// Re-anchor the soft-keyboard lift to the new cursor row (touch + keyboard
@@ -2658,6 +2683,7 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 			setFocused(true);
 			startBlink();
 			props.onFocus?.();
+			reclaimSize();
 			resetInputBuffer();
 			if (currentFrame?.focusReporting) writePtyNoScroll("\x1b[I");
 		});
