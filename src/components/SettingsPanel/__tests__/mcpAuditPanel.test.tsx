@@ -1,12 +1,14 @@
 import { cleanup, fireEvent, render, waitFor } from "@solidjs/testing-library";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const { rpc } = vi.hoisted(() => ({ rpc: vi.fn() }));
+const { rpc, mockInvoke } = vi.hoisted(() => ({ rpc: vi.fn(), mockInvoke: vi.fn() }));
 vi.mock("../../../transport", () => ({ rpc }));
+vi.mock("../../../invoke", () => ({ invoke: mockInvoke, listen: vi.fn().mockResolvedValue(vi.fn()) }));
 vi.mock("../../../stores/appLogger", () => ({
 	appLogger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
 }));
 
+import { LocalMcpPanel } from "../tabs/services/LocalMcpPanel";
 import { McpAuditPanel } from "../tabs/services/McpAuditPanel";
 
 const row = (over: Record<string, unknown> = {}) => ({
@@ -100,5 +102,46 @@ describe("McpAuditPanel", () => {
 		const { container } = render(() => <McpAuditPanel />);
 		await waitFor(() => expect(container.textContent).toContain("disabled"));
 		expect(container.querySelector("table")).toBeNull();
+	});
+});
+
+describe("LocalMcpPanel audit toggle", () => {
+	afterEach(cleanup);
+
+	// Catches: the view mounting and fetching before the toggle is persisted, so a just-enabled audit reads "disabled".
+	it("shows the enabled, empty view after the toggle is switched on, not a stale disabled notice", async () => {
+		let saved = false;
+		const config = () => ({
+			mcp_capabilities: { denied: [], migration_unknown_tools: [] },
+			mcp_call_audit_enabled: saved,
+		});
+		rpc.mockReset();
+		mockInvoke.mockReset();
+		rpc.mockImplementation(async (cmd: string) => {
+			if (cmd === "load_config") return config();
+			if (cmd === "get_mcp_audit") return saved ? projection([]) : { enabled: false, records: [] };
+			throw new Error(`unmocked ${cmd}`);
+		});
+		mockInvoke.mockImplementation(async (cmd: string) => {
+			if (cmd === "load_config") return config();
+			if (cmd === "save_config") {
+				await new Promise((resolve) => setTimeout(resolve, 30));
+				saved = true;
+			}
+			return undefined;
+		});
+		const { container } = render(() => <LocalMcpPanel />);
+		const toggle = await waitFor(() => {
+			const el = container.querySelector<HTMLInputElement>('[data-setting-id="app.mcp_call_audit_enabled"]');
+			expect(el).not.toBeNull();
+			return el as HTMLInputElement;
+		});
+		await new Promise((resolve) => setTimeout(resolve, 20)); // let the initial load_config apply land
+		toggle.checked = true;
+		fireEvent.change(toggle);
+		await waitFor(() => expect(saved).toBe(true));
+		await new Promise((resolve) => setTimeout(resolve, 50));
+		expect(container.textContent).toContain("No calls recorded yet.");
+		expect(container.textContent).not.toContain("The call audit is disabled.");
 	});
 });
