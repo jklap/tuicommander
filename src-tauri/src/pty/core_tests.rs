@@ -7379,8 +7379,11 @@ fn raw_stream_carry_is_bounded() {
 /// ends OSC with ESC-backslash would carry its whole stream forward.
 #[test]
 fn raw_stream_carry_recognises_st_termination() {
-    assert!(unterminated_osc_tail("\x1b]777;notify;Codex;approval\x1b\\").is_empty());
-    assert!(!unterminated_osc_tail("\x1b]777;notify;Codex;approval").is_empty());
+    assert_eq!(
+        unterminated_osc_tail("\x1b]777;notify;Codex;approval\x1b\\"),
+        ""
+    );
+    assert_ne!(unterminated_osc_tail("\x1b]777;notify;Codex;approval"), "");
 }
 
 // --- Awaiting-signal fixtures -----------------------------------------
@@ -8273,7 +8276,7 @@ async fn progress_open_intent_close_matrix() {
     ] {
         let (events, entries) = run_progress_intent_case(&chunks, 128, true, false);
         assert!(events.is_empty(), "cursor move or CR closed an open intent");
-        assert!(entries.is_empty());
+        assert_eq!(entries, [] as [std::string::String; 0]);
     }
 
     let (events, entries) = run_progress_intent_case(
@@ -8283,7 +8286,7 @@ async fn progress_open_intent_close_matrix() {
         false,
     );
     assert!(events.is_empty(), "soft wrap closed an open intent");
-    assert!(entries.is_empty());
+    assert_eq!(entries, [] as [std::string::String; 0]);
 
     let (events, entries) = run_progress_intent_case(
         &[
@@ -8316,8 +8319,14 @@ async fn progress_open_intent_close_matrix() {
         false,
         false,
     );
-    assert!(events.is_empty());
-    assert!(entries.is_empty());
+    assert_eq!(
+        events,
+        [] as [(
+            std::string::String,
+            std::option::Option<std::string::String>
+        ); 0]
+    );
+    assert_eq!(entries, [] as [std::string::String; 0]);
 
     let (events, entries) = run_progress_intent_case_ending(
         &["\x1b[4;1H\x1b[2K• intent: Inspect a closed store (Store error)"],
@@ -8332,7 +8341,7 @@ async fn progress_open_intent_close_matrix() {
         events.is_empty(),
         "failed journal write must not publish an intent"
     );
-    assert!(entries.is_empty());
+    assert_eq!(entries, [] as [std::string::String; 0]);
 
     let secret = format!("ghp_{}", "A".repeat(40));
     let chunk = format!("\x1b[4;1H\x1b[2K• intent: Inspect {secret} (Secret check)");
@@ -8419,8 +8428,14 @@ async fn progress_open_intent_close_matrix() {
         false,
         false,
     );
-    assert!(events.is_empty());
-    assert!(entries.is_empty());
+    assert_eq!(
+        events,
+        [] as [(
+            std::string::String,
+            std::option::Option<std::string::String>
+        ); 0]
+    );
+    assert_eq!(entries, [] as [std::string::String; 0]);
 }
 
 #[cfg(unix)]
@@ -8556,8 +8571,14 @@ async fn ordinary_agent_repaint_avoids_intent_grid_scans() {
     }
     INTENT_CANDIDATE_GRID_READS.with(|reads| reads.set(0));
     let (events, entries) = run_progress_intent_case(&[&frame], 80, true, false);
-    assert!(events.is_empty());
-    assert!(entries.is_empty());
+    assert_eq!(
+        events,
+        [] as [(
+            std::string::String,
+            std::option::Option<std::string::String>
+        ); 0]
+    );
+    assert_eq!(entries, [] as [std::string::String; 0]);
     INTENT_CANDIDATE_GRID_READS.with(|reads| {
         assert!(
             reads.get() <= 2,
@@ -11555,7 +11576,10 @@ fn check_pending_planfiles_empty_is_noop() {
     let state = crate::state::tests_support::make_test_app_state();
     let mut cp = ChunkProcessor::new(None, None);
     cp.check_pending_planfiles("sid", &state);
-    assert!(cp.pending_planfiles.is_empty());
+    assert_eq!(
+        cp.pending_planfiles,
+        [] as [(std::string::String, std::time::Instant); 0]
+    );
 }
 
 #[test]
@@ -12716,7 +12740,7 @@ mod vt_read_tests {
             .await
             .unwrap();
 
-        assert!(text.is_empty());
+        assert_eq!(text, "");
     }
 
     // The lock is taken inside the closure, on the pool thread. If it were taken

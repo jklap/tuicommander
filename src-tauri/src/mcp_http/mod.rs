@@ -6568,7 +6568,7 @@ mod tests {
                 // Catches: HTTP status retaining description prefixes while Settings
                 // switches to dedicated, concise native registry summaries.
                 let summary = entry["summary"].as_str().unwrap();
-                assert!(!summary.trim().is_empty());
+                assert_ne!(summary.trim(), "");
                 assert!(summary.chars().count() <= 70);
                 assert!(
                     !definition["description"]
@@ -10010,7 +10010,7 @@ mod tests {
 
         let (removed, retained) = evict_peers_for_reaped_mcp_session(&state, "mcp-3");
         assert_eq!(removed, vec!["ghost".to_string()]);
-        assert!(retained.is_empty());
+        assert_eq!(retained, [] as [std::string::String; 0]);
         assert!(!state.peer_agents.contains_key("ghost"));
         assert!(!state.orchestrator_peers.contains("ghost"));
     }
@@ -10055,8 +10055,8 @@ mod tests {
             .insert("mcp-live".to_string(), live_channel);
 
         let (removed, retained) = evict_peers_for_reaped_mcp_session(&state, "mcp-old");
-        assert!(removed.is_empty());
-        assert!(retained.is_empty());
+        assert_eq!(removed, [] as [std::string::String; 0]);
+        assert_eq!(retained, [] as [std::string::String; 0]);
         assert_eq!(
             state.peer_agents.get("shared").unwrap().mcp_session_id,
             "mcp-live"

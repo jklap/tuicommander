@@ -430,11 +430,9 @@ fn start_plan_checks_the_pinned_story_revision_not_the_latest_one() {
     );
     // catches: the rejection happening after the run row is written, leaving a Running run that
     // blocks the plan and dispatches nothing.
-    assert!(
-        store
-            .list_plan_runs(&project_path, &plan_id, 10)
-            .unwrap()
-            .is_empty()
+    assert_eq!(
+        store.list_plan_runs(&project_path, &plan_id, 10).unwrap(),
+        [] as [crate::workflows::run::model::RunSnapshot; 0]
     );
     // control: the migrated plan revision pins the checked story revision and starts.
     let run = store
@@ -582,7 +580,10 @@ fn completed_check_rejects_a_changed_git_artifact_without_persisting() {
     );
     let snapshot = flow.store.snapshot(&flow.run_id).unwrap();
     assert_eq!(snapshot.sequence, flow.sequence);
-    assert!(snapshot.stories[0].check_receipts.is_empty());
+    assert_eq!(
+        snapshot.stories[0].check_receipts,
+        [] as [crate::workflows::run::check::CheckReceipt; 0]
+    );
 }
 
 #[test]
@@ -611,10 +612,9 @@ fn completed_check_cannot_reuse_an_unrelated_command_id() {
         flow.store.snapshot(&flow.run_id).unwrap().sequence,
         unrelated.sequence
     );
-    assert!(
-        flow.store.snapshot(&flow.run_id).unwrap().stories[0]
-            .check_receipts
-            .is_empty()
+    assert_eq!(
+        flow.store.snapshot(&flow.run_id).unwrap().stories[0].check_receipts,
+        [] as [crate::workflows::run::check::CheckReceipt; 0]
     );
 }
 
@@ -637,10 +637,9 @@ fn completed_check_cannot_advance_a_cancelled_run() {
         flow.store.snapshot(&flow.run_id).unwrap().sequence,
         cancelled.sequence
     );
-    assert!(
-        flow.store.snapshot(&flow.run_id).unwrap().stories[0]
-            .check_receipts
-            .is_empty()
+    assert_eq!(
+        flow.store.snapshot(&flow.run_id).unwrap().stories[0].check_receipts,
+        [] as [crate::workflows::run::check::CheckReceipt; 0]
     );
 }
 

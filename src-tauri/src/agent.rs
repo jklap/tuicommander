@@ -1993,7 +1993,7 @@ mod tests {
         // We just verify it doesn't panic and returns a proper Result
         match result {
             Ok(path) => {
-                assert!(!path.is_empty());
+                assert_ne!(path, "");
                 assert!(std::path::Path::new(&path).exists());
             }
             Err(msg) => {
@@ -2080,7 +2080,7 @@ mod tests {
         let out = expand_placeholders(&args, &ctx(None, "/proj", None, None, None));
         // Home resolves to a real path on the dev/CI machine — never left literal.
         assert_ne!(out[0], "{home}");
-        assert!(!out[0].is_empty());
+        assert_ne!(out[0], "");
     }
 
     #[test]

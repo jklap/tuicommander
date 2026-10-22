@@ -2880,15 +2880,15 @@ mod tests {
             .into_response();
         assert_eq!(response.status(), StatusCode::OK);
         assert_eq!(*bytes.lock().unwrap(), b"next task\x15");
-        assert!(
+        assert_eq!(
             state
                 .session_maps
                 .input_buffers
                 .get(sid)
                 .unwrap()
                 .lock()
-                .content()
-                .is_empty()
+                .content(),
+            ""
         );
         assert_eq!(
             crate::pty::list_queued_commands(&state, sid)[0].text,
@@ -4417,7 +4417,7 @@ mod tests {
 
         let frame = full_frame_for_single_client(&state, "shared-damage")
             .expect("a dirty session must produce a frame");
-        assert!(!frame.is_empty());
+        assert_ne!(frame, [] as [u8; 0]);
 
         assert!(
             !ticker_frame(&state, "shared-damage").is_empty(),
