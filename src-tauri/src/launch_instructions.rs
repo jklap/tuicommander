@@ -74,7 +74,11 @@ pub(crate) const MDKB_RULE: &str = "## Code search\nUse MDKB for all code search
 static MDKB_INSTALLED: AtomicU8 = AtomicU8::new(0);
 
 fn mdkb_in(dirs: &[PathBuf]) -> bool {
-    let names: &[&str] = if cfg!(windows) { &["mdkb.exe", "mdkb.cmd"] } else { &["mdkb"] };
+    let names: &[&str] = if cfg!(windows) {
+        &["mdkb.exe", "mdkb.cmd"]
+    } else {
+        &["mdkb"]
+    };
     dirs.iter()
         .any(|dir| names.iter().any(|name| dir.join(name).is_file()))
 }

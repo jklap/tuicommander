@@ -453,7 +453,10 @@ fn mdkb_rule_is_absent_when_not_installed_or_launch_text_is_disabled() {
     let (app, mut agents) = (AppConfig::default(), AgentsConfig::default());
     assert!(!effective_text_with(&app, &agents, "claude", false, false).contains("MDKB"));
     agents.launch_instructions_disabled = true;
-    assert_eq!(effective_text_with(&app, &agents, "claude", false, true), "");
+    assert_eq!(
+        effective_text_with(&app, &agents, "claude", false, true),
+        ""
+    );
 }
 
 /// Catches: detection that misses an mdkb executable in a PATH directory, or accepts a directory named mdkb.
