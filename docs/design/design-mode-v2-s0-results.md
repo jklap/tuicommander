@@ -299,3 +299,147 @@ found none running and the isolated desktop PID file was absent. Raw test-profil
 state and transcripts remain as evidence; no daily process was restarted.
 Instruction-link validation and `git diff --check` passed. The formatting helper
 was run against the branch change range; this report changes Markdown only.
+
+## Round 7: catalogue reconciliation and capture authority (2026-10-22)
+
+This round uses production HEAD `c67550fedb009640a118be019cfaa5d54cdfbfd2`.
+It changes evidence and an explicit RED probe only, not production permissions or
+browser behavior. The shared main-checkout story store remains authoritative.
+
+### Catalogue contract
+
+Approved #2067 (`96c4f5778`) removed standalone `design_mode` and moved its actions
+onto the always-listed `ui` tool. Story 1724 AC6 was rejected as superseded, with
+that reason preserved. Its checked replacement retains the observable contract:
+`ui design_*` remains listed, Arm and Stop emit `notifications/tools/list_changed`,
+and a cached action after Stop refuses `Design Mode not armed for this session`.
+Round 6 retained all three observations. Actual-client refresh is still a separate
+criterion; no scope was removed to close the story.
+
+### Screenshot product defect and decision boundary
+
+Authoritative sources inspected on 2026-10-22:
+
+- [Chrome tabs.captureVisibleTab](https://developer.chrome.com/docs/extensions/reference/api/tabs#method-captureVisibleTab):
+  “In order to call this method, the extension must have either the `<all_urls>`
+  permission or the `activeTab` permission.”
+- [Chrome activeTab](https://developer.chrome.com/docs/extensions/develop/concepts/activeTab):
+  temporary access follows user invocation (action, context menu, command shortcut
+  or omnibox acceptance), not merely an `activeTab` manifest declaration. Access
+  is revoked on cross-origin navigation or tab closure.
+
+The tabs page's general host-permission section also lists captureVisibleTab as
+an example of host access. That generic prose does not establish that a narrow
+localhost grant satisfies the method-specific contract. The method-specific
+requirement agrees with the actual Chrome 149 denial recorded in Round 6.
+
+Production call sites:
+
+- `browserCommands.js` accepts static localhost access, checks the reviewed tab
+  is active, then directly calls `chrome.tabs.captureVisibleTab`. It does not
+  obtain a capture grant or convert this denial into an actionable typed error.
+- `worker.js` calls that function for native commands after the armed-owner check.
+  Its separate pick-crop path also calls captureVisibleTab; it retains DOM
+  evidence and reports `Screenshot unavailable: …` on denial.
+- `panel.js` requests per-host or HTTP/HTTPS-wide optional origins from explicit
+  grant buttons. Its Pick button sends a worker message; the code does not
+  establish that this is a Chrome browser-action invocation granting activeTab.
+- The manifest declares `activeTab` and static localhost hosts, but no
+  `<all_urls>` host grant. The ordinary product launcher supplies no user gesture.
+
+**Confirmed defect, narrow claim:** a reviewed localhost page admitted by Design
+Mode can still reject agent screenshots for missing capture authority. Arming and
+static host admission are not sufficient. The recorded failure is a permission
+failure, independent of whether a later PNG would render while the screen is
+locked. No claim is made that capture after a real toolbar gesture also fails.
+
+The smallest permission-preserving correction is an actionable typed refusal
+that asks the user to invoke the Design Mode browser action on the reviewed tab,
+plus documented re-grant behavior after cross-origin navigation. This does not
+make unattended capture work. If unattended capture is required, Boss must first
+approve an explicit broader capture-permission flow. A required `<all_urls>`
+manifest grant would broaden install-time access; an optional grant would keep
+consent explicit but still needs a verified Chrome flow. Neither was implemented
+or requested in this round. CDP/debugger is not proposed as a product workaround.
+
+### One extension-boundary RED
+
+`scripts/design-mode-capture-permission.red.mjs` drives the production
+`browserCommand` entry point with the actual recorded Chrome rejection at its
+external API boundary. It asserts a typed `capture_permission_required` error
+with browser-action recovery guidance. It does **not** mock a successful PNG,
+model Chrome's grant rules, or prove a live screenshot. This narrower regression
+protects the permission-preserving error correction, not an unapproved broad
+permission implementation.
+
+The fixture `scripts/fixtures/design-mode-chrome149-capture-denial.json` is the
+unchanged parsed Round 6 MCP response from `design_screenshot-headed.json`, not
+invented external behavior. SHA-256:
+`b5b57855824a0cdd6e04d14613100c72061832f1e2dfecc735485462f832ae3d`.
+
+One authorized pre-fix run:
+
+```sh
+/Users/stefano.straus/Gits/personal/orchestrator/tools/build/build-slot.sh \
+  scripts/with-test-tmp.sh node --test scripts/design-mode-capture-permission.red.mjs
+```
+
+**Expected RED:** one test failed in 99.7 ms. Actual error was Chrome's raw
+`Either the '<all_urls>' or 'activeTab' permission is required.`, not the expected
+typed actionable refusal. Log: `~/Gits/.tmp/results/design-web-round2-red.log`.
+The `.red.mjs` suffix keeps this explicitly invoked diagnostic outside routine
+suite discovery while the decision is pending. No GREEN or production fix is
+claimed. Adjacent inspected cases: hidden reviewed tab already refuses before
+capture; cross-origin navigation requires renewed activeTab; frame picks retain
+DOM without a screenshot. No new live visual claims were made for these cases.
+
+### Real installed MCP clients
+
+The isolated agent-test backend started with the authorized instance/port preset
+and a matching dry run. Fresh instance ID:
+`7857b87a-a5d9-440a-b9ff-60be68803ef5`. A throwaway Claude PTY supplied the live
+owner identity `8c4af753-931e-4a0f-801f-dae7347af44c`. Clients inherited their
+existing authentication environment; no credential file/keychain was read,
+copied or printed, and no model prompt was submitted.
+
+Invocation-only MCP files/overrides ran a stdio observation relay around the
+worktree's `tuic-bridge` with the explicit isolated socket. The relay recorded
+JSON-RPC methods, IDs and tool names only, not credential or model payloads.
+Evidence: `~/Gits/.tmp/design-web/round2/{claude,codex,ego}-wire.jsonl` and the
+per-client event/transcript files. Results:
+
+| Client | Actual observation | Limit / fallback |
+|---|---|---|
+| Claude Code 2.1.306 | Initial tools/list, then each Arm/Stop notification immediately followed by a fresh tools/list; all three replies list the same nine grouped tools | Refresh **proved** for this bounded connected run. It used server/discover and subscriptions/listen, rather than a legacy initialize handshake. |
+| Codex 0.163.0 | Legacy initialize, initial tools/list, both Arm/Stop notifications delivered; no later tools/list through the end of its 24-second run | Automatic refresh **not observed**, not a claim that Codex can never refresh. Cached grouped UI action remains usable and is refused server-side while stopped (Round 6). The top-level per-run mcp_servers override merged with ambient servers: startup showed eight servers, not a strict one-server environment. No tool/model operation was submitted to them. |
+| ego 0.1.2 | First invocation file lacked required transport; corrected strict stdio file reached server/discover and tools/list, then exited with `invalid MCP candidate: registry publication failed` | Registry admission failed before Arm/Stop. No ego refresh or client fallback pass is claimed. Corrected invocation used inherited environment names and a Gits-local session directory; no empty authentication home. Root cause of registry rejection remains unknown. |
+
+Claude and Codex Arm/Stop calls succeeded against the isolated instance. Each
+browser launch was preceded by one ioreg check reporting unlocked; only newly
+observed exact product Edge PIDs were stopped. A later pre-visual check reported
+`IOConsoleLocked = Yes`, so screenshot/history/crop visual work was skipped,
+without rendering retries or lock polling. S0 persistence, tab return, successful
+crop and independently asserted cancellation ordering remain open.
+
+### Cleanup and remaining gates
+
+The client harness terminated/reaped its recorded client process groups and
+recorded product Edge PIDs. At final cleanup the backend was already unavailable:
+both socket cleanup requests failed to connect, and matching agent-test-stop
+reported no running supervisor. The runtime log records the owned PTY's
+`close_requested` and process exit; the cause of the backend shutdown is not
+established here. All recorded client, bridge, owner, Edge and supervisor PIDs
+were checked and absent; the desktop PID file was absent. No daily TUIC process
+was stopped or restarted by this round.
+
+Both stories remain open. Live matching screenshot and S0 evidence are still
+missing; ego refresh is blocked by registry admission. Permission broadening and
+any resulting production implementation require Boss's decision first.
+Adversarial-TDD's admitted SKILL instructions were read, but its requested README
+resource was unavailable (`no such file or directory`); no hidden review gate is
+claimed. Independent critic, GREEN, full suites and mutation were not run.
+Risk: **medium**, because the diagnosis concerns browser permissions and MCP
+client lifecycle; the committed changes themselves do not change production.
+Locations under `~/Gits/.tmp/` contain raw local evidence, not portable fixtures.
+Verified static checks and story-close refusal output are recorded in the round's
+terminal report.
