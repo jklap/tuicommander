@@ -189,6 +189,20 @@ describe("ContextMenu", () => {
 		}
 	});
 
+	it("reclamps an already-open menu when another right click moves its anchor", async () => {
+		// Catches: x/y update inline styles but fail to schedule the viewport clamp.
+		const [position, setPosition] = createSignal({ x: 20, y: 20 });
+		const { container } = render(() => (
+			<ContextMenu items={sampleItems} x={position().x} y={position().y} visible={true} onClose={() => {}} />
+		));
+		await new Promise((resolve) => requestAnimationFrame(resolve));
+		setPosition({ x: window.innerWidth - 2, y: window.innerHeight - 2 });
+		await new Promise((resolve) => requestAnimationFrame(resolve));
+		const menu = container.querySelector(".menu") as HTMLElement;
+		expect(Number.parseFloat(menu.style.left) + 180).toBeLessThanOrEqual(window.innerWidth - 8);
+		expect(Number.parseFloat(menu.style.top) + sampleItems.length * 36 + 8).toBeLessThanOrEqual(window.innerHeight - 8);
+	});
+
 	it("clamps position to viewport bounds", async () => {
 		// Set a small viewport
 		Object.defineProperty(window, "innerWidth", { value: 200, writable: true, configurable: true });

@@ -215,22 +215,19 @@ export const ContextMenu: Component<ContextMenuProps> = (props) => {
 	});
 
 	// Reposition menu after render to use measured dimensions
-	const clampToViewport = () => {
+	const clampToViewport = (anchorX: number, anchorY: number, itemCount: number) => {
 		if (!menuRef) return;
 		constrainPopupSize(menuRef);
 		const rect = menuRef.getBoundingClientRect();
 		// Layout dimensions ignore the opening scale animation; rects do not.
 		// Fallback estimates support environments without layout (e.g. jsdom).
 		const menuWidth = Math.min(menuRef.offsetWidth || rect.width || 180, viewportLimit("width"));
-		const menuHeight = Math.min(
-			menuRef.offsetHeight || rect.height || props.items.length * 36 + 8,
-			viewportLimit("height"),
-		);
+		const menuHeight = Math.min(menuRef.offsetHeight || rect.height || itemCount * 36 + 8, viewportLimit("height"));
 		const vw = window.innerWidth;
 		const vh = window.innerHeight;
 
-		let x = props.x;
-		let y = props.y;
+		let x = anchorX;
+		let y = anchorY;
 
 		// Horizontal: flip left if overflows right
 		if (x + menuWidth > vw - VIEWPORT_MARGIN) {
@@ -240,7 +237,7 @@ export const ContextMenu: Component<ContextMenuProps> = (props) => {
 
 		// Vertical: if menu doesn't fit below click point, grow upward
 		if (y + menuHeight > vh - VIEWPORT_MARGIN) {
-			y = props.y - menuHeight;
+			y = anchorY - menuHeight;
 		}
 		y = clampAxis(y, menuHeight, vh);
 
@@ -251,7 +248,12 @@ export const ContextMenu: Component<ContextMenuProps> = (props) => {
 
 	createEffect(() => {
 		if (!props.visible || !menuRef) return;
-		const raf = requestAnimationFrame(clampToViewport);
+		// Read reactive inputs here, not in the frame callback: another right click
+		// can move an already-visible menu without changing `visible`.
+		const x = props.x;
+		const y = props.y;
+		const itemCount = props.items.length;
+		const raf = requestAnimationFrame(() => clampToViewport(x, y, itemCount));
 		onCleanup(() => cancelAnimationFrame(raf));
 	});
 
