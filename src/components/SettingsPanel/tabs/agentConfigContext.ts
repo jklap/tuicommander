@@ -1,5 +1,7 @@
+import type { Accessor } from "solid-js";
 import { createContext, useContext } from "solid-js";
 import { type AgentConfigStore, agentConfigsFor } from "../../../stores/agentConfigs";
+import type { LaunchInstructionsDefaults } from "../../../stores/settingsExpert";
 
 export type { AgentConfigStore };
 
@@ -39,3 +41,8 @@ export function useMachine(): () => string | undefined {
 export function createRemoteAgentConfigStore(connectionId: string): AgentConfigStore {
 	return agentConfigsFor(connectionId);
 }
+
+/** One backend preview snapshot shared by the global editor and all agent rows. */
+const LaunchPreviewContext = createContext<Accessor<LaunchInstructionsDefaults | undefined>>(() => undefined);
+export const LaunchPreviewProvider = LaunchPreviewContext.Provider;
+export const useLaunchPreview = () => useContext(LaunchPreviewContext);

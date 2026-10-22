@@ -15,7 +15,7 @@ async fn automation_mcp_http_cli_wire_cannot_drift() {
     use crate::mcp_http::mcp_transport::handle_mcp_tool_call;
     use axum::extract::ConnectInfo;
     let state = test_state();
-    state.config.write().disabled_native_tools.clear();
+    state.config.write().mcp_capabilities.denied.clear();
     state
         .mcp
         .to_session
@@ -38,6 +38,9 @@ async fn automation_mcp_http_cli_wire_cannot_drift() {
         json!({"action":"update","id":"parity","enabled":false}),
         json!({"action":"get","id":"parity"}),
         json!({"action":"list","unexpected":true}),
+        json!({"action":"invented"}),
+        json!({"action":"list_runs","limit":"1"}),
+        json!({"action":"preview","cron":"0 9 * * *","count":0}),
         json!({"action":"preview","cron":"invalid","timezone":"UTC"}),
         json!({"action":"preset","preset":{"kind":"daily","hour":9,"minute":30}}),
         json!({"action":"list"}),
@@ -129,6 +132,17 @@ async fn automation_http_matches_shared_ipc_results_and_errors() {
         let body: Value =
             serde_json::from_slice(&to_bytes(response.into_body(), usize::MAX).await.unwrap())
                 .unwrap();
+        // Static repair errors are shared by HTTP and MCP; IPC retains its string
+        // error signature. Semantic failures below still come from the shared API.
+        if input.get("unknown").is_some() || input.get("count") == Some(&json!(0)) {
+            assert!(expected.is_err());
+            assert_eq!(status, StatusCode::BAD_REQUEST);
+            assert_eq!(body["code"], "invalid_arguments");
+            assert_eq!(body["effect"], "not_started");
+            assert_eq!(body["repair"]["retry_after_correction"], true);
+            assert!(!body["violations"].as_array().unwrap().is_empty());
+            continue;
+        }
         match expected {
             Ok(value) => {
                 assert_eq!(status, StatusCode::OK);

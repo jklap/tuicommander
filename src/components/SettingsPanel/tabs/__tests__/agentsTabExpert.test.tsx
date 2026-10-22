@@ -1,5 +1,6 @@
 import { readFileSync } from "node:fs";
 import { fireEvent, render, waitFor } from "@solidjs/testing-library";
+import { createSignal } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { mockInvoke } from "../../../../__tests__/mocks/tauri";
 
@@ -13,6 +14,12 @@ vi.mock("../../../../stores/ui", async () => {
 		},
 	};
 });
+
+const remoteRpc = vi.hoisted(() => vi.fn());
+vi.mock("../../../../transport", async (importOriginal) => ({
+	...(await importOriginal<typeof import("../../../../transport")>()),
+	rpc: remoteRpc,
+}));
 
 const settingsState = vi.hoisted(() => ({ intentTabTitle: true, suggestFollowups: true, progressTracking: true }));
 vi.mock("../../../../stores/settings", () => ({
@@ -43,6 +50,7 @@ vi.mock("../../../../plugins/pluginLoader", () => ({
 
 import { AGENTS, type AgentsConfig, LIMITED_SUPPORT_LABEL } from "../../../../agents";
 import { agentConfigsStore } from "../../../../stores/agentConfigs";
+import { appLogger } from "../../../../stores/appLogger";
 import { settingsExpertStore } from "../../../../stores/settingsExpert";
 import { uiStore } from "../../../../stores/ui";
 import { AgentsTab } from "../AgentsTab";
@@ -329,5 +337,61 @@ describe("AgentsTab expert controls", () => {
 				}),
 			),
 		);
+	});
+});
+
+// The real machine registry hydrates from transport; only the external IO is held.
+describe("launch preview machine ownership", () => {
+	beforeEach(() => vi.spyOn(appLogger, "error").mockImplementation(() => undefined));
+	let settleLoad: (() => void) | undefined;
+	afterEach(() => {
+		settleLoad?.();
+		vi.restoreAllMocks();
+		settingsExpertStore._resetForTests();
+	});
+	it.each(["delayed", "failed"])("catches stale local preview during %s remote hydration", async (outcome) => {
+		let resolveLoad!: (value: { agents: Record<string, unknown> }) => void;
+		let rejectLoad!: (error: Error) => void;
+		const load = new Promise<{ agents: Record<string, unknown> }>((resolve, reject) => {
+			resolveLoad = resolve;
+			rejectLoad = reject;
+		});
+		settleLoad = () => resolveLoad({ agents: {} });
+		const preview = (text: string) => ({
+			...DEFAULTS,
+			launch_instructions: { default_text: text, required_markers: [], effective_text: {} },
+		});
+		mockInvoke.mockImplementation((cmd: string) => {
+			if (cmd === "load_agents_config") return Promise.resolve({ agents: {} });
+			if (cmd === "get_config_defaults") return Promise.resolve(preview("LOCAL PREVIEW"));
+			if (cmd === "list_installed_mcp_integrations") return Promise.resolve([]);
+			return Promise.resolve(undefined);
+		});
+		remoteRpc.mockImplementation((cmd: string) => {
+			if (cmd === "load_agents_config") return load;
+			if (cmd === "get_config_defaults") return Promise.resolve(preview("REMOTE PREVIEW"));
+			return Promise.resolve(undefined);
+		});
+		await agentConfigsStore.hydrate();
+		await settingsExpertStore.open();
+		const [machine, setMachine] = createSignal<string>();
+		const view = render(() => <AgentsTab connectionId={machine()} />);
+		await waitFor(() => expect(view.getByText("LOCAL PREVIEW")).toBeTruthy());
+		expect((view.getByRole("button", { name: "Add instructions" }) as HTMLButtonElement).disabled).toBe(false);
+		setMachine(`preview-${outcome}`);
+		await waitFor(() => expect(remoteRpc).toHaveBeenCalledWith("load_agents_config", {}, `preview-${outcome}`));
+		expect(view.queryByText("LOCAL PREVIEW")).toBeNull();
+		expect((view.getByRole("button", { name: "Add instructions" }) as HTMLButtonElement).disabled).toBe(true);
+		if (outcome === "failed") {
+			rejectLoad(new Error("remote offline"));
+			await waitFor(() => expect(view.container.textContent).toContain("remote offline"));
+			expect(appLogger.error).toHaveBeenCalledWith("config", "Failed to hydrate agent configs", expect.any(Error));
+			expect(view.queryByText("LOCAL PREVIEW")).toBeNull();
+			expect((view.getByRole("button", { name: "Add instructions" }) as HTMLButtonElement).disabled).toBe(true);
+		} else {
+			resolveLoad({ agents: {} });
+			await waitFor(() => expect(view.getByText("REMOTE PREVIEW")).toBeTruthy());
+			expect((view.getByRole("button", { name: "Add instructions" }) as HTMLButtonElement).disabled).toBe(false);
+		}
 	});
 });

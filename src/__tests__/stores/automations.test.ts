@@ -103,3 +103,24 @@ describe("automations dialog state", () => {
 		});
 	});
 });
+
+// Catches: resaving an unchanged fold choosing the earlier instant, or keeping an obsolete instant after editing.
+it("preserves relative Once instant for prompt edits and clears it for schedule edits", () => {
+	createRoot((dispose) => {
+		const store = createAutomationsStore(fakeAdapter());
+		const once = { ...definition, cron: "", once_local: "2099-10-25T02:30:00", once_at: "2099-10-25T01:30:00Z" };
+		store.select(once);
+		store.edit({ prompt: "New prompt" });
+		expect(store.draft()?.once_at).toBe(once.once_at);
+		for (const patch of [
+			{ once_local: "2099-10-25T03:30:00" },
+			{ timezone: "UTC" },
+			{ cron: "0 9 * * *", once_local: null },
+		]) {
+			store.select(once);
+			store.edit(patch);
+			expect(store.draft()?.once_at).toBeNull();
+		}
+		dispose();
+	});
+});

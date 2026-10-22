@@ -31,6 +31,7 @@
 - [AI Chat](./user-guide/ai-chat.md)
 - [Smart Prompts](./user-guide/smart-prompts.md)
 - [Prompt Library](./user-guide/prompt-library.md)
+- [Guided Event Configuration](./user-guide/event-driven-templates.md)
 - [Voice Dictation](./user-guide/dictation.md)
 
 ## Git & GitHub

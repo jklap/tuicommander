@@ -527,4 +527,13 @@ Logout and disconnect advance the GitHub login generation. Settings device flows
 
 ## Settings startup workflows
 
-The Settings facade delegates device flow, Enterprise verification, account cleanup and registered-repository bindings to the GitHub owners. [Startup workflows](settings-startup.md#github) records poll/status semantics, binding revisions, write-only credentials and current read-discovery gaps. An adapter-level owner snapshot alone does not prove the same information is reachable through the published Settings schema.
+The Settings facade delegates device flow, Enterprise verification, account cleanup and registered-repository bindings to the GitHub owners. [Startup workflows](settings-startup.md#github) records poll/status semantics, binding revisions, write-only credentials and typed `list_accounts` discovery of account metadata/presence. An adapter-level owner snapshot alone does not prove the same information is reachable through the published Settings schema.
+
+## Persistent PR visibility filters
+
+Global `pr_hide_drafts`, `pr_hide_conflicting` and `pr_hide_ci_failing` values
+persist in `config.json` and default to false (show all). Each repository stores
+nullable overrides in `repo-settings.json`: null inherits the current global
+value, true hides the matching PRs, and false explicitly shows them. Settings
+owner transactions preserve unrelated fields, and settings refresh adopts owner
+readback without saving it again. The Rust settings catalogue describes both scopes.

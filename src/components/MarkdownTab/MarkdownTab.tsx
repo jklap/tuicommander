@@ -15,6 +15,7 @@ import { toastsStore } from "../../stores/toasts";
 import { uiStore } from "../../stores/ui";
 import { copyPathToClipboard } from "../../utils/clipboard";
 import { openFileAction } from "../../utils/filePreview";
+import { buildMarkdownReviewPrompt } from "../../utils/markdownReviewPrompt";
 import { isAbsolutePath, joinPath, normalizeSep, pathDirname } from "../../utils/pathUtils";
 import { consumePendingHeading, setPendingHeading } from "../../utils/pendingHeadings";
 import {
@@ -560,13 +561,7 @@ export const MarkdownTab: Component<MarkdownTabProps> = (props) => {
 		const sentContent = content();
 		setSendingChanges(true);
 		try {
-			const noun = count === 1 ? "comment" : "comments";
-			const tweaks = count > 0 ? `apply the ${count} embedded tweak review ${noun}, ` : "";
-			const cleanup = count > 0 ? "remove each resolved tweak marker, and leave" : "and leave";
-			const outcome = await pty.enqueueCommand(
-				sessionId,
-				`Open ${path}, re-read the whole file: ${tweaks}treat every other change since your last write (checkbox toggles, edited text) as the user's answer, ${cleanup} unrelated files unchanged.`,
-			);
+			const outcome = await pty.enqueueCommand(sessionId, buildMarkdownReviewPrompt(path, count));
 			setSentCommentIds(new Set(comments.map((comment) => comment.id)));
 			if (content() === sentContent) setEditedSinceSend(false);
 			const terminalId = terminalsStore.findBySessionId(sessionId);

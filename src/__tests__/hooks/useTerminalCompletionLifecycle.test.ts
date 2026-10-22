@@ -136,7 +136,7 @@ describe("useTerminalCompletionNotifications", () => {
 
 	it("keeps a remote exit fallback silent while still claiming the cycle", async () => {
 		const id = addTerminal("claude");
-		terminalsStore.update(id, { isRemote: true });
+		terminalsStore.update(id, { isExternallyCreated: true });
 		terminalsStore.setActive(null);
 		notificationsStore.setSilenceRemoteCompletions(true);
 
