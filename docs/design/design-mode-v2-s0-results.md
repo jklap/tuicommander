@@ -527,3 +527,60 @@ The feature and consent flow require extension reload/reinstall from a rebuilt
 native bridge before use in a normal installation. This round does not restart
 Boss's daily app. Story 1724 remains open pending the actual consent and live
 post-grant checks; prior S0 and ego-refresh gaps are not silently marked complete.
+
+
+## Round 9: real consent GREEN; rebuilt installer mismatch (2026-10-22)
+
+Boss accepted the genuine Chrome permission prompt. The actual extension document
+reported `<all_urls>` in `chrome.permissions.getAll()` and displayed **All-sites
+capture enabled. Agent eval still needs a separate grant.** No CDP permission
+mutation, browser-action invocation, fake screenshot or storage grant was used.
+
+The opt-in live boundary run passed both tests, with no skips, in 268.4 ms (the
+Chrome case took 148.3 ms). It called the production browser-command module inside
+the real extension document against the actual reviewed fixture and saved the PNG
+at `~/Gits/.tmp/design-web/optionc/granted.png`. The admitted command used
+`TUIC_DESIGN_CDP=http://127.0.0.1:58096` and `TUIC_DESIGN_CAPTURE` with that path.
+Log: `~/Gits/.tmp/results/design-optionc-live-green-retry.log`. The first foreground
+attempt timed out in the build queue without running tests; the event-driven retry
+was admitted after 20 seconds. The display was unlocked before the visual step.
+This proves post-consent Chrome capture without another browser-action gesture;
+it does **not** prove the MCP transport or matching-image acceptance.
+
+### Packaging provenance blocks the MCP comparison
+
+The next normal isolated `make agent-test` build completed in 2m 24s after the
+frontend build. Its bridge artifact had SHA256
+`3ac72e610dc670bc9d8b79aca1b4d91d0a003293f8590ed45d953e54deabbe76`.
+The new backend instance was `5604a56c-3450-4091-9bde-623644137fb4` on 19885.
+A fresh throwaway Claude session was detected as a live Claude agent and armed
+through the real product endpoint. The newly launched isolated Edge PID was
+recorded from the exact executable/profile prefix and stopped before using the
+owned Chrome test profile.
+
+After stopping the owned Chrome, that bridge's real `--design-install` command
+installed assets which did not match this worktree. Six files differed: manifest,
+panel HTML/JS, worker, host errors and browser commands. The installed manifest
+omitted optional `<all_urls>` and the installed panel omitted `grant-capture`.
+The current source contains both. No source files were copied over this mismatch
+to obtain a passing MCP result. Evidence is in
+`~/Gits/.tmp/design-web/optionc/final-installed-assets.json`,
+`rebuilt-manifest.json` and `rebuilt-panel.html`.
+
+With those installed assets, the real panel snapshot returned `{ok:true}` without
+a result; actual MCP `ui design_navigate` and `ui design_screenshot` returned
+`no_reviewed_tab`. The saved browser-page PNG therefore has no successful MCP image
+to compare. Neither a matching image nor successful action history is claimed.
+The panel/document evidence and RPC responses use the `final-*` prefix in that
+same evidence folder. This is not another consent failure: the installer has
+replaced the tested extension assets. The root cause of that artifact mismatch is
+not established. `mbx explain --last`, run from `src-tauri`, reported 913 hits and
+no bridge miss; the build log records a bridge compilation line. No cache was
+deleted, no clean build was run, and no cache bypass was attempted. The coordinator
+was asked to authorize a bridge-only rebuild diagnosis or assign the cache owner.
+
+Story 1724 matching-image acceptance remains open, along with its prior client
+refresh gap. S0 persistence, tab return, crop and cancellation chronology also
+remain open. Round 8's pending-consent status is historical and is superseded by
+the real consent and boundary GREEN above; it must not be used to claim a still
+pending Allow click.
