@@ -168,10 +168,12 @@ impl RelaySession {
     }
 
     /// Resolves when this attachment has ended, with the reason a person sees.
-    pub(crate) async fn lost(&self) -> RelayFailure {
+    pub(crate) fn lost(&self) -> impl std::future::Future<Output = RelayFailure> + Send + 'static {
         let mut handle = self.handle.clone();
-        let _: CloseReason = handle.closed().await;
-        RelayFailure::LinkLost
+        async move {
+            let _: CloseReason = handle.closed().await;
+            RelayFailure::LinkLost
+        }
     }
 }
 

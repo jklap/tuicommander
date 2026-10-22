@@ -117,7 +117,7 @@ pub async fn relay_pair(options: RelayPairOptions) -> anyhow::Result<()> {
             );
         }
         None => {
-            println!("{}", &*text);
+            println!("{}", *text);
             eprintln!(
                 "Pairing bundle above holds the end-to-end secret: import it on the desktop \
                  over a trusted channel and clear your terminal history."
