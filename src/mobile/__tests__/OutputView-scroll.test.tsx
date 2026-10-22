@@ -79,6 +79,43 @@ function dragUp(viewport: HTMLDivElement, pixels: number) {
 	fireEvent.touchEnd(viewport, { touches: [] });
 }
 
+describe("mobile output file links", () => {
+	const path = "stories/archive/2011-86b5-complete-P2-mobile-cli-file-links-wrap-centered-with-surrounding-text.md";
+
+	it("keeps wrapped file links in inline text instead of native centered atomic buttons", async () => {
+		vi.mocked(fetch).mockResolvedValue({
+			ok: true,
+			json: async () => ({ lines: [`  Read ${path} next`], total_lines: 1, offset: 0 }),
+		} as Response);
+		const view = render(() => <OutputView sessionId="links" onOpenFileLink={vi.fn()} />);
+		const link = await view.findByRole("button", { name: path });
+		// Native buttons remain atomic inline-blocks even with display:inline in Chrome.
+		expect(link.tagName).not.toBe("BUTTON");
+		expect(link.tabIndex).toBe(0);
+		expect(link.parentElement?.style.getPropertyValue("--wrap-indent")).toBe("2ch");
+		expect(link.parentElement?.textContent).toBe(`  Read ${path} next`);
+	});
+
+	it("keeps inline file actions tappable and keyboard accessible without scrolling on Space", async () => {
+		vi.mocked(fetch).mockResolvedValue({
+			ok: true,
+			json: async () => ({ lines: [path], total_lines: 1, offset: 0 }),
+		} as Response);
+		const open = vi.fn();
+		const view = render(() => <OutputView sessionId="links" onOpenFileLink={open} />);
+		const link = await view.findByRole("button", { name: path });
+		fireEvent.click(link);
+		fireEvent.keyDown(link, { key: "Enter" });
+		expect(fireEvent.keyDown(link, { key: " " })).toBe(false);
+		fireEvent.keyDown(link, { key: "Escape" });
+		expect(open.mock.calls).toEqual([
+			[path, undefined],
+			[path, undefined],
+			[path, undefined],
+		]);
+	});
+});
+
 describe("mobile output follow", () => {
 	it("keeps the line being read when streaming crosses the tail cap instead of evicting detached content", async () => {
 		const { viewport, append, visibleLine } = await mountCappedOutput();

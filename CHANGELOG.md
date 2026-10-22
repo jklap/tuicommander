@@ -8,6 +8,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - Initialize every terminal grid at its PTY spawn size and seed the first resize no-op guard from the kernel PTY size, not the grid (#2130-2ca2).
 
+### Fixed
+- Keep long mobile CLI file links inline with surrounding text and its hanging indent instead of centering wrapped paths (#2011-86b5).
+- Read nullable macOS WebView URLs without Wry unwraps in document recovery and detached-panel snapshots; a missing URL no longer reaches that panic path (#2120-9f3f).
+- Stop opening the installed CLI for writing during status checks; probe its install directory instead to avoid macOS signature invalidation without changed binary bytes (#2129-1dfd).
 - Offer Add Agent on non-git shell-folder rows using the folder as the working directory, without Git branch or worktree actions (#2125-13fe).
 
 - Clamp context menus using their unscaled layout size, constrain narrow-window menus, and hide branch workflow actions on non-git shell rows (#2124-1866).
