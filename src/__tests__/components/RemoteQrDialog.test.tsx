@@ -55,14 +55,31 @@ describe("RemoteQrDialog", () => {
 		vi.useRealTimers();
 	});
 
-	it("shows a generating placeholder before the QR code resolves", async () => {
-		// Never resolves within this test — proves the placeholder is the initial state.
-		h.rpc.mockImplementation((cmd: string) =>
-			cmd === "get_connect_url" ? new Promise(() => {}) : Promise.resolve([]),
-		);
-		const { getByText } = render(() => <RemoteQrDialog onClose={vi.fn()} />);
+	it("shows a generating placeholder while the connect URL request is still pending", async () => {
+		// IPs resolve, so the effect issues get_connect_url; that request never settles.
+		h.rpc.mockImplementation((cmd: string) => {
+			if (cmd === "get_local_ips") return Promise.resolve(LOCAL_IPS);
+			if (cmd === "load_config") return Promise.resolve({ services: { server: { enabled: true } } });
+			return new Promise(() => {});
+		});
+		const { getByText, queryByAltText } = render(() => <RemoteQrDialog onClose={vi.fn()} />);
 
+		await waitFor(() => expect(h.rpc).toHaveBeenCalledWith("get_connect_url", { ip: "192.168.1.10" }));
 		expect(getByText("Generating QR…")).toBeTruthy();
+		expect(queryByAltText("QR code for remote mobile connection")).toBeNull();
+		expect(h.toDataURL).not.toHaveBeenCalled();
+	});
+
+	it("shows not-available and never requests a connect URL when there are no local IPs", async () => {
+		mockRpc({ localIps: [] });
+		const { findByText, queryByAltText } = render(() => <RemoteQrDialog onClose={vi.fn()} />);
+
+		await waitFor(() => expect(h.rpc).toHaveBeenCalledWith("get_local_ips"));
+		await waitFor(() => expect(h.rpc).toHaveBeenCalledWith("load_config"));
+		// Discovery finished with no address: the placeholder says so (#2049-2d50).
+		expect(await findByText("Not available")).toBeTruthy();
+		expect(queryByAltText("QR code for remote mobile connection")).toBeNull();
+		expect(h.rpc).not.toHaveBeenCalledWith("get_connect_url", expect.anything());
 	});
 
 	it("renders the QR image and connect URL once they resolve", async () => {
@@ -136,12 +153,19 @@ describe("RemoteQrDialog", () => {
 		await findByAltText("QR code for remote mobile connection");
 		h.rpc.mockClear();
 		h.toDataURL.mockClear();
+		h.toDataURL.mockImplementation((url: string) => Promise.resolve(`data:image/png;base64,qr-for-${url}`));
 
 		const select = container.querySelector("select") as HTMLSelectElement;
 		fireEvent.change(select, { target: { value: "10.0.0.5" } });
 
 		await waitFor(() => expect(getByText("https://example.test/connect?ip=10.0.0.5")).toBeTruthy());
 		expect(h.rpc).toHaveBeenCalledWith("get_connect_url", { ip: "10.0.0.5" });
+		expect(h.toDataURL).toHaveBeenCalledWith("https://example.test/connect?ip=10.0.0.5", expect.any(Object));
+		await waitFor(() =>
+			expect((container.querySelector("img") as HTMLImageElement).src).toBe(
+				"data:image/png;base64,qr-for-https://example.test/connect?ip=10.0.0.5",
+			),
+		);
 	});
 
 	it("copies the connect URL to the clipboard and shows a confirmation", async () => {
