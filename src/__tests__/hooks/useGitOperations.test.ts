@@ -251,6 +251,36 @@ describe("useGitOperations", () => {
 		});
 	});
 
+	describe("handleReviewPr on a branch that is not checked out anywhere", () => {
+		it("opens no terminal and queues no command when the branch has no directory of its own", async () => {
+			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
+			repositoriesStore.setWorkspace("/repo", "main", { worktreePath: "/repo" });
+			repositoriesStore.setWorkspace("/repo", "pr-branch"); // a branch row, no checkout
+			repositoriesStore.setActive("/repo");
+			repositoriesStore.setActiveWorkspace("/repo", "main");
+			const before = terminalsStore.getIds().length;
+
+			await expect(gitOps.handleReviewPr("/repo", "pr-branch", "review it")).resolves.toBeUndefined();
+
+			expect(terminalsStore.getIds()).toHaveLength(before);
+			expect(repositoriesStore.get("/repo")?.workspaces["pr-branch"]?.terminals).toEqual([]);
+		});
+
+		it("still opens the review terminal on a linked worktree", async () => {
+			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
+			repositoriesStore.setWorkspace("/repo", "main", { worktreePath: "/repo" });
+			repositoriesStore.setWorkspace("/repo", "pr-branch", { worktreePath: "/repo__wt/pr-branch" });
+			repositoriesStore.setActive("/repo");
+			repositoriesStore.setActiveWorkspace("/repo", "main");
+
+			await gitOps.handleReviewPr("/repo", "pr-branch", "review it");
+
+			const [termId] = repositoriesStore.get("/repo")?.workspaces["pr-branch"]?.terminals ?? [];
+			expect(termId).toBeTruthy();
+			expect(terminalsStore.get(termId)?.pendingInitCommand).toBe("review it");
+		});
+	});
+
 	describe("handleBranchSelect", () => {
 		it("sets active repo and branch", async () => {
 			repositoriesStore.add({ path: "/repo", displayName: "Repo" });

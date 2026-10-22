@@ -3,6 +3,7 @@ import { appLogger } from "../../stores/appLogger";
 import { placementWorkspaceFor, repositoriesStore, resolveRepoOwner } from "../../stores/repositories";
 import { terminalsStore } from "../../stores/terminals";
 import { pathStartsWith } from "../../utils/pathUtils";
+import { sameDir } from "../../utils/repoOwnership";
 
 interface TerminalWorktreeCoordinatorDeps {
 	refreshBranches: () => Promise<void>;
@@ -45,6 +46,18 @@ export function createTerminalWorktreeCoordinator(deps: TerminalWorktreeCoordina
 
 		if (!target) return;
 		if (target.repoPath === currentRepoPath && target.workspaceId === currentWorkspaceId) return;
+
+		// A cwd at the repo root does not name a row (see `findWorkspaceForCwd`), so
+		// `placementWorkspaceFor` picks one — and when two rows claim the root (a stale
+		// ex-root row next to the real one), it can pick a row other than the one the
+		// terminal was deliberately placed on. A terminal whose OWN row already sits at
+		// that directory is home; moving it only trades one row at the same path for
+		// another (a "+" on `wip` landed under `wip-bkup` this way).
+		if (currentRepoPath === target.repoPath && currentWorkspaceId) {
+			const own = repositoriesStore.get(currentRepoPath)?.workspaces[currentWorkspaceId]?.worktreePath;
+			const owner = resolveRepoOwner(placementCwd);
+			if (own && owner && owner.workspaceId === null && sameDir(own, owner.repoPath)) return;
+		}
 
 		// A cd across repos is navigation, not a placement. The tab belongs to the repo
 		// it was opened in — `repoPath` records that owner — and this path may only move
