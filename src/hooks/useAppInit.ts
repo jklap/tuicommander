@@ -1048,7 +1048,7 @@ export async function initApp(deps: AppInitDeps) {
 					paneLayoutStore.setActiveGroup(leafIds[0]);
 				}
 			}
-			assignTabToActiveGroup(id, "terminal", false);
+			assignTabToActiveGroup(id, "terminal", false, { agent: true });
 			// Only steal focus when the app had no terminals at all.
 			if (hadNoTerminals) {
 				terminalsStore.setActive(id);

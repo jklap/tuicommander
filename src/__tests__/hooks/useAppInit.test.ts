@@ -784,6 +784,31 @@ describe("initApp", () => {
 		expect(byId("unnamed")?.nameFromSpawn).toBe(false);
 	});
 
+	it("docks an agent-spawned session into an agent-owned split without taking focus", async () => {
+		let sessionCreated: ((event: { payload: Record<string, unknown> }) => void) | null = null;
+		vi.mocked(listen).mockImplementation(((event: string, handler: (event: { payload: unknown }) => void) => {
+			if (event === "session-created") sessionCreated = handler as typeof sessionCreated;
+			return Promise.resolve(vi.fn());
+		}) as unknown as typeof listen);
+		await initApp(createMockDeps());
+		const existing = terminalsStore.add({
+			sessionId: null,
+			fontSize: 14,
+			name: "mine",
+			cwd: null,
+			awaitingInput: null,
+		});
+		terminalsStore.setActive(existing);
+		paneLayoutStore.arrangeSessionsAsLayout(["s1", "s2"], "tiled");
+		expect(paneLayoutStore.isAgentOwned()).toBe(true);
+
+		sessionCreated!({ payload: { session_id: "agent-x", cwd: "/repo", agent_type: "claude" } });
+
+		const id = terminalsStore.getTerminalForSession("agent-x")!;
+		expect(paneLayoutStore.getGroupForTab(id)).toBeTruthy();
+		expect(terminalsStore.state.activeId).toBe(existing);
+	});
+
 	// `term-alias-assigned` fires once, at spawn. A WebView reload rebuilds every
 	// tab from this list, so the list is the only place the alias survives — a tab
 	// without it loses the address other agents reach it by, and the next restart

@@ -55,6 +55,13 @@ describe("pruneLayoutToLiveTerminals", () => {
 		expect(out).toEqual(input);
 	});
 
+	it("keeps the agentOwned flag, and adds none to a user layout", () => {
+		const owned = { ...layoutOf({ g1: ["t1"], g2: ["t2"] }), agentOwned: true };
+		expect(pruneLayoutToLiveTerminals(owned, live("t1", "t2"))?.agentOwned).toBe(true);
+		const user = pruneLayoutToLiveTerminals(layoutOf({ g1: ["t1"], g2: ["t2"] }), live("t1", "t2"));
+		expect(user).not.toHaveProperty("agentOwned");
+	});
+
 	it("returns null for a layout with no tree", () => {
 		expect(pruneLayoutToLiveTerminals({ root: null, groups: {}, activeGroupId: null }, live("t1"))).toBeNull();
 	});
@@ -185,6 +192,11 @@ describe("arrangeLayoutState", () => {
 		if (!r.ok) throw new Error(`expected ok, got ${r.reason}`);
 		return r.state;
 	}
+
+	it("marks the arranged layout as agent-owned", () => {
+		expect(ok(arrangeLayoutState(EMPTY, ["t1", "t2"], "tiled")).agentOwned).toBe(true);
+		expect(ok(arrangeLayoutState(EMPTY, ["t1", "t2"], "main-vertical")).agentOwned).toBe(true);
+	});
 
 	it("reports 'empty' for no ids, and ignores blank and duplicate ids", () => {
 		expect(arrangeLayoutState(EMPTY, [], "tiled")).toEqual({ ok: false, reason: "empty" });

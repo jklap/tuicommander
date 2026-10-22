@@ -188,6 +188,19 @@ describe("savePaneLayoutForBranch", () => {
 		expect(savedPaneLayouts.has(KEY)).toBe(false);
 	});
 
+	it("carries the agentOwned flag through save and resolve", () => {
+		paneLayoutStore.arrangeSessionsAsLayout(["t1", "t2"], "tiled");
+		savePaneLayoutForBranch(REPO, BRANCH);
+		expect(savedPaneLayouts.get(KEY)?.agentOwned).toBe(true);
+		paneLayoutStore.reset();
+		expect(paneLayoutStore.isAgentOwned()).toBe(false);
+
+		resolvePaneLayoutForBranch(REPO, BRANCH, ["t1", "t2"]);
+
+		expect(paneLayoutStore.isSplit()).toBe(true);
+		expect(paneLayoutStore.isAgentOwned()).toBe(true);
+	});
+
 	it("snapshots the layout, so later live edits don't alter what was saved", () => {
 		paneLayoutStore.arrangeSessionsAsLayout(["t1", "t2"], "tiled");
 		savePaneLayoutForBranch(REPO, BRANCH);

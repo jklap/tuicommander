@@ -82,6 +82,7 @@ export function createBranchSelectionCoordinator(deps: BranchSelectionCoordinato
 		// own (the store's echo guard requires a `name` key alongside it). That
 		// used to leave a branch-label rename unprotected against a later
 		// client's OSC/tmux rename, since the backend never learned it was
+		const previousActiveId = terminalsStore.state.activeId;
 		// custom. Fixed via Terminal.tsx's `createSession` call, which now
 		// reads this same `nameIsCustom` (and `name`) off the store and sends
 		// both as `display_name`/`display_name_is_custom` at creation time —
@@ -132,7 +133,7 @@ export function createBranchSelectionCoordinator(deps: BranchSelectionCoordinato
 			// Safe unconditionally now — paneLayoutStore reflects the target branch's own
 			// layout by this point either way (untouched when !needsSwitch, resolved above
 			// when needsSwitch), so docking never lands the new tab in a stale split.
-			assignTabToActiveGroup(id, "terminal");
+			assignTabToActiveGroup(id, "terminal", true, { displayedId: needsSwitch ? null : previousActiveId });
 		});
 		// Focus the new terminal after SolidJS renders and mounts the component
 		// (onMount sets ref, which happens in the next frame).

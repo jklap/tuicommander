@@ -88,6 +88,16 @@ describe("arrangeSwarmLayout", () => {
 		expect(savedPaneLayouts.get(KEY_A)?.root?.type).toBe("branch");
 	});
 
+	it("marks both a live and a saved swarm split as agent-owned", () => {
+		arrangeSwarmLayout(SWARM, "tiled");
+		expect(savedPaneLayouts.get(KEY_A)?.agentOwned).toBe(true);
+		expect(paneLayoutStore.isAgentOwned()).toBe(false);
+
+		mockRepositoriesStore.state.activeRepoPath = REPO_A;
+		arrangeSwarmLayout(SWARM, "tiled");
+		expect(paneLayoutStore.isAgentOwned()).toBe(true);
+	});
+
 	it("leaves the layout on screen alone when the swarm belongs to another branch", () => {
 		// The user's own split of repo B's terminals is showing.
 		paneLayoutStore.arrangeSessionsAsLayout(["b1", "b2"], "tiled");

@@ -47,6 +47,9 @@ export interface PaneLayoutState {
 	root: PaneNode | null;
 	groups: Record<string, PaneGroup>;
 	activeGroupId: string | null;
+	/** True when the split was built by an agent (tmux-shim `select-layout`), not started by the user.
+	 *  New user-created terminals stay out of an agent-owned split; a user split action adopts it. */
+	agentOwned?: boolean;
 }
 
 // ---- Constants ----
@@ -406,7 +409,7 @@ export function pruneLayoutToLiveTerminals(
 	const leafIds = allLeafIds(root);
 	const activeGroupId =
 		layout.activeGroupId && leafIds.includes(layout.activeGroupId) ? layout.activeGroupId : (leafIds[0] ?? null);
-	return { root, groups, activeGroupId };
+	return { root, groups, activeGroupId, ...(layout.agentOwned ? { agentOwned: true } : {}) };
 }
 
 export type ArrangeResult = { ok: true; state: PaneLayoutState } | { ok: false; reason: "empty" | "unrelated-panes" };
@@ -465,7 +468,7 @@ export function arrangeLayoutState(current: PaneLayoutState, sessionIds: string[
 	const root = layout === "main-vertical" ? mainVertical(groupIds) : tileLeaves(groupIds);
 	const activeGroupId =
 		current.activeGroupId && groupIds.includes(current.activeGroupId) ? current.activeGroupId : (groupIds[0] ?? null);
-	return { ok: true, state: { root, groups, activeGroupId } };
+	return { ok: true, state: { root, groups, activeGroupId, agentOwned: true } };
 }
 
 // ---- Store ----
@@ -483,6 +486,8 @@ function createPaneLayoutStore() {
 	// Plain JS tree — no proxy wrapping
 	let tree: PaneNode | null = null;
 	let restoredFromDisk = false;
+	/** Mirrors `PaneLayoutState.agentOwned` for the layout on screen. Plain (non-reactive): only read at tab-creation time. */
+	let agentOwned = false;
 	const [treeRevision, setTreeRevision] = createSignal(0);
 
 	const [state, setState] = createStore<GroupsState>({
@@ -511,6 +516,7 @@ function createPaneLayoutStore() {
 			root: tree ? structuredClone(tree) : null,
 			groups,
 			activeGroupId: state.activeGroupId,
+			...(agentOwned ? { agentOwned: true } : {}),
 		};
 		layoutWriter.save(snapshot).catch((err: unknown) => appLogger.warn("app", "Failed to save pane layout", err));
 	}
@@ -571,6 +577,8 @@ function createPaneLayoutStore() {
 		/** Split the given group's leaf in the specified direction */
 		split(groupId: string, direction: "horizontal" | "vertical"): string | null {
 			const newGroupId = this.createGroup();
+			// Only a user action calls this; splitting an agent's layout adopts it.
+			agentOwned = false;
 
 			if (!tree) {
 				tree = {
@@ -709,6 +717,11 @@ function createPaneLayoutStore() {
 			return tree !== null && tree.type === "branch";
 		},
 
+		/** True when the visible split was built by an agent (tmux shim), not by the user. */
+		isAgentOwned(): boolean {
+			return agentOwned;
+		},
+
 		/** Check if a group can be split (not at max depth) */
 		canSplit(groupId: string): boolean {
 			treeRevision(); // subscribe
@@ -812,6 +825,7 @@ function createPaneLayoutStore() {
 				root: tree ? structuredClone(tree) : null,
 				groups,
 				activeGroupId: state.activeGroupId,
+				...(agentOwned ? { agentOwned: true } : {}),
 			};
 		},
 
@@ -825,6 +839,7 @@ function createPaneLayoutStore() {
 			groupCounter = maxNum;
 
 			tree = saved.root;
+			agentOwned = saved.agentOwned === true;
 			bumpTree();
 			// reconcile, not a wholesale node replace: `saved.groups` is always a
 			// fresh object, so a plain setState would hand every group and every
@@ -866,6 +881,7 @@ function createPaneLayoutStore() {
 				return;
 			}
 			tree = null;
+			agentOwned = false;
 			restoredFromDisk = false;
 			bumpTree();
 			setState({
