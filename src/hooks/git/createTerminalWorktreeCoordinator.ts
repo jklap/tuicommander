@@ -4,6 +4,7 @@ import { placementWorkspaceFor, repositoriesStore, resolveRepoOwner } from "../.
 import { getDeclaredTerminalWorkspace } from "../../stores/terminalOwnership";
 import { terminalsStore } from "../../stores/terminals";
 import { pathStartsWith } from "../../utils/pathUtils";
+import { sameDir } from "../../utils/repoOwnership";
 
 interface TerminalWorktreeCoordinatorDeps {
 	refreshBranches: () => Promise<void>;
@@ -33,17 +34,32 @@ export function createTerminalWorktreeCoordinator(deps: TerminalWorktreeCoordina
 		const currentWorkspaceId = repositoriesStore.findOwnerForTerminal(terminalId)?.workspaceId ?? null;
 
 		// A declaration changes display placement without moving the process.
-		let target = getDeclaredTerminalWorkspace(terminalId) ?? findWorkspaceForCwd(newCwd);
+		let declared = getDeclaredTerminalWorkspace(terminalId);
+		let target = declared ?? findWorkspaceForCwd(newCwd);
 		if (!target && currentRepoPath) {
 			const insideKnownRepo = repositoriesStore.getPaths().some((repoPath) => pathStartsWith(newCwd, repoPath));
 			if (insideKnownRepo) {
 				await deps.refreshBranches();
-				target = getDeclaredTerminalWorkspace(terminalId) ?? findWorkspaceForCwd(newCwd);
+				declared = getDeclaredTerminalWorkspace(terminalId);
+				target = declared ?? findWorkspaceForCwd(newCwd);
 			}
 		}
 
 		if (!target) return;
 		if (target.repoPath === currentRepoPath && target.workspaceId === currentWorkspaceId) return;
+
+		// A cwd at the repo root does not name a row (see `findWorkspaceForCwd`), so
+		// `placementWorkspaceFor` picks one — and when two rows claim the root (a stale
+		// ex-root row next to the real one), it can pick a row other than the one the
+		// terminal was deliberately placed on. A terminal whose OWN row already sits at
+		// that directory is home; moving it only trades one row at the same path for
+		// another (a "+" on `wip` landed under `wip-bkup` this way). A declared
+		// placement names its row explicitly, so it is never second-guessed here.
+		if (!declared && currentRepoPath === target.repoPath && currentWorkspaceId) {
+			const own = repositoriesStore.get(currentRepoPath)?.workspaces[currentWorkspaceId]?.worktreePath;
+			const owner = resolveRepoOwner(newCwd);
+			if (own && owner && owner.workspaceId === null && sameDir(own, owner.repoPath)) return;
+		}
 
 		// A cd across repos is navigation, not a placement. The tab belongs to the repo
 		// it was opened in — `repoPath` records that owner — and this path may only move

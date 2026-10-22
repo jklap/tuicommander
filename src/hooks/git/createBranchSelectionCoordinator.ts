@@ -15,6 +15,7 @@ import { resolvePaneLayoutForBranch, savePaneLayoutForBranch } from "../../utils
 import { assignTabToActiveGroup } from "../../utils/paneTabAssign";
 import { markPerf } from "../../utils/perfTrace";
 import { randomUuid } from "../../utils/randomId";
+import { sameDir } from "../../utils/repoOwnership";
 import { filterValidTerminals } from "../../utils/terminalFilter";
 import { disarmEagerResume, isEagerResumeArmed } from "../../utils/updateRestart";
 import { syncScopeForActiveRepo } from "../useWorktreeConsolidation";
@@ -59,6 +60,22 @@ export function createBranchSelectionCoordinator(deps: BranchSelectionCoordinato
 				known: Object.keys(repositoriesStore.get(repoPath)?.workspaces ?? {}),
 			});
 		}
+		// A row with no checkout of its own would spawn in the repo root, which is a
+		// DIFFERENT branch's directory whenever another row already sits there — the
+		// shell would be on the wrong branch and the cwd tracker would re-home the tab
+		// under the row that really owns that directory.
+		if (branch && !branch.worktreePath && !cwdOverride) {
+			const repoRoot = repositoriesStore.get(repoPath)?.workspaces ?? {};
+			const rootOwner = Object.entries(repoRoot).find(
+				([id, other]) => id !== workspaceId && !!other.worktreePath && sameDir(other.worktreePath, repoPath),
+			);
+			if (rootOwner) {
+				deps.setStatusInfo(
+					`"${branch.branchName}" has no checkout of its own — check it out, or create a worktree for it, before opening a terminal`,
+				);
+				return;
+			}
+		}
 		const termCount = branch?.terminals.length || 0;
 
 		const branchName = branch?.branchName ?? workspaceId;
@@ -68,6 +85,7 @@ export function createBranchSelectionCoordinator(deps: BranchSelectionCoordinato
 		// frontend key change separate); see the same note at `remove_branch_label`.
 		const label = repoSettingsStore.getEffective(repoPath)?.branchLabels?.[branchName];
 		const tabName = label ?? `${branchName.split(/[\\/]/).pop()} ${termCount + 1}`;
+		const previousActiveId = terminalsStore.state.activeId;
 		const id = terminalsStore.add({
 			sessionId: null,
 			fontSize: deps.getDefaultFontSize(),
@@ -81,8 +99,6 @@ export function createBranchSelectionCoordinator(deps: BranchSelectionCoordinato
 			// backend's `is_valid_uuid` prompt-injection guard.
 			tuicSession: randomUuid(),
 		});
-		// The tab the user was viewing before this add; the pane-docking check below needs it.
-		const previousActiveId = terminalsStore.state.activeId;
 		// This only sets the LOCAL flag — it never echoes to the backend on its
 		// own (the store's echo guard requires a `name` key alongside it). That
 		// used to leave a branch-label rename unprotected against a later
