@@ -207,3 +207,95 @@ Edge checks remain outstanding.
 - The MacControl tool is not exposed to this session (ToolSearch "maccontrol": no match), so the MacControl-specific prompt could not be re-read.
 - Trusted GUI input is unavailable: `osascript` System Events fails with error -1743 (not authorized to send Apple events). `cliclick` exists but Accessibility was not probed, to avoid a permission dialog on the Boss screen.
 - Result: S0 items (a), (b), (e), (f) stay BLOCKED on trusted input. No new S0 pass is claimed.
+
+
+## Round 6: isolated web and MCP checks (2026-10-22)
+
+**MacControl is not a prerequisite for these checks.** Boss's correction applies:
+TUIC's browser frontend can exercise its shared Tauri/HTTP backend, and an owned
+Chrome test instance may use CDP as a harness. The product launcher must still
+omit CDP and automation flags. No daily app restart or daily browser profile was
+used. These results do not close S0 or the screenshot/client-refresh criteria.
+
+### Setup and evidence
+
+- Worktree: `fix/design-mode-web-checks`, starting at `0d02ef11470f`.
+- Built and started with `make agent-test AGENT_TEST_INSTANCE=agent-test-design
+  AGENT_TEST_PORT=19885`, after its matching dry run. This target runs its native
+  build through build-slot/mbx. The isolated backend reported instance
+  `ffd92cb1-5bdd-4de0-bf17-c33f918a184d`; the explicit socket is under
+  `~/Gits/.tmp/tuic-at/8244dd0e0d93010a/`.
+- The authenticated TUIC browser frontend loaded at `http://127.0.0.1:19885/`
+  through the named stealth-wrapper/agent-browser session `design-web-ui`.
+  `tuic-web-snapshot.txt` contains its real sidebar and terminal controls.
+- Chrome for Testing **149.0.7827.54**, real product extension **2.0.0**, fixed ID
+  `eefbgjmmpaimpeaflioojmdipmfchefo`; dedicated profile
+  `~/Gits/.tmp/design-web/profile`. The freshly built native host installed an
+  explicit socket/instance binding. Its sidebar reported that exact socket and
+  the isolated Claude PTY recipient `3b946888-932f-434e-afb0-c595de039544`.
+- The product Arm path launched Edge in the isolated agent-test instance only.
+  Its own Edge processes were stopped before the harness used CFT. Browser cache
+  and native-host files for CFT stayed under the Gits test profile. Product launch
+  and agent-test state also used the explicitly selected isolated instance's
+  application-support directory, never the daily configuration directory. The debug
+  credential-store initialization also selected
+  `~/.tuicommander-dev/instances/agent-test-design/` (startup log); no credential
+  store was read or copied by the harness.
+- The fixture was served from this worktree's `.tmp/design-web-page` on **19886**.
+  Its top origin was `127.0.0.1`; its iframe origin was `localhost`. Native host,
+  socket, DOM picks and MCP replies were real, not mock browser state.
+- Raw evidence and harnesses: `~/Gits/.tmp/design-web/`. Build/start logs:
+  `~/Gits/.tmp/results/design-web-{start,instance}.log`. No application suites,
+  Clippy, mutation runs or rb tests were needed for this documentation/evidence
+  change. The native build is not claimed as a test-suite pass.
+
+### Per-criterion results
+
+| Story / criterion | Non-native verification path | Measured result and remaining scope |
+|---|---|---|
+| 1724 AC4: sidebar who/what/when | Actual extension side panel attached to the isolated backend; MCP `ui design_screenshot`; expand its **Agent actions** details | **PASS DOM observation.** `history-dom-expanded.txt` shows `10:21:43 AM · 3b946888-932f-434e-afb0-c595de039544 · screenshot · failed`. `history-after.json` retains the same real action record. A failed browser action is correctly visible, not hidden. This is not a visual screenshot pass. |
+| 1724 AC5: routing tests plus matching screenshot reality | Existing recorded routing/handler GREEN evidence, plus a real MCP navigation to the worktree fixture and an extension screenshot request | Navigation returned the requested URL (`design_navigate-headed.json`). Screenshot returned Chrome's `Either the '<all_urls>' or 'activeTab' permission is required.` No matching PNG was produced; the mixed criterion stays open. A later navigation during harness reconnect returned the production ten-second `command_timeout`; it is retained, not counted as successful delivery. |
+| 1724 AC6: session-scoped discovery and Claude/Codex/ego refresh | MCP initialize, persistent SSE, tools/list before and after Arm/Stop, cached call after Stop, and separate installed-client probes | **Protocol PASS, client refresh unproved.** Arm and Stop each emitted `notifications/tools/list_changed`. Stop succeeded; the cached `ui design_screenshot` call then refused `Design Mode not armed for this session`. `tools-armed.json` and `tools-stopped.json` are identical under the later accepted #2067 grouping: `ui` always lists `design_*` actions and there is no standalone `design_mode` tool. The old tool-add/remove wording needs reconciliation with #2067, not another implementation of the removed tool. |
+| 1724 AC19: visual action history | Screenshot of the real extension panel, not a static mock or the orchestrator WebView | **OPEN.** DOM history is proved above, but `Page.captureScreenshot` timed out at the harness's eight-second bound (`history-screenshot-error.txt`). No PNG is claimed. |
+| 1724 AC20: visual screenshot correspondence | Compare the MCP screenshot with a harness screenshot of the same reviewed fixture | **OPEN.** The extension capture lacks `activeTab`; the independent harness capture also timed out. Neither half of the comparison is replaced with a fixture image. |
+| 1724 AC21: three-client Arm/Stop refresh | Actual installed clients with invocation-scoped MCP configuration and isolated client homes; no model request or credentials copied | **OPEN.** Claude Code **2.1.306** reached its initial theme/onboarding screen; Codex **0.163.0** reached its sign-in screen; ego **0.1.2** reached model selection with isolated providers not signed in. These bounded probes did not establish a connected, ready MCP client, so they prove neither refresh support nor lack of support. The server-side cached-call fallback is verified independently, not attributed to any client. Transcripts: `{claude,codex,ego}-client.txt`; Claude startup log: `claude-debug.log`. |
+| 1672 AC1 / S0(a): load and persistence | Test-profile flag load; `Extensions.loadUnpacked`; restart the same profile without `--load-extension`; `Extensions.getExtensions` | Flag/API loading worked. After each no-load-flag restart the test API returned `extensions: []` (`persistence-result.json`). This is **not** a successful persistent GUI installation, and does not prove that Chrome's actual **Load unpacked** chooser installation fails. That separate install/persistence step remains open. |
+| 1672 AC1 / S0(b): side panel and tab return | `Target.getTargets` with `type: tab`, then `Extensions.triggerAction` using that **tab** target (not the page target) | The actual `panel.html` target opened and its DOM contained the real native connection and recipient. No OS toolbar click was needed to open it. Tab-return restoration and rendered screenshots were not proved. A page target is rejected with `Action can only be triggered on a tab target`; that is a harness-addressing distinction, not a product failure. |
+| 1672 AC1 / S0(e): trusted top/frame picks and cancellation | Reload owned fixture pages after extension installation, then real `Input.dispatchMouseEvent` in top/frame targets; panel's real arm/stop path | **Partial PASS.** Persisted real picks contain `#target` at `{x:44,y:216.3125,width:278.828125,height:76}` and cross-origin `#frame-target` at `{x:8,y:8,width:291.265625,height:78}` (`picks-result.json`). No hand-written pick storage was injected. Escape and Stop inputs were exercised, but one-shot/cancellation ordering was not independently asserted; do not close that part. Reload after extension installation is required to inject content scripts into already open pages. |
+| 1672 AC1 / S0(f): captureVisibleTab and crop | Invoke the browser action through the test API, then the real capture and crop path, without broadening permissions | **OPEN.** `Extensions.triggerAction` opened the panel but did not grant usable `activeTab` in this run, even on the selected fixture tab. Direct extension capture and the top pick both returned the precise Chrome permission error. Cross-origin picks explicitly retained DOM evidence and omitted their image. No successful crop exists. |
+
+### What still needs a browser-chrome gesture, and what does not
+
+The exact unproved gesture is invoking the extension's real browser action so
+Chrome grants `activeTab` to the reviewed tab. Opening the panel from an
+extension document, or calling the tested `Extensions.triggerAction`, did not
+establish that grant. Likewise, the original GUI **Load unpacked** persistence
+step has not been replaced by a successful persistent test-API install. These
+are browser-chrome installation/permission checks, not reasons to block MCP
+notifications, sidebar DOM checks or ordinary TUIC web controls on MacControl.
+No claim is made that every possible browser API alternative has been exhausted.
+Toolbar pinning itself is not a product acceptance criterion.
+
+During the capture attempts, `ioreg` reported `IOConsoleLocked = Yes`. Both the
+headed browser and the tested `--headless=new` configuration timed out on
+`Page.captureScreenshot`; `fromSurface:false` and a later software-rendering
+configuration also failed to produce a PNG. The concurrent lock is recorded as
+context, not proved as the sole cause. No Accessibility/Screen Recording request,
+permission reset, unlock attempt or permission broadening was performed.
+
+The next verification pass needs a rendering-capable owned browser session, a
+working browser-action grant, and ready MCP clients configured for the isolated
+socket. It does **not** require restarting Boss's daily TUIC, installing into his
+everyday browser, or waiting for MacControl before trying the web/MCP checks.
+
+
+### Cleanup and validation
+
+Design Mode was explicitly stopped, the owned PTY was deleted, all three remaining
+named agent-browser daemons were closed, and the recorded Chrome/fixture processes
+were terminated. `make agent-test-stop AGENT_TEST_INSTANCE=agent-test-design
+AGENT_TEST_PORT=19885` stopped the isolated desktop. The final recorded-PID check
+found none running and the isolated desktop PID file was absent. Raw test-profile
+state and transcripts remain as evidence; no daily process was restarted.
+Instruction-link validation and `git diff --check` passed. The formatting helper
+was run against the branch change range; this report changes Markdown only.
