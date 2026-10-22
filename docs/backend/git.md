@@ -290,7 +290,7 @@ remote branch, otherwise the qualified remote-tracking ref such as
 `upstream/develop`; `origin/HEAD` first, then the remote the main checkout's
 branch tracks, then every other remote in `git remote` order, so an
 `upstream`-only or fork setup resolves too), then the main checkout's attached
-HEAD branch. A linked checkout never supplies the fallback HEAD. When a local
+HEAD branch. A linked checkout never supplies the fallback HEAD. When a tag or local
 branch literally named like the short remote ref (`upstream/develop`) would
 shadow it, the full `refs/remotes/<remote>/<branch>` is returned instead; base
 lookups, the base-ref list and `fetch_if_remote` accept that form. A remote ref
