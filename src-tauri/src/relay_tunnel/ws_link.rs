@@ -9,9 +9,9 @@ use std::time::Duration;
 
 use futures_util::{SinkExt, StreamExt};
 use serde::Deserialize;
-use tokio::sync::{mpsc, watch};
-use tokio_tungstenite::tungstenite::protocol::WebSocketConfig;
+use tokio::sync::mpsc;
 use tokio_tungstenite::tungstenite::Message;
+use tokio_tungstenite::tungstenite::protocol::WebSocketConfig;
 
 use super::bundle::RelayBearer;
 
@@ -43,6 +43,17 @@ impl std::error::Error for LinkError {}
 pub(crate) enum Presence {
     Waiting,
     Connected,
+    /// The other peer left, or was reaped.
+    Gone,
+}
+
+/// What a link delivers. Presence travels in the same queue as the records so a
+/// consumer sees "peer joined" strictly before that peer's first record, and
+/// "peer left" strictly after its last.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum LinkItem {
+    Record(Vec<u8>),
+    Peer(Presence),
 }
 
 #[derive(Deserialize)]
@@ -57,10 +68,8 @@ enum RelayText {
 pub(crate) struct WsLink {
     /// Sealed records to send. Dropping it closes the WebSocket.
     pub tx: mpsc::Sender<Vec<u8>>,
-    /// Sealed records received. Closes when the WebSocket ends.
-    pub rx: mpsc::Receiver<Vec<u8>>,
-    /// `None` until the relay accepts the bearer and sends its first status.
-    pub presence: watch::Receiver<Option<Presence>>,
+    /// Records and peer presence. Closes when the WebSocket ends.
+    pub rx: mpsc::Receiver<LinkItem>,
 }
 
 /// `{relay_url}/ws/{room}`, authenticated by `Bearer R` as the first text frame.
@@ -88,8 +97,7 @@ pub(crate) async fn connect(
         .map_err(|e| LinkError::Connect(e.to_string()))?;
 
     let (out_tx, mut out_rx) = mpsc::channel::<Vec<u8>>(LINK_QUEUE);
-    let (in_tx, in_rx) = mpsc::channel::<Vec<u8>>(LINK_QUEUE);
-    let (presence_tx, presence_rx) = watch::channel(None);
+    let (in_tx, in_rx) = mpsc::channel::<LinkItem>(LINK_QUEUE);
 
     tokio::spawn(async move {
         loop {
@@ -107,18 +115,20 @@ pub(crate) async fn connect(
                 },
                 incoming = source.next() => match incoming {
                     Some(Ok(Message::Binary(record))) => {
-                        if in_tx.send(record.to_vec()).await.is_err() {
+                        if in_tx.send(LinkItem::Record(record.to_vec())).await.is_err() {
                             break;
                         }
                     }
                     Some(Ok(Message::Text(text))) => {
                         if let Ok(RelayText::Status { peer }) = serde_json::from_str(&text) {
-                            let presence = if peer == "connected" {
-                                Presence::Connected
-                            } else {
-                                Presence::Waiting
+                            let presence = match peer.as_str() {
+                                "connected" => Presence::Connected,
+                                "waiting" => Presence::Waiting,
+                                _ => Presence::Gone,
                             };
-                            presence_tx.send_replace(Some(presence));
+                            if in_tx.send(LinkItem::Peer(presence)).await.is_err() {
+                                break;
+                            }
                         }
                     }
                     Some(Ok(Message::Ping(_) | Message::Pong(_) | Message::Frame(_))) => {}
@@ -131,7 +141,6 @@ pub(crate) async fn connect(
     Ok(WsLink {
         tx: out_tx,
         rx: in_rx,
-        presence: presence_rx,
     })
 }
 
