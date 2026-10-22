@@ -1,6 +1,6 @@
 use super::{
-    NewPlan, NewStory, Plan, PlanSource, PlanState, PlanView, Story, StoryCommand, StoryStore,
-    StoryTransition,
+    NewPlan, NewStory, Plan, PlanSource, PlanState, PlanView, Story, StoryCommand, StoryStatus,
+    StoryStore, StorySummary, StoryTransition,
 };
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -32,6 +32,8 @@ pub enum StoryAction {
     PlanView {
         plan_id: String,
     },
+    /// Counts over the active plans of the project: plans, in_progress stories, done and total stories.
+    Summary,
     CreateStory {
         input: NewStory,
     },
@@ -82,6 +84,7 @@ pub enum StoryReply {
     PlanSources(Vec<PlanSource>),
     PlanState(PlanState),
     PlanView(PlanView),
+    Summary(StorySummary),
     Story(Story),
     Stories(Vec<Story>),
     Transitions(Vec<StoryTransition>),
@@ -157,6 +160,29 @@ fn story_action_with_source(
         StoryAction::PlanView { plan_id } => {
             plan_in_project(&plan_id)?;
             Ok(StoryReply::PlanView(store.plan_view(&plan_id)?))
+        }
+        StoryAction::Summary => {
+            let mut summary = StorySummary::default();
+            for plan in store.list_plans(&project)? {
+                let view = store.plan_view(&plan.id)?;
+                if view.state != PlanState::Active {
+                    continue;
+                }
+                summary.active_plans += 1;
+                for read in &view.stories {
+                    if read.abandoned {
+                        continue;
+                    }
+                    match read.story.status {
+                        StoryStatus::WontFix => continue,
+                        StoryStatus::InProgress => summary.in_progress += 1,
+                        StoryStatus::Done => summary.done += 1,
+                        _ => {}
+                    }
+                    summary.total += 1;
+                }
+            }
+            Ok(StoryReply::Summary(summary))
         }
         StoryAction::CreateStory { input } => {
             plan_in_project(&input.plan_id)?;
@@ -479,6 +505,139 @@ mod tests {
             )
         };
         (create("First"), create("Second"))
+    }
+
+    /// Catches: counting stories of finished plans, counting won't-fix stories in the total, and
+    /// counting stories abandoned behind a cancelled dependency, and leaking another project's plans into the summary.
+    #[test]
+    fn summary_counts_only_active_plans_of_the_project() {
+        let config = tempfile::tempdir().expect("config");
+        let _guard = crate::config::set_config_dir_override(config.path().to_path_buf());
+        let repo = tempfile::tempdir().expect("project");
+        let other = tempfile::tempdir().expect("other project");
+        let project = repo.path().to_str().expect("project path");
+        let other_path = other.path().to_str().expect("other path");
+        let transition = |project: &str, story: &Story, command: StoryCommand| {
+            story_of(
+                story_action(
+                    project,
+                    StoryAction::Transition {
+                        story_id: story.id.clone(),
+                        expected_revision: story.revision,
+                        command,
+                    },
+                    None,
+                )
+                .expect("transition"),
+            )
+        };
+
+        // Active plan: one in progress, one won't fix, one ready.
+        let (first, second) = two_stories(project);
+        let third = {
+            let StoryReply::Plans(plans) =
+                story_action(project, StoryAction::ListPlans, None).unwrap()
+            else {
+                panic!("expected plans");
+            };
+            story_of(
+                story_action(
+                    project,
+                    StoryAction::CreateStory {
+                        input: NewStory {
+                            plan_id: plans[0].id.clone(),
+                            title: "Third".into(),
+                            criteria: vec!["Done".into()],
+                            priority: 1,
+                            origin: StoryOrigin::Native,
+                            file_scope: vec![],
+                        },
+                    },
+                    None,
+                )
+                .unwrap(),
+            )
+        };
+        transition(project, &first, StoryCommand::StartManual);
+        // `third` depends on `second`, which is then cancelled: `third` is abandoned.
+        let third = story_of(
+            story_action(
+                project,
+                StoryAction::AddDependency {
+                    story_id: third.id.clone(),
+                    dependency_id: second.id.clone(),
+                    expected_revision: third.revision,
+                },
+                None,
+            )
+            .unwrap(),
+        );
+        assert_eq!(third.status, StoryStatus::Backlog);
+        transition(project, &second, StoryCommand::WontFix);
+
+        // Finished plan: its done story must not count.
+        let StoryReply::Plan(done_plan) = story_action(
+            project,
+            StoryAction::CreatePlan {
+                title: "Old".into(),
+                source: "plans/old.md".into(),
+            },
+            None,
+        )
+        .unwrap() else {
+            panic!("expected plan");
+        };
+        let old = story_of(
+            story_action(
+                project,
+                StoryAction::CreateStory {
+                    input: NewStory {
+                        plan_id: done_plan.id,
+                        title: "Old".into(),
+                        criteria: vec!["Done".into()],
+                        priority: 1,
+                        origin: StoryOrigin::Native,
+                        file_scope: vec![],
+                    },
+                },
+                None,
+            )
+            .unwrap(),
+        );
+        let old = transition(project, &old, StoryCommand::StartManual);
+        let old = transition(project, &old, StoryCommand::CheckCriterion(0));
+        let old = transition(project, &old, StoryCommand::SubmitReview);
+        assert_eq!(
+            transition(project, &old, StoryCommand::Approve).status,
+            StoryStatus::Done
+        );
+
+        // Another project with its own active plan.
+        two_stories(other_path);
+
+        let StoryReply::Summary(summary) =
+            story_action(project, StoryAction::Summary, None).unwrap()
+        else {
+            panic!("expected summary");
+        };
+        assert_eq!(
+            summary,
+            StorySummary {
+                active_plans: 1,
+                in_progress: 1,
+                done: 0,
+                total: 1
+            }
+        );
+        let StoryReply::Summary(empty) = story_action(
+            tempfile::tempdir().unwrap().path().to_str().unwrap(),
+            StoryAction::Summary,
+            None,
+        )
+        .unwrap() else {
+            panic!("expected summary");
+        };
+        assert_eq!(empty, StorySummary::default());
     }
 
     /// Catches: add_dependency silently moving a ready story to backlog, and a claim refusal
