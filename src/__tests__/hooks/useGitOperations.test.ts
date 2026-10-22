@@ -926,6 +926,22 @@ describe("useGitOperations", () => {
 			);
 		});
 
+		// Catches: a recycled (archived) checkout is reported as "Removed", hiding that the branch lives on.
+		it("reports archive and kept branch when the backend recycled the checkout", async () => {
+			mockRepo.removeWorktree.mockResolvedValueOnce({
+				branch_delete_warning: null,
+				branch: "feature",
+				removal_rule: "recyclable",
+			});
+			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
+			repositoriesStore.setWorkspace("/repo", "feature", { worktreePath: "/repo/wt" });
+
+			await gitOps.handleRemoveWorkspace("/repo", "feature");
+
+			expect(mockSetStatusInfo).toHaveBeenCalledWith("Archived feature worktree for reuse; branch was kept");
+			expect(mockSetStatusInfo).not.toHaveBeenCalledWith("Removed feature");
+		});
+
 		it("passes deleteBranch=false when repo setting overrides default", async () => {
 			mockRepo.getWorkspaceLifecycle.mockResolvedValueOnce({
 				dirtyFiles: 0,

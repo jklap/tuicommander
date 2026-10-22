@@ -217,7 +217,7 @@ export const StoriesDialog: Component<StoriesDialogProps> = (props) => {
 	const fail = (cause: unknown): void => {
 		const message = String(cause);
 		appLogger.warn("store", "Stories: action failed", { error: message });
-		setError(cause instanceof Error ? cause.message : message);
+		setError(cause instanceof HttpRpcError ? cause.detail : cause instanceof Error ? cause.message : message);
 	};
 	const ensureCapabilities = async (): Promise<void> => {
 		if (capabilitiesReady) return;

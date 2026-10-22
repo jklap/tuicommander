@@ -38,6 +38,9 @@ function describeRemoveWorktreeSuccess(branchName: string, outcome: RemoveWorktr
 	if (outcome?.branch_delete_warning) {
 		return `Removed ${branchName} worktree; branch was kept: ${outcome.branch_delete_warning}`;
 	}
+	if (outcome?.removal_rule === "recyclable") {
+		return `Archived ${branchName} worktree for reuse; branch was kept`;
+	}
 	return `Removed ${branchName}`;
 }
 

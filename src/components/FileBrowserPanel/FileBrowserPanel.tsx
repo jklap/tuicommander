@@ -1112,6 +1112,33 @@ export const FileBrowserPanel: Component<FileBrowserPanelProps> = (props) => {
 		contextMenu.open(e);
 	};
 
+	/** Right-click on the empty area (rows stop propagation): menu for the tree root. */
+	const getRootContextMenuItems = (): ContextMenuItem[] => {
+		const mod = getModifierSymbol();
+		const parent = parentDirFor(null);
+		return [
+			{ label: t("fileBrowser.newFolder", "New Folder\u2026"), action: () => openCreateDialog("folder", parent) },
+			{
+				label: t("fileBrowser.newFile", "New File\u2026"),
+				action: () => openCreateDialog("file", parent),
+				separator: true,
+			},
+			{
+				label: t("fileBrowser.paste", "Paste"),
+				shortcut: `${mod}V`,
+				action: handlePaste,
+				disabled: !clipboard(),
+			},
+		];
+	};
+
+	const handleEmptyAreaContextMenu = (e: MouseEvent) => {
+		e.preventDefault();
+		if (!root()) return;
+		setContextEntry(null);
+		contextMenu.open(e);
+	};
+
 	// Keyboard navigation
 	createEffect(() => {
 		if (!props.visible) return;
@@ -1416,7 +1443,7 @@ export const FileBrowserPanel: Component<FileBrowserPanelProps> = (props) => {
 				</div>
 			</Show>
 
-			<div class={p.content} ref={contentRef}>
+			<div class={p.content} ref={contentRef} onContextMenu={handleEmptyAreaContextMenu}>
 				<Show when={loading() || (searching() && searchMode() === "filename")}>
 					<div class={s.empty}>
 						{searching() ? t("fileBrowser.searching", "Searching\u2026") : t("fileBrowser.loading", "Loading...")}
@@ -1598,7 +1625,7 @@ export const FileBrowserPanel: Component<FileBrowserPanelProps> = (props) => {
 
 			{/* Context menu */}
 			<ContextMenu
-				items={contextEntry() ? getContextMenuItems(contextEntry()!) : []}
+				items={contextEntry() ? getContextMenuItems(contextEntry()!) : getRootContextMenuItems()}
 				x={contextMenu.position().x}
 				y={contextMenu.position().y}
 				visible={contextMenu.visible()}
