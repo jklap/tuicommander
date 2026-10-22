@@ -353,6 +353,18 @@ async fn agent_without_required_profile_pauses_with_a_durable_reason() {
     let project_alias = project.path().join(".");
     let project_path = project_alias.to_str().unwrap();
     let published = definition(project_path, false, true);
+    // A default install seeds a default Codex profile, so the pause needs two saved profiles and no default.
+    crate::config::save_agents_config(
+        crate::config::AgentsConfig::default(),
+        agents(serde_json::json!({"agents": {
+            "codex": {"codex_bypass_migrated": true},
+            "claude": {"run_configs": [
+                {"name": "alpha", "command": "claude"},
+                {"name": "beta", "command": "claude"}
+            ]}
+        }})),
+    )
+    .unwrap();
     let state = state(config.path());
     WorkflowRuntime::spawn(&state);
     owner_ready(&state).await;
@@ -394,10 +406,71 @@ async fn agent_without_required_profile_pauses_with_a_durable_reason() {
         notices
             .entries
             .iter()
-            .any(|n| n.text.contains(&run.id) && n.text.contains("'sol'"))
+            .any(|n| n.text.contains(&run.id) && n.text.contains("mark one as default"))
     );
+    // catches: a pause whose cause lives only in the progress journal, so Incidents says none is retained.
+    let cause = current.pause_cause.as_deref().unwrap();
+    assert!(cause.contains("mark one as default"), "{cause}");
+    let incidents = crate::workflows::run::incidents::project_incidents(&current, None);
+    assert_eq!(incidents[0].cause, cause);
     assert_eq!(store.replay(&run.id).unwrap(), current);
     store
         .command(&run.id, "test:cancel", RunCommand::Cancel)
         .unwrap();
+}
+
+fn agents(json: serde_json::Value) -> crate::config::AgentsConfig {
+    serde_json::from_value(json).unwrap()
+}
+
+#[test]
+fn a_default_install_with_one_saved_profile_serves_every_role() {
+    // catches: hardcoded sol/sonnet names pausing a run on an install that saved another profile.
+    let config = agents(serde_json::json!({"agents": {"claude": {"run_configs": [
+        {"name": "mine", "command": "claude"}
+    ]}}}));
+    for role in [AgentRole::Implementer, AgentRole::Reviewer, AgentRole::Coordinator] {
+        assert_eq!(
+            super::super::runtime::effects::resolve_run_profile(&config, &role).unwrap(),
+            "mine"
+        );
+    }
+}
+
+#[test]
+fn the_default_profile_wins_over_other_saved_profiles_and_named_ones_win_over_it() {
+    // catches: picking an arbitrary saved profile; ignoring the legacy sol/sonnet names on configured installs.
+    let config = agents(serde_json::json!({"agents": {"claude": {"run_configs": [
+        {"name": "alpha", "command": "claude"},
+        {"name": "beta", "command": "claude", "is_default": true},
+        {"name": "sonnet", "command": "claude"}
+    ]}}}));
+    use super::super::runtime::effects::resolve_run_profile as resolve;
+    assert_eq!(resolve(&config, &AgentRole::Implementer).unwrap(), "beta");
+    assert_eq!(resolve(&config, &AgentRole::Reviewer).unwrap(), "sonnet");
+}
+
+#[test]
+fn several_profiles_without_a_default_say_what_to_do() {
+    // catches: guessing a model when the user never chose one.
+    let config = agents(serde_json::json!({"agents": {"claude": {"run_configs": [
+        {"name": "alpha", "command": "claude"},
+        {"name": "beta", "command": "claude"}
+    ]}}}));
+    let error = super::super::runtime::effects::resolve_run_profile(&config, &AgentRole::Implementer)
+        .unwrap_err();
+    assert!(error.contains("mark one as default"), "{error}");
+}
+
+#[test]
+fn readiness_names_each_problem_once_for_a_definition_with_agents() {
+    // catches: the start dialog saying nothing before a run that cannot reach its first Agent step.
+    let (_config, project, _plan, _story, _template, _guard) = fixture();
+    let published = definition(project.path().to_str().unwrap(), false, true);
+    let problems = super::super::runtime::effects::profile_problems(
+        &published,
+        &crate::config::AgentsConfig::default(),
+    );
+    assert_eq!(problems.len(), 1, "{problems:?}");
+    assert!(problems[0].contains("Settings > Agents"));
 }

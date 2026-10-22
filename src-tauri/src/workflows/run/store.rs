@@ -275,6 +275,7 @@ impl RunStore {
             started_ms: now_ms(),
             paused_since_ms: None,
             paused_duration_ms: 0,
+            pause_cause: None,
             limits,
             loops: 0,
             story_creations: 0,
@@ -1849,6 +1850,7 @@ fn choose_event(
             command,
             RunCommand::Cancel
                 | RunCommand::Pause
+                | RunCommand::PauseFor { .. }
                 | RunCommand::BindAgent { .. }
                 | RunCommand::MarkEffect { .. }
                 | RunCommand::ResolveUncertainEffect { .. }
@@ -1870,6 +1872,7 @@ fn choose_event(
             command,
             RunCommand::Cancel
                 | RunCommand::Pause
+                | RunCommand::PauseFor { .. }
                 | RunCommand::BindAgent { .. }
                 | RunCommand::MarkEffect { .. }
                 | RunCommand::ResolveUncertainEffect { .. }
@@ -2479,6 +2482,7 @@ fn choose_event(
             Ok(RunEventKind::Completed)
         }
         RunCommand::Pause => Ok(RunEventKind::Paused),
+        RunCommand::PauseFor { cause } => Ok(RunEventKind::PausedFor { cause }),
         RunCommand::ExpireDeadline => unreachable!("deadline handled before ordinary commands"),
         RunCommand::ResumeGraph {
             execution_id,
