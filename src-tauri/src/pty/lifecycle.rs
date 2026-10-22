@@ -3712,15 +3712,14 @@ pub(crate) fn resize_session_core(
         .or_insert_with(|| Arc::new(Mutex::new((0, 0))))
         .clone();
     let mut applied = resize_lock.lock();
-    // Seed the last-applied dims from the live grid the first time we see this session:
-    // at creation the grid and PTY share the openpty size, so a first resize that only
-    // matches the startup dims no-ops instead of firing a gratuitous SIGWINCH. `(0, 0)`
-    // is the never-applied sentinel (real dims are guarded > 0 above).
+    // Seed from the kernel PTY size, not the grid: the grid may differ from what
+    // the child sees. If querying fails, leave the sentinel and attempt the resize.
+    // `(0, 0)` is the never-applied sentinel (real dims are guarded > 0 above).
     if *applied == (0, 0)
-        && let Some(vt_log) = state.grid.vt_log_buffers.get(session_id)
+        && let Some(session) = state.session_maps.sessions.get(session_id)
+        && let Ok(size) = session.lock().master.get_size()
     {
-        let vt = vt_log.lock();
-        *applied = (vt.grid_screen_lines() as u16, vt.grid_columns() as u16);
+        *applied = (size.rows, size.cols);
     }
     // No-op guard compares against the last dims that actually reached the PTY, not just
     // the grid: a prior call that resized the grid but then failed `master.resize` leaves

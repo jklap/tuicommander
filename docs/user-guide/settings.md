@@ -250,7 +250,7 @@ keep a managed child open, and its parent receives an idle-timeout notice before
 closure. A child can also be marked keep-open at spawn or through the agent or
 session tool.
 
-**Launch instructions** combines generated modules with user additions. Select Markers, Working with the user, Waiting and long work, Git and worktrees, Process safety, and Children. Children applies only to spawned children. Global switches are ceilings for the per-agent switches. **Turn all launch instructions off** suppresses the complete text, including additions.
+**Launch instructions** combines generated modules with user additions. Select Markers, Working with the user, Waiting and long work, Git and worktrees, Process safety, and Children. Children applies only to spawned children. Global switches are ceilings for the per-agent switches. **Turn all launch instructions off** suppresses the complete text, including additions. When mdkb is installed, a fixed "Code search" rule (search with MDKB first) follows the modules; it has no toggle and is absent without mdkb.
 
 **Add instructions** and **Add instructions for <agent>** open empty user-addition fields, not copies of the generated text. TUIC appends global additions and then agent additions after enabled modules. Save on blur; clear a layer with **Clear global additions** or **Clear agent additions**. Empty adds nothing. `{VER}` becomes the TUIC version.
 
