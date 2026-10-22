@@ -1,5 +1,6 @@
 import { type Component, createSignal, For, onMount, Show } from "solid-js";
 import { invoke } from "../../invoke";
+import { HttpRpcError } from "../../transport";
 import { Input } from "../ui/Input";
 import { Select } from "../ui/Select";
 import { Textarea } from "../ui/Textarea";
@@ -33,6 +34,7 @@ interface Draft {
 	graph: Graph;
 	draftRevision: number;
 	latestPublishedRevision: number;
+	lastPublishedDraftRevision: number;
 	builtinKey: string | null;
 }
 type Reply =
@@ -91,6 +93,11 @@ function outcomes(kind: Kind): string[] {
 	}
 }
 
+/** An HTTP failure carries the server's plain message in `detail`; `String(cause)` would show the RPC envelope. */
+function plainMessage(cause: unknown): string {
+	return cause instanceof HttpRpcError ? cause.detail : String(cause);
+}
+
 export interface WorkflowDesignerProps {
 	project: string;
 }
@@ -132,7 +139,7 @@ export const WorkflowDesigner: Component<WorkflowDesignerProps> = (props) => {
 			setDrafts(reply.value);
 			if (reply.value.length) chooseDraft(reply.value.find((item) => item.id === draft()?.id) ?? reply.value[0]);
 		} catch (cause) {
-			setError(String(cause));
+			setError(plainMessage(cause));
 		} finally {
 			setBusy(false);
 		}
@@ -200,7 +207,7 @@ export const WorkflowDesigner: Component<WorkflowDesignerProps> = (props) => {
 			setDirty(false);
 			setNotice("Draft saved.");
 		} catch (cause) {
-			setError(String(cause));
+			setError(plainMessage(cause));
 		} finally {
 			setBusy(false);
 		}
@@ -214,9 +221,13 @@ export const WorkflowDesigner: Component<WorkflowDesignerProps> = (props) => {
 			const reply = await call({ action: "publish", id: current.id, expected_revision: current.draftRevision });
 			if (reply.type !== "published") throw new Error("Invalid workflow response");
 			setNotice(`Published revision ${reply.value.revision}.`);
-			setDraft({ ...current, latestPublishedRevision: reply.value.revision });
+			setDraft({
+				...current,
+				latestPublishedRevision: reply.value.revision,
+				lastPublishedDraftRevision: current.draftRevision,
+			});
 		} catch (cause) {
-			setError(String(cause));
+			setError(plainMessage(cause));
 		} finally {
 			setBusy(false);
 		}
@@ -236,7 +247,11 @@ export const WorkflowDesigner: Component<WorkflowDesignerProps> = (props) => {
 					<button type="button" onClick={() => void save()} disabled={busy() || !dirty()}>
 						Save draft
 					</button>
-					<button type="button" onClick={() => void publish()} disabled={busy() || dirty() || !draft()}>
+					<button
+						type="button"
+						onClick={() => void publish()}
+						disabled={busy() || dirty() || !draft() || draft()?.draftRevision === draft()?.lastPublishedDraftRevision}
+					>
 						Publish
 					</button>
 				</div>
