@@ -10,9 +10,11 @@ while an owned fake HTTP upstream stopped, opened its circuit and recovered.
 Only `fake2126__echo` left the list. The bridge also forwarded
 `notifications/tools/list_changed` during these transitions.
 
-This does **not** prove that Claude Code retains its client-side catalogue.
-The original report of all TUIC tools disappearing still needs a timestamped
-client trace, bridge stderr or tools/list response from the failing connection.
+The coordinator subsequently supplied the exact Claude Code transcript. Its
+structured deltas disprove the claimed native-tool loss in the supplied samples:
+all nine TUIC removal deltas on October 22 remove only upstream tools. See
+[Client transcript findings](#client-transcript-findings). This does not rule out
+a different native outage outside those samples.
 
 ## Contract and scope
 
@@ -61,11 +63,41 @@ The nine native names were `agent`, `automations`, `plugin_dev_guide`, `progress
 It also successfully called `agent list_peers`, `session list` and `repo list`
 in each phase. It did not call `ui` or `progress`.
 
-This experiment induced the circuit through failed tool calls, not the periodic
-health-check task. Recovery used the reconnect endpoint, not a timed automatic
-health probe. The client was a stdio JSON-RPC probe, not Claude Code itself.
+This first experiment induced the circuit through failed tool calls. Recovery
+used the reconnect endpoint. Its snapshots and notifications are in
+`observations.json`.
+
+### Periodic health-check experiment
+
+A second finite run used the same isolated target, real bridge and owned fake.
+It made **no upstream tool calls** and did not request reconnect after the
+outage. It waited for the production periodic health checker to open the circuit
+and recover it automatically.
+
+| UTC timestamp | Observation |
+| --- | --- |
+| 11:04:26.863452 | Healthy tools/list: nine native tools and the fake tool |
+| 11:04:27.038407 | Fake listener stopped |
+| 11:05:24.877341 | Application log: `Health check failed — circuit opening`, fake2126 |
+| 11:05:24.957901 | HTTP status: `circuit_open`, zero upstream tool calls |
+| 11:05:24.958323 | Bridge stdout: `notifications/tools/list_changed` |
+| 11:05:24.965092 | tools/list retains all nine native names; only fake tool absent |
+| 11:05:24.971322 | Fake listener restarted |
+| 11:06:24.886730 | Application log: `Recovered (Ready) with 1 tools` |
+| 11:06:25.649631 | Bridge stdout: another `notifications/tools/list_changed` |
+| 11:06:25.683520 | tools/list contains all nine native names and fake tool again |
+
+`agent list_peers`, `session list` and `repo list` again succeeded in every
+phase. The bridge stayed connected across both health intervals; its stderr
+contains startup and `connected to TUIC`, with no connection-lost or proxy
+error. The finite run exited zero, removed the saved fake upstream and stopped
+all owned processes. The observations are in `health-observations.json`; full
+local logs and scripts use the `tuic-2126-health-` prefix under the same results
+directory.
+
+Both experiments used a stdio JSON-RPC probe rather than Claude Code itself.
 Collapsed discovery and simultaneous outages of multiple upstreams were not
-exercised. The snapshots and notifications are in `observations.json`.
+exercised.
 
 ## Source findings
 
@@ -129,11 +161,55 @@ Full local evidence is under `~/Gits/.tmp/results/`:
 `tuic-2126-live.log`. The diagnostic scripts are retained there as
 `tuic-2126-probe.py` and `tuic-2126-run-live.py`.
 
-## Required next evidence
+## Client transcript findings
 
-Capture the affected Claude Code connection's bridge stderr and raw tools/list
-responses across a reported disappearance. Distinguish a bridge-generated empty
-offline list, an RPC error/timeout, and client-side catalogue refresh behavior.
-Do not change registry filtering or suppress list_changed based on correlation
-alone. Story acceptance criteria remain open because the reported native-tool
-loss and a corresponding RED test have not been reproduced.
+The coordinator supplied `~/Gits/.tmp/results/coord-mcp-drops-20261022.md`, which
+names this source transcript:
+
+```text
+~/.claude-private/projects/-Users-stefano-straus-Gits-personal-orchestrator/a06d7386-5100-42fb-b2d3-d56bdda6adcd.jsonl
+```
+
+Read the structured `attachment.removedNames`, **not** the rendered wildcard
+summary. The client writes the attachment when building its next request, so
+these timestamps are upper bounds for the catalogue changes.
+
+| Client attachment UTC | Removed tools | Native tools removed |
+| --- | --- | --- |
+| 05:26:53.781 | openrouter-key-manager 53, quill 6 | None |
+| 05:27:12.498 | outlook-calendar 11, outlook-mail 21, publishwith-ai-mcp 1, slack 27, spinach 5 | None |
+| 09:00:02.749 | All eight upstream namespaces, 177 total | None |
+| 09:03:31.201 | quill 6 | None |
+| 09:44:03.583 | gh-metrics 53 | None |
+| 09:49:01.978 | openrouter-key-manager 53, quill 6 | None |
+| 10:35:22.527 | gh-metrics 53 | None |
+| 10:52:25.409 | gh-metrics 53 | None |
+| 10:59:34.601 | gh-metrics 53 | None |
+
+In particular, the last three samples render this misleading text:
+
+```text
+53 deferred tools are no longer available (MCP server disconnected): mcp__tuicommander__* (53).
+```
+
+But every removed name has the narrower prefix
+`mcp__tuicommander__gh-metrics__`. No `agent`, `ui`, `session`, `repo` or
+`progress` removal appears in these deltas. The complete October 22 TUIC
+removal arrays and rendered notices are retained in `client-deltas.json`.
+The supplied claim that these samples removed native tools is contradicted by
+their own source. This is consistent with normal upstream filtering and the
+bridge's list_changed notifications, not evidence of a TUIC disconnect.
+
+The longer transcript does contain older native-removal deltas, including
+October 19 at 06:51:58.737Z and October 20 at 18:34:48.905Z. Their causes have
+not been established here. Do not generalize the October 22 finding to every
+historical disconnect or dismiss a future trace that names native tools.
+
+## Remaining decision
+
+Do not change registry filtering or suppress list_changed to fix the supplied
+October 22 samples: their upstream-only removal is correct. The coordinator
+must reconcile the story's original defect claim and RED criterion with the
+structured client evidence. A genuine native-loss report still needs a delta
+that names native tools, bridge stderr or a failing tools/list response. No
+corresponding RED test has been reproduced, and no production fix is claimed.
