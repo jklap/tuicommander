@@ -1,5 +1,5 @@
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use chrono::{DateTime, Utc};
 use dashmap::DashMap;
@@ -24,6 +24,8 @@ struct StartReservation<'a> {
     manager: &'a TunnelManager,
     id: String,
     token: u64,
+    /// The slot is ours (the claim succeeded); only then may Drop remove it.
+    claimed: bool,
     published: bool,
 }
 
@@ -47,7 +49,7 @@ impl Drop for StartReservation<'_> {
         // cleanup has been awaited, so a zero in-flight count means every start
         // has finished (or discarded) whatever it spawned.
         let _release = InFlightRelease(&self.manager.starting_in_flight);
-        if self.published {
+        if self.published || !self.claimed {
             return;
         }
         if let dashmap::mapref::entry::Entry::Occupied(entry) =
@@ -75,6 +77,17 @@ pub struct TunnelManager {
     /// `Starting` reservation alone says nothing about the supervisor/ssh that
     /// start is about to create (and then has to clean up itself).
     starting_in_flight: tokio::sync::watch::Sender<usize>,
+    /// Set (and never cleared) by `shutdown_all_and_wait` BEFORE it snapshots the
+    /// map. A start that claims its id after that snapshot would otherwise
+    /// publish a Running tunnel nothing will ever stop; see `start_with`.
+    shutting_down: AtomicBool,
+    /// Cleanup of a start that lost its publication race (its `stop_and_take_task`
+    /// wait). Owned HERE, on a spawned task, rather than by the `start_with`
+    /// future: a caller can abort that future (e.g. the remote-runtime
+    /// supervisor's `dispose`), which would drop the wait and let the in-flight
+    /// counter reach zero while the supervisor's ssh is still being killed.
+    /// `shutdown_all_and_wait` joins these.
+    cleanups: Mutex<Vec<tokio::task::JoinHandle<()>>>,
     next_reservation: AtomicU64,
     /// Wrapped in Mutex so Arc<Mutex<AuditLog>> is Send+Sync and can be
     /// captured in the `Send + 'static` status callback required by TunnelSupervisor.
@@ -86,6 +99,8 @@ impl TunnelManager {
         Self {
             tunnels: DashMap::new(),
             starting_in_flight: tokio::sync::watch::channel(0).0,
+            shutting_down: AtomicBool::new(false),
+            cleanups: Mutex::new(Vec::new()),
             next_reservation: AtomicU64::new(1),
             audit,
         }
@@ -108,6 +123,21 @@ impl TunnelManager {
         let id = profile.id.clone();
         let token = self.next_reservation.fetch_add(1, Ordering::Relaxed);
 
+        // Count this start BEFORE the slot becomes visible: `shutdown_all_and_wait`
+        // removes a `Starting` slot and then reads the counter, so a slot that is
+        // visible while the count is still zero would be waited for by nobody.
+        // The reservation's Drop releases the count on every exit path, and only
+        // removes a slot carrying its own token, so the early returns below are
+        // safe.
+        self.starting_in_flight.send_modify(|count| *count += 1);
+        let mut reservation = StartReservation {
+            manager: self,
+            id: id.clone(),
+            token,
+            claimed: false,
+            published: false,
+        };
+
         // Claim the id ATOMICALLY, before spawning anything. A `contains_key`
         // check followed by an `.await` and a later `insert` is a TOCTOU: two
         // concurrent starts both saw the id free, both spawned a supervisor, and
@@ -121,15 +151,17 @@ impl TunnelManager {
             }
             dashmap::mapref::entry::Entry::Vacant(slot) => {
                 slot.insert(TunnelSlot::Starting(token));
+                reservation.claimed = true;
             }
         }
-        self.starting_in_flight.send_modify(|count| *count += 1);
-        let mut reservation = StartReservation {
-            manager: self,
-            id: id.clone(),
-            token,
-            published: false,
-        };
+        // Checked AFTER the claim (SeqCst, like the store in
+        // `shutdown_all_and_wait`, which sets the flag BEFORE its snapshot):
+        // either the snapshot saw this slot and removed it (so `publish` fails
+        // and this start discards its own supervisor), or the claim came after
+        // the snapshot, in which case the flag is already visible here.
+        if self.shutting_down.load(Ordering::SeqCst) {
+            return Err(format!("tunnel '{id}' not started: app is shutting down"));
+        }
 
         let audit = Arc::clone(&self.audit);
         let audit_cb = Arc::clone(&self.audit);
@@ -180,7 +212,21 @@ impl TunnelManager {
             // the `.await` below.
             let task = handle.lock().supervisor.stop_and_take_task();
             if let Some(task) = task {
-                let _ = tokio::time::timeout(GRACEFUL_SHUTDOWN_TIMEOUT, task).await;
+                // Handed to the manager, not awaited by this future: aborting
+                // THIS future must not abandon the wait (see `cleanups`). No
+                // await between `stop_and_take_task` and the registration, so
+                // an abort cannot land in the gap.
+                let (done_tx, done_rx) = tokio::sync::oneshot::channel::<()>();
+                let cleanup = tokio::spawn(async move {
+                    let _ = tokio::time::timeout(GRACEFUL_SHUTDOWN_TIMEOUT, task).await;
+                    let _ = done_tx.send(());
+                });
+                {
+                    let mut cleanups = self.cleanups.lock();
+                    cleanups.retain(|c| !c.is_finished());
+                    cleanups.push(cleanup);
+                }
+                let _ = done_rx.await;
             }
             return Err(format!("tunnel '{id}' was stopped while starting"));
         }
@@ -356,6 +402,11 @@ impl TunnelManager {
         // concurrent `start()` publishes in the gap, with no stop signal and
         // no wait — directly undermining the "no orphaned SSH process on
         // exit" guarantee this method exists to provide.
+        //
+        // The flag goes up BEFORE the snapshot so a start that claims an id
+        // after it cannot publish a tunnel this call will never stop (see
+        // `start_with`).
+        self.shutting_down.store(true, Ordering::SeqCst);
         let ids: Vec<String> = self
             .tunnels
             .iter()
@@ -381,6 +432,12 @@ impl TunnelManager {
                 let _ = task.await;
             }
             let _ = in_flight.wait_for(|count| *count == 0).await;
+            // After the counter: every start that returned or was aborted has
+            // registered its cleanup (synchronously) before it could be dropped.
+            let cleanups = std::mem::take(&mut *self.cleanups.lock());
+            for cleanup in cleanups {
+                let _ = cleanup.await;
+            }
         };
         let _ = tokio::time::timeout(GRACEFUL_SHUTDOWN_TIMEOUT, joined).await;
     }
@@ -781,6 +838,109 @@ mod tests {
             .await
             .unwrap()
             .expect_err("stopped start must not publish");
+        let ssh_pid: i32 = std::fs::read_to_string(&marker)
+            .map(|text| text.trim().parse().unwrap())
+            .unwrap_or(0);
+        if ssh_pid > 0 {
+            let alive = unsafe { libc::kill(ssh_pid, 0) } == 0;
+            if alive {
+                unsafe { libc::kill(ssh_pid, libc::SIGKILL) };
+            }
+            assert!(!alive, "ssh {ssh_pid} survived shutdown");
+        }
+    }
+
+    /// Catches: a start that claims its id AFTER `shutdown_all_and_wait` took its
+    /// snapshot. Nothing removes it and the counter is already zero, so the
+    /// tunnel would publish as Running and outlive the app exit.
+    #[tokio::test]
+    async fn a_start_after_shutdown_is_refused_before_spawning_anything() {
+        let (audit, _dir) = temp_audit();
+        let manager = TunnelManager::new(audit);
+        manager.shutdown_all_and_wait().await;
+
+        let spawned = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let spawned_in_closure = Arc::clone(&spawned);
+        let profile = test_profile("after-shutdown");
+        let id = profile.id.clone();
+        let error = manager
+            .start_with(profile, move |_, _| async move {
+                spawned_in_closure.store(true, Ordering::SeqCst);
+                std::future::pending::<TunnelSupervisor>().await
+            })
+            .await
+            .expect_err("start after shutdown must be refused");
+        assert!(error.contains("shutting down"), "{error}");
+        assert!(manager.get_status(&id).is_none(), "no slot may be left");
+        assert!(!spawned.load(Ordering::SeqCst), "nothing may be spawned");
+    }
+
+    /// Catches: the lost-publication cleanup being owned by the (abortable)
+    /// `start_with` future. Aborting the caller — the remote-runtime supervisor's
+    /// `dispose` does — dropped the wait, the in-flight counter hit zero, and
+    /// `shutdown_all_and_wait` returned while ssh was still being killed. ssh
+    /// ignores SIGTERM here, so it only dies after the 5s SIGKILL escalation.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn aborting_a_start_mid_cleanup_does_not_let_shutdown_return_early() {
+        let (audit, _dir) = temp_audit();
+        let manager = Arc::new(TunnelManager::new(audit));
+        let marker = crate::test_support::test_temp_root().join("abort_mid_cleanup_ssh.pid");
+        let _ = std::fs::remove_file(&marker);
+        let script = fake_ssh_script(&format!(
+            "echo $$ > '{}'\ntrap '' TERM\nexec sleep 3600",
+            marker.display()
+        ));
+        let ssh_path = script.path().to_path_buf();
+        let marker_in_spawn = marker.clone();
+        let profile = test_profile("abort-mid-cleanup");
+        let id = profile.id.clone();
+        let (release_tx, release_rx) = tokio::sync::oneshot::channel();
+        let task_manager = Arc::clone(&manager);
+        let start = tokio::spawn(async move {
+            task_manager
+                .start_with(profile, move |profile, callback| async move {
+                    let _ = release_rx.await;
+                    let supervisor =
+                        TunnelSupervisor::start_with_binary(profile, ssh_path, callback).await;
+                    // Hold the supervisor back until ssh is really up: stopping
+                    // a supervisor before its ssh spawned would skip the slow
+                    // kill this test needs the cleanup to sit in.
+                    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+                    while !marker_in_spawn.exists() && std::time::Instant::now() < deadline {
+                        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+                    }
+                    supervisor
+                })
+                .await
+        });
+        while !matches!(manager.get_status(&id), Some(TunnelStatus::Starting)) {
+            tokio::task::yield_now().await;
+        }
+        let shutdown_manager = Arc::clone(&manager);
+        let shutdown = tokio::spawn(async move { shutdown_manager.shutdown_all_and_wait().await });
+        while manager.get_status(&id).is_some() {
+            tokio::task::yield_now().await;
+        }
+
+        // The start spawns ssh, loses its publication race, and is parked in
+        // cleanup waiting for ssh to die (it ignores SIGTERM).
+        let _ = release_tx.send(());
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while !marker.exists() {
+            assert!(std::time::Instant::now() < deadline, "ssh never started");
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+        start.abort();
+        let _ = start.await;
+
+        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+        assert!(
+            !shutdown.is_finished(),
+            "shutdown returned while ssh was still being cleaned up"
+        );
+        shutdown.await.unwrap();
         let ssh_pid: i32 = std::fs::read_to_string(&marker)
             .map(|text| text.trim().parse().unwrap())
             .unwrap_or(0);
