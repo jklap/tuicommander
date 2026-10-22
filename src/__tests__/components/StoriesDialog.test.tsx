@@ -171,6 +171,18 @@ describe("StoriesDialog", () => {
 		expect(screen.queryByText(/Restart TUICommander/)).toBeNull();
 	});
 
+	// Catches: the dialog showing "RPC story_action_command failed: 422 {...}" instead of the plain message.
+	it("shows only the plain message of a rejected user action", async () => {
+		vi.mocked(invoke)
+			.mockResolvedValueOnce(true)
+			.mockRejectedValueOnce(
+				new HttpRpcError("story_action_command", 422, '{"error":"criteria are incomplete: unchecked indexes 1"}'),
+			);
+		render(() => <StoriesDialog project="/repo" onClose={() => {}} />);
+		const alert = await screen.findByText(/criteria are incomplete/);
+		expect(alert.textContent).not.toMatch(/RPC|422|\{/);
+	});
+
 	it("classifies a missing HTTP capability route by its status", async () => {
 		vi.mocked(invoke).mockRejectedValueOnce(new HttpRpcError("story_capabilities", 404, "Not Found"));
 		render(() => <StoriesDialog project="/repo" onClose={() => {}} />);
