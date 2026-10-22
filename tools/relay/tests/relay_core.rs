@@ -535,7 +535,9 @@ type TestWs =
 /// stops reading must end the room, never receive a stream with a hole in it.
 #[tokio::test]
 async fn slow_peer_overflow_closes_the_room_instead_of_dropping_frames() {
-    let addr = start_relay().await;
+    let mut state = AppState::new();
+    Arc::get_mut(&mut state).unwrap().timing.peer_send_timeout = Duration::from_millis(300);
+    let addr = start_relay_with_state(state).await;
     let mut sender = connect_ws(addr, "overflow").await;
     let _ = read_text(&mut sender).await;
     let mut slow = connect_ws(addr, "overflow").await;
@@ -603,4 +605,64 @@ async fn oversized_message_ends_the_connection_and_is_not_forwarded() {
     })
     .await;
     assert_eq!(outcome, Ok("closed"));
+}
+
+/// Catches a burst closing the room: a peer that is only briefly slow must
+/// receive every frame in order, because the relay waits before it gives up.
+#[tokio::test]
+async fn brief_stall_of_a_peer_delays_frames_but_loses_none() {
+    let addr = start_relay().await;
+    let mut sender = connect_ws(addr, "burst").await;
+    let _ = read_text(&mut sender).await;
+    let mut slow = connect_ws(addr, "burst").await;
+    let _ = read_text(&mut slow).await;
+    let _ = read_text(&mut sender).await;
+
+    // 100 frames overrun the 32-slot channel while the reader sleeps 1 s.
+    let sender_task = tokio::spawn(async move {
+        for i in 0u32..100 {
+            let mut payload = vec![0u8; 64 * 1024];
+            payload[..4].copy_from_slice(&i.to_be_bytes());
+            sender.send(Message::Binary(payload.into())).await.unwrap();
+        }
+        sender
+    });
+    tokio::time::sleep(Duration::from_secs(1)).await;
+    for i in 0u32..100 {
+        let b = read_binary(&mut slow).await;
+        assert_eq!(u32::from_be_bytes(b[..4].try_into().unwrap()), i);
+    }
+    let _ = sender_task.await;
+}
+
+/// Catches a dead TCP peer pinning a room: a peer that answers nothing is
+/// reaped and the remaining peer is told.
+#[tokio::test]
+async fn silent_peer_is_reaped_and_the_other_peer_is_told() {
+    let mut state = AppState::new();
+    {
+        let timing = &mut Arc::get_mut(&mut state).unwrap().timing;
+        timing.ping_interval = Duration::from_millis(100);
+        timing.dead_after = Duration::from_millis(500);
+    }
+    let addr = start_relay_with_state(state).await;
+    let mut live = connect_ws(addr, "dead").await;
+    let _ = read_text(&mut live).await;
+    // Never polled again: tungstenite answers pings only while it is read.
+    let mut silent = connect_ws(addr, "dead").await;
+    let _ = read_text(&mut silent).await;
+    let _ = read_text(&mut live).await;
+
+    let told = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            if let Some(Ok(Message::Text(t))) = live.next().await {
+                if t.contains("disconnected") {
+                    return;
+                }
+            }
+        }
+    })
+    .await;
+    assert!(told.is_ok(), "a silent peer was never reaped");
+    drop(silent);
 }
