@@ -486,7 +486,10 @@ mod tests {
         if root {
             return; // permission bits do not bind root
         }
-        assert!(!writable, "a read-only directory cannot take an atomic replacement");
+        assert!(
+            !writable,
+            "a read-only directory cannot take an atomic replacement"
+        );
     }
 
     #[test]
