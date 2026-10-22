@@ -150,6 +150,22 @@ port 9876 remain off limits.
 - Historical RED: unavailable because the original panic/caller is not retained.
   The coordinator accepted the nil-NSURL contract test as a fallback, not as a
   claim that the historical process crash was reproduced.
+- Native source-defect RED: the standalone `webkit_nil_url` target creates a
+  real unloaded WKWebView on the process main thread with a nonpersistent data
+  store. WebKit returned nil, and the former URL unwrap pattern panicked. The
+  probe captures and validates that expected panic. It does not reproduce the
+  historical desktop crash or run the pre-fix application.
+- `cargo test --manifest-path src-tauri/Cargo.toml --test webkit_nil_url`
+  passed, and `cargo nextest list --manifest-path src-tauri/Cargo.toml --test
+  webkit_nil_url` discovered `unloaded_webkit_url_unwrap_panics`.
+  Evidence: `~/Gits/.tmp/results/tuic-2120-real-webkit-main-fixed.log`.
+  The existing nil-conversion unit test remains the safe-conversion GREEN half.
+- Both the original nextest unit probe and plain libtest with one test thread
+  failed the main-thread prerequisite before native construction. Those failures
+  are not RED evidence. The standalone target uses `harness = false` to supply
+  its own process-main-thread entry point. An initial compile error was corrected
+  by receiving the native initializer's raw pointer and adopting its ownership
+  with `Retained::from_raw`; production visibility was not changed.
 - Mutation, a full suite, and a daily-app restart are not part of this peer run.
 
 ## Isolation caveat discovered after the live run
