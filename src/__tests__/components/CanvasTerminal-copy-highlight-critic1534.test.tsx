@@ -36,6 +36,7 @@ vi.mock("../../components/Terminal/gridRenderer", () => ({
 		invalidateCaches: vi.fn(),
 		paintGrid: vi.fn(),
 		paintRow: vi.fn(),
+		buildFontStyle: () => "14px monospace",
 	}),
 }));
 // Copy-on-select writes through writeClipboardAsync (it must start inside the user

@@ -2470,6 +2470,73 @@ describe("initApp", () => {
 			expect(emptyBranch ? savedTerminalsFor(emptyBranch) : []).toHaveLength(0);
 		});
 
+		describe("tabs that must not auto-restore", () => {
+			const twoSessions = () =>
+				createMockDeps({
+					pty: {
+						listActiveSessions: vi.fn().mockResolvedValue([
+							{ session_id: "keep", cwd: "/repo" },
+							{ session_id: "drop", cwd: "/repo" },
+						]),
+						close: vi.fn().mockResolvedValue(undefined),
+					},
+				});
+
+			const setup = async () => {
+				repositoriesStore.add({ path: "/repo", displayName: "Repo" });
+				repositoriesStore.setWorkspace("/repo", "main", { worktreePath: "/repo" });
+				await initApp(twoSessions());
+				const [keepId, dropId] = terminalsStore.getIds();
+				terminalsStore.update(keepId, { name: "keep-me" });
+				terminalsStore.update(dropId, { name: "drop-me" });
+				return { keepId, dropId };
+			};
+
+			const savedNames = () => {
+				const branch = repositoriesStore.get("/repo")?.workspaces["main"];
+				return (branch ? savedTerminalsFor(branch) : []).map((s) => s.name);
+			};
+
+			it("does not save an exited tab that lingers for review", async () => {
+				const { dropId } = await setup();
+				terminalsStore.update(dropId, { shellState: "exited" });
+
+				window.dispatchEvent(new Event("beforeunload"));
+
+				expect(savedNames()).toEqual(["keep-me"]);
+			});
+
+			it("does not save an agent-created (isExternallyCreated) tab such as a subagent pane", async () => {
+				const { dropId } = await setup();
+				terminalsStore.update(dropId, { isExternallyCreated: true });
+
+				window.dispatchEvent(new Event("beforeunload"));
+
+				expect(savedNames()).toEqual(["keep-me"]);
+			});
+
+			it("still saves a restored placeholder that has no session yet", async () => {
+				const { dropId } = await setup();
+				terminalsStore.update(dropId, { sessionId: null, shellState: null });
+
+				window.dispatchEvent(new Event("beforeunload"));
+
+				expect(savedNames().sort()).toEqual(["drop-me", "keep-me"]);
+			});
+
+			it("overwrites a stale snapshot when every remaining tab is excluded", async () => {
+				const { keepId, dropId } = await setup();
+				window.dispatchEvent(new Event("beforeunload"));
+				expect(savedNames().sort()).toEqual(["drop-me", "keep-me"]);
+
+				terminalsStore.update(keepId, { shellState: "exited" });
+				terminalsStore.update(dropId, { isExternallyCreated: true });
+				window.dispatchEvent(new Event("beforeunload"));
+
+				expect(savedNames()).toEqual([]);
+			});
+		});
+
 		it("flushes activityStore, uiStore, and paneLayoutStore before snapshotting", async () => {
 			const deps = createMockDeps();
 			await initApp(deps);
@@ -3317,6 +3384,50 @@ describe("initApp", () => {
 			// Advance to just past 30s — tab must be gone
 			vi.advanceTimersByTime(20_000);
 			expect(terminalsStore.get(termId)).toBeUndefined();
+		});
+	});
+
+	describe("stranded remote-tab self-heal", () => {
+		/**
+		 * A remote tab can already be sitting in the store `shellState: "exited"`
+		 * with no countdown ever having run (e.g. a prior countdown's timer died
+		 * with a page reload before this fix existed) by the time `initApp` runs
+		 * again. When the initial `listActiveSessions` call fails, every pre-init
+		 * terminal is deliberately left untouched (see the comment at that branch
+		 * in useAppInit.ts) rather than pruned — the one path where such a
+		 * terminal can actually survive to reach the stranded-tab sweep instead
+		 * of being wiped outright by the ordinary success-path cleanup.
+		 */
+		it("resumes a countdown for an already-stuck exited remote tab when listActiveSessions fails at startup", async () => {
+			const { REMOTE_TAB_AUTOCLOSE_MS } = await import("../../stores/remoteAutoClose");
+			const id = terminalsStore.add({
+				sessionId: null,
+				fontSize: 14,
+				name: "Stuck Agent",
+				cwd: "/repo",
+				awaitingInput: null,
+				isExternallyCreated: true,
+			});
+			terminalsStore.update(id, { shellState: "exited" });
+
+			const deps = createMockDeps({
+				pty: {
+					listActiveSessions: vi.fn().mockRejectedValue(new Error("backend unreachable")),
+					close: vi.fn().mockResolvedValue(undefined),
+				},
+			});
+			await initApp(deps);
+
+			expect(terminalsStore.get(id)?.name).toBe(`Stuck Agent (${Math.round(REMOTE_TAB_AUTOCLOSE_MS / 1000)}s)`);
+
+			// Also drains the detached bounded-retry chain (1s+3s+9s, all rejecting
+			// via the same mock) so it settles before the test ends instead of
+			// leaking a pending promise.
+			await vi.advanceTimersByTimeAsync(REMOTE_TAB_AUTOCLOSE_MS - 1);
+			expect(terminalsStore.get(id)).toBeDefined();
+
+			await vi.advanceTimersByTimeAsync(2);
+			expect(terminalsStore.get(id)).toBeUndefined();
 		});
 	});
 
