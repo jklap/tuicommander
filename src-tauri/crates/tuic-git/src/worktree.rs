@@ -4959,7 +4959,7 @@ mod tests {
             ])
             .run()
             .unwrap();
-        assert!(!refs.stdout.trim().is_empty());
+        assert_ne!(refs.stdout.trim(), "");
     }
 
     // Catches: archive errors leave the sidebar and registry pointing at a moved checkout.
@@ -6562,7 +6562,10 @@ mod tests {
                 .count(),
             1
         );
-        assert!(!integration_bases(&repo, "origin/trunk").is_empty());
+        assert_ne!(
+            integration_bases(&repo, "origin/trunk"),
+            [] as [std::string::String; 0]
+        );
     }
 
     /// Catches stale configuration hiding a valid master branch.
@@ -7113,7 +7116,7 @@ branch refs/heads/feat
 
 ";
         let orphans = super::parse_orphan_worktrees(porcelain);
-        assert!(orphans.is_empty());
+        assert_eq!(orphans, [] as [std::string::String; 0]);
     }
 
     #[tokio::test]
@@ -7130,7 +7133,7 @@ branch refs/heads/feat
             .await
             .expect("detect orphan worktrees");
 
-        assert!(orphans.is_empty());
+        assert_eq!(orphans, [] as [std::string::String; 0]);
     }
 
     /// Build a linked-worktree fixture: `<root>/wt` with a `.git` file pointing at
@@ -7352,7 +7355,10 @@ branch refs/heads/feat
         );
         let porcelain = detached_porcelain(&wt);
 
-        assert!(super::parse_orphan_worktrees(&porcelain).is_empty());
+        assert_eq!(
+            super::parse_orphan_worktrees(&porcelain),
+            [] as [std::string::String; 0]
+        );
         assert_eq!(
             super::map_worktree_workspace_paths(&porcelain)
                 .get("feat-auth")
@@ -7370,7 +7376,10 @@ branch refs/heads/feat
         );
         let porcelain = detached_porcelain(&wt);
 
-        assert!(super::parse_orphan_worktrees(&porcelain).is_empty());
+        assert_eq!(
+            super::parse_orphan_worktrees(&porcelain),
+            [] as [std::string::String; 0]
+        );
         assert_eq!(
             super::map_worktree_workspace_paths(&porcelain)
                 .get("feat-am")
@@ -7867,7 +7876,7 @@ branch refs/heads/feat
     fn public_name_commands_return_valid_noncolliding_names_1450() {
         let existing = vec!["xyzzy".to_string()];
         let name = generate_worktree_name_cmd(existing.clone());
-        assert!(!name.is_empty());
+        assert_ne!(name, "");
         assert!(!existing.contains(&name));
         assert!(name.rsplit('-').next().unwrap().parse::<u16>().unwrap() < 1000);
         let clone = generate_clone_branch_name_cmd("feat/auth".into(), existing);
@@ -9053,7 +9062,7 @@ branch refs/heads/feat
             ])
             .run()
             .unwrap();
-        assert!(!refs.stdout.trim().is_empty());
+        assert_ne!(refs.stdout.trim(), "");
         assert!(
             refs.stdout
                 .lines()
@@ -9208,14 +9217,14 @@ branch refs/heads/feat
         let error = preserve_submodule_refs(&repo, &path, "modules/local").unwrap_err();
         assert!(error.contains("main checkout has no repository"), "{error}");
         assert!(path.exists());
-        assert!(
+        assert_eq!(
             git_cmd(&repo)
                 .args(["for-each-ref", "--format=%(refname)", "refs/tuic/preserved"])
                 .run()
                 .unwrap()
                 .stdout
-                .trim()
-                .is_empty()
+                .trim(),
+            ""
         );
     }
 
@@ -10705,10 +10714,9 @@ branch refs/heads/feat
                 assert!(status.dirty_fingerprint.is_none());
                 crate::git_reads::git_reads().diff_stats(Path::new(&workspace.path), None);
             }
-            assert!(
-                crate::git::get_merged_branches_impl(&repo)
-                    .unwrap()
-                    .is_empty()
+            assert_eq!(
+                crate::git::get_merged_branches_impl(&repo).unwrap(),
+                [] as [std::string::String; 0]
             );
         }
         let after = crate::git_cli::take_command_counts();
@@ -12286,17 +12294,15 @@ branch refs/heads/feat
             rev_at(&path, "HEAD").unwrap(),
             rev_at(&repo, "active-detached").unwrap()
         );
-        assert!(
-            detect_orphan_worktrees_blocking(repo.to_string_lossy().into_owned())
-                .unwrap()
-                .is_empty()
+        assert_eq!(
+            detect_orphan_worktrees_blocking(repo.to_string_lossy().into_owned()).unwrap(),
+            [] as [std::string::String; 0]
         );
         assert!(path.exists());
         fs::write(path.join("unsaved.txt"), "work in progress\n").unwrap();
-        assert!(
-            assess_orphan_worktrees(&repo.to_string_lossy())
-                .unwrap()
-                .is_empty()
+        assert_eq!(
+            assess_orphan_worktrees(&repo.to_string_lossy()).unwrap(),
+            [] as [OrphanCleanupAssessment; 0]
         );
         git_cmd(&repo)
             .args(["branch", "-D", "active-detached"])
@@ -12981,6 +12987,311 @@ branch refs/heads/feat
         }
     }
 
+    fn pr_pages(number: u64, branch: &str, head: &str) -> serde_json::Value {
+        serde_json::json!([{"data": {"repository": {"pullRequests": {"nodes": [{
+            "number": number,
+            "state": "MERGED",
+            "headRefName": branch,
+            "headRefOid": head
+        }]}}}}])
+    }
+
+    #[test]
+    fn a_pr_proof_accepts_only_a_full_length_head_sha() {
+        let (_temp, repo, _workspaces) = workspace_fixture();
+        let tip = rev_at(&repo, "HEAD").unwrap();
+
+        assert!(merged_pr_proof_from_pages(
+            &repo,
+            "feature",
+            &tip,
+            &pr_pages(7, "feature", &tip)
+        ));
+        // An abbreviation resolves to the same commit but is not what the API
+        // records; it must never count as the recorded head.
+        assert!(!merged_pr_proof_from_pages(
+            &repo,
+            "feature",
+            &tip,
+            &pr_pages(7, "feature", &tip[..12])
+        ));
+    }
+
+    #[test]
+    fn a_pr_proof_needs_a_positive_pr_number() {
+        let (_temp, repo, _workspaces) = workspace_fixture();
+        let tip = rev_at(&repo, "HEAD").unwrap();
+
+        assert!(!merged_pr_proof_from_pages(
+            &repo,
+            "feature",
+            &tip,
+            &pr_pages(0, "feature", &tip)
+        ));
+    }
+
+    #[test]
+    fn a_branch_created_from_the_default_branch_by_name_is_in_sync() {
+        let (_temp, repo, workspaces) = workspace_fixture();
+        let default_branch = base_branch_of(&repo);
+        fs::create_dir_all(&workspaces).unwrap();
+        for (name, start) in [
+            ("from-short-name", default_branch.clone()),
+            ("from-full-ref", format!("refs/heads/{default_branch}")),
+        ] {
+            let path = workspaces.join(name);
+            git_cmd(&repo)
+                .args([
+                    "worktree",
+                    "add",
+                    "-b",
+                    name,
+                    &path.to_string_lossy(),
+                    &start,
+                ])
+                .run()
+                .unwrap();
+
+            let status = inspect_workspace_lifecycle(&repo, name);
+
+            assert_eq!(
+                status.commit_status,
+                WorkspaceCommitStatus::InSync,
+                "{name}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_pull_of_another_branch_by_name_is_not_following_the_default() {
+        let (_temp, repo, _workspaces) = workspace_fixture();
+        let source = add_worktree(&repo, "pull-source");
+        commit_file(&source, "feature.txt", "source work\n");
+        let puller = add_worktree(&repo, "puller");
+        git_cmd(&puller)
+            .args(["pull", "--ff-only", &repo.to_string_lossy(), "pull-source"])
+            .run()
+            .unwrap();
+        git_cmd(&repo)
+            .args(["merge", "--ff-only", "pull-source"])
+            .run()
+            .unwrap();
+
+        let status = inspect_workspace_lifecycle(&repo, "puller");
+
+        assert_eq!(status.commit_status, WorkspaceCommitStatus::Merged);
+    }
+
+    #[test]
+    fn a_rebase_entry_naming_another_branch_is_not_following_the_default() {
+        let (_temp, repo, _workspaces) = workspace_fixture();
+        let worktree = add_worktree(&repo, "rebased-elsewhere");
+        commit_file(&worktree, "own.txt", "own work\n");
+        git_cmd(&repo)
+            .args(["merge", "--ff-only", "rebased-elsewhere"])
+            .run()
+            .unwrap();
+        let tip = rev_at(&worktree, "HEAD").unwrap();
+        let log = git_cmd(&repo)
+            .args(["rev-parse", "--git-common-dir"])
+            .run()
+            .unwrap()
+            .stdout;
+        let log = repo
+            .join(log.trim())
+            .join("logs/refs/heads/rebased-elsewhere");
+        let mut entries = fs::read_to_string(&log).unwrap();
+        entries.push_str(&format!(
+            "{tip} {tip} Test <test@test.com> 0 +0000\trebase (finish): refs/heads/another-branch onto {tip}\n"
+        ));
+        fs::write(&log, entries).unwrap();
+
+        let status = inspect_workspace_lifecycle(&repo, "rebased-elsewhere");
+
+        assert_eq!(status.commit_status, WorkspaceCommitStatus::Merged);
+    }
+
+    #[test]
+    fn a_bare_pull_follows_the_default_only_when_the_default_is_its_upstream() {
+        let (_temp, repo, _workspaces) = workspace_fixture();
+        let default_branch = base_branch_of(&repo);
+        let source = add_worktree(&repo, "pull-source");
+        let from_default = add_worktree(&repo, "pulls-default");
+        let from_other = add_worktree(&repo, "pulls-other");
+        commit_file(&source, "feature.txt", "source work\n");
+        git_cmd(&repo)
+            .args(["merge", "--ff-only", "pull-source"])
+            .run()
+            .unwrap();
+        for (worktree, name, upstream) in [
+            (&from_default, "pulls-default", default_branch.as_str()),
+            (&from_other, "pulls-other", "pull-source"),
+        ] {
+            git_cmd(&repo)
+                .args(["config", &format!("branch.{name}.remote"), "."])
+                .run()
+                .unwrap();
+            git_cmd(&repo)
+                .args([
+                    "config",
+                    &format!("branch.{name}.merge"),
+                    &format!("refs/heads/{upstream}"),
+                ])
+                .run()
+                .unwrap();
+            git_cmd(worktree)
+                .args(["-c", "pull.rebase=false", "pull"])
+                .run()
+                .unwrap();
+        }
+
+        assert_eq!(
+            inspect_workspace_lifecycle(&repo, "pulls-default").commit_status,
+            WorkspaceCommitStatus::InSync
+        );
+        assert_eq!(
+            inspect_workspace_lifecycle(&repo, "pulls-other").commit_status,
+            WorkspaceCommitStatus::Merged
+        );
+    }
+
+    #[test]
+    fn a_forced_removal_discards_a_dirty_registered_worktree() {
+        let (_temp, repo, _workspaces) = workspace_fixture();
+        let path = add_worktree(&repo, "dirty-forced");
+        fs::write(path.join("scratch.txt"), "unsaved\n").unwrap();
+
+        remove_worktree_by_workspace_id(&repo.to_string_lossy(), "dirty-forced", false, None, true)
+            .unwrap();
+
+        assert!(!path.exists());
+    }
+
+    #[test]
+    fn a_removal_checks_the_confirmed_fingerprint_against_the_live_state() {
+        let (_temp, repo, _workspaces) = workspace_fixture();
+        let path = add_worktree(&repo, "fingerprinted");
+        fs::write(path.join("scratch.txt"), "unsaved\n").unwrap();
+        let info = WorktreeInfo {
+            name: "fingerprinted".into(),
+            path: path.clone(),
+            branch: Some("fingerprinted".into()),
+            base_repo: repo.clone(),
+        };
+        let fingerprint = dirty_fingerprint_at(&path).unwrap().0;
+
+        let error = remove_worktree_internal_with_lock(&info, true, false, Some("stale"), None)
+            .unwrap_err();
+        assert!(
+            error.contains("state changed since confirmation"),
+            "{error}"
+        );
+        assert!(path.exists());
+
+        remove_worktree_internal_with_lock(&info, true, false, Some(&fingerprint), None).unwrap();
+        assert!(!path.exists());
+    }
+
+    #[test]
+    fn a_forced_id_removal_needs_the_confirmed_fingerprint_to_match() {
+        let (_temp, repo, _workspaces) = workspace_fixture();
+        let path = add_worktree(&repo, "confirmed");
+        fs::write(path.join("scratch.txt"), "unsaved\n").unwrap();
+        let fingerprint = inspect_workspace_lifecycle(&repo, "confirmed")
+            .dirty_fingerprint
+            .unwrap();
+
+        let error = remove_worktree_by_workspace_id_with_confirmation(
+            &repo.to_string_lossy(),
+            "confirmed",
+            false,
+            None,
+            true,
+            false,
+            Some("stale"),
+        )
+        .unwrap_err();
+        assert!(
+            error.contains("state changed since confirmation"),
+            "{error}"
+        );
+        assert!(path.exists());
+
+        remove_worktree_by_workspace_id_with_confirmation(
+            &repo.to_string_lossy(),
+            "confirmed",
+            false,
+            None,
+            true,
+            false,
+            Some(&fingerprint),
+        )
+        .unwrap();
+        assert!(!path.exists());
+    }
+
+    /// Runs `remove` with `blocked` made read-only, restoring it afterwards.
+    /// `None` when the permission cannot be withheld (running as root).
+    #[cfg(unix)]
+    fn removal_with_blocked_dir(blocked: &Path, info: &WorktreeInfo) -> Option<Result<(), String>> {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(blocked, fs::Permissions::from_mode(0o555)).unwrap();
+        let writable = fs::write(blocked.join("probe"), "").is_ok();
+        let result = remove_worktree_internal(info, true);
+        fs::set_permissions(blocked, fs::Permissions::from_mode(0o755)).unwrap();
+        (!writable).then_some(result)
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_failure_after_git_dropped_the_registration_finishes_the_cleanup_attempt() {
+        let (temp, repo, _workspaces) = workspace_fixture();
+        let path = add_worktree(&repo, "parent-readonly");
+        let info = WorktreeInfo {
+            name: "parent-readonly".into(),
+            path,
+            branch: Some("parent-readonly".into()),
+            base_repo: repo.clone(),
+        };
+
+        // Git deletes the checkout's contents and registration, then cannot
+        // remove the checkout directory from its read-only parent.
+        let Some(result) = removal_with_blocked_dir(temp.path(), &info) else {
+            return;
+        };
+
+        let error = result.unwrap_err();
+        assert!(!error.starts_with(LOCKED_WORKTREE_PREFIX), "{error}");
+        assert!(!error.starts_with(MAIN_WORKTREE_PREFIX), "{error}");
+        assert!(
+            error.starts_with("Worktree has no Git registration but its directory remains"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn deleting_a_branch_with_an_invalid_name_is_refused_as_invalid() {
+        let (_temp, repo, _workspaces) = workspace_fixture();
+
+        for name in ["has space", "bad..name", ""] {
+            let error = delete_integrated_local_branch(&repo.to_string_lossy(), name).unwrap_err();
+            assert!(
+                error.starts_with("Invalid local branch name"),
+                "{name}: {error}"
+            );
+        }
+    }
+
+    #[test]
+    fn dirtiness_of_an_unreadable_repository_is_unknown_not_clean() {
+        let temp = TempDir::new().unwrap();
+
+        assert!(matches!(
+            worktree_dirtiness(&temp.path().join("missing"), "anything"),
+            WorktreeDirtiness::Unknown(_)
+        ));
+    }
+
     fn orphan_entry(repo: &Path, name: &str) -> OrphanCleanupAssessment {
         assess_orphan_worktrees(&repo.to_string_lossy())
             .unwrap()
@@ -13090,10 +13401,9 @@ branch refs/heads/feat
             .args(["branch", "rescue", &head])
             .run()
             .unwrap();
-        assert!(
-            assess_orphan_worktrees(&repo.to_string_lossy())
-                .unwrap()
-                .is_empty()
+        assert_eq!(
+            assess_orphan_worktrees(&repo.to_string_lossy()).unwrap(),
+            [] as [OrphanCleanupAssessment; 0]
         );
         assert!(
             path.exists(),

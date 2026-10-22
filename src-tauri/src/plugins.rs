@@ -1491,7 +1491,7 @@ mod tests {
             set_plugin_output_watchers_impl(&state, "c1", 1, &[spec("a", "done"), spec("b", "x+")]);
 
         assert!(outcome.applied);
-        assert!(outcome.rejected.is_empty());
+        assert_eq!(outcome.rejected, [] as [std::string::String; 0]);
         let watchers = state.plugin_output_watchers.read();
         assert!(!watchers.needs_all_lines());
         assert!(!watchers.is_idle());
@@ -1527,7 +1527,10 @@ mod tests {
         set_plugin_output_watchers_impl(&state, "c1", 2, &[spec("new", "kept")]);
 
         let watchers = state.plugin_output_watchers.read();
-        assert!(watchers.matching_ids("gone").is_empty());
+        assert_eq!(
+            watchers.matching_ids("gone"),
+            [] as [std::string::String; 0]
+        );
         assert_eq!(watchers.matching_ids("kept"), vec!["c1/new".to_string()]);
     }
 
@@ -1558,7 +1561,7 @@ mod tests {
         let outcome = set_plugin_output_watchers_impl(&state, "c1", 2, &[]);
 
         assert!(outcome.applied);
-        assert!(outcome.rejected.is_empty());
+        assert_eq!(outcome.rejected, [] as [std::string::String; 0]);
         assert!(state.plugin_output_watchers.read().is_idle());
     }
 

@@ -7,6 +7,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 - Let any live MCP-bound agent send Telegram notifications without taking inbound ownership. Non-owner messages carry a server-derived sender name, are limited to one send per 30 seconds, and route Telegram Replies to the unique live sender; buttons remain owner-only (#2119-d5de).
+- Keep remote Design Mode error reads behind explicit host consent and avoid claiming eval consent when Chrome does not add it (#1724-fe7e).
+- Add the optional Design Mode **Let agents capture any site** grant. Without it, screenshots retain temporary browser-action access and explain how to enable capture; capture consent does not enable agent eval (#1724-fe7e).
+- Initialize every terminal grid at its PTY spawn size and seed the first resize no-op guard from the kernel PTY size, not the grid (#2130-2ca2).
+
+### Fixed
+- Keep long mobile CLI file links inline with surrounding text and its hanging indent instead of centering wrapped paths (#2011-86b5).
+- Read nullable macOS WebView URLs without Wry unwraps in document recovery and detached-panel snapshots; a missing URL no longer reaches that panic path (#2120-9f3f).
+- Stop opening the installed CLI for writing during status checks; probe its install directory instead to avoid macOS signature invalidation without changed binary bytes (#2129-1dfd).
+- Offer Add Agent on non-git shell-folder rows using the folder as the working directory, without Git branch or worktree actions (#2125-13fe).
+
+- Clamp context menus using their unscaled layout size, constrain narrow-window menus, and hide branch workflow actions on non-git shell rows (#2124-1866).
+
+- Hide agent-mail wake notices in terminal Chat while keeping interruption notices and real user messages unchanged (#2123-8f17).
+
+- **BREAKING:** remove MCP migration hints for `agent detect/stats/metrics` (use `GET /agents`, `/stats`, `/metrics`), `session process_stats` (use `GET /process/stats`), and `repo prs/issues/close_issue/reopen_issue/ci_logs` (use `GET /repo/prs`, `GET /repo/issues`, `POST /repo/issues/close`, `POST /repo/issues/reopen`, `GET /repo/ci-failure-logs`). These actions now use ordinary unsupported-input errors; no compatibility alias or replacement hint remains (#2115-1333).
 
 ## [2.0.0-beta.1] - 2026-10-22
 
@@ -1315,7 +1330,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - **Mobile session and feed repair** — Connected remote sessions open live output and close through their owning machine. Mobile Progress discovers projects with journal entries, and Activity loads saved events when opened.
 
 - **Progress toast dismissal** — Tapping a toast closes it without switching repositories or terminals. The dedicated **Go to repo** button still navigates to the reporting workspace.
-- **BREAKING: smaller native MCP tools** — `agent register/list_peers` now takes `path` instead of `project`; `repo worktree_lifecycle/worktree_remove` now takes `branch` instead of `workspace_id`. Removed `agent detect/stats/metrics`, `session process_stats`, and `repo prs/issues/close_issue/reopen_issue/ci_logs` in favor of their single-call HTTP routes. Each removed action returns an error naming its replacement. This saves tool tokens by keeping one name per concept and removing duplicate actions from schemas and output choices. The `worktree_create` response still carries `workspace_id` alongside `branch` for HTTP parity. `tuic agent list-peers --path` and `tuic repo worktree-remove <path> <branch>` use the new names.
+- **BREAKING: smaller native MCP tools** — `agent register/list_peers` now takes `path` instead of `project`; `repo worktree_lifecycle/worktree_remove` now takes `branch` instead of `workspace_id`. Removed `agent detect/stats/metrics`, `session process_stats`, and `repo prs/issues/close_issue/reopen_issue/ci_logs` in favor of their single-call HTTP routes. Migration hints for these removed actions were later removed in #2115-1333; clients must use the HTTP routes directly. This saves tool tokens by keeping one name per concept and removing duplicate actions from schemas and output choices. The `worktree_create` response still carries `workspace_id` alongside `branch` for HTTP parity. `tuic agent list-peers --path` and `tuic repo worktree-remove <path> <branch>` use the new names.
 
 - **Remote repository terminals and browsing** — New remote terminals attach to their owning machine's stream and show launch failures in the pane or stream failures in a persistent toast. Remote PTY creation rejects a missing working directory instead of registering an empty terminal. The remote folder picker starts at the host's reported home directory and shows readable permission errors while keeping path entry available.
 

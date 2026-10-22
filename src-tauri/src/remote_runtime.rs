@@ -1956,7 +1956,10 @@ mod tests {
         assert!(active);
         teardown(&state, "fixture");
         assert!(claim_and_supervise(&state, "fixture", generation).is_none());
-        assert!(state.remote.snapshot().is_empty());
+        assert_eq!(
+            state.remote.snapshot(),
+            [] as [crate::remote_runtime::RemoteConnectionStatus; 0]
+        );
     }
 
     // Catches: a chunk boundary inside the daemon's "Untrusted Host" response
@@ -2023,7 +2026,10 @@ mod tests {
         let runtime = RemoteRuntime::default();
         assert_eq!(runtime.status_of("nope"), RemoteStatus::Disconnected);
         assert!(runtime.base_url("nope").is_none());
-        assert!(runtime.snapshot().is_empty());
+        assert_eq!(
+            runtime.snapshot(),
+            [] as [crate::remote_runtime::RemoteConnectionStatus; 0]
+        );
     }
 
     #[test]
@@ -2856,7 +2862,10 @@ mod tests {
 
         state.remote.entries.remove("machine");
         record_updated_build(&state, "machine", build);
-        assert!(state.remote.snapshot().is_empty());
+        assert_eq!(
+            state.remote.snapshot(),
+            [] as [crate::remote_runtime::RemoteConnectionStatus; 0]
+        );
     }
 
     #[test]
@@ -3585,7 +3594,10 @@ mod tests {
         // no task, no socket, no timer — and this is the regression that says
         // so, because "it is lazy" is invisible in a profile until it is not.
         let state = test_state();
-        assert!(state.remote.snapshot().is_empty());
+        assert_eq!(
+            state.remote.snapshot(),
+            [] as [crate::remote_runtime::RemoteConnectionStatus; 0]
+        );
         assert!(state.remote.base_url("anything").is_none());
         assert!(state.remote.token("anything").is_none());
         assert_eq!(
@@ -4376,7 +4388,7 @@ mod tests {
 
         // Dedup is on the client view: 12 identical pushes a minute would be
         // the whole cost of the poll.
-        assert!(drain_statuses(&mut events).is_empty());
+        assert_eq!(drain_statuses(&mut events), [] as [std::string::String; 0]);
     }
 
     #[tokio::test]

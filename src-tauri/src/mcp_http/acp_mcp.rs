@@ -1149,7 +1149,7 @@ mod tests {
             )
             .await
             .expect("ego admits the tuicommander MCP server");
-        assert!(!session.session_id.to_string().is_empty());
+        assert_ne!(session.session_id.to_string(), "");
 
         state
             .acp

@@ -4749,7 +4749,7 @@ mod tests {
 
         assert_eq!(res.moved, 1);
         assert_eq!(res.skipped, 1);
-        assert!(res.errors.is_empty());
+        assert_eq!(res.errors, [] as [std::string::String; 0]);
     }
 
     // --- Cross-repo content search (search_content_all_impl) ---

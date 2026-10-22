@@ -378,7 +378,10 @@ async fn agent_without_required_profile_pauses_with_a_durable_reason() {
     let current = store.snapshot(&run.id).unwrap();
     assert_eq!(current.attempts.len(), 1);
     assert!(current.attempts[0].agent.is_none());
-    assert!(current.effects.is_empty());
+    assert_eq!(
+        current.effects,
+        [] as [crate::workflows::run::model::EffectIntent; 0]
+    );
     let notices = crate::progress::ProgressStore::open()
         .unwrap()
         .list_limited(

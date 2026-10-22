@@ -350,7 +350,7 @@ async fn acp_mail_woken_turn_settling_without_finish_sends_its_text_once() {
             assert_eq!(finals(&server), [" exact answer\n"]);
             assert_eq!(reactions(&server).last().unwrap(), "👍");
         } else {
-            assert!(finals(&server).is_empty());
+            assert_eq!(finals(&server), [] as [std::string::String; 0]);
         }
     }
 }
@@ -750,7 +750,7 @@ async fn queued_stop_withdraws_without_interrupting_current_turn() {
     runtime.tick().await;
     assert!(bytes.lock().unwrap().is_empty());
     assert!(runtime.outbound.active.is_none());
-    assert!(finals(&server).is_empty());
+    assert_eq!(finals(&server), [] as [std::string::String; 0]);
     finish(&mut runtime, "tg:test-bot:7", "Late answer")
         .await
         .unwrap();
@@ -847,7 +847,7 @@ async fn telegram_registered_owner_wins_over_ai_chat() {
             .get(other)
             .is_none_or(|inbox| inbox.is_empty())
     );
-    assert!(finals(&server).is_empty());
+    assert_eq!(finals(&server), [] as [std::string::String; 0]);
 }
 
 // Catches: hash-map iteration chooses an arbitrary AI Chat instead of the latest connection.
@@ -878,7 +878,7 @@ async fn telegram_latest_connected_ai_chat_wins_without_registration() {
     assert_eq!(runtime.deliver(mail(7)).await.unwrap()["accepted"], true);
     assert_eq!(runtime.requests[0].peer, other);
     assert!(runtime.registration.is_none());
-    assert!(finals(&server).is_empty());
+    assert_eq!(finals(&server), [] as [std::string::String; 0]);
 }
 
 // Catches: connecting a second AI Chat discards the first chat's in-flight Telegram reply.

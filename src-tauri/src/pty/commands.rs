@@ -113,7 +113,7 @@ pub(crate) async fn create_pty(
         session_id.clone(),
         Mutex::new(OutputRingBuffer::new(OUTPUT_RING_BUFFER_CAPACITY)),
     );
-    let vt_log = state.new_vt_log_buffer(24, 220, VT_LOG_BUFFER_CAPACITY);
+    let vt_log = state.new_vt_log_buffer(rows, cols, VT_LOG_BUFFER_CAPACITY);
     state
         .grid
         .vt_log_buffers
@@ -284,7 +284,7 @@ pub(crate) async fn create_pty_with_worktree(
         session_id.clone(),
         Mutex::new(OutputRingBuffer::new(OUTPUT_RING_BUFFER_CAPACITY)),
     );
-    let vt_log = state.new_vt_log_buffer(24, 220, VT_LOG_BUFFER_CAPACITY);
+    let vt_log = state.new_vt_log_buffer(rows, cols, VT_LOG_BUFFER_CAPACITY);
     state
         .grid
         .vt_log_buffers

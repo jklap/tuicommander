@@ -1204,11 +1204,9 @@ mod tests {
                 .sequence,
             accepted.sequence
         );
-        assert!(
-            store
-                .interrupt_agent_session("managed-session")
-                .unwrap()
-                .is_empty()
+        assert_eq!(
+            store.interrupt_agent_session("managed-session").unwrap(),
+            [] as [crate::workflows::run::model::RunSnapshot; 0]
         );
 
         let next = store
@@ -1256,11 +1254,9 @@ mod tests {
             AttemptState::Interrupted
         );
         assert!(interrupted[0].attempts.last().unwrap().report.is_none());
-        assert!(
-            store
-                .interrupt_agent_session("managed-exit")
-                .unwrap()
-                .is_empty()
+        assert_eq!(
+            store.interrupt_agent_session("managed-exit").unwrap(),
+            [] as [crate::workflows::run::model::RunSnapshot; 0]
         );
         assert_eq!(
             store.replay(&run.id).unwrap(),
@@ -2284,7 +2280,10 @@ mod tests {
             )
             .expect("plan coordinator");
         assert_eq!(started.snapshot.attempts[0].story_id, plan_id);
-        assert!(started.snapshot.stories.is_empty());
+        assert_eq!(
+            started.snapshot.stories,
+            [] as [crate::workflows::run::model::StoryExecution; 0]
+        );
         assert_eq!(
             store.replay(&run.id).unwrap(),
             store.snapshot(&run.id).unwrap()
@@ -2914,7 +2913,10 @@ mod tests {
         .expect("incidents") else {
             panic!("incident reply")
         };
-        assert!(incidents.is_empty());
+        assert_eq!(
+            incidents,
+            [] as [crate::workflows::run::incidents::RunIncident; 0]
+        );
         assert_eq!(
             RunStore::open()
                 .unwrap()
