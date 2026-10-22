@@ -377,3 +377,39 @@ fn recent_settings_redacts_before_unicode_truncation_1956() {
     assert!(!value.to_string().contains("fake-one"));
     assert!(!value.to_string().contains("A1B2C3"));
 }
+
+// Catches: Telegram discovery requires network health/registration, or ignores
+// owner opt-out and missing credentials. No credential contents are read.
+#[test]
+fn conditional_telegram_configuration_uses_setup_opt_in() {
+    let (_dir, paths) = crate::telegram::tests::setup();
+    assert!(configured_at(&paths));
+    save_config(
+        &paths,
+        &Config {
+            enabled: false,
+            bot_alias: "test-bot".into(),
+        },
+    )
+    .unwrap();
+    assert!(!configured_at(&paths));
+    save_config(
+        &paths,
+        &Config {
+            enabled: true,
+            bot_alias: String::new(),
+        },
+    )
+    .unwrap();
+    assert!(!configured_at(&paths));
+    save_config(
+        &paths,
+        &Config {
+            enabled: true,
+            bot_alias: "test-bot".into(),
+        },
+    )
+    .unwrap();
+    std::fs::remove_file(paths.file("bot.token")).unwrap();
+    assert!(!configured_at(&paths));
+}

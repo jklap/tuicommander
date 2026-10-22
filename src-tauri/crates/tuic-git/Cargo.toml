@@ -10,7 +10,7 @@ test-support = []
 [dependencies]
 tuic-core = { path = "../tuic-core" }
 dashmap = "6"
-gix = { version = "0.85", default-features = false, features = [
+gix = { version = "0.89", default-features = false, features = [
     "sha1",
     "revision",
     "status",

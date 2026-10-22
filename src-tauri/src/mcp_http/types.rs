@@ -34,6 +34,9 @@ pub(super) struct VersionResponse {
 #[serde(default)]
 pub(crate) struct SessionInfo {
     pub session_id: String,
+    /// Live PTY child, not the foreground agent or one of its tool subprocesses.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub child_pid: Option<u32>,
     pub cwd: Option<String>,
     pub worktree_path: Option<String>,
     pub worktree_branch: Option<String>,
@@ -125,6 +128,8 @@ pub(super) struct OutputQuery {
     /// Native MCP output windows, used only by format=mcp/mcp_raw.
     pub from_line: Option<usize>,
     pub from_byte: Option<u64>,
+    pub byte_budget: Option<u64>,
+    pub continuation: Option<String>,
     pub since_cursor: Option<usize>,
     /// When set to "text", ANSI escape sequences are stripped from the output.
     pub format: Option<String>,

@@ -29,20 +29,20 @@ Cards retain selectors, DOM paths, snippets, selected styles, CSS tokens and ava
 
 Discovery lists only the dev servers of the agent selected in the side panel (initially the session that launched Design Mode; the list refreshes when you pick another agent): the configured **Dev Server URL**, live listeners attributed by process directory or an absolute command path to that session’s worktree, and URLs that session printed in its own terminal. Other worktrees of the repository and other sessions are not listed. Live listeners must answer HTTP GET `/` successfully with a `text/html` Content-Type within 750 ms. TUIC itself is excluded. Probes do not follow redirects; the scan has a 3-second budget. Fresh PTY URLs are accepted only when their port has a verified live owned HTML listener. Multiple candidates are listed instead of automatically choosing one. Windows native host registration currently targets Edge and awaits Chrome/multi-profile validation. Windows discovery offers configured URLs and the address bar; listener attribution is not claimed there. Repo-local `.tuic.json` cannot silently supply executable scripts.
 
-The pilot has browser evidence from Chrome for Testing. Native Edge Load unpacked persistence, toolbar-granted screenshot permissions and sidebar restoration still need an Edge check. Agents ask the browser to reload the reviewed tab with MCP `design_mode` `action: "reload"` (for static pages without HMR). The extension also tells TUICommander it is alive every 5 s: Design Mode stops by itself 60 s after the browser goes away. Everyday-profile installation is later work.
+The pilot has browser evidence from Chrome for Testing. Native Edge Load unpacked persistence, toolbar-granted screenshot permissions and sidebar restoration still need an Edge check. Agents ask the browser to reload the reviewed tab with MCP `ui` `action: "design_reload"` (for static pages without HMR). The extension also tells TUICommander it is alive every 5 s: Design Mode stops by itself 60 s after the browser goes away. Everyday-profile installation is later work.
 
 ### Start from a link or coordinator
 
 Right-click a terminal HTTP(S) link and choose **Start in Design Mode**, then **Edge** or **Chrome**. This always starts or rebinds to that terminal agent and opens the exact URL, even if another agent is already connected. The D badge follows the bound session.
 
-For layout work, coordinators use MCP `design_mode` with `action: "start"`, `session_id` naming the live terminal agent, and `url` naming the HTTP(S) page. Optional `browser` selects `chrome` or `edge`. Use `action: "status"` for bindings and `action: "stop"` with the returned `repoPath` as `repo_path`. Browser launch happens on the host; an ACP coordinator does not become the terminal agent.
+For layout work, coordinators use MCP `ui` with `action: "design_start"`, `session_id` naming the live terminal agent, and `url` naming the HTTP(S) page. Optional `browser` selects `chrome` or `edge`. Use `action: "design_status"` for bindings and `action: "design_stop"` with the returned `repoPath` as `repo_path`. Browser launch happens on the host; an ACP coordinator does not become the terminal agent.
 
 If the sidebar icon is hidden, open the Extensions (puzzle) menu and pin **TUICommander Design Mode**. You can also press **Option+Shift+D** on macOS or **Alt+Shift+D** on Windows/Linux. Browser choice currently lists Edge and Chrome; launch reports if the chosen browser is not installed.
 
 ### Agent browser commands
 
-Agents can request `navigate`, `reload`, `screenshot`, `errors`, and `eval` through
-`design_mode`. The native port returns a request-id-matched reply, with a ten-second
+Agents can request `design_navigate`, `design_reload`, `design_screenshot`,
+`design_errors`, and `design_eval` through `ui`. The native port returns a request-id-matched reply, with a ten-second
 timeout. Open the sidebar on the page to select the reviewed tab. Screenshot fails
 if that tab is not visible; it never captures a different active tab. PNG files are
 stored in the instance's `design-grabs` directory. Errors and eval values are bounded,

@@ -26,6 +26,9 @@ pub struct RegistryEntry {
     pub capabilities: Vec<String>,
     /// Direct HTTPS download URL for the `.zip` archive.
     pub download_url: String,
+    /// SHA-256 of the packaged payload tree; absent in older catalogues.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub content_sha256: Option<String>,
 }
 
 /// Fetch the remote plugin registry.

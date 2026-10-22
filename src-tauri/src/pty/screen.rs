@@ -9,11 +9,11 @@ pub(super) enum AgentScreenActivity {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(super) struct ProcessTreeEntry {
+pub(crate) struct ProcessTreeEntry {
     pub(super) pid: u32,
     pub(super) parent_pid: u32,
     pub(super) name: String,
-    pub(super) command: String,
+    pub(crate) command: String,
     /// Seconds this process has been alive, when the platform snapshot reports
     /// it. `None` on Windows, whose `PROCESSENTRY32` carries no creation time —
     /// see [`started_with_agent`] for what the absence costs.
@@ -312,8 +312,25 @@ pub(super) fn foreground_group_at_prompt(root_pid: u32, processes: &[ProcessTree
     true
 }
 
+/// An abandoned terminal must own only an interactive shell, never a script or
+/// any descendant (including a quiet background job). Unknown argv fails closed.
+pub(crate) fn abandoned_shell_process(root_pid: u32, processes: &[ProcessTreeEntry]) -> bool {
+    let Some(root) = processes.iter().find(|p| p.pid == root_pid) else {
+        return false;
+    };
+    is_prompt_shell_process(root)
+        && !root.command.is_empty()
+        && root.command.split_whitespace().skip(1).all(|arg| {
+            matches!(
+                arg,
+                "-l" | "-i" | "-il" | "-li" | "--login" | "--noprofile" | "--norc"
+            )
+        })
+        && !processes.iter().any(|p| p.parent_pid == root_pid)
+}
+
 /// The pid whose process tree represents this session's foreground work.
-fn session_foreground_pid(state: &AppState, session_id: &str) -> Option<u32> {
+pub(super) fn session_foreground_pid(state: &AppState, session_id: &str) -> Option<u32> {
     let entry = state.session_maps.sessions.get(session_id)?;
     let session = entry.value().lock();
     #[cfg(not(windows))]
@@ -374,7 +391,7 @@ pub(super) fn explicit_busy_is_a_nested_prompt(state: &AppState, session_id: &st
 }
 
 #[cfg(not(windows))]
-pub(super) fn process_tree_snapshot() -> Option<Vec<ProcessTreeEntry>> {
+pub(crate) fn process_tree_snapshot() -> Option<Vec<ProcessTreeEntry>> {
     let output = std::process::Command::new("ps")
         .args(["-ww", "-axo", "pid=,ppid=,etime=,comm=,args="])
         .output()
@@ -451,7 +468,7 @@ fn take_process_snapshot_field(value: &str) -> Option<(&str, &str)> {
 }
 
 #[cfg(windows)]
-pub(super) fn process_tree_snapshot() -> Option<Vec<ProcessTreeEntry>> {
+pub(crate) fn process_tree_snapshot() -> Option<Vec<ProcessTreeEntry>> {
     use windows_sys::Win32::Foundation::CloseHandle;
     use windows_sys::Win32::System::Diagnostics::ToolHelp::{
         CreateToolhelp32Snapshot, PROCESSENTRY32, Process32First, Process32Next, TH32CS_SNAPPROCESS,
@@ -843,7 +860,12 @@ pub(crate) fn spawn_process_snapshot_refresher(state: Arc<AppState>) {
             interval.tick().await;
             let refresh_state = Arc::clone(&state);
             let _ = tokio::task::spawn_blocking(move || {
-                refresh_process_snapshot_if_demanded(&refresh_state, process_tree_snapshot)
+                refresh_process_snapshot_if_demanded(&refresh_state, process_tree_snapshot);
+                super::bg_wake_diagnostics::capture_overdue_bg_wakes(
+                    &refresh_state,
+                    std::time::Instant::now(),
+                    process_tree_snapshot,
+                )
             })
             .await;
         }

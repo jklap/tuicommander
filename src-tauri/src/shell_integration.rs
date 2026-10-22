@@ -354,7 +354,9 @@ if [ -z "$real" ]; then
 fi
 ext=md
 [ "$name" = codex ] && ext=toml
-file=${TUIC_AGENT_INSTRUCTIONS_DIR:+$TUIC_AGENT_INSTRUCTIONS_DIR/instructions-$name.$ext}
+suffix=
+[ "$TUIC_SPAWNED_CHILD" = 1 ] && suffix=-child
+file=${TUIC_AGENT_INSTRUCTIONS_DIR:+$TUIC_AGENT_INSTRUCTIONS_DIR/instructions-$name$suffix.$ext}
 if [ "$name" = gemini ]; then
   [ -z "$TUIC_ATTACHMENTS_DIR" ] || set -- "--include-directories=$TUIC_ATTACHMENTS_DIR" "$@"
   exec "$real" "$@"
@@ -770,6 +772,9 @@ mod tests {
         );
         let _guard = tuic_core::config_dir::set_override(dir.path().to_path_buf());
         let mut cmd = portable_pty::CommandBuilder::new("zsh");
+        // Catches: an inherited TUIC launch config masks this shell's injection.
+        // Production intentionally preserves an explicit OpenCode config.
+        cmd.env_remove("OPENCODE_CONFIG_CONTENT");
         cmd.env("PATH", "/usr/bin:/bin");
         inject(dir.path(), "zsh", &mut cmd);
         let bin = dir.path().join("shell-integration/bin");

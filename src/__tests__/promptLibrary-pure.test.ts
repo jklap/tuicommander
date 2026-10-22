@@ -75,6 +75,67 @@ describe("promptLibrary pure functions", () => {
 		store._testCancelPendingSave();
 	});
 
+	describe("guided event configuration (#2012-72ff)", () => {
+		it("hydrates all three guides into the toolbar without enabling unattended execution", async () => {
+			await testInScopeAsync(async () => {
+				await store.hydrate();
+				const guides = store.getSmartByPlacement("toolbar").filter((prompt) => prompt.tags?.includes("events"));
+				expect(guides.map((prompt) => prompt.id).sort()).toEqual([
+					"smart-configure-authorized-bounded-fix",
+					"smart-configure-incoming-pr-review",
+					"smart-configure-issue-to-draft-pr",
+				]);
+				for (const guide of guides) {
+					expect(guide.executionMode).toBe("inject");
+					expect(guide.injectTarget).toBe("compose");
+					expect(guide.autoExecute).toBe(false);
+					expect(guide.requiresIdle).toBe(true);
+				}
+			});
+		});
+
+		it("retains prerequisite stops and human confirmation in every delivered guide", async () => {
+			await testInScopeAsync(async () => {
+				await store.hydrate();
+				for (const id of [
+					"smart-configure-issue-to-draft-pr",
+					"smart-configure-incoming-pr-review",
+					"smart-configure-authorized-bounded-fix",
+				]) {
+					const guide = store.getPrompt(id)!;
+					// Content is the delivered product contract, not evidence that a model obeyed it.
+					const delivered = await store.processContent(guide, {});
+					expect(delivered).toContain("one owning daemon");
+					expect(delivered).toContain("available agent profile");
+					expect(delivered).toContain("GitHub authentication");
+					expect(delivered).toContain("required skills installed on that host");
+					expect(delivered).toContain("STOP: missing <prerequisite>; needed: <operator action>");
+					expect(delivered).toContain("STOP: unsupported <capability> on <host>");
+					expect(delivered).toContain(
+						"wait for explicit confirmation before saving, enabling, launching, pushing or posting",
+					);
+					expect(delivered).toContain("recorded GitHub fixture with provenance");
+					expect(delivered).toContain("never invent external payloads or contact GitHub in fixture mode");
+				}
+			});
+		});
+
+		it("keeps issue publication, review-only and authorized repair policies separate", async () => {
+			await testInScopeAsync(async () => {
+				await store.hydrate();
+				expect(store.getPrompt("smart-configure-issue-to-draft-pr")?.content).toContain(
+					"create or update a draft PR referencing the issue",
+				);
+				expect(store.getPrompt("smart-configure-incoming-pr-review")?.content).toContain(
+					"Do not create another PR, repair code, push to the source branch or approve/merge the PR",
+				);
+				const repair = store.getPrompt("smart-configure-authorized-bounded-fix")?.content;
+				expect(repair).toContain("STOP: missing branch authorization");
+				expect(repair).toContain("remote head still equals the authorized head");
+			});
+		});
+	});
+
 	describe("extractVariables()", () => {
 		it("extracts variables from content", async () => {
 			const vars = await store.extractVariables("Hello {name}, welcome to {place}!");

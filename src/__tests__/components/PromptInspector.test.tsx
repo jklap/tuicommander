@@ -34,6 +34,22 @@ const receipt: PromptReceipt = {
 };
 
 describe("PromptInspector", () => {
+	// Catches: removing narration also removes real observation values or contextual warnings.
+	it("rejects permanent explanation while retaining receipt values and warnings", async () => {
+		vi.mocked(invoke).mockResolvedValue({
+			...receipt,
+			sections: [{ ...receipt.sections[0], truncated: true }],
+			captureLimited: true,
+		});
+		const view = render(() => <PromptInspector sessionId="concise" onClose={() => {}} />);
+		await waitFor(() => expect(view.getByText("42 bytes")).toBeTruthy());
+		expect(view.getByText("stored generator")).toBeTruthy();
+		expect(view.getByText("é🦀")).toBeTruthy();
+		expect(view.getByText(/Truncated redacted preview/)).toBeTruthy();
+		expect(view.getByText(/Additional sections omitted/)).toBeTruthy();
+		expect(view.queryByText(/Launch-time observations from this session/)).toBeNull();
+	});
+
 	beforeEach(() => vi.clearAllMocks());
 	// Catches: computing counts from rendered/redacted text or hiding stored provenance.
 	it("renders stored source and original byte count in collapsible sections", async () => {
