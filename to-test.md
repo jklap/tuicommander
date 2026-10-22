@@ -1,3 +1,8 @@
+## PTY size on tab mount and reconnect (2128-153a) — rebuild required
+
+- [x] Isolated `agent-test-2128` instance with Claude Code 2.1.306: before the fix, a WebView reload and the first activation of a background tab left the PTY at 15x38 while the canvas drew 14x37. After the fix, the first activation sends one resize, a reload sends none, and `stty size` equals the drawn grid. Evidence: `~/Gits/.tmp/results/tuic-2128/`.
+- [ ] After Boss rebuilds and restarts the daily app, reload the WebView with a Claude tab open, then run `stty size` in a shell tab or read `PTY resize` in the debug log. The size must equal the visible grid. This peer did not restart the daily app.
+
 ## Detached command peer isolation (2100-c249) — CLI update and backend restart required
 
 - [ ] After installing the rebuilt `tuic` CLI, verify a detached reviewer cannot set the foreground composer to awaiting through its progress report, and its BG DONE still arrives. Install both the rebuilt CLI and backend, then manually restart the backend: the ancestry boundary cannot load through frontend hot reload. No daily app restart was performed by this peer.

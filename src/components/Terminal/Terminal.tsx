@@ -165,10 +165,27 @@ export function cleanOscTitle(title: string): string {
 	return cleaned;
 }
 
+/** The box the canvas grid fills: CanvasTerminal's own container once it is
+ *  mounted, otherwise the content box of the pane, because its padding holds no
+ *  cells. Measuring the padded pane gave the PTY one more row and column than the
+ *  canvas draws; when that resize landed after the canvas's own, Claude kept the
+ *  larger size with its last row and column off screen (story 2128-153a). */
+function gridBox(container: HTMLElement): { width: number; height: number } {
+	const canvasBox = container.querySelector<HTMLElement>("[data-terminal-container]");
+	if (canvasBox) return canvasBox.getBoundingClientRect();
+	const rect = container.getBoundingClientRect();
+	const style = getComputedStyle(container);
+	const px = (value: string) => Number.parseFloat(value) || 0;
+	return {
+		width: rect.width - px(style.paddingLeft) - px(style.paddingRight),
+		height: rect.height - px(style.paddingTop) - px(style.paddingBottom),
+	};
+}
+
 /** Get initial terminal dimensions from container size + font metrics.
  *
- *  Mirrors CanvasTerminal's remeasure EXACTLY — shared `gridDimsForBox` formula
- *  (gutter + scrollbar subtracted) and the per-terminal font-size override — so
+ *  Mirrors CanvasTerminal's remeasure EXACTLY — the same box (`gridBox`), the
+ *  shared `gridDimsForBox` formula and the per-terminal font-size override — so
  *  the reconnect-path resize lands on the same dims the canvas will compute and
  *  the backend no-ops it instead of firing a spurious SIGWINCH (each SIGWINCH
  *  makes Ink TUIs clear+reprint their full frame into scrollback). */
@@ -178,8 +195,8 @@ function calcGridSize(container: HTMLElement, terminalId: string): { rows: numbe
 	const fontWeight = settingsStore.state.fontWeight;
 	const dpr = window.devicePixelRatio || 1;
 	const m = getSharedMetrics(fontSize, fontFamily, dpr, snapLineHeight(fontSize), fontWeight);
-	const rect = container.getBoundingClientRect();
-	const d = gridDimsForBox(rect.width, rect.height, m.cellWidth, m.cellHeight);
+	const box = gridBox(container);
+	const d = gridDimsForBox(box.width, box.height, m.cellWidth, m.cellHeight);
 	return { rows: Math.max(2, d.rows), cols: Math.max(2, d.cols) };
 }
 
@@ -850,6 +867,16 @@ export const Terminal: Component<TerminalProps> = (props) => {
 			let reconnected = false;
 			if (sessionId) {
 				try {
+					const box = gridBox(containerRef);
+					appLogger.diag.info("terminal", `resize_pty request reconnect ${grid.rows}x${grid.cols}`, {
+						sessionId,
+						caller: "reconnect",
+						viewer: isTauri() ? "desktop" : "browser",
+						rows: grid.rows,
+						cols: grid.cols,
+						boxWidth: box.width,
+						boxHeight: box.height,
+					});
 					await pty.resize(sessionId, grid.rows, grid.cols);
 					reconnected = true;
 					await attachSessionListeners(sessionId);
