@@ -889,9 +889,12 @@ DU src/deleted.rs
     /// filename, on a line whose actual code is a plain modification.
     #[test]
     fn parse_conflicted_files_porcelain_ignores_conflict_codes_inside_names() {
-        assert!(parse_conflicted_files_porcelain("?? UUID.md\n").is_empty());
-        assert!(parse_conflicted_files_porcelain("?? AAA.md\n M src/DD.rs\n").is_empty());
-        assert!(parse_conflicted_files_porcelain("").is_empty());
+        assert_eq!(parse_conflicted_files_porcelain("?? UUID.md\n").len(), 0);
+        assert_eq!(
+            parse_conflicted_files_porcelain("?? AAA.md\n M src/DD.rs\n").len(),
+            0
+        );
+        assert_eq!(parse_conflicted_files_porcelain("").len(), 0);
         assert_eq!(
             parse_conflicted_files_porcelain("?? notes.txt\nUU file.rs\n"),
             vec!["file.rs".to_string()]

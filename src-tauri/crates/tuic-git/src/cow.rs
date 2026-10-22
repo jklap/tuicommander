@@ -928,7 +928,7 @@ mod tests {
         let (_temp, repo, worktree) = warming_fixture();
         let report = warm_worktree_with(&repo, &worktree, plain_copy);
         assert_eq!(report.warmed, 1);
-        assert!(report.warnings.is_empty());
+        assert_eq!(report.warnings.len(), 0);
         assert_eq!(
             std::fs::read_to_string(worktree.join("build/cache/data")).unwrap(),
             "warm"
@@ -1040,7 +1040,7 @@ mod tests {
         });
 
         assert_eq!(report.warmed, 0);
-        assert!(report.warnings.is_empty());
+        assert_eq!(report.warnings.len(), 0);
         assert_eq!(
             std::fs::read_to_string(worktree.join("build/cache/data")).unwrap(),
             "workspace"
@@ -1056,7 +1056,7 @@ mod tests {
         });
 
         assert_eq!(report.warmed, 1);
-        assert!(report.warnings.is_empty());
+        assert_eq!(report.warnings.len(), 0);
         assert_eq!(
             std::fs::read_to_string(worktree.join("build/cache/data")).unwrap(),
             "warm"
@@ -1170,7 +1170,7 @@ mod tests {
         });
 
         assert_eq!(report.warmed, 0);
-        assert!(report.warnings.is_empty());
+        assert_eq!(report.warnings.len(), 0);
     }
 
     #[test]
@@ -1212,7 +1212,7 @@ mod tests {
         });
 
         assert_eq!(report.warmed, 0);
-        assert!(report.warnings.is_empty());
+        assert_eq!(report.warnings.len(), 0);
     }
 
     #[test]
@@ -1221,7 +1221,7 @@ mod tests {
         git_cmd(&repo.join("build")).args(["init"]).run().unwrap();
         let report = warm_worktree_with(&repo, &worktree, |_, _| panic!("must not copy"));
         assert_eq!(report.warmed, 0);
-        assert!(report.warnings.is_empty());
+        assert_eq!(report.warnings.len(), 0);
     }
 
     /// Story 1398-42b4 criterion 2: a child created from a linked-worktree
