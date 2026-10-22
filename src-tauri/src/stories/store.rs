@@ -1,6 +1,6 @@
 use super::model::{
-    CRITERIA_INCOMPLETE, NewPlan, NewStory, Plan, PlanState, PlanView, Story, StoryCommand, StoryOrigin, StoryRead,
-    StoryStatus, StoryTransition, StoryTransitionActor,
+    CRITERIA_INCOMPLETE, NewPlan, NewStory, Plan, PlanState, PlanView, Story, StoryCommand,
+    StoryOrigin, StoryRead, StoryStatus, StoryTransition, StoryTransitionActor,
 };
 use rusqlite::{Connection, OpenFlags, OptionalExtension, params};
 use sha2::{Digest, Sha256};

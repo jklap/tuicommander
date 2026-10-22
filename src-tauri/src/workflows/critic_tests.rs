@@ -147,7 +147,10 @@ fn a_draft_reports_the_draft_revision_it_last_published() {
     assert_ne!(edited.last_published_draft_revision, edited.draft_revision);
     store.publish(&story.id, edited.draft_revision).unwrap();
     let published = store.get_draft(&story.id).unwrap();
-    assert_eq!(published.last_published_draft_revision, published.draft_revision);
+    assert_eq!(
+        published.last_published_draft_revision,
+        published.draft_revision
+    );
 }
 
 #[test]

@@ -3974,7 +3974,11 @@ mod tests {
         let local = std::net::SocketAddr::from(([127, 0, 0, 1], 0));
         let response = app
             .clone()
-            .oneshot(mcp_post_from(path, &serde_json::json!({ "action": action }), local))
+            .oneshot(mcp_post_from(
+                path,
+                &serde_json::json!({ "action": action }),
+                local,
+            ))
             .await
             .expect("story response");
         let status = response.status();
@@ -3982,7 +3986,10 @@ mod tests {
             .await
             .expect("read story response");
         let body: serde_json::Value = serde_json::from_slice(&bytes).expect("story JSON");
-        (status, body["error"].as_str().unwrap_or_default().to_owned())
+        (
+            status,
+            body["error"].as_str().unwrap_or_default().to_owned(),
+        )
     }
 
     // Catches: a missing plan file or unchecked criteria answered as HTTP 500 (a server fault)
