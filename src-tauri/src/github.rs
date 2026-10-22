@@ -5640,6 +5640,26 @@ mod tests {
         );
     }
 
+    #[test]
+    fn oauth_not_found_group_offers_the_oauth_app_page() {
+        // Catches the real pending-org-approval case (GitHub hides such repos as NOT_FOUND)
+        // showing no recovery action because the URL is only offered for SSO/restriction wording.
+        let state = crate::state::tests_support::make_test_app_state();
+        let response = serde_json::json!({
+            "data": {"repo0": null},
+            "errors": [{"type": "NOT_FOUND", "path": ["repo0"],
+                "message": "Could not resolve to a Repository with the name 'Lansweeper/gate-os'."}]
+        });
+        record_repo_access(&state, &cloud_account(), "Lansweeper", "gate-os", &response, "repo0");
+        let diagnostics = crate::github_auth::compute_diagnostics(&state);
+        let group = diagnostics
+            .repo_access_errors
+            .iter()
+            .find(|g| g.owner == "Lansweeper")
+            .unwrap();
+        assert!(group.oauth_app_url.is_some());
+    }
+
     // --- check_graphql_errors tests ---
 
     #[test]
