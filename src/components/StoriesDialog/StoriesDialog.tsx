@@ -217,7 +217,7 @@ export const StoriesDialog: Component<StoriesDialogProps> = (props) => {
 	const fail = (cause: unknown): void => {
 		const message = String(cause);
 		appLogger.warn("store", "Stories: action failed", { error: message });
-		setError(cause instanceof Error ? cause.message : message);
+		setError(cause instanceof HttpRpcError ? cause.detail : cause instanceof Error ? cause.message : message);
 	};
 	const ensureCapabilities = async (): Promise<void> => {
 		if (capabilitiesReady) return;
@@ -642,10 +642,7 @@ export const StoriesDialog: Component<StoriesDialogProps> = (props) => {
 						>
 							Start story workflow
 						</button>
-						{/* DEFERRED (2026-10-06) — plan start awaits the slice E dispatch entry point. */}
-						<button type="button" disabled title="Plan dispatch is unavailable in this build">
-							Start plan workflow · unavailable
-						</button>
+						{/* DEFERRED (2026-10-22) — "Start plan workflow" is hidden until the slice E plan dispatch entry point exists (audit 2137 A11). */}
 						<button
 							type="button"
 							aria-pressed={showRuns()}

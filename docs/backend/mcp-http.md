@@ -2715,6 +2715,8 @@ The loopback-only `debug action=frame_workload_dump` schedules the enabled front
 
 ## Runtime call outcome audit (#2010-30a7)
 
+Gated by the persisted `mcp_call_audit_enabled` setting (#2136-dc79): default `false` in release builds, `true` when `cfg!(debug_assertions)`. While off, `tools/call` ingress records nothing and `GET /mcp/audit` (IPC `get_mcp_audit`) returns `{"enabled":false,"records":[]}`; retained rows are not returned. Each row also carries `outcome` (`replied`, `error`, `cancelled`), which describes the reply, never the effect. Settings > MCP > Call audit shows the rows; it fetches on open and on Refresh only.
+
 `GET /mcp/audit` returns at most 100 newest completed/cancelled `tools/call`
 observations from an instance-local 1024-record memory ring. `retained`, `evicted`,
 `capacity` and `limit` describe retention. Restart clears the ring. HTTP and ACP

@@ -751,6 +751,12 @@ describe("transport", () => {
 			expect(result.body).toEqual({ base: { font_family: "Menlo" }, config: cfg });
 		});
 
+		it("maps the MCP call audit read to GET /mcp/audit", () => {
+			const result = mapCommandToHttp("get_mcp_audit", {});
+			expect(result.method).toBe("GET");
+			expect(result.path).toBe("/mcp/audit");
+		});
+
 		it("maps upstream saves with both the loaded base and desired config", () => {
 			const base = { servers: [{ id: "a", enabled: true }] };
 			const config = { servers: [{ id: "a", enabled: false }] };

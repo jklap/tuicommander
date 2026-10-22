@@ -191,6 +191,7 @@
 /github/viewer-login
 /grok/usage
 /logs
+/mcp/audit
 /mcp/confirm-response
 /mcp/status
 /mcp/upstream-status

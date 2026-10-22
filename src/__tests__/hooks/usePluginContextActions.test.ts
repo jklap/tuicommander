@@ -12,6 +12,7 @@ vi.mock("../../stores/promptLibrary", () => ({ promptLibraryStore: mockPromptLib
 import { usePluginContextActions } from "../../hooks/usePluginContextActions";
 import { contextMenuActionsStore } from "../../stores/contextMenuActionsStore";
 import type { SavedPrompt } from "../../stores/promptLibrary";
+import { toastsStore } from "../../stores/toasts";
 
 const branchPrompt = {
 	id: "branch-prompt",
@@ -63,6 +64,20 @@ describe("usePluginContextActions", () => {
 		expect(executeSmartPrompt).toHaveBeenNthCalledWith(2, terminalPrompt);
 		expect(terminalAction.disabled?.({ target: "terminal" })).toBe(true);
 		expect(canExecute).toHaveBeenCalledWith(terminalPrompt);
+	});
+
+	// Catches: a branch smart prompt that cannot run (no headless agent) doing nothing visible.
+	it("tells the user why a branch smart prompt did not run", async () => {
+		const add = vi.spyOn(toastsStore, "add");
+		const reason = "No headless agent configured — set one in Settings → Smart Prompts";
+		const refused = vi.fn().mockResolvedValue({ ok: false, reason });
+		createRoot((rootDispose) => {
+			dispose = rootDispose;
+			usePluginContextActions({ executeSmartPrompt: refused, canExecute });
+		});
+		contextMenuActionsStore.getContextActions("branch")[0].action({ target: "branch", branchName: "feature/test" });
+		await vi.waitFor(() => expect(add).toHaveBeenCalledWith("Review branch", reason, "warn"));
+		add.mockRestore();
 	});
 
 	it("disposes every registration when the owning root is disposed", () => {

@@ -28,7 +28,7 @@ A distinct second start on a plan with a running or paused run is refused with `
 
 ## Workflow definitions
 
-`POST /workflows/definition/action?path=<absolute-project>` accepts one `WorkflowAction` object and returns `{ type, value }`. Actions are `seed_templates`, `create_draft {name,kind,graph}`, `list_drafts`, `get_draft {id}`, `update_draft {id,expected_revision,graph}`, `update_closure {id,expected_revision,closure}`, `update_checks {id,expected_revision,checks}`, `publish {id,expected_revision}`, and `get_published {id,revision}`. `closure` is `human` or `automatic`, defaults to `human`, and `automatic` cannot be published until its evidence gate exists. Each check has `id`, `argv`, and camel-case `timeoutSecs`; the published revision pins its `requiredChecks`. A graph has `nodes` and `edges`; see [Workflow definitions](../backend/workflows.md) for node, outcome, and publication rules. The path resolves to the canonical owning project. Published revisions are immutable. This endpoint defines workflows; it does not start one. Executable-graph validation errors during `publish` return HTTP 422 with `{ "error": "invalid workflow definition: ..." }`; invalid Pause targets name `resume_to`.
+`POST /workflows/definition/action?path=<absolute-project>` accepts one `WorkflowAction` object and returns `{ type, value }`. Actions are `seed_templates`, `create_draft {name,kind,graph}`, `list_drafts`, `get_draft {id}`, `update_draft {id,expected_revision,graph}`, `update_closure {id,expected_revision,closure}`, `update_checks {id,expected_revision,checks}`, `publish {id,expected_revision}`, and `get_published {id,revision}`. `closure` is `human` or `automatic`, defaults to `human`, and `automatic` cannot be published until its evidence gate exists. Each check has `id`, `argv`, and camel-case `timeoutSecs`; the published revision pins its `requiredChecks`. A graph has `nodes` and `edges`; see [Workflow definitions](../backend/workflows.md) for node, outcome, and publication rules. The path resolves to the canonical owning project. Published revisions are immutable. This endpoint defines workflows; it does not start one. Executable-graph validation errors during `publish` return HTTP 422 with `{ "error": "invalid workflow definition: ..." }`; invalid Pause targets name `resume_to`. Publishing a draft with no edit since its last publication also returns HTTP 422 (`draft revision has already been published`); each draft carries `lastPublishedDraftRevision`, and a client disables Publish while it equals `draftRevision`.
 
 ## Native stories
 
@@ -39,6 +39,8 @@ A distinct second start on a plan with a running or paused run is refused with `
 Story transition provenance comes from host-validated credentials: desktop IPC and credential-authenticated HTTP record `human`; sessionless local HTTP records `local_api`. Managed calls record their session identity, including when the claiming session approves its own story. Actor identity never restricts actions; state, revision, project and claim-conflict rules remain enforced.
 
 `plan_view` returns `{type:"plan_view",value:{stories,state,wontFixCount,allCancelled}}`. Each story in `stories` includes a read-only `abandoned` boolean, derived from whether that story or any dependency reachable from it is WontFix. The summary and state are derived from the same read; no abandonment flag is persisted.
+
+`summary` returns `{type:"summary",value:{activePlans,inProgress,done,total}}` for the project: plans whose derived state is active, and over their stories those `in_progress`, those `done`, and all except `wont_fix` and abandoned ones. The Plans and Stories toolbar button reads it; it is also available over IPC through `story_action_command`.
 
 The project path is resolved to its canonical owner, so a managed worktree shares its parent project's plans. Unknown action and create-story fields are rejected. Claim requires a live PTY session in that project. `transition` accepts the `start_manual` command to begin a Ready story without a terminal. Actor identity is tracking only; managed, local API and human callers use the same transition rules. `remove_dependency` accepts only a Backlog dependent with a direct WontFix prerequisite; it returns the revised story, Ready only when all remaining prerequisites are Done. WontFix never satisfies dependencies. A nonempty plan with only Done/WontFix stories has `plan_state: done`, while an empty plan is `draft`. Reads and writes verify the stored plan's project; a story ID alone grants no cross-project access. Revisions are required for mutations to detect stale clients. The same service backs desktop IPC and MCP. There is no import or export endpoint.
 
@@ -2934,6 +2936,8 @@ Disconnect retires that host's existing shadows synchronously, independently
 of a pending handshake or a later reconnect generation. This is a bounded replay horizon,
 not unbounded or restart-persistent exactly-once delivery.
 
+`POST /stories/action` answers a mistake the user can fix with HTTP 422 and `{ "error": "..." }`: `add_plan_source` for a missing plan file (`plan document not found: <path>`) and `submit_review` with unchecked criteria (`criteria are incomplete: unchecked indexes N`). Other failures stay HTTP 500.
+
 Workflow definition and run APIs are actorless and share the same services across transports. Story transition actors track provenance and never restrict actions. Desktop IPC and valid HTTP credentials record Human; sessionless local requests record LocalApi; managed story requests record their session. Missing ConnectInfo on Unix sockets and in-process services means local/unknown caller metadata, not HTTP 500. Local token exchange is accepted; state, revision, project and integration checks remain enforced.
 
 ### Stored terminal marker coordinates
@@ -3462,6 +3466,8 @@ See the native argument repair contract in the MCP backend guide. Progress HTTP
 and IPC use the same raw 500-Unicode-scalar text limit as MCP.
 
 ### GET /mcp/audit
+
+Gated by `mcp_call_audit_enabled` (default off in release, on in debug): when off the body is `{"enabled":false,"records":[]}`. Rows add `outcome`: `replied`, `error` or `cancelled`. IPC: `get_mcp_audit`.
 
 Returns a bounded, body-free runtime MCP call outcome projection (100 newest rows,
 1024 retained per instance). Includes call/parent correlation UUIDs, recognized
