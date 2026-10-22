@@ -37,6 +37,17 @@ tab file, run it; regenerate the literal from the extractor rather than editing 
 by hand. `settingsSearch.test.tsx` and `settingsPanelSearch.test.tsx` cover the
 search/scroll behavior itself.
 
+**`extractTab` reads only the files `TAB_SOURCES` lists for a page — it never follows
+imports — and it only recognizes a literal `<h3>` as a section heading (settings are `<label>`
+elements and `label=` props under the nearest preceding `<h3>`).** A component a page renders must
+therefore be listed in that page's `TAB_SOURCES` entry (the drift guard fails when `SettingsPanel`
+renders a component the map doesn't name — e.g. `McpIntegrationsSection.tsx` on the MCP page, which
+had to be listed even though it contributes no entry), and a heading-shaped element that isn't an
+`<h3>` (e.g. "MCP integrations", a `<div class={a.expandedLabel}>`) is invisible to search. Don't
+paper over that with a hand-added `SETTINGS_SEARCH_INDEX` entry — the drift-guard test in
+`settingsSearchIndex.test.ts` fails with a diff naming exactly the phantom entry. Make it findable
+by giving it a real `<h3>`/`<label>` instead.
+
 **A sentinel value sharing its namespace with real, externally-sourced data is a latent collision, not just a style nitpick.** `RepoWorktreeTab.tsx`'s "Branch From" dropdown uses the string `"automatic"` as a sentinel meaning "let TUIC detect the default branch" — fine while the dropdown was a hardcoded list, but once it was changed to render the repo's actual branches, a real branch literally named `automatic` (a legal git ref name) would render as a second `<option value="automatic">`, indistinguishable from the sentinel and permanently unselectable. Fixed narrowly by filtering any ref matching a reserved sentinel (`automatic`, `__inherit__`) out of the rendered list — a display-only fix, not a sentinel-scheme redesign (that would be a wire-format/migration concern). Any dropdown that mixes a fixed sentinel value with a dynamically-fetched, open-ended real-world value (branch names, file paths, user-typed strings) needs the same check: either namespace the sentinel so it can never collide (e.g. `__automatic__`), or filter colliding real values out of the rendered options.
 
 ## Export/Import Settings Collections & Native File Save
