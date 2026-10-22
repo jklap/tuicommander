@@ -23,14 +23,14 @@
 {"record":27,"event":{"type":"shell-state","state":"idle","agent_type":"ego"}}
 {"record":27,"event":{"type":"intent","text":"captured draft","title":"εgo","_turn_epoch":0}}
 {"record":27,"event":{"type":"user-input","content":"","line":-1,"_turn_epoch":0}}
-{"record":27,"state":{"shell":2,"agent":"working","awaiting":false,"question":null,"confident":false,"last_question":null,"choice_sig":null,"fullscreen":false}}
-{"record":28,"state":{"shell":2,"agent":"working","awaiting":false,"question":null,"confident":false,"last_question":null,"choice_sig":null,"fullscreen":false}}
-{"record":30,"state":{"shell":2,"agent":"working","awaiting":false,"question":null,"confident":false,"last_question":null,"choice_sig":null,"fullscreen":false}}
-{"record":31,"state":{"shell":2,"agent":"working","awaiting":false,"question":null,"confident":false,"last_question":null,"choice_sig":null,"fullscreen":false}}
-{"record":33,"state":{"shell":2,"agent":"working","awaiting":false,"question":null,"confident":false,"last_question":null,"choice_sig":null,"fullscreen":false}}
-{"record":34,"state":{"shell":2,"agent":"working","awaiting":false,"question":null,"confident":false,"last_question":null,"choice_sig":null,"fullscreen":false}}
-{"record":36,"state":{"shell":2,"agent":"working","awaiting":false,"question":null,"confident":false,"last_question":null,"choice_sig":null,"fullscreen":false}}
-{"record":38,"state":{"shell":2,"agent":"working","awaiting":false,"question":null,"confident":false,"last_question":null,"choice_sig":null,"fullscreen":false}}
-{"record":39,"state":{"shell":2,"agent":"working","awaiting":false,"question":null,"confident":false,"last_question":null,"choice_sig":null,"fullscreen":false}}
-{"record":41,"state":{"shell":2,"agent":"working","awaiting":false,"question":null,"confident":false,"last_question":null,"choice_sig":null,"fullscreen":false}}
+{"record":27,"state":{"shell":2,"agent":"idle","awaiting":false,"question":null,"confident":false,"last_question":null,"choice_sig":null,"fullscreen":false}}
+{"record":28,"state":{"shell":2,"agent":"idle","awaiting":false,"question":null,"confident":false,"last_question":null,"choice_sig":null,"fullscreen":false}}
+{"record":30,"state":{"shell":2,"agent":"idle","awaiting":false,"question":null,"confident":false,"last_question":null,"choice_sig":null,"fullscreen":false}}
+{"record":31,"state":{"shell":2,"agent":"idle","awaiting":false,"question":null,"confident":false,"last_question":null,"choice_sig":null,"fullscreen":false}}
+{"record":33,"state":{"shell":2,"agent":"idle","awaiting":false,"question":null,"confident":false,"last_question":null,"choice_sig":null,"fullscreen":false}}
+{"record":34,"state":{"shell":2,"agent":"idle","awaiting":false,"question":null,"confident":false,"last_question":null,"choice_sig":null,"fullscreen":false}}
+{"record":36,"state":{"shell":2,"agent":"idle","awaiting":false,"question":null,"confident":false,"last_question":null,"choice_sig":null,"fullscreen":false}}
+{"record":38,"state":{"shell":2,"agent":"idle","awaiting":false,"question":null,"confident":false,"last_question":null,"choice_sig":null,"fullscreen":false}}
+{"record":39,"state":{"shell":2,"agent":"idle","awaiting":false,"question":null,"confident":false,"last_question":null,"choice_sig":null,"fullscreen":false}}
+{"record":41,"state":{"shell":2,"agent":"idle","awaiting":false,"question":null,"confident":false,"last_question":null,"choice_sig":null,"fullscreen":false}}
 {"ring_len":2102}

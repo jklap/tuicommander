@@ -54,6 +54,7 @@ impl DispatchEffects for NativeEffects {
                 &format!("Automation {} ({})", request.name, request.run_id),
                 &request.prompt,
                 &request.workspace,
+                &request.run_id,
             )?;
             let session = spawned["session_id"]
                 .as_str()

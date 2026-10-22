@@ -1,4 +1,5 @@
 import { fireEvent, render } from "@solidjs/testing-library";
+import { ErrorBoundary } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("../../../stores/appLogger", () => ({
@@ -22,12 +23,15 @@ vi.mock("../../../stores/ui", async () => {
 	};
 });
 
+import { RemoteQrDialog } from "../../../components/RemoteQrDialog/RemoteQrDialog";
 import { RemoteAccessPanel } from "../../../components/SettingsPanel/tabs/services/RemoteAccessPanel";
 import { settingsExpertStore } from "../../../stores/settingsExpert";
 import { uiStore } from "../../../stores/ui";
 import { rpc } from "../../../transport";
 import { updateAppConfig } from "../../../utils/updateAppConfig";
 import { mockInvoke } from "../../mocks/tauri";
+
+vi.mock("qrcode", () => ({ default: { toDataURL: vi.fn().mockResolvedValue("data:image/png;base64,AA==") } }));
 
 describe("RemoteAccessPanel", () => {
 	beforeEach(() => {
@@ -69,6 +73,53 @@ describe("RemoteAccessPanel", () => {
 		vi.useRealTimers();
 		vi.clearAllMocks();
 	});
+
+	it.each(["settings", "dialog"] as const)(
+		"keeps the %s surface after rejected IP discovery and recovers on retry",
+		async (surface) => {
+			const base = vi.mocked(rpc).getMockImplementation()!;
+			let discoveries = 0;
+			vi.mocked(rpc).mockImplementation(async (command, args) => {
+				if (command === "get_local_ips") {
+					if (++discoveries < 3) throw new Error("Discovery unavailable: " + "network-interface/".repeat(20));
+					return [{ ip: "192.168.1.42", label: "LAN" }];
+				}
+				if (command === "get_connect_url") return "http://192.168.1.42:9876/connect";
+				const result = await base(command, args);
+				if (command === "load_config") {
+					const config = result as { services: { server: { enabled: boolean } } };
+					config.services.server.enabled = true;
+				}
+				return result;
+			});
+			const view = render(() => (
+				<ErrorBoundary fallback={<p>Whole surface crashed</p>}>
+					{surface === "settings" ? <RemoteAccessPanel /> : <RemoteQrDialog onClose={() => {}} />}
+				</ErrorBoundary>
+			));
+			await vi.advanceTimersByTimeAsync(0);
+			// Catches: a failed resource read replaces the entire surface, or Retry cannot recover it.
+			expect(view.queryByText("Whole surface crashed")).toBeNull();
+			expect(view.getByText(surface === "settings" ? "Remote Access" : "Remote Mobile Connection")).toBeDefined();
+			expect(view.getByRole("alert").textContent).toContain("Discovery unavailable:");
+			if (surface === "settings") {
+				expect(view.getByLabelText("Username")).toBeDefined();
+				expect(view.getByLabelText("Relay Server URL")).toBeDefined();
+			}
+			for (let attempt = 0; attempt < 2; attempt++) {
+				fireEvent.click(view.getByRole("button", { name: "Retry" }));
+				await vi.advanceTimersByTimeAsync(0);
+				if (attempt === 0) expect(view.getByRole("alert").textContent).toContain("Discovery unavailable:");
+			}
+			expect(discoveries).toBe(3);
+			expect(view.queryByRole("alert")).toBeNull();
+			expect(view.getByText("http://192.168.1.42:9876/connect")).toBeDefined();
+			expect(
+				view.getByAltText(surface === "settings" ? "QR code" : "QR code for remote mobile connection"),
+			).toBeDefined();
+			view.unmount();
+		},
+	);
 
 	it("shows the remote-access content it owns", async () => {
 		const view = render(() => <RemoteAccessPanel />);

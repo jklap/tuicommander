@@ -558,7 +558,7 @@ pub fn extract_from_zip(archive: &Path, dest: &Path) -> Result<(), InstallError>
     let candidates: Vec<String> = (0..zip.len())
         .filter_map(|index| {
             let entry = zip.by_index(index).ok()?;
-            let name = entry.name().to_string();
+            let name = entry.name().ok()?.into_owned();
             (entry.is_file() && is_library_member(&name)).then_some(name)
         })
         .collect();
@@ -1281,6 +1281,35 @@ mod tests {
         assert_eq!(installed.len(), 1);
         assert_eq!(installed[0].name, library_name());
         assert!(runtime().install_dir().ends_with(RUNTIME_SUBDIR));
+    }
+
+    #[test]
+    fn zip_decoded_entry_names_preserve_runtime_selection() {
+        // Catches: losing a valid name when adapting ZIP's fallible Cow decoder,
+        // leaving the downloaded runtime uninstalled or selecting another member.
+        use std::io::Write;
+
+        let dir = tempfile::tempdir().unwrap();
+        let archive = dir.path().join("runtime.zip");
+        let file = std::fs::File::create(&archive).unwrap();
+        let mut writer = zip::ZipWriter::new(file);
+        let options = zip::write::SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Stored);
+        writer
+            .start_file(format!("runtime-é/lib/{}", library_name()), options)
+            .unwrap();
+        writer.write_all(b"runtime library").unwrap();
+        writer
+            .start_file("runtime-é/lib/pkgconfig/libonnxruntime.pc", options)
+            .unwrap();
+        writer.write_all(b"not a library").unwrap();
+        writer.finish().unwrap();
+
+        let dest = dir.path().join(library_name());
+        extract_from_zip(&archive, &dest).unwrap();
+
+        assert_eq!(std::fs::read(&dest).unwrap(), b"runtime library");
+        assert!(!dir.path().join("runtime-é").exists());
     }
 
     #[test]
