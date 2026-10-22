@@ -13,6 +13,7 @@ function mountPanel(snapshot: Record<string, unknown>) {
 	const html = readFileSync(`${DIR}/panel.html`, "utf8");
 	document.body.innerHTML = html.slice(html.indexOf("<body>") + 6, html.indexOf("<script"));
 	const chrome = {
+		permissions: { contains: vi.fn(async () => false), request: vi.fn(async () => true) },
 		runtime: {
 			sendMessage: vi.fn(async () => ({ ok: true, result: snapshot })),
 			onMessage: { addListener: () => {} },
@@ -95,4 +96,29 @@ it("starter_agent_is_first_and_labelled", async () => {
 	expect(Array.from(select.querySelectorAll("optgroup option"), (option) => option.textContent)).toEqual([
 		"fix-dm-list",
 	]);
+});
+
+// Catches: the capture option requesting mandatory/ordinary host grants, or prompting again after consent.
+it("capture_option_requests_optional_all_urls_only_until_granted", async () => {
+	const chrome = mountPanel({ ...base, picks: [] });
+	const button = document.getElementById("grant-capture") as HTMLButtonElement;
+	expect(button.textContent).toBe("Let agents capture any site");
+	button.click();
+	await vi.waitFor(() => expect(chrome.permissions.request).toHaveBeenCalledWith({ origins: ["<all_urls>"] }));
+	expect(document.getElementById("grants")?.textContent).toContain("All-sites capture enabled");
+	chrome.permissions.contains.mockResolvedValue(true);
+	button.click();
+	await vi.waitFor(() => expect(chrome.permissions.contains).toHaveBeenCalledTimes(2));
+	expect(chrome.permissions.request).toHaveBeenCalledTimes(1);
+});
+
+// Catches: declined capture consent being presented as enabled instead of retaining activeTab recovery.
+it("capture_option_decline_preserves_temporary_capture_guidance", async () => {
+	const chrome = mountPanel({ ...base, picks: [] });
+	chrome.permissions.request.mockResolvedValue(false);
+	(document.getElementById("grant-capture") as HTMLButtonElement).click();
+	await vi.waitFor(() =>
+		expect(document.getElementById("grants")?.textContent).toContain("Capture permission declined"),
+	);
+	expect(document.getElementById("grants")?.textContent).toContain("browser action");
 });

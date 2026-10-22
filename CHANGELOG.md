@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+- Add the optional Design Mode **Let agents capture any site** grant. Without it, screenshots retain temporary browser-action access and explain how to enable capture; capture consent does not enable agent eval (#1724-fe7e).
+
 - **BREAKING:** remove MCP migration hints for `agent detect/stats/metrics` (use `GET /agents`, `/stats`, `/metrics`), `session process_stats` (use `GET /process/stats`), and `repo prs/issues/close_issue/reopen_issue/ci_logs` (use `GET /repo/prs`, `GET /repo/issues`, `POST /repo/issues/close`, `POST /repo/issues/reopen`, `GET /repo/ci-failure-logs`). These actions now use ordinary unsupported-input errors; no compatibility alias or replacement hint remains (#2115-1333).
 
 ## [2.0.0-beta.1] - 2026-10-22

@@ -5,6 +5,7 @@ Agent desktop verification (#2086-269b): `make agent-test` uses a dedicated macO
 MCP capability cutover (#2068-63b9): persist `mcp_capabilities`, migrate saved tool denials once with visible unknown-name diagnostics, enforce parent/member restrictions on discovery and dispatch, and remove retired names without aliases. Clients must reconnect and review external allow rules.
 
 Native MCP guidance (#2069-7347): session, agent, repo, ui, voice, telegram and automations expose compact agent-facing action contracts. Their action=help returns every displaced rule from the full native guide. Existing action validation, conditional availability, disabled-tool gates and Settings copy remain unchanged.
+Design Mode optional capture (#1724-fe7e): the extension declares `<all_urls>` only in optional host permissions. **Let agents capture any site** requests that grant from a user click; after consent Chrome capture needs no further action gesture. Without consent, preserve `activeTab` capture and return a typed error naming the option. Capture consent does not grant agent eval or opt into remote error injection.
 UI Design Mode actions (#2067-e708): `ui design_start/stop/status/reload/navigate/screenshot/errors/eval` reuse the Design Mode owner, armed caller/repository checks and extension host grants. Saved `design_mode` denials apply to the grouped actions. The old tool is removed by the 2068 capability cutover; use `ui design_*`.
 
 

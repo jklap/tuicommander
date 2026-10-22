@@ -20,7 +20,7 @@ export async function browserCommand(command, chrome, tabId, errors) {
   if (action === 'errors') return {errors:await errors(tabId)};
   if (action === 'screenshot') {
     if (!tab.active) throw new Error('tab_not_visible: The reviewed tab must be visible.');
-    const image = await chrome.tabs.captureVisibleTab(tab.windowId, {format:'png'});
+    const image = await captureVisibleTab(chrome, tab.windowId);
     const after = await chrome.tabs.get(tabId);
     if (!after.active || after.url !== tab.url) throw new Error('page_changed: Page changed during screenshot.');
     if (image.length > 700 * 1024) throw new Error('result_too_large: Screenshot exceeds 700 KiB.');
@@ -50,4 +50,15 @@ export async function browserCommand(command, chrome, tabId, errors) {
     return {value:reply?.result?.value ?? null};
   }
   throw new Error('unknown_command: Unsupported browser command.');
+}
+
+// Both agent screenshots and pick crops use Chrome's capture authority.
+export async function captureVisibleTab(chrome, windowId) {
+  try { return await chrome.tabs.captureVisibleTab(windowId, {format:'png'}); }
+  catch (error) {
+    if (error.message === "Either the '<all_urls>' or 'activeTab' permission is required.") {
+      throw new Error('capture_permission_required: Enable “Let agents capture any site” in the Design Mode sidebar, or invoke the Design Mode browser action on this tab to grant temporary capture access.');
+    }
+    throw error;
+  }
 }

@@ -1,3 +1,7 @@
+## Optional Design Mode all-sites capture (1724-fe7e) — rebuilt bridge and extension reload required
+
+- [ ] After deploying a rebuilt `tuic-bridge` and reopening Design Mode with the updated extension, click **Let agents capture any site** and accept Chrome's real optional permission prompt. Verify an agent screenshot and pick crop without another browser-action gesture, then revoke the grant and verify the error names the option while temporary browser-action capture still works. The isolated live prompt is parked with Boss; targeted tests pass, but post-consent screenshot GREEN is not yet claimed. No daily app was restarted.
+
 ## Detached command peer isolation (2100-c249) — CLI update and backend restart required
 
 - [ ] After installing the rebuilt `tuic` CLI, verify a detached reviewer cannot set the foreground composer to awaiting through its progress report, and its BG DONE still arrives. Install both the rebuilt CLI and backend, then manually restart the backend: the ancestry boundary cannot load through frontend hot reload. No daily app restart was performed by this peer.

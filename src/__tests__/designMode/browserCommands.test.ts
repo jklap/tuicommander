@@ -36,6 +36,9 @@ describe("native browser command boundary", () => {
 			"eval_not_granted",
 		);
 		expect(chrome.scripting.executeScript).not.toHaveBeenCalled();
+		await expect(
+			browserCommand({ action: "eval", args: { script: "2+2" } }, browser(["<all_urls>"]), 7),
+		).rejects.toThrow("eval_not_granted");
 		const granted = browser(["http://*/*", "https://*/*"]);
 		expect(await browserCommand({ action: "eval", args: { script: "2+2" } }, granted, 7)).toEqual({ value: 4 });
 		expect(granted.scripting.executeScript).toHaveBeenCalledWith(

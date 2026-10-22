@@ -110,3 +110,11 @@ $('grant-all').onclick = async () => {
   const allowed = await chrome.permissions.request({origins:['http://*/*','https://*/*']});
   $('grants').textContent = allowed ? 'All sites granted for agent commands and eval.' : 'Host permission declined.';
 };
+
+$('grant-capture').onclick = async () => {
+  try {
+    const permission = {origins:['<all_urls>']};
+    const allowed = await chrome.permissions.contains(permission) || await chrome.permissions.request(permission);
+    $('grants').textContent = allowed ? 'All-sites capture enabled. Agent eval still needs a separate grant.' : 'Capture permission declined. Invoke the Design Mode browser action on a tab for temporary capture access.';
+  } catch (error) { $('grants').textContent = error.message; }
+};

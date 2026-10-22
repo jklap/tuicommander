@@ -443,3 +443,85 @@ client lifecycle; the committed changes themselves do not change production.
 Locations under `~/Gits/.tmp/` contain raw local evidence, not portable fixtures.
 Verified static checks and story-close refusal output are recorded in the round's
 terminal report.
+
+
+## Round 8: approved optional all-sites capture (2026-10-22)
+
+Boss selected option C in beta2-asks item 6. The shared 1724 worklog records the
+decision: `<all_urls>` belongs in `optional_host_permissions`, never mandatory
+`host_permissions`. The new **Let agents capture any site** button requests that
+permission from an explicit user click. Existing consent avoids another request;
+a declined prompt preserves temporary browser-action capture guidance.
+
+Agent screenshots and pick crops now share the Chrome capture call and translate
+the recorded missing-permission denial into `capture_permission_required`, naming
+the option and the temporary browser-action alternative. Other capture failures
+remain unchanged. The capture-only grant is not treated as eval consent and does
+not register remote page-error scripts. Existing explicit eval/host grant buttons
+are unchanged. Chrome still controls the real permission state.
+
+### RED and targeted GREEN
+
+- Pre-fix boundary RED at `4cb624a933bc0952a0bffb5d01676c97b9e12395`:
+  `build-slot.sh scripts/with-test-tmp.sh node --test scripts/design-mode-capture-permission.red.mjs`
+  failed on the missing typed option guidance. Log:
+  `~/Gits/.tmp/results/design-optionc-red-retry.log`. The first foreground attempt
+  timed out while queued (no test ran); the event-driven retry was admitted after
+  160 seconds and the actual test failed as expected in 214 ms.
+- The extended script has an opt-in real-Chrome test. With
+  `TUIC_DESIGN_CDP=http://127.0.0.1:57323` against the pre-fix installed extension,
+  capture without a browser-action gesture failed with the recorded Chrome
+  permission denial; the real granted origins contained only static localhost
+  entries. Log: `~/Gits/.tmp/results/design-optionc-live-red.log`. This was an
+  actual Chrome API call, not a fake grant model or storage injection.
+- Targeted GREEN after implementation: the recorded-denial boundary test passed;
+  the live-Chrome case was explicitly skipped without its endpoint environment.
+  Browser commands, host errors, worker and panel Vitest files passed **12 tests
+  in four files**, 1.17 s. `pnpm exec tsc --noEmit` passed in the same admitted
+  command. Log: `~/Gits/.tmp/results/design-optionc-green.log`. The scheduler
+  admitted the command after 60 seconds. No full suite, mutation or Clippy ran.
+- Adjacent protections cover hidden reviewed tabs, capture consent not becoming
+  eval consent, capture-only origins not injecting remote error scripts, consent
+  refusal guidance, and avoiding another permission request once already granted.
+
+### Live consent boundary — deliberately not GREEN yet
+
+The authorized isolated agent-test-design backend on 19885 started after its
+matching dry run. Instance ID: `d3237151-2cce-4247-82ac-e086c35a5576`.
+Chrome for Testing 149 uses the owned profile
+`~/Gits/.tmp/design-web/profile`, fixture port 19886, and the real native host.
+The changed unpacked extension sources were copied into that owned extension
+folder while its recorded Chrome process was stopped, then Chrome was restarted.
+This verifies extension source behavior, not a newly rebuilt embedded installer.
+The production launcher still does not request a debugging port; CDP is used only
+by this owned test harness.
+
+Before the visual step, ioreg reported unlocked. The new option rendered in the
+real extension document; its screenshot is retained at
+`~/Gits/.tmp/design-web/optionc/option.png`. A trusted CDP pointer click on the
+actual button initiated Chrome's optional permission request. Its promise remains
+pending and `<all_urls>` is not yet granted. MacControl could not inspect the
+browser-chrome consent prompt: **Screen Recording permission required. Grant
+access in System Settings > Privacy & Security > Screen Recording**. No alternate
+transport was used to bypass that OS block, and no permission state was fabricated.
+
+The coordinator explicitly parked the consent click with Boss and authorized
+leaving this test window open. The exact required action is to accept the genuine
+Chrome all-sites permission prompt. After that click, rerun the script's live
+case with `TUIC_DESIGN_CDP` pointing at the owned Chrome port and
+`TUIC_DESIGN_CAPTURE` naming a Gits-local PNG path, then complete the matching
+MCP/browser screenshot comparison. No post-grant screenshot success, crop,
+revocation behavior or matching-image acceptance is claimed yet.
+
+Recorded retained runtime ownership: Chrome PID 46762, fixture PID 39420, plus
+the isolated agent-test supervisor recorded in
+`~/Gits/.tmp/results/design-optionc-supervisor.pid`. Harness metadata is in
+`~/Gits/.tmp/design-web/optionc/pids.json`; verify ownership again before stopping.
+These are intentionally retained for Boss's pending click, not an abandoned daily
+instance. The matching stop target remains `make agent-test-stop
+AGENT_TEST_INSTANCE=agent-test-design AGENT_TEST_PORT=19885`.
+
+The feature and consent flow require extension reload/reinstall from a rebuilt
+native bridge before use in a normal installation. This round does not restart
+Boss's daily app. Story 1724 remains open pending the actual consent and live
+post-grant checks; prior S0 and ego-refresh gaps are not silently marked complete.
