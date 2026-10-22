@@ -65,7 +65,7 @@ pub(super) async fn handle_github(
     };
     match action {
         "status" => {
-            // Cross-repo aggregate: for each workspace repo, return branch/ahead/behind/open PRs
+            // Cross-repo aggregate (or the one repo named by `path`): for each workspace repo, return branch/ahead/behind/open PRs
             // Reads from poller cache to avoid fan-out API calls
             let repo_data = crate::config::load_repositories();
             let repo_order = repo_data
@@ -73,11 +73,22 @@ pub(super) async fn handle_github(
                 .and_then(|v| v.as_array())
                 .cloned()
                 .unwrap_or_default();
+            let requested = args["path"].as_str();
+            if let Some(requested) = requested
+                && !repo_order.iter().any(|p| p.as_str() == Some(requested))
+            {
+                return serde_json::json!({"error": format!(
+                    "Path '{requested}' is not a registered repository. Use repo action=list to see registered paths."
+                )});
+            }
             let mut results: Vec<serde_json::Value> = Vec::new();
             for path_val in &repo_order {
                 let Some(path) = path_val.as_str() else {
                     continue;
                 };
+                if requested.is_some_and(|requested| requested != path) {
+                    continue;
+                }
                 let info = crate::git::get_repo_info_cached(state, path);
                 if !info.is_git_repo {
                     continue;
