@@ -427,13 +427,20 @@ export function OutputView(props: OutputViewProps) {
 							{label}
 						</a>
 					) : (
-						<button
-							type="button"
+						<span
+							role="button"
+							tabIndex={0}
 							class={styles.fileLink}
 							onClick={() => props.onOpenFileLink?.(link.candidate!, link.line)}
+							onKeyDown={(event) => {
+								if (event.key === "Enter" || event.key === " ") {
+									event.preventDefault();
+									event.currentTarget.click();
+								}
+							}}
 						>
 							{label}
-						</button>
+						</span>
 					),
 				);
 				offset = to;

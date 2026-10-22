@@ -208,6 +208,8 @@ pub(crate) mod tunnels;
 #[cfg(feature = "desktop")]
 mod updater;
 pub(crate) mod webview_recovery;
+#[cfg(feature = "desktop")]
+pub(crate) mod webview_url;
 pub(crate) mod workflows;
 pub(crate) mod workitem_links;
 pub(crate) mod worktree;
