@@ -108,3 +108,152 @@ All measurement sessions were deleted. The instance supervisor exited after its
 requested stop (the make wrapper reports the expected child termination). Shared
 Chrome and the daily TUIC instance were not stopped. No test suite, rb test,
 mutation run, production restart or installed-binary replacement was performed.
+
+
+## Follow-up: layered Chrome trace
+
+The coordinator narrowed the target to Chrome browser mode, authorized the same
+controlled workload, and replaced the ego-help comparison with a plain-shell
+`seq` comparison. Safari automation is not a prerequisite for this follow-up.
+The production source was unchanged from the source identified above.
+
+### Observation contract and trace boundaries
+
+The consumer observes the glyph produced in response to a trusted terminal key,
+not an input acknowledgement. Real state comes from the browser event, HTTP PTY
+writer, real PTY reader/writer, terminal grid, WebSocket arrival, canvas operation,
+and compositor PNG. The controlled Python echo is the external fixture. It does
+not represent an ego composer. The radius of the observation is the isolated
+`agent-test-2040` instance on port 19884 and its owned browser tab.
+
+Temporary, environment-gated Rust observers recorded epoch microseconds at HTTP
+write begin/end, PTY read, VT application, frame serialization and frame submit.
+The Python fixture recorded epoch nanoseconds at input read and echo write.
+Browser observers recorded fetch, binary grid-message arrival and the existing
+fill/PNG boundaries. Browser clocks were aligned through `performance.timeOrigin`.
+The native observers were removed byte-for-byte after acquisition; their patch is
+retained as evidence, not shipped code. Logging and PNG capture can perturb the
+instrumented run.
+
+All 20 trusted inputs have a writer, PTY echo, VT, frame, browser arrival, fill and
+PNG observation. All native trace records identify the one measurement session
+`89008dcf-1aae-463d-b747-d2ec21e05b78`. Frame correlation scans for the unique echoed
+codepoint, rather than decoding and asserting row geometry. Thus arrival is the
+first key-bearing wire message, not a separately verified accepted-row timestamp.
+Submillisecond cross-clock values are not precise enough for causal attribution:
+one submit-to-arrival sample was -0.012 ms.
+
+### Layer timings
+
+The following table uses the statistical median and nearest-rank p95. Percentiles
+of different stages must not be added together.
+
+| Boundary | Median | p95 | Maximum |
+| --- | ---: | ---: | ---: |
+| Trusted event → browser fetch | 0.200 ms | 0.400 ms | 10.200 ms |
+| Fetch → HTTP writer begin | 1.064 ms | 2.223 ms | 2.251 ms |
+| HTTP writer begin → done | 0.044 ms | 0.094 ms | 0.114 ms |
+| Writer done → Python input read | 0.021 ms | 0.049 ms | 0.122 ms |
+| Python input read → echo write done | 0.026 ms | 0.048 ms | 0.096 ms |
+| Echo done → PTY reader | 0.005 ms | 0.024 ms | 0.046 ms |
+| PTY reader → VT applied | 0.076 ms | 0.169 ms | 0.229 ms |
+| VT applied → frame cut | 0.047 ms | 4.456 ms | 8.074 ms |
+| Frame cut → submit | 0.021 ms | 0.065 ms | 0.067 ms |
+| Frame submit → browser message | 4.839 ms | 14.753 ms | 15.382 ms |
+| Browser message → matching fill | 16.250 ms | 17.100 ms | 23.400 ms |
+| Matching fill → sampled compositor | 10.853 ms | 19.082 ms | 27.563 ms |
+| Trusted event → matching fill | 26.000 ms | 34.500 ms | 36.200 ms |
+| Trusted event → sampled compositor | 38.028 ms | 55.063 ms | 55.260 ms |
+
+Cumulative event → frame-submit median/p95/max was 1.725/9.712/11.733 ms;
+event → browser-message was 9.900/16.200/18.200 ms. The frontend fill/compositor
+boundaries, not the PTY input write or VT parsing, therefore account for most of
+the measured end-to-end delay. Submit-to-arrival also contributes up to almost
+one frame; that interval includes backend WebSocket scheduling, network delivery
+and browser message dispatch, not just network transit.
+
+The browser's rAF gap p95/max was 16.7/16.8 ms. The 100 ms sentinel p95/max was
+108.6/113.6 ms. Output grew by 65,158 bytes over 3,545.654 ms, or 18,376.863 bytes/s.
+These are instrumented current-run observations, not throughput or heartbeat
+non-regression evidence.
+
+### Attribution and implementation decision
+
+The measured dominant boundary is **browser key-bearing message arrival to
+canvas fill**, followed by compositor observation. This is not evidence of an
+input-writer stall. Source inspection confirms the browser WebSocket handler
+calls the terminal handler synchronously (`canvasTerminalTransport.ts`,
+`deliveredFrame`), while `CanvasTerminal.tsx`, `scheduleRepaint`, coalesces work into
+one `requestAnimationFrame`. The backend grid WebSocket waits on the frame watch
+channel and sends the latest frame, with a full-frame repair for sequence gaps
+(`mcp_http/session.rs`, grid WebSocket send task).
+
+No production defect is isolated by this trace. In particular, the earlier
+suspicion that the first key frame was dropped is not established: for the first
+key the matching fill precedes the next key-bearing wire frame. rAF timestamps
+are frame timestamps, not callback-entry timestamps, so their difference from a
+fill cannot be called paint execution time. The trace does not split accepted
+frame handling, rAF queueing, callback entry, renderer execution and compositor
+scheduling finely enough to prove an unnecessary extra turn.
+
+**No fix was made and no regression RED was fabricated.** Painting synchronously
+on every arrival or bypassing the serializer would trade away existing batching,
+damage and ordering contracts without evidence of a specific defect. The current
+numbers still fail the under-one-frame requirement and the below-33-ms fill p95
+target. This report narrows the investigation boundary; it does not claim that
+all latency inside that boundary is avoidable or that the story can close.
+
+### Plain-shell A/B
+
+The successful probe uses the same `/bin/sh -c` workload on a real 40×120 PTY:
+print READY, wait for `go`, run `seq 1 1000`, print END, then wait to keep the final
+screen alive. The plain arm uses `subprocess.Popen` with PTY descriptors; the TUIC
+arm uses the isolated backend session and browser. Startup is outside the timed
+interval. Both output streams include the expected final marker. The browser
+observer sees the production canvas draw that marker.
+
+| Pair | Plain input → final PTY bytes | TUIC HTTP submission → polled output | TUIC submission → final canvas fill | Fill / plain |
+| --- | ---: | ---: | ---: | ---: |
+| 1 | 9.785 ms | 19 ms | 23.300 ms | 2.381× |
+| 2 | 8.607 ms | 35 ms | 41.200 ms | 4.787× |
+| 3 | 8.458 ms | 16 ms | 13.700 ms | 1.620× |
+
+The median fill/plain ratio is 2.381×, not a pass of a 2× target. There are only
+three pairs. The TUIC output endpoint is polled, so its result is an upper bound
+with polling/API overhead; a fill can precede that observation. Plain PTY-read
+completion and canvas-fill completion are deliberately different endpoints.
+These numbers are a same-workload processing/display comparison, not equivalent
+physical presentation clocks, an ego `/help` comparison, or a compositor A/B.
+
+The original manual nested-fork probe, including a `pty.fork` variant, hung in
+child cleanup (`waitpid`, recorded by faulthandler). No ego or shell defect is
+inferred. The replacement avoids Python fork-child setup and successfully captures
+both arms. A first replacement attempt exited the shell immediately after END:
+backend bytes arrived but the canvas observer saw only `go`. Keeping the shell
+alive after END resolved that harness lifetime error. A stale wrapper tab also
+required a new, uniquely named browser session. These rejected attempts are not
+mixed into the three successful pairs.
+
+### Evidence, checks and remaining scope
+
+Additional evidence under `~/Gits/.tmp/2040-web/layer/`:
+
+- `run/{probe,frames,summary,throughput}.json`, `run/match-*.png`: trusted trace and
+  matching compositor frames.
+- `native.log`, `echo.jsonl`, `observer.patch`: native and Python observation.
+- `analyze.py`, `timeline.json`, `stages.json`, `trace-events.json`: all per-key
+  correlations and aggregate stage timings.
+- `seq-pairs.json`, `seq-output-*.json`, `seq-last.json`: successful shell A/B.
+- `seq-burst.mjs`, `run-seq.py`, `seq-lifecycle.json`: acquisition and cleanup.
+- `burst-stack.log` and rejected probe logs: diagnosed harness failures.
+
+The final lifecycle reports zero remaining measurement sessions, owned tab and
+named daemon closure, and exact instance stop exit 0. The make supervisor exit 2
+wraps its requested child termination. All temporary production observers were
+restored, and no installed application binary was replaced. No application suite,
+GREEN run, mutation, cross-target test or Safari verification was claimed.
+
+The main-story read-only-root denial remains binding. No alternate tool was used
+to modify its criteria. Original help, one-frame and combined non-regression
+criteria remain unsupported; the parent must reconcile scope and worklog wording,
+not mark those requirements passed from these measurements.
