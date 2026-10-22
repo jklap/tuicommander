@@ -1,10 +1,24 @@
-## CLI status signature preservation (2129-1dfd) — backend restart required
-
-- [ ] After Boss manually rebuilds and restarts the backend, open General Settings and run `tuic --version` again. The status query must not invalidate the installed CLI signature. The old running backend still opens the executable for writing until that restart; no daily app or installed binary was changed by this peer. Native isolated probes reproduced intermittent SIGKILL without changed bytes; historical writer attribution remains open in `reports/2129-cli-signature.md`.
 ## PTY size on tab mount and reconnect (2128-153a) — rebuild required
 
 - [x] Isolated `agent-test-2128` instance with Claude Code 2.1.306: before the fix, a WebView reload and the first activation of a background tab left the PTY at 15x38 while the canvas drew 14x37. After the fix, the first activation sends one resize, a reload sends none, and `stty size` equals the drawn grid. Evidence: `~/Gits/.tmp/results/tuic-2128/`.
 - [ ] After Boss rebuilds and restarts the daily app, reload the WebView with a Claude tab open, then run `stty size` in a shell tab or read `PTY resize` in the debug log. The size must equal the visible grid. This peer did not restart the daily app.
+## Telegram non-owner notifications (2119-d5de) — Rust restart required
+
+- [ ] After Boss manually rebuilds and restarts the backend, keep an inbound owner registered, send from another agent without registering, and verify its sender prefix. Reply in Telegram and verify that sender receives native mail while a new message still reaches the owner. No daily app restart was performed. Coordinator approved native cfg(test) loopback verification instead of a desktop fake-endpoint override; the native integration test checks outgoing wire text and reply delivery to the sender inbox.
+## Optional Design Mode all-sites capture (1724-fe7e) — rebuilt bridge and extension reload required
+
+- [x] Isolated real Chrome consent, actual MCP screenshot and matching browser PNG, live sidebar history, and post-capture **Allow eval on this host** click/eval. _(verified: S0 results Round 11; 1628 × 1596 PNGs have identical SHA256 and zero differing pixels; actual Chrome added the host origin and MCP eval succeeded.)_
+- [ ] Normal deployment still needs a rebuilt `tuic-bridge` whose installed extension assets match source. The multi-package agent-test build returned old bridge assets twice; the verified package-only installer worked. Pick-crop, revoke/activeTab recovery, and a fresh-profile capture-only host/eval sequence remain unverified. No daily app was restarted.
+## PTY spawn geometry (2130-2ca2) — Rust restart required
+
+- [ ] After Boss manually rebuilds and restarts the backend, open a terminal and a direct agent at a non-default size. Verify their initial output wraps at the spawn width and a first resize to 24x220 reaches the child. This Rust change does not hot-reload; this peer did not restart the daily app.
+## Nil-safe WebView URL reads (2120-9f3f) — Rust restart required
+
+- [x] Isolated `agent-test-2120` backend survived multiple recovery periods and detached-panel snapshot/main unload through uptime 171s; the native nil-NSURL contract test passed. Evidence: `~/Gits/.tmp/results/tuic-2120-live.log` and `tuic-2120-native-tests.log`. No live nil-URL fault injection was performed.
+- [ ] After Boss manually rebuilds and restarts the daily backend, verify document recovery and detached-panel background unload/restore. This Rust fix does not hot-reload; the peer does not restart the daily app.
+## CLI status signature preservation (2129-1dfd) — backend restart required
+
+- [ ] After Boss manually rebuilds and restarts the backend, open General Settings and run `tuic --version` again. The status query must not invalidate the installed CLI signature. The old running backend still opens the executable for writing until that restart; no daily app or installed binary was changed by this peer. Native isolated probes reproduced intermittent SIGKILL without changed bytes; historical writer attribution remains open in `reports/2129-cli-signature.md`.
 
 ## Detached command peer isolation (2100-c249) — CLI update and backend restart required
 
@@ -2787,3 +2801,7 @@ Needs an iPhone (iOS 16.4+, 18.4+ preferred), the desktop TUICommander running a
 ## Library cleanup (#2115-1333)
 
 - [ ] After the next manual backend restart, confirm shell activity, inline-TUI classification and plugin output watchers still work. The write-only command knowledge recorder no longer writes history files. Existing files remain untouched. Do not restart the daily app for this check.
+
+- [ ] #2127-97f5: After a manual Rust rebuild/restart, inspect Settings > Git & GitHub. Record the exact Lansweeper repository error to distinguish OAuth app restrictions from SSO. In an isolated `make agent-test` instance, Boss must log in with GitHub and grant/request organization access at https://github.com/settings/connections/applications/Ov23liN95BHKQDboVFRl. Confirm the next poll clears granted-access failures without another login; real NOT_FOUND entries remain separate. The daily Rust backend does not hot-reload.
+
+- [ ] #2133-9213: After a manual backend rebuild/restart, grant organization access, select Settings > Git & GitHub > Refresh status and verify the next monitoring poll retries prior NOT_FOUND repositories for all accounts. Opening Settings alone must not release the retry delay. Rust does not hot-reload.

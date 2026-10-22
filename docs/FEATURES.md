@@ -148,6 +148,8 @@ per cell and the configured history limit still apply.
 
 ### 1.0 Design Mode for agent terminals
 
+The extension offers **Let agents capture any site** as an optional Chrome all-sites grant. Approved capture needs no further browser-action gesture; without the grant, temporary `activeTab` access remains available. Capture consent is separate from agent eval and remote error-read consent. The sidebar reports when Chrome does not add a separate eval grant.
+
 Agents can use `ui action=design_start/stop/status/reload/navigate/screenshot/errors/eval` with the same armed-recipient ownership and extension host grants. Existing Design Mode denials remain effective. The separate `design_mode` tool is retired without an alias.
 
 The extension sends a heartbeat every five seconds. A stale mode stops after 60 seconds without a heartbeat, or ten minutes after Start if the extension has not connected. Agents can request a page reload with `ui action=design_reload repo_path=<repoPath>`; the worker reloads the reviewed tab once per new sequence.
@@ -2892,7 +2894,7 @@ MCP session end, PTY close, foreground-agent exit or daemon restart.
 Allowlisted private text arrives as native peer mail. Without an agent the bot
 replies "No agent is listening. Ask an agent in TUICommander to register for Telegram." and drops the text; strangers stay silent.
 The registered agent can stream concise activity, send exact replies and offer
-opaque buttons. Proactive sends use one allowlisted destination. Only the polling
+opaque buttons. Any live MCP-bound agent can send notifications without registering or taking inbound ownership. Non-owner sends carry a server-derived `[session name]` on every chunk, allow no buttons, and are limited to one send per 30 seconds per peer. Telegram Replies to that prefix reach the unique live exact-name sender; other replies and new messages use the inbound owner. Proactive sends use one allowlisted destination. Only the polling
 cursor persists; live mint deployment remains pending. See
 [Telegram channel](design/telegram-channel.md).
 ### Telegram Settings
@@ -3262,7 +3264,7 @@ removing a stored token leaves environment and CircleCI CLI fallbacks unchanged.
 
 ### Generated launch playbook
 
-Settings > Agents selects generated Markers, Working with the user, Waiting, Git/worktrees, Process safety and child-only Children modules. Global and per-agent additions append after the modules; an explicit all-off switch suppresses the entire prompt. Effective previews use the selected machine. Exact old default copies migrate away without duplication.
+Settings > Agents selects generated Markers, Working with the user, Waiting, Git/worktrees, Process safety and child-only Children modules. Global and per-agent additions append after the modules; an explicit all-off switch suppresses the entire prompt. Effective previews use the selected machine. Exact old default copies migrate away without duplication. When mdkb is installed, the launch text also carries the fixed MDKB code-search rule.
 
 ### Durable managed-child launch
 
@@ -3320,3 +3322,8 @@ Mobile offers the **Chat** tab only when the host has a configured ego executabl
 Desktop sidebar session rows and mobile session cards mark a parentless plain shell as **Abandoned** after one idle hour and show its idle age. The five-second backend sweep requires a fresh OS process inventory: the PTY child must be an interactive shell with no child processes. An unknown inventory, script, foreground command, background child, detached TUIC job, managed identity, live child session, pending input or keep-open hold prevents closure. Unsupported or incomplete OS process observations fail closed.
 
 Settings → Agents → Idle agent hibernation (Expert Mode) includes **Close abandoned shells after (hours)** (`agents.abandoned_shell_hours`). The machine-owned value defaults to **0 (off)**; whole hours from 1 to 65535 enable closure. Idle age is measured from the most recent input, output or semantic activity, including elapsed time while the machine sleeps. Closure rechecks the process inventory and activity at the destructive boundary, and uses the normal session close/tombstone path. The sweep can lag the threshold by one five-second tick. A remote daemon applies its own setting, not the desktop host's value.
+
+GitHub access diagnostics group exact API messages by account and owner, distinguish NOT_FOUND from retriable denials, and offer the OAuth organization authorization action for every github.com OAuth group.
+
+GitHub Settings Refresh status releases NOT_FOUND retry delays for all accounts;
+ordinary diagnostics reads do not alter the retry cache (#2133-9213).

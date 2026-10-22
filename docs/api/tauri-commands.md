@@ -1058,3 +1058,11 @@ host-injected state routes both through the shared value-free Settings publisher
 only after owner persistence. Their HTTP equivalents use the same adapters.
 
 Progress reporting rejects text longer than 500 raw Unicode scalar values before trimming, consistently with HTTP and the native MCP schema (#2007-59f6).
+
+`github_diagnostics` includes `repo_access_errors` grouped by account, host and
+owner, with per-repository reason (`not_found`, `forbidden` or `unknown`) and
+exact message, plus an OAuth app authorization URL for every github.com OAuth group. IPC and HTTP share this DTO.
+
+`github_diagnostics` accepts optional `refresh: boolean` (default false). True
+clears all accounts' NOT_FOUND cooldowns before returning diagnostics; HTTP uses
+`POST /github/diagnostics` for this explicit mutation and GET for ordinary reads.

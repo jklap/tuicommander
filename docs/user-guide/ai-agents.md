@@ -105,7 +105,7 @@ For unrecognized agents, silence-based detection kicks in — if the terminal st
 
 ## Launch Instructions (TUIC Output Markers)
 
-TUICommander generates a launch playbook through the agent's native instruction channel: Markers, Working with the user, Waiting and long work, Git and worktrees, Process safety, and Children. The Children module is included only for spawned children; children do not receive follow-up suggestions. MCP initialize instructions retain live discovery, but do not repeat playbook obligations for launch-capable agents. Other clients retain the MCP marker fallback.
+TUICommander generates a launch playbook through the agent's native instruction channel: Markers, Working with the user, Waiting and long work, Git and worktrees, Process safety, and Children. The Children module is included only for spawned children; children do not receive follow-up suggestions. MCP initialize instructions retain live discovery, but do not repeat playbook obligations for launch-capable agents. Other clients retain the MCP marker fallback. When mdkb is installed, the launch playbook also carries a fixed "Code search" rule that tells the agent to search with MDKB first; without mdkb it is absent. TUICommander checks once when it writes the launch files (startup, settings change, mdkb install or uninstall).
 
 | Agent | Channel |
 |---|---|
