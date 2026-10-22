@@ -1,3 +1,6 @@
+## Telegram non-owner notifications (2119-d5de) — Rust restart required
+
+- [ ] After Boss manually rebuilds and restarts the backend, keep an inbound owner registered, send from another agent without registering, and verify its sender prefix. Reply in Telegram and verify that sender receives native mail while a new message still reaches the owner. No daily app restart was performed. Coordinator approved native cfg(test) loopback verification instead of a desktop fake-endpoint override; the native integration test checks outgoing wire text and reply delivery to the sender inbox.
 ## Optional Design Mode all-sites capture (1724-fe7e) — rebuilt bridge and extension reload required
 
 - [x] Isolated real Chrome consent, actual MCP screenshot and matching browser PNG, live sidebar history, and post-capture **Allow eval on this host** click/eval. _(verified: S0 results Round 11; 1628 × 1596 PNGs have identical SHA256 and zero differing pixels; actual Chrome added the host origin and MCP eval succeeded.)_

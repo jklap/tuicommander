@@ -4066,7 +4066,7 @@ export const settingsCatalogue = {
       "schema": {
         "description": "Update channel: \"stable\", \"beta\" or \"nightly\"",
         "type": "string",
-        "default": "stable",
+        "default": "beta",
         "enum": [
           "stable",
           "beta",
@@ -4074,7 +4074,7 @@ export const settingsCatalogue = {
         ]
       },
       "nullable": false,
-      "default": "stable",
+      "default": "beta",
       "availability": {
         "status": "available"
       },

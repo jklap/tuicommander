@@ -6,6 +6,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+- Let any live MCP-bound agent send Telegram notifications without taking inbound ownership. Non-owner messages carry a server-derived sender name, are limited to one send per 30 seconds, and route Telegram Replies to the unique live sender; buttons remain owner-only (#2119-d5de).
 - Keep remote Design Mode error reads behind explicit host consent and avoid claiming eval consent when Chrome does not add it (#1724-fe7e).
 - Add the optional Design Mode **Let agents capture any site** grant. Without it, screenshots retain temporary browser-action access and explain how to enable capture; capture consent does not enable agent eval (#1724-fe7e).
 - Initialize every terminal grid at its PTY spawn size and seed the first resize no-op guard from the kernel PTY size, not the grid (#2130-2ca2).
