@@ -44,6 +44,28 @@ fn option_text(row: &str, multiple: bool) -> Option<(&str, &str)> {
         .filter(|(key, _)| !key.is_empty() && key.bytes().all(|ch| ch.is_ascii_digit()))
 }
 
+/// Native diagnostics, receipts, working chrome and a submitted composer delimit the
+/// question. Both modal forms share this boundary contract; soft-wrapped rows
+/// have already been joined from terminal-grid metadata by the PTY adapter.
+fn is_question_boundary(row: &str) -> bool {
+    let row = row.trim();
+    row.is_empty()
+        || row.starts_with("εgo:")
+        || (row.starts_with("TUICommander v") && row.ends_with(" is connected."))
+        || row.starts_with("intent: ")
+        // Ego's finished tool rows begin with the outcome mark. They are not
+        // question prose, even when no blank row separates the next modal.
+        || row.starts_with("✓ ")
+        || row.starts_with("✗ ")
+        || row.starts_with('>')
+        || (crate::chrome::is_spinner_row(row) && row.contains("Esc to interrupt"))
+        || row.starts_with("Ctrl+B backgrounds")
+        || row.starts_with("Ctrl+Enter steers")
+        || row.contains("Option+P models")
+        || matches!(row, "/help" | "· /help")
+        || (row.chars().count() >= 3 && row.chars().all(|ch| matches!(ch, '─' | '━' | '═' | '-')))
+}
+
 pub fn parse_ego_question(rows: &[String]) -> Option<ParsedEvent> {
     let (end, multiple) = footer_end(rows, FOOTER)
         .map(|end| (end, false))
@@ -95,7 +117,12 @@ pub fn parse_ego_question(rows: &[String]) -> Option<ParsedEvent> {
         return None;
     }
     let mut start = first;
-    while start > 0 && !rows[start - 1].trim().is_empty() {
+    // A repaint may retain the tail of the previous selector immediately above
+    // the new title. Those numbered rows are history, not title continuation.
+    while start > 0
+        && !is_question_boundary(&rows[start - 1])
+        && option_text(&rows[start - 1], multiple).is_none()
+    {
         start -= 1;
     }
     let title = rows[start..first]
@@ -119,6 +146,85 @@ pub fn parse_ego_question(rows: &[String]) -> Option<ParsedEvent> {
     })
 }
 
+/// CLI-enforced default-mode tool approval, distinct from ask_question.
+/// The five exact key markers and Risk row anchor the native surface.
+pub fn parse_ego_approval(rows: &[String]) -> Option<ParsedEvent> {
+    const REFUSAL: &str = "What should it do instead? (Enter alone just says no)";
+    let end = rows.iter().rposition(|row| !row.trim().is_empty())? + 1;
+    if rows[end - 1].trim() == REFUSAL {
+        return Some(ParsedEvent::Question {
+            prompt_text: REFUSAL.to_owned(),
+            confident: true,
+        });
+    }
+    let title_end = rows[..end]
+        .iter()
+        .rposition(|row| row.trim().starts_with("Risk: "))?;
+    if title_end == 0 || title_end + 1 == end {
+        return None;
+    }
+    // Ego explicitly hard-wraps long approval titles with CRLF, so grid
+    // soft-wrap joining cannot recover them. Read the contiguous title back
+    // from Risk, without crossing a blank or another native surface.
+    let mut title_start = title_end - 1;
+    while !rows[title_start].trim().starts_with("Allow ") {
+        if title_start == 0 || is_question_boundary(&rows[title_start]) {
+            return None;
+        }
+        title_start -= 1;
+    }
+    let title = rows[title_start..title_end]
+        .iter()
+        .map(|row| row.trim())
+        .collect::<Vec<_>>()
+        .join(" ");
+    if !title.ends_with('?') {
+        return None;
+    }
+    lazy_static::lazy_static! {
+        static ref KEY_RE: regex::Regex = regex::Regex::new(r"(?:^|\s)\[([yaned])\]\s+").unwrap();
+    }
+    // Approval labels can contain explicit newlines as well as terminal wraps.
+    // Risk anchors the start; the exact final control keeps history fail-closed.
+    let footer = rows[title_end + 1..end]
+        .iter()
+        .map(|row| row.trim())
+        .collect::<Vec<_>>()
+        .join(" ");
+    if !footer.starts_with("[y] ") || !footer.ends_with("[d] details") {
+        return None;
+    }
+    let keys: Vec<_> = KEY_RE.captures_iter(&footer).collect();
+    if keys.iter().map(|key| &key[1]).collect::<Vec<_>>() != ["y", "a", "n", "e", "d"] {
+        return None;
+    }
+    let mut options = Vec::new();
+    for (index, key) in keys.iter().enumerate() {
+        let start = key.get(0)?.end();
+        let end = keys
+            .get(index + 1)
+            .map_or(footer.len(), |key| key.get(0).unwrap().start());
+        let label = footer[start..end].trim();
+        if label.is_empty() {
+            return None;
+        }
+        options.push(ChoiceOption {
+            key: key[1].to_owned(),
+            label: label.to_owned(),
+            highlighted: index == 0,
+            destructive: &key[1] == "n",
+            hint: None,
+        });
+    }
+    Some(ParsedEvent::ChoicePrompt {
+        title: title.to_owned(),
+        options,
+        selection_mode: None,
+        dismiss_key: None,
+        amend_key: None,
+    })
+}
+
 /// This text shape alone is not authoritative: call only during a confident ego
 /// awaiting interval. A ready composer has the same empty `>` row.
 pub fn parse_ego_free_text_question(rows: &[String]) -> Option<ParsedEvent> {
@@ -127,19 +233,7 @@ pub fn parse_ego_free_text_question(rows: &[String]) -> Option<ParsedEvent> {
         return None;
     }
     let mut start = end;
-    while start > 0 {
-        let row = rows[start - 1].trim();
-        if row.is_empty()
-            || row.starts_with("εgo:")
-            || row.starts_with("Ctrl+B backgrounds")
-            || row.starts_with("Ctrl+Enter steers")
-            || row.contains("Option+P models")
-            || matches!(row, "/help" | "· /help")
-            || (row.chars().count() >= 3
-                && row.chars().all(|ch| matches!(ch, '─' | '━' | '═' | '-')))
-        {
-            break;
-        }
+    while start > 0 && !is_question_boundary(&rows[start - 1]) {
         start -= 1;
     }
     let prompt_text = rows[start..end]
@@ -165,6 +259,90 @@ mod tests {
 
     fn rows(lines: &[&str]) -> Vec<String> {
         lines.iter().map(|line| (*line).to_owned()).collect()
+    }
+
+    /// Catches: assuming Risk is third-last and joining only two footer rows.
+    #[test]
+    fn ego_approval_exports_captured_three_row_footer() {
+        // Exact approval rows from desk-2021b/p-ready.json, agents.ego-p.output.data.
+        let screen = rows(&[
+            "Allow run printf 'PARITY_P_OK\\n'?",
+            "Risk: unknown - runs a program",
+            "[y] yes   [a] yes, do not ask again for exec(printf PARITY_P_OK\\",
+            ")",
+            "[n] no, say what to do instead   [e] edit   [d] details",
+            "",
+        ]);
+        let Some(ParsedEvent::ChoicePrompt { title, options, .. }) = parse_ego_approval(&screen)
+        else {
+            panic!("captured three-row approval must expose answer controls");
+        };
+        assert_eq!(title, "Allow run printf 'PARITY_P_OK\\n'?");
+        assert_eq!(
+            options
+                .iter()
+                .map(|option| (option.key.as_str(), option.label.as_str()))
+                .collect::<Vec<_>>(),
+            [
+                ("y", "yes"),
+                ("a", "yes, do not ask again for exec(printf PARITY_P_OK\\ )"),
+                ("n", "no, say what to do instead"),
+                ("e", "edit"),
+                ("d", "details"),
+            ]
+        );
+    }
+
+    /// Catches: variable footer scanning resurrecting approvals above newer output.
+    #[test]
+    fn ego_approval_rejects_history_and_incomplete_native_controls() {
+        let screen = rows(&[
+            "Allow run printf 'PARITY_P_OK\\n'?",
+            "Risk: unknown - runs a program",
+            "[y] yes   [a] yes, do not ask again for exec(printf PARITY_P_OK\\",
+            ")",
+            "[n] no, say what to do instead   [e] edit   [d] details",
+        ]);
+        for newer in [">", "◓ Working 1s · Esc to interrupt", "Completed"] {
+            let mut history = screen.clone();
+            history.push(newer.to_owned());
+            assert!(parse_ego_approval(&history).is_none(), "{newer}");
+        }
+        for controls in [
+            "[n] no, say what to do instead   [e] edit",
+            "[n] no, say what to do instead   [d] details   [e] edit",
+            "[e] edit   [d] details",
+        ] {
+            let mut incomplete = screen.clone();
+            *incomplete.last_mut().unwrap() = controls.to_owned();
+            assert!(parse_ego_approval(&incomplete).is_none(), "{controls}");
+        }
+    }
+
+    /// Catches: dropping short approvals while removing the fixed footer height.
+    #[test]
+    fn ego_approval_keeps_short_footer_and_wrapped_title() {
+        let screen = rows(&[
+            "Allow run python3 -c",
+            "'print(987654321)'?",
+            "Risk: unknown - runs a program",
+            "[y] yes   [a] yes, do not ask again",
+            "[n] no, say what to do instead   [e] edit   [d] details",
+        ]);
+        let Some(ParsedEvent::ChoicePrompt { title, options, .. }) = parse_ego_approval(&screen)
+        else {
+            panic!("short native approval lost");
+        };
+        assert_eq!(title, "Allow run python3 -c 'print(987654321)'?");
+        assert_eq!(
+            options
+                .iter()
+                .map(|option| option.key.as_str())
+                .collect::<Vec<_>>(),
+            ["y", "a", "n", "e", "d"]
+        );
+        assert!(options[0].highlighted);
+        assert!(options[2].destructive);
     }
 
     #[test]
@@ -303,6 +481,47 @@ mod tests {
                 matches!(question, Some(ParsedEvent::Question { prompt_text, confident: true })
                 if prompt_text == "Which release checks should we run?")
             );
+        }
+    }
+
+    /// Catches: connection/intent or finished tool rows becoming wrapped modal titles.
+    #[test]
+    fn ego_question_titles_stop_at_receipt_and_status_rows() {
+        for boundary in [
+            "TUICommander v2.0.0 is connected.",
+            "intent: Verifying session status and colour selection (Live verification)",
+            "✓ call_tool {\"tool_name\":\"session\"} · 542ms · approval 17.7s",
+            "✗ call_tool {\"tool_name\":\"session\"} · 542ms",
+        ] {
+            for (options, footer) in [
+                (["> 1. Red", "  2. Green"], FOOTER),
+                (["> [x] 1. Red", "  [ ] 2. Green"], MULTIPLE_FOOTER),
+            ] {
+                let Some(ParsedEvent::ChoicePrompt { title, .. }) = parse_ego_question(&rows(&[
+                    "Previous output",
+                    boundary,
+                    "Pick a colour",
+                    "for the release?",
+                    options[0],
+                    options[1],
+                    footer,
+                ])) else {
+                    panic!("selector lost after {boundary}");
+                };
+                assert_eq!(title, "Pick a colour for the release?", "{boundary}");
+            }
+            let Some(ParsedEvent::Question { prompt_text, .. }) =
+                parse_ego_free_text_question(&rows(&[
+                    "Previous output",
+                    boundary,
+                    "Pick a colour",
+                    "for the release?",
+                    ">",
+                ]))
+            else {
+                panic!("free-text question lost after {boundary}");
+            };
+            assert_eq!(prompt_text, "Pick a colour for the release?", "{boundary}");
         }
     }
 

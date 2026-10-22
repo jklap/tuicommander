@@ -186,12 +186,12 @@ describe("mobile managed-agent reply", () => {
 			/>
 		));
 		const option = Array.from(container.querySelectorAll("button")).find((button) =>
-			button.textContent?.includes("Blu"),
+			button.textContent?.includes("Blue"),
 		)!;
 		await fireEvent.click(option);
 		await fireEvent.click(option);
 		await waitFor(() => expect(rpc).toHaveBeenCalledTimes(1));
-		expect(rpc).toHaveBeenCalledWith("write_pty", { sessionId: "codex-question", data: "2" });
+		expect(rpc).toHaveBeenCalledWith("write_pty", { sessionId: "codex-question", data: "3" });
 	});
 
 	// Catches: a Claude Ink picker receives a numeric key without the Enter its footer requires.
@@ -239,7 +239,7 @@ describe("mobile managed-agent reply", () => {
 			Array.from(container.querySelectorAll("button")).find((button) => button.textContent?.includes("Other"))!,
 		);
 		await waitFor(() => expect(rpc).toHaveBeenCalledWith("write_pty", { sessionId: "codex-other", data: "\t" }));
-		expect(rpc.mock.calls.map(([, args]) => args.data)).toEqual(["\x1b[B", "\x1b[B", "\t"]);
+		expect(rpc.mock.calls.map(([, args]) => args.data)).toEqual(["\x1b[B", "\x1b[B", "\x1b[B", "\t"]);
 		await fireEvent.input(container.querySelector("textarea")!, { target: { value: "Purple" } });
 		await fireEvent.click(screen.getByRole("button", { name: "Send" }));
 		await waitFor(() => expect(rpc.mock.calls.some(([, args]) => args.data === "\r")).toBe(true));

@@ -642,13 +642,6 @@ export const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 			transform: (data) => (data as { text: string }).text,
 		}),
 	},
-	terminal_hyperlink_at: {
-		map: (args) => ({
-			method: "GET",
-			path: `/sessions/${args.sessionId}/terminal/hyperlink?row=${args.row}&col=${args.col}`,
-			transform: (data) => (data as { url: string | null }).url,
-		}),
-	},
 	terminal_hyperlink_span: {
 		map: (args) => ({
 			method: "GET",
@@ -744,7 +737,12 @@ export const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 	},
 
 	// --- Config: defaults (Settings "expert mode") ---
-	get_config_defaults: { map: () => ({ method: "GET", path: "/config/defaults" }) },
+	get_config_defaults: {
+		map: (args) =>
+			args.preview
+				? { method: "POST", path: "/config/defaults", body: args.preview }
+				: { method: "GET", path: "/config/defaults" },
+	},
 
 	// --- Config: repo settings ---
 	load_repo_settings: { map: () => ({ method: "GET", path: "/config/repo-settings" }) },
@@ -1489,9 +1487,6 @@ export const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 			body: { repoPath: args.repoPath, branch: args.branch },
 		}),
 	},
-	get_git_panel_context: {
-		map: (_args, p) => ({ method: "GET", path: `/repo/panel-context?path=${p("path")}` }),
-	},
 	run_git_command: {
 		map: (args) => ({
 			method: "POST",
@@ -1874,6 +1869,9 @@ export const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 			},
 		}),
 	},
+	managed_agent_launch: {
+		map: (args) => ({ method: "POST", path: "/agents/launch", body: args.request }),
+	},
 	spawn_agent: {
 		map: (args) => {
 			const ptyConfig = isRecord(args.pty_config) ? args.pty_config : {};
@@ -2099,7 +2097,15 @@ export const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 	},
 
 	// --- Plugins ---
-	list_user_plugins: { map: () => ({ method: "GET", path: "/plugins/list" }) },
+	list_user_plugins: {
+		map: (args) => ({
+			method: "GET",
+			path:
+				args.pluginIds == null
+					? "/plugins/list"
+					: `/plugins/list?plugin_ids=${encodeURIComponent(JSON.stringify(args.pluginIds))}`,
+		}),
+	},
 
 	// --- Remote Connections ---
 	list_remote_connections: { map: () => ({ method: "GET", path: "/config/remote-connections" }) },
@@ -2215,6 +2221,10 @@ export const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 	probe_ssh_config_hosts: { map: () => ({ method: "GET", path: "/tunnels/ssh-hosts/status" }) },
 	list_ssh_agent_keys: { map: () => ({ method: "GET", path: "/tunnels/agent-keys" }) },
 
+	// --- Opt-in terminal-content evidence ---
+	save_frame_workload: {
+		map: (args) => ({ method: "POST", path: "/debug/frame-workload", body: { recording: args.recording } }),
+	},
 	// --- App Logger ---
 	push_log: {
 		map: (args) => ({
@@ -2334,6 +2344,13 @@ export const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 			body: { account: args.account, reference: args.reference, request: args.request },
 		}),
 	},
+	plugin_http_cancel: {
+		map: (args, p) => ({
+			method: "POST",
+			path: `/api/plugins/${p("pluginId")}/http/cancel`,
+			body: { requestId: args.requestId },
+		}),
+	},
 	plugin_http_fetch: {
 		map: (args, p) => ({
 			method: "POST",
@@ -2344,6 +2361,7 @@ export const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 				headers: args.headers,
 				body: args.body,
 				account: args.account,
+				requestId: args.requestId,
 			},
 		}),
 	},
@@ -2418,9 +2436,6 @@ export const INTENTIONALLY_UNMAPPED: ReadonlySet<string> = new Set<string>([
 	// Data leaves the machine; source paths come from Finder and cannot be gated
 	// to registered roots. HTTP token holders must not trigger exfiltration.
 	"fs_transfer_remote_paths",
-	// Binary IPC uses byte arrays; browser uploads use a streaming fetch body to
-	// the equivalent /attachments/upload route instead of JSON rpc mapping.
-	"upload_attachment",
 	// Multi-window management — secondary/panel windows are a desktop-only concept.
 	"open_secondary_window",
 	// Open on the client machine; remote HTTP must not launch host applications.
@@ -2473,21 +2488,17 @@ export const INTENTIONALLY_UNMAPPED: ReadonlySet<string> = new Set<string>([
 	// mdkb daemon install/management — host binary lifecycle.
 	"install_mdkb",
 	"uninstall_mdkb",
-	// Terminal grid push — browser uses the WS log-mode stream
-	// (GET /sessions/{id}?format=log) instead of the native grid-frame protocol.
+	// Terminal grid push — browser uses its session WebSocket instead of Tauri channels.
 	"subscribe_terminal_grid",
 	"unsubscribe_terminal_grid",
 	"ack_terminal_frame",
 	"terminal_exit_alt_screen",
-	"read_vt_log",
-	"terminal_get_block_rows",
 	// WebView liveness beat. Deliberately host-only: it watches the embedded
 	// WebView's main thread, and a browser client beating on the same channel
 	// would mask a dead desktop one.
 	"frontend_heartbeat",
 	// Desktop-only terminal/session diagnostics or local visual state with no
 	// faithful HTTP contract yet.
-	"debug_agent_detection",
 	"set_ansi_colors",
 	// GitHub issues: Tauri command is multi-repo; current HTTP route is single-repo
 	// (/repo/issues), so mapping here would silently change the contract.

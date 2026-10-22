@@ -314,13 +314,15 @@ async fn agent_model_save_never_launches_cli() {
 #[tokio::test]
 async fn agent_model_save_never_launches_cli_preserves_other_owner_state() {
     let f = fixture(Some(initial()));
+    // Read through the owner first: one-time migrations precede a model-only edit.
+    let revision = revision(&f).await;
     let before: crate::config::AgentsConfig = serde_json::from_value(on_disk(&f)).unwrap();
     let before = serde_json::to_value(before).unwrap();
     let neighbour = f.dir.path().join("notifications.json");
     std::fs::write(&neighbour, "sentinel").unwrap();
     set(
         &f,
-        revision(&f).await,
+        revision,
         &format!("{RUN}/Beta/model"),
         json!("custom-model"),
     )

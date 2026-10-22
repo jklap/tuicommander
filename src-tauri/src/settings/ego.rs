@@ -13,10 +13,21 @@ use std::sync::Arc;
 
 const ID: &str = "ego";
 
-/// Write-only base auth edits. No Debug/Serialize: values must not enter diagnostics.
+#[path = "ego_login.rs"]
+mod login;
+
+/// Base auth edits and human login lifecycle. No Debug/Serialize: write-only values must not enter diagnostics.
 #[derive(Deserialize, schemars::JsonSchema)]
 #[serde(tag = "action", rename_all = "snake_case", deny_unknown_fields)]
 pub enum EgoAuthAction {
+    /// Open the configured Ego login in a human-operated PTY. No credential input is accepted.
+    BeginLogin {
+        provider: String,
+    },
+    /// Read terminal liveness and fresh credential presence; exit is not authentication success.
+    LoginStatus {
+        flow_id: String,
+    },
     SetHeaders {
         provider: String,
         #[schemars(extend("writeOnly" = true))]
@@ -40,6 +51,7 @@ pub struct EgoSettingsStore {
     context: Option<Arc<ConfigContext>>,
     runtime: tokio::runtime::Handle,
     sequence: Arc<Mutex<()>>,
+    logins: Arc<login::Logins>,
 }
 
 impl EgoSettingsStore {
@@ -53,6 +65,7 @@ impl EgoSettingsStore {
             runtime: tokio::runtime::Handle::try_current()
                 .map_err(|_| Error::new(ID, "unavailable"))?,
             sequence: Arc::new(Mutex::new(())),
+            logins: Arc::new(login::Logins::default()),
         })
     }
 
@@ -80,6 +93,9 @@ impl EgoSettingsStore {
             return Err(Error::new(ID, "conflict"));
         }
         let (provider, field, value) = match action {
+            EgoAuthAction::BeginLogin { .. } | EgoAuthAction::LoginStatus { .. } => {
+                return Err(Error::new(ID, "invalid_type"));
+            }
             EgoAuthAction::SetHeaders { provider, headers } => (
                 provider,
                 "headers",
@@ -289,6 +305,7 @@ impl Store for EgoSettingsStore {
             context: Some(context),
             runtime: self.runtime.clone(),
             sequence: self.sequence.clone(),
+            logins: self.logins.clone(),
         }))
     }
     fn validate_read_paths(&self, paths: &[String]) -> Result<(), Failure> {

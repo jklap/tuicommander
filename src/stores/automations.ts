@@ -92,8 +92,9 @@ export function createAutomationsStore(adapter: AutomationAdapter) {
 		setNotice("");
 	}
 	function edit(patch: Partial<AutomationDefinition>) {
-		setDraft((value) => (value ? { ...value, ...patch } : value));
-		if ("cron" in patch || "timezone" in patch || "once_local" in patch) invalidatePreview();
+		const changesSchedule = "cron" in patch || "timezone" in patch || "once_local" in patch;
+		setDraft((value) => (value ? { ...value, ...(changesSchedule ? { once_at: null } : {}), ...patch } : value));
+		if (changesSchedule) invalidatePreview();
 	}
 	async function openRun(id: string) {
 		const epoch = ++selectionEpoch;

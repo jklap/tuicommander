@@ -4,17 +4,28 @@ import { ideasStore } from "../../stores/ideas";
 import { rpc } from "../../transport";
 import { sendCommand } from "../../utils/sendCommand";
 import { formatRelativeTime } from "../../utils/time";
+import { useBrowserDictation } from "../useBrowserDictation";
 import { retryWrite } from "../utils/retryWrite";
 import styles from "./IdeasOverlay.module.css";
+import { MobileDictationButton } from "./MobileDictationButton";
 
 interface IdeasOverlayProps {
 	sessionId: string;
 	repoPath: string | null;
+	microphoneBlocked?: boolean;
 	onDismiss: () => void;
 }
 
 export function IdeasOverlay(props: IdeasOverlayProps) {
 	const [inputText, setInputText] = createSignal("");
+	let inputEl: HTMLTextAreaElement | undefined;
+	const browserDictation = useBrowserDictation({
+		sessionId: () => props.sessionId,
+		blocked: () => !!props.microphoneBlocked,
+		getDraft: inputText,
+		getSelection: () => ({ start: inputEl?.selectionStart ?? 0, end: inputEl?.selectionEnd ?? 0 }),
+		setDraft: setInputText,
+	});
 
 	const notes = () => ideasStore.getFilteredIdeas(props.repoPath);
 
@@ -25,6 +36,7 @@ export function IdeasOverlay(props: IdeasOverlayProps) {
 	function handleSubmit() {
 		const text = inputText().trim();
 		if (!text) return;
+		browserDictation.cancel();
 		ideasStore.addIdea(text, props.repoPath, deriveDisplayName(props.repoPath));
 		setInputText("");
 	}
@@ -126,13 +138,18 @@ export function IdeasOverlay(props: IdeasOverlayProps) {
 
 				<div class={styles.inputArea}>
 					<textarea
+						ref={inputEl}
 						class={styles.input}
 						rows={1}
 						placeholder="Type an idea..."
 						value={inputText()}
-						onInput={(e) => setInputText(e.currentTarget.value)}
+						onInput={(e) => {
+							browserDictation.cancel();
+							setInputText(e.currentTarget.value);
+						}}
 						onKeyDown={handleKeyDown}
 					/>
+					<MobileDictationButton dictation={browserDictation} disabled={props.microphoneBlocked} />
 					<button class={styles.submitBtn} onClick={handleSubmit} disabled={!inputText().trim()}>
 						+
 					</button>

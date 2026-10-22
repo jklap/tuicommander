@@ -119,7 +119,6 @@ export const TasksBoard: Component<TasksBoardProps> = (props) => {
 		<div class={s.container}>
 			<header class={s.header}>
 				<h2>{props.board.name}</h2>
-				<p>Drag a card or use its move menu.</p>
 			</header>
 			<Show when={error()}>
 				<p role="alert" class={s.error}>

@@ -240,11 +240,33 @@ pub(crate) fn launch_args(
     config_dir: &Path,
     attachment_dir: &Path,
 ) -> Vec<String> {
+    launch_args_for(
+        agent_type,
+        binary_path,
+        args,
+        config_dir,
+        attachment_dir,
+        false,
+    )
+}
+
+pub(crate) fn launch_args_for(
+    agent_type: &str,
+    binary_path: &str,
+    args: &[String],
+    config_dir: &Path,
+    attachment_dir: &Path,
+    child: bool,
+) -> Vec<String> {
     if is_claude_subcommand(agent_type, binary_path, args) {
         return args.to_vec();
     }
     let result = augment_launch(agent_type, binary_path, args, config_dir);
-    let mut result = crate::launch_instructions::args(agent_type, result, config_dir);
+    let mut result = if child {
+        crate::launch_instructions::args_for(agent_type, result, config_dir, true)
+    } else {
+        crate::launch_instructions::args(agent_type, result, config_dir)
+    };
     let flag = match agent_type {
         "claude" => Some("--add-dir"),
         "gemini" => Some("--include-directories"),

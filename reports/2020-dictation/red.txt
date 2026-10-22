@@ -1,0 +1,47 @@
+build-slot: waiting (running=2 free=68% need=55% load1=25 disk=54GiB)
+build-slot: admitted after 80s (running=0 free=70%)
+
+[1m[30m[46m RUN [49m[39m[22m [36mv5.0.0 [39m[90m/Users/stefano.straus/Gits/personal/tuicommander__wt/chore-desk-2020-visual/.tmp/desk-2020/pre-fix[39m
+
+ [31m❯[39m src/mobile/__tests__/BrowserDictation.repeat.test.tsx [2m([22m[2m12 tests[22m[2m | [22m[31m3 failed[39m[2m | [22m[33m9 skipped[39m[2m)[22m[32m 36[2mms[22m[39m
+   [2m[90m↓[39m[22m waits for end after draft edit before dictating again
+   [2m[90m↓[39m[22m waits for end after aborted before dictating again
+   [2m[90m↓[39m[22m waits for end after network before dictating again
+[31m   [31m×[31m finishes a failed aborted take before inserting the next transcript[39m[32m 16[2mms[22m[39m
+[31m   [31m×[31m finishes a failed network take before inserting the next transcript[39m[32m 7[2mms[22m[39m
+[31m   [31m×[31m finishes a failed no-speech take before inserting the next transcript[39m[32m 6[2mms[22m[39m
+   [2m[90m↓[39m[22m inserts the next transcript after an empty take ends
+   [2m[90m↓[39m[22m dictates three times after result then end without duplicating earlier speech
+   [2m[90m↓[39m[22m dictates again after a synchronous start failure without waiting for end
+   [2m[90m↓[39m[22m screen wake lock while dictating [2m(3)[22m
+     [2m[90m↓[39m[22m holds the lock from start to end
+     [2m[90m↓[39m[22m releases the lock when recognition fails to start
+     [2m[90m↓[39m[22m holds one lock across a repeat dictation, not a leaked one per take
+
+[31m⎯⎯⎯⎯⎯⎯⎯[39m[1m[41m Failed Tests 3 [49m[22m[31m⎯⎯⎯⎯⎯⎯⎯[39m
+
+[41m[1m FAIL [22m[49m src/mobile/__tests__/BrowserDictation.repeat.test.tsx[2m > [22mfinishes a failed aborted take before inserting the next transcript
+[41m[1m FAIL [22m[49m src/mobile/__tests__/BrowserDictation.repeat.test.tsx[2m > [22mfinishes a failed network take before inserting the next transcript
+[41m[1m FAIL [22m[49m src/mobile/__tests__/BrowserDictation.repeat.test.tsx[2m > [22mfinishes a failed no-speech take before inserting the next transcript
+[31m[1mAssertionError[22m: expected '' to be 'retry succeeded' // Object.is equality[39m
+
+[32m- Expected[39m
+[31m+ Received[39m
+
+[32m- retry succeeded[39m
+
+[36m [2m❯[22m src/mobile/__tests__/BrowserDictation.repeat.test.tsx:[2m99:23[22m[39m
+    [90m 97|[39m   fireEvent.click(screen.getByRole("button", { name: /^(Dictate into d…
+    [90m 98|[39m   Recognition.instances.at(-1)!.result("retry succeeded");
+    [90m 99|[39m   expect(draft.value).toBe("retry succeeded");
+    [90m   |[39m                       [31m^[39m
+    [90m100|[39m  },
+    [90m101|[39m );
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/3]⎯[22m[39m
+
+
+[2m Test Files [22m [1m[31m1 failed[39m[22m[90m (1)[39m
+[2m      Tests [22m [1m[31m3 failed[39m[22m[2m | [22m[33m9 skipped[39m[90m (12)[39m
+[2m   Start at [22m 12:56:56
+[2m   Duration [22m 1.14s[2m (transform 30%, import 25%, environment 23%, setup 19%, tests 4%)[22m

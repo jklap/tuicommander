@@ -1,0 +1,198 @@
+{
+  "visibility": "visible",
+  "focus": false,
+  "nativeFocus": false,
+  "visible": true,
+  "position": {
+    "x": 1712,
+    "y": 1092
+  },
+  "size": {
+    "width": 1280,
+    "height": 840
+  },
+  "innerSize": {
+    "width": 1280,
+    "height": 840
+  },
+  "monitor": {
+    "name": "Monitor #41054",
+    "scaleFactor": 2,
+    "position": {
+      "x": 0,
+      "y": 0
+    },
+    "size": {
+      "width": 3024,
+      "height": 1964
+    },
+    "workArea": {
+      "position": {
+        "x": 0,
+        "y": 66
+      },
+      "size": {
+        "width": 3024,
+        "height": 1898
+      }
+    }
+  },
+  "draws": [
+    "s",
+    "t",
+    "e",
+    "f",
+    "a",
+    "n",
+    "o",
+    ".",
+    "s",
+    "t",
+    "r",
+    "a",
+    "u",
+    "s",
+    "@",
+    "D",
+    "G",
+    "Q",
+    "T",
+    "9",
+    "2",
+    "C",
+    "J",
+    "F",
+    "P",
+    "~"
+  ],
+  "canvases": [
+    {
+      "width": 604,
+      "height": 640,
+      "rect": {
+        "x": 313,
+        "y": 57,
+        "width": 302,
+        "height": 320,
+        "top": 57,
+        "right": 615,
+        "bottom": 377,
+        "left": 313
+      }
+    },
+    {
+      "width": 604,
+      "height": 560,
+      "rect": {
+        "x": 313,
+        "y": 77,
+        "width": 302,
+        "height": 280,
+        "top": 77,
+        "right": 615,
+        "bottom": 357,
+        "left": 313
+      }
+    },
+    {
+      "width": 604,
+      "height": 560,
+      "rect": {
+        "x": 313,
+        "y": 77,
+        "width": 302,
+        "height": 280,
+        "top": 77,
+        "right": 615,
+        "bottom": 357,
+        "left": 313
+      }
+    }
+  ],
+  "owned_pid": 48173,
+  "front_before": {
+    "pid": 749,
+    "name": "iTerm2"
+  },
+  "front_ready": {
+    "pid": 749,
+    "name": "iTerm2"
+  },
+  "front_after": {
+    "pid": 749,
+    "name": "iTerm2"
+  },
+  "native": {
+    "front": {
+      "pid": 749,
+      "name": "iTerm2"
+    },
+    "applicationHidden": false,
+    "activationPolicy": "2",
+    "windows": [
+      {
+        "pid": 48173,
+        "number": 5394,
+        "layer": 0,
+        "alpha": 1,
+        "bounds": {
+          "X": 0,
+          "Height": 500,
+          "Y": 482,
+          "Width": 500
+        }
+      },
+      {
+        "pid": 48173,
+        "number": 5393,
+        "layer": 5,
+        "onScreen": true,
+        "alpha": 1,
+        "bounds": {
+          "X": 856,
+          "Height": 420,
+          "Y": 546,
+          "Width": 640
+        }
+      }
+    ]
+  },
+  "cover": {
+    "rect": [
+      848,
+      538,
+      656,
+      436
+    ],
+    "covered": {
+      "X": 856,
+      "Height": 420,
+      "Y": 546,
+      "Width": 640
+    },
+    "native": {
+      "front": {
+        "pid": 749,
+        "name": "iTerm2"
+      },
+      "applicationHidden": false,
+      "activationPolicy": "1",
+      "windows": [
+        {
+          "pid": 49552,
+          "number": 5395,
+          "layer": 25,
+          "onScreen": true,
+          "alpha": 1,
+          "bounds": {
+            "X": 848,
+            "Height": 436,
+            "Y": 538,
+            "Width": 656
+          }
+        }
+      ]
+    }
+  },
+  "failures": []
+}

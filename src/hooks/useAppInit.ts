@@ -126,6 +126,7 @@ export interface AppInitDeps {
 				display_name_is_custom?: boolean;
 				display_name_from_spawn?: boolean;
 				is_remote?: boolean;
+				connection_id?: string | null;
 				parent_session?: string | null;
 				state?: {
 					shell_state?: "busy" | "idle";
@@ -749,6 +750,7 @@ export async function initApp(deps: AppInitDeps) {
 		const id = terminalsStore.add(
 			{
 				sessionId: session_id,
+				tuicSession: tuic_session ?? null,
 				fontSize: saved?.fontSize ?? deps.getDefaultFontSize(),
 				name:
 					display_name ||
@@ -761,7 +763,8 @@ export async function initApp(deps: AppInitDeps) {
 				nameFromSpawn: Boolean(display_name),
 				cwd: cwd ?? null,
 				awaitingInput: null,
-				isRemote: true,
+				isRemote: false,
+				isExternallyCreated: true,
 				agentType: parsedAgentType,
 				ptyDescription: null,
 				parentSession: parent_session ?? null,
@@ -975,12 +978,12 @@ export async function initApp(deps: AppInitDeps) {
 
 		remoteSessionTabs.delete(session_id);
 
-		// Countdown + auto-remove is only for MCP-spawned (remote) tabs. Locally-created
+		// Countdown + auto-remove is only for HTTP/MCP-created tabs. UI-created
 		// tabs are managed by Terminal.tsx's pty-exit handler — applying the rename
-		// here would leave the name stuck forever because the ticker's isRemote
-		// guard aborts on the first tick and the setTimeout's isRemote guard skips removal.
+		// here would leave the name stuck forever because the ticker's isExternallyCreated
+		// guard aborts on the first tick and the setTimeout's isExternallyCreated guard skips removal.
 		const t0 = terminalsStore.get(termId);
-		if (!t0?.isRemote) return;
+		if (!t0?.isExternallyCreated) return;
 		// A suspended tab ended its PTY on purpose and must stay, restorable.
 		if (isSuspendingOrSuspended(termId)) return;
 
@@ -1001,7 +1004,7 @@ export async function initApp(deps: AppInitDeps) {
 		const ticker = setInterval(() => {
 			remaining--;
 			const t = terminalsStore.get(termId);
-			if (!t?.isRemote || remaining <= 0) {
+			if (!t?.isExternallyCreated || remaining <= 0) {
 				clearInterval(ticker);
 				return;
 			}
@@ -1013,7 +1016,7 @@ export async function initApp(deps: AppInitDeps) {
 			const t = terminalsStore.get(termId);
 			// Only remove if the tab still exists and is still the remote tab for this
 			// session (user may have closed it manually or re-used the slot).
-			if (t?.isRemote) {
+			if (t?.isExternallyCreated) {
 				appLogger.info("app", `Auto-removing remote tab ${termId} for closed session ${session_id}`);
 				terminalsStore.remove(termId);
 			}
@@ -1072,7 +1075,8 @@ export async function initApp(deps: AppInitDeps) {
 		terminalsStore.remove(id);
 	}
 
-	// Re-adopt surviving PTY sessions or start fresh
+	// Re-adopt surviving PTY sessions or start fresh. `is_remote` records launch
+	// provenance; only `connection_id` identifies execution on another machine.
 	if (survivingSessions.length > 0) {
 		appLogger.info("app", `PTY reconnect: found ${survivingSessions.length} surviving session(s)`);
 		for (const session of survivingSessions) {
@@ -1087,7 +1091,8 @@ export async function initApp(deps: AppInitDeps) {
 						name: session.display_name || terminalsStore.nextDefaultName(),
 						nameIsCustom: session.display_name_is_custom ?? false,
 						ptyDescription: session.pty_description ?? null,
-						isRemote: session.is_remote ?? false,
+						isRemote: Boolean(session.connection_id),
+						isExternallyCreated: session.is_remote ?? false,
 						agentType: parseAgentType(session.state?.agent_type),
 						cwd: session.cwd,
 						awaitingInput: null,
@@ -1108,7 +1113,8 @@ export async function initApp(deps: AppInitDeps) {
 					: currentRevision === 0);
 			terminalsStore.update(id, {
 				...(canApplySnapshotShell && session.state?.shell_state ? { shellState: session.state.shell_state } : {}),
-				...(session.is_remote !== undefined ? { isRemote: session.is_remote } : {}),
+				isRemote: Boolean(session.connection_id),
+				...(session.is_remote !== undefined ? { isExternallyCreated: session.is_remote } : {}),
 				...(session.display_name_is_custom !== undefined ? { nameIsCustom: session.display_name_is_custom } : {}),
 				// Only the row survives a reload, and only the backend knows where the
 				// name came from: every OSC/intent title is synced back as non-custom.
