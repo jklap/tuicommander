@@ -862,6 +862,13 @@ pub fn merged_pr_proof_from_pages(
 /// local default branch routinely trails, and the local default branch itself
 /// (it may hold merges not yet pushed). Missing refs are skipped.
 fn integration_bases(repo: &Path, default_branch: &str) -> Vec<String> {
+    // A fully qualified default (see `get_remote_default_branch`) is already exact.
+    if default_branch.starts_with("refs/") {
+        return Some(default_branch.to_string())
+            .filter(|base| rev_at(repo, &format!("{base}^{{commit}}")).is_ok())
+            .into_iter()
+            .collect();
+    }
     [
         format!("refs/remotes/origin/{default_branch}"),
         format!("refs/heads/{default_branch}"),
@@ -3671,10 +3678,20 @@ pub fn get_remote_default_branch(repo_path: &str) -> Result<String, String> {
                 format!("{prefix}{branch}")
             };
             if rev_at(repo, &format!("{reference}^{{commit}}")).is_ok() {
+                if let Some(short) = reference.strip_prefix("refs/remotes/") {
+                    // git resolves a short name to refs/heads/ before
+                    // refs/remotes/, so a local branch literally named
+                    // `<remote>/<branch>` would shadow the remote ref. Keep the
+                    // qualified name then; `integration_bases`,
+                    // `list_base_ref_options` and `fetch_if_remote` accept it.
+                    if rev_at(repo, &format!("refs/heads/{short}^{{commit}}")).is_ok() {
+                        return Some(reference);
+                    }
+                    return Some(short.to_string());
+                }
                 return Some(
                     reference
                         .strip_prefix("refs/heads/")
-                        .or_else(|| reference.strip_prefix("refs/remotes/"))
                         .unwrap_or(&reference)
                         .to_string(),
                 );
@@ -3772,6 +3789,7 @@ pub fn get_remote_default_branch(repo_path: &str) -> Result<String, String> {
 /// Fetch a remote ref if the ref name is a remote tracking branch (e.g. "origin/main").
 /// Local refs are a no-op. Returns Ok(()) on success or if the ref is local.
 pub fn fetch_if_remote(repo_path: &str, ref_name: &str) -> Result<(), String> {
+    let ref_name = ref_name.strip_prefix("refs/remotes/").unwrap_or(ref_name);
     // A "/" alone does NOT mean remote — local branches routinely contain slashes
     // (e.g. "POC-0001/merge-radar", "feature/foo"). Only fetch when the ref actually
     // resolves as a remote-tracking ref under refs/remotes/.
@@ -3797,14 +3815,13 @@ pub fn fetch_if_remote(repo_path: &str, ref_name: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// Split `<remote>/<branch>` against the configured remotes, longest remote
-/// name first. Both halves may contain slashes (`my/fork` + `release/1.x`), so
+/// Split `<remote>/<branch>` against the configured remotes. Both halves may contain slashes (`my/fork` + `release/1.x`), so
 /// splitting on the first `/` would fetch the wrong remote.
 fn split_remote_ref(repo_path: &str, ref_name: &str) -> Option<(String, String)> {
     let remotes = git_cmd(Path::new(repo_path))
         .args(["remote"])
         .run_silent()?;
-    remotes
+    let mut candidates = remotes
         .stdout
         .lines()
         .map(str::trim)
@@ -3812,8 +3829,19 @@ fn split_remote_ref(repo_path: &str, ref_name: &str) -> Option<(String, String)>
         .filter_map(|r| {
             let branch = ref_name.strip_prefix(r)?.strip_prefix('/')?;
             (!branch.is_empty()).then(|| (r.to_string(), branch.to_string()))
-        })
-        .max_by_key(|(r, _)| r.len())
+        });
+    let first = candidates.next()?;
+    // Remotes `my` and `my/fork` both own `refs/remotes/my/fork/release/1.x`
+    // (branch `fork/release/1.x` vs `release/1.x`). Guessing could fetch the
+    // wrong remote over the tracking ref, so refuse to split.
+    if candidates.next().is_some() {
+        tracing::warn!(
+            source = "worktree",
+            "remote ref {ref_name} matches several configured remotes; not fetching"
+        );
+        return None;
+    }
+    Some(first)
 }
 
 /// Persist the base ref for a branch in git config.
@@ -3923,7 +3951,7 @@ pub fn list_base_ref_options(repo_path: String) -> Result<Vec<BaseRefOption>, St
 
         if full_ref.starts_with("refs/heads/") {
             local_names.insert(short_name.clone());
-            if short_name != default_branch {
+            if short_name != default_branch && full_ref != default_branch {
                 local_refs.push(BaseRefOption {
                     name: short_name,
                     kind: "local".to_string(),
@@ -3935,7 +3963,7 @@ pub fn list_base_ref_options(repo_path: String) -> Result<Vec<BaseRefOption>, St
             if short_name.ends_with("/HEAD") {
                 continue;
             }
-            if short_name == default_branch {
+            if short_name == default_branch || full_ref == default_branch {
                 continue;
             }
             remote_refs.push(BaseRefOption {
@@ -6147,6 +6175,37 @@ mod tests {
     }
 
     #[test]
+    fn remote_default_branch_stays_qualified_when_a_local_branch_shadows_the_short_name() {
+        let src = remote_source();
+        let repo = setup_test_repo();
+        add_remote(repo.path(), src.path(), "upstream", Some("develop"));
+        // A local branch literally named `upstream/develop`: git resolves the
+        // short name to it before refs/remotes/upstream/develop.
+        git_cmd(repo.path())
+            .args(["branch", "upstream/develop"])
+            .run()
+            .unwrap();
+        let path = repo.path().to_string_lossy().into_owned();
+        let got = get_remote_default_branch(&path).unwrap();
+        assert_eq!(got, "refs/remotes/upstream/develop");
+        assert_eq!(
+            integration_bases(repo.path(), &got),
+            vec!["refs/remotes/upstream/develop".to_string()]
+        );
+        let options = list_base_ref_options(path).unwrap();
+        assert_eq!(options[0].name, got);
+        assert!(options[0].is_default);
+        assert_eq!(
+            options
+                .iter()
+                .filter(|o| o.name.ends_with("upstream/develop"))
+                .count(),
+            2,
+            "the shadowing local branch stays listed separately: {options:?}"
+        );
+    }
+
+    #[test]
     fn remote_default_branch_keeps_a_local_branch_that_tracks_the_remote_branch() {
         let src = remote_source();
         let repo = setup_test_repo();
@@ -7537,6 +7596,47 @@ branch refs/heads/feat
         assert_eq!(
             rev_at(repo.path(), "refs/remotes/my/fork/release/1.x").unwrap(),
             expected
+        );
+    }
+
+    #[test]
+    fn fetch_if_remote_does_not_guess_between_overlapping_remote_names() {
+        let src = setup_test_repo();
+        git_cmd(src.path())
+            .args(["checkout", "-b", "release/1.x"])
+            .run()
+            .unwrap();
+        let repo = setup_test_repo();
+        let url = src.path().to_string_lossy().into_owned();
+        git_cmd(repo.path())
+            .args(["remote", "add", "my/fork", &url])
+            .run()
+            .unwrap();
+        git_cmd(repo.path())
+            .args(["fetch", "my/fork"])
+            .run()
+            .unwrap();
+        // `my` could equally own refs/remotes/my/fork/release/1.x. `git remote
+        // add` refuses the overlap, but a hand-edited config can express it.
+        git_cmd(repo.path())
+            .args(["config", "remote.my.url", &url])
+            .run()
+            .unwrap();
+        git_cmd(repo.path())
+            .args([
+                "config",
+                "remote.my.fetch",
+                "+refs/heads/*:refs/remotes/my/*",
+            ])
+            .run()
+            .unwrap();
+        let old = rev_at(repo.path(), "refs/remotes/my/fork/release/1.x").unwrap();
+        commit_file(src.path(), "next.txt", "next\n");
+        fetch_if_remote(&repo.path().to_string_lossy(), "my/fork/release/1.x").unwrap();
+        assert_eq!(
+            rev_at(repo.path(), "refs/remotes/my/fork/release/1.x").unwrap(),
+            old,
+            "an ambiguous remote/branch split must not fetch"
         );
     }
 
