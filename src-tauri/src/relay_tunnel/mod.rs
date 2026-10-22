@@ -18,4 +18,5 @@ pub(crate) mod daemon;
 pub(crate) mod frames;
 pub(crate) mod mux;
 pub(crate) mod secure;
+pub(crate) mod service;
 pub(crate) mod ws_link;
