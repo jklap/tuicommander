@@ -554,3 +554,91 @@ All successful controls closed their owned tabs/daemons and stopped their record
 server child. The NODELAY lifecycle records zero remaining terminal sessions and
 exact isolated instance stop exit 0. All temporary production source was restored
 byte-for-byte, and no daily app/shared Chrome process was stopped or replaced.
+
+
+## Native WebKit follow-up — 2026-10-23
+
+The coordinator authorized the isolated native target with instance
+`agent-test-2040` and port `19890`. All inspection used its Unix socket, not the
+orchestrator's debug interface. The application is **CanvasTerminal**, not xterm:
+its keyboard target is a hidden `input[aria-hidden=true]`, and its output path is
+binary grid installation followed by the custom canvas renderer. There is no
+xterm textarea or xterm write callback to measure.
+
+### Verified native readiness, but no valid input distribution
+
+The successful native preflight reports WebKit UA
+`AppleWebKit/605.1.15`, a 640×420 CSS viewport and DPR 2. This is the UA string,
+not an independently verified WebKit build number. Six successive actual rAF
+callbacks ran at performance-clock values 652, 669, 686, 704, 719 and 735 ms.
+Thus the native WebView did execute frames during this preflight. This is not a
+keystroke sample or proof that frames continued for an entire workload.
+
+An earlier screen-lock check returned true. That attempt stopped without timing
+claims. Later unlocked runs reached JavaScript evaluation and native frame
+callbacks. One evidence-helper error used `#root`; the verified mount point is
+`#app`. This selector was corrected. Another launch passed ego directly as the
+HTTP session's shell command, but TUIC appends `-l` to a shell. Ego rejected that
+argument. The corrected launcher is a Python script that ignores the shell's
+extra argument and execs the intended ego argv. Neither failed setup supplied
+latency samples.
+
+The final real TUIC PTY session was
+`d0ea609f-84fc-4a09-9439-5d67269235d6`. It ran installed ego 0.1.2 with an
+isolated EGO_HOME and argv:
+
+```text
+ego --bare --offline --thinking off -m ollama/gemma4:e4b-mlx
+```
+
+It printed the ego/model/mode banner and shortcut hints, including `/help`, but
+no live composer or help body was observed before cleanup. Synthetic keydown
+for `/help` plus Enter produced no new PTY output in the following two seconds.
+The first unique CJK idle-key probe then failed its 1500 ms echo acquisition
+bound. Its event was `isTrusted=false`. No 200-key acquisition ran. This is a
+failed measurement prerequisite, **not** evidence of 1500 ms steady-state input
+latency or proof that TUIC dropped the key. The probe did not establish that ego
+had completed startup and opened its live composer.
+
+### Independent startup control
+
+A separate plain-PTY control used macOS `script` with a subprocess-owned PTY,
+24×80 geometry, the same executable/flags and isolated EGO_HOME. The exec
+launcher recorded all three standard streams as TTYs. The control printed the
+banner at about 0.4 seconds; `/help` was written at 5.014 seconds. No additional
+output was captured before the 20-second observation ended. No manual fork or
+fork-child terminal setup was used. This reproduces the unavailable help output
+outside TUIC for the observed interval. It does not prove a root cause, rule out
+provider/startup dependencies, or establish that ego would never become ready.
+
+No model generation, credential read or login was used. A responsive ego
+composer and help output are still required before this assignment can provide
+valid samples. It would be incorrect to call 200 keys submitted after Enter
+“while help prints” without first observing and correlating real help output.
+
+### Limits and retained evidence
+
+There is no native p50/p95 input result, no verified help-overlap sample, no
+same-help-byte plain-shell replay, and no supported answer to whether native
+WebKit has the Chrome phase concentration. The existing Chrome results remain
+separate evidence. Future synthetic native results must explicitly exclude the
+OS keyboard path; canvas fill and rAF remain proxies, not physical scanout.
+
+`~/Gits/.tmp/2040-web/native/` retains `probe.json`, `ego-help-probe.json`,
+`native.log`, `plain-ego.json`, `plain-ego-script.log`, the exec launcher's
+TTY/PID record, the observer patch and original source backups, and the
+acquisition scripts. Temporary Rust observations timestamped actual PTY reads;
+temporary frontend observations covered decoded acceptance and canvas/rAF
+boundaries. They were not retained as production code. Raw terminal text in
+this private evidence comes only from the isolated probe.
+
+Build-slot contention exceeded one evidence helper's one-hour setup budget.
+That run was a setup timeout, not an application failure. The later run used a
+longer setup budget and reached the native preflight. Setup/build wait and
+acquisition bounds are not application latency samples.
+
+The final lifecycle deleted the owned TUIC PTY, ran matching
+`make agent-test-stop` with exit 0, and observed the supervisor exit. The
+plain-PTY process and its recorded ego PID are gone. The native PID file is
+absent. Both temporarily modified production files were restored byte-for-byte.
+No shared Chrome, daily app, installed executable or other agent was stopped.
