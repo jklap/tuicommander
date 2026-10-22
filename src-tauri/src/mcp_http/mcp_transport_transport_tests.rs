@@ -5879,14 +5879,23 @@ async fn runtime_audit_projection(state: Arc<AppState>) -> serde_json::Value {
 async fn mcp_call_audit_disabled_records_nothing_and_endpoint_reports_disabled() {
     let state = test_state();
     state.config.write().mcp_call_audit_enabled = false;
-    post_test_tool_call(state.clone(), "audit-off", "session", serde_json::json!({"action":"list"})).await;
+    post_test_tool_call(
+        state.clone(),
+        "audit-off",
+        "session",
+        serde_json::json!({"action":"list"}),
+    )
+    .await;
     let off = runtime_audit_projection(state.clone()).await;
     assert_eq!(off["enabled"], false);
     assert_eq!(off["records"], serde_json::json!([]));
     state.config.write().mcp_call_audit_enabled = true;
     let on = runtime_audit_projection(state).await;
     assert_eq!(on["enabled"], true);
-    assert_eq!(on["retained"], 0, "the call made while disabled left no row");
+    assert_eq!(
+        on["retained"], 0,
+        "the call made while disabled left no row"
+    );
 }
 
 // Catches: the row outcome hides an application error, or labels a reply as success of the effect.
@@ -5894,8 +5903,20 @@ async fn mcp_call_audit_disabled_records_nothing_and_endpoint_reports_disabled()
 async fn mcp_call_audit_outcome_names_reply_and_error_not_effect() {
     let state = test_state();
     state.config.write().mcp_call_audit_enabled = true;
-    post_test_tool_call(state.clone(), "audit-outcome", "session", serde_json::json!({"action":"list"})).await;
-    post_test_tool_call(state.clone(), "audit-outcome", "progress", serde_json::json!({"type":"done","text":"x".repeat(600)})).await;
+    post_test_tool_call(
+        state.clone(),
+        "audit-outcome",
+        "session",
+        serde_json::json!({"action":"list"}),
+    )
+    .await;
+    post_test_tool_call(
+        state.clone(),
+        "audit-outcome",
+        "progress",
+        serde_json::json!({"type":"done","text":"x".repeat(600)}),
+    )
+    .await;
     let projection = runtime_audit_projection(state).await;
     assert_eq!(projection["records"][0]["outcome"], "error");
     assert_eq!(projection["records"][1]["outcome"], "replied");

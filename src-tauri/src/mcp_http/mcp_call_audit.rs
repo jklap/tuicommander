@@ -171,7 +171,11 @@ impl<'a> Call<'a> {
         };
         let application_error = formatted["isError"].as_bool().unwrap_or(false);
         row.application_error = Some(application_error);
-        row.outcome = if application_error { "error" } else { "replied" };
+        row.outcome = if application_error {
+            "error"
+        } else {
+            "replied"
+        };
         row.response_text_bytes = Some(formatted["content"].as_array().map_or(0, |content| {
             content
                 .iter()

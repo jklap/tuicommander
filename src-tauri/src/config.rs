@@ -10064,9 +10064,14 @@ mod tests {
     // Catches: the debug default not applied (empty view for developers) or release defaulting on.
     #[test]
     fn mcp_call_audit_defaults_on_only_in_debug_builds() {
-        assert_eq!(AppConfig::default().mcp_call_audit_enabled, cfg!(debug_assertions));
+        assert_eq!(
+            AppConfig::default().mcp_call_audit_enabled,
+            cfg!(debug_assertions)
+        );
         let mut file = serde_json::to_value(AppConfig::default()).unwrap();
-        file.as_object_mut().unwrap().remove("mcp_call_audit_enabled");
+        file.as_object_mut()
+            .unwrap()
+            .remove("mcp_call_audit_enabled");
         let legacy: AppConfig = serde_json::from_value(file.clone()).unwrap();
         assert_eq!(legacy.mcp_call_audit_enabled, cfg!(debug_assertions));
         file["mcp_call_audit_enabled"] = serde_json::json!(false);
