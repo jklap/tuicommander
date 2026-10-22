@@ -101,3 +101,40 @@ it("re-sends its own size on focus and on input once another viewer changed the 
 		terminalsStore.remove(terminalId);
 	}
 });
+
+// Catches: the once-per-foreign-size memory outlives the reclaim — viewer B reclaims on focus, the
+// frame confirms B's size, viewer A takes the same size again, and B's next focus is swallowed
+// because "24x80" was already asked for.
+it("reclaims again when another viewer takes the same size back after a confirmed reclaim", async () => {
+	const terminalId = terminalsStore.add(makeTerminal({ sessionId: "reclaim-again-2131" }));
+	const view = render(() => <CanvasTerminal sessionId="reclaim-again-2131" terminalId={terminalId} />);
+	try {
+		await waitFor(() => expect(resizes()).toHaveLength(1));
+		const mine = resizes()[0] as { rows: number; cols: number };
+		await waitFor(() => expect(transport.sink).not.toBeNull());
+		const foreign = () => Uint8Array.from(atob(fixture.frameBase64), (c) => c.charCodeAt(0)).buffer;
+		const ownSize = () => {
+			const buf = foreign();
+			const v = new DataView(buf);
+			v.setUint16(18, mine.rows, true);
+			v.setUint16(20, mine.cols, true);
+			return buf;
+		};
+		transport.sink?.(foreign());
+		await new Promise((r) => setTimeout(r, 50));
+		const input = view.container.querySelector("textarea, input") as HTMLElement;
+		fireEvent.focus(input);
+		await waitFor(() => expect(resizes()).toHaveLength(2));
+
+		transport.sink?.(ownSize());
+		await new Promise((r) => setTimeout(r, 50));
+		transport.sink?.(foreign());
+		await new Promise((r) => setTimeout(r, 50));
+		fireEvent.blur(input);
+		fireEvent.focus(input);
+		await waitFor(() => expect(resizes()).toHaveLength(3));
+	} finally {
+		view.unmount();
+		terminalsStore.remove(terminalId);
+	}
+});
