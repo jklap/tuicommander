@@ -160,6 +160,11 @@ port 9876 remain off limits.
   webkit_nil_url` discovered `unloaded_webkit_url_unwrap_panics`.
   Evidence: `~/Gits/.tmp/results/tuic-2120-real-webkit-main-fixed.log`.
   The existing nil-conversion unit test remains the safe-conversion GREEN half.
+- Native nextest execution of `webkit_nil_url`, filtered to
+  `unloaded_webkit_url_unwrap_panics`, passed: one test run, one passed, zero
+  skipped; 2m12s build and 0.199s test run. The command ran through build-slot,
+  the mbx shim, and `scripts/with-test-tmp.sh` with Gits-local TMPDIR.
+  Evidence: `~/Gits/.tmp/results/tuic-2120-real-webkit-nextest.log`.
 - Both the original nextest unit probe and plain libtest with one test thread
   failed the main-thread prerequisite before native construction. Those failures
   are not RED evidence. The standalone target uses `harness = false` to supply
