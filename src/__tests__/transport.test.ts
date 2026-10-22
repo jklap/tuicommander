@@ -1874,7 +1874,12 @@ describe("transport", () => {
 			expect(mapCommandToHttp("github_disconnect", {}).path).toBe("/github/auth/disconnect");
 			expect(mapCommandToHttp("github_auth_status", {}).path).toBe("/github/auth/status");
 			expect(mapCommandToHttp("github_auth_status", {}).method).toBe("GET");
-			expect(mapCommandToHttp("github_diagnostics", {}).path).toBe("/github/diagnostics");
+			expect(mapCommandToHttp("github_diagnostics", {})).toEqual({ method: "GET", path: "/github/diagnostics" });
+			// Catches manual refresh being mapped to the read-only diagnostics route.
+			expect(mapCommandToHttp("github_diagnostics", { refresh: true })).toEqual({
+				method: "POST",
+				path: "/github/diagnostics",
+			});
 		});
 
 		// Catches: the {request} wrapper being forwarded as the body, or the launch reaching a different endpoint.
