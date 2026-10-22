@@ -3,6 +3,7 @@ import { t } from "../i18n";
 import { appLogger } from "../stores/appLogger";
 import { toastsStore } from "../stores/toasts";
 import { rpc } from "../transport";
+import { randomId } from "../utils/randomId";
 import { holdScreenAwake } from "../utils/screenWakeLock";
 
 interface RecognitionResult {
@@ -47,7 +48,11 @@ export function useBrowserDictation(options: {
 	/** Desktop composers must not initialize browser speech or fetch its config. */
 	enabled?: boolean;
 	blocked: Accessor<boolean>;
+	/** Owner identity captured once per take; an unbound ACP draft has no session yet. */
+	sessionId: Accessor<string | null>;
 	getDraft: Accessor<string>;
+	/** Capture an insertion range for this take; omitted composers keep tail insertion. */
+	getSelection?: Accessor<{ start: number; end: number }>;
 	setDraft: (text: string) => void;
 	onRecording?: (recording: boolean) => void;
 }) {
@@ -58,10 +63,38 @@ export function useBrowserDictation(options: {
 	const Constructor =
 		options.enabled === false ? undefined : (browser.SpeechRecognition ?? browser.webkitSpeechRecognition);
 	const [recording, setRecording] = createSignal(false);
+	const [failed, setFailed] = createSignal(false);
 	let recognition: BrowserRecognition | null = null;
 	let discarding = false;
 	let language = navigator.language;
 	let renderedSpeech = "";
+	let take: {
+		id: string;
+		sessionId: string | null;
+		firstResult: boolean;
+		errorLogged: boolean;
+		sequence: number;
+	} | null = null;
+
+	// At most six content-free records per take, never one per hypothesis.
+	function trace(event: string, code?: string) {
+		if (!take) return;
+		appLogger.debug("dictation", `Browser dictation lifecycle: ${event} [${take.id}]`, {
+			event,
+			sequence: ++take.sequence,
+			sessionId: take.sessionId,
+			takeId: take.id,
+			recording: !!recognition,
+			discarding,
+			code,
+		});
+	}
+
+	function traceError(code: string) {
+		if (!take || take.errorLogged) return;
+		take.errorLogged = true;
+		trace("error", code);
+	}
 
 	if (Constructor) {
 		void rpc<{ language?: string }>("get_dictation_config")
@@ -85,6 +118,7 @@ export function useBrowserDictation(options: {
 	}
 
 	function fail(code: string, cause?: unknown) {
+		setFailed(true);
 		// The code is in the message: the logger coalesces equal messages and would drop the
 		// data of a second failure with another code before it reaches the server log.
 		appLogger.warn("dictation", `Browser dictation failed: ${code}`, {
@@ -100,24 +134,29 @@ export function useBrowserDictation(options: {
 
 	/** A thrown start/stop failure: its name is the code, the full error the cause. */
 	function failWith(error: unknown) {
-		fail(error instanceof Error ? error.name : "unknown", error);
+		const code = error instanceof Error ? error.name : "unknown";
+		traceError(code);
+		fail(code, error);
 	}
 
 	function release() {
 		if (recognition) recognition.onresult = recognition.onerror = recognition.onend = null;
 		recognition = null;
 		markRecording(false);
+		trace("ownership-release");
+		take = null;
 	}
 
 	function cancel() {
 		if (!recognition || discarding) return;
 		discarding = true;
+		trace("abort-requested");
 		// abort() is asynchronous: keep the service and microphone claim until end.
 		try {
 			recognition.abort();
 		} catch (error) {
-			release();
 			failWith(error);
+			release();
 		}
 	}
 
@@ -132,50 +171,86 @@ export function useBrowserDictation(options: {
 			try {
 				recognition.stop();
 			} catch (error) {
-				cancel();
 				failWith(error);
+				cancel();
 			}
 			return;
 		}
 		if (!Constructor || options.blocked()) return;
 		try {
-			const current = new Constructor();
-			recognition = current;
+			take = {
+				id: randomId("dictation-"),
+				sessionId: options.sessionId(),
+				firstResult: false,
+				errorLogged: false,
+				sequence: 0,
+			};
 			discarding = false;
 			renderedSpeech = "";
+			const selection = options.getSelection?.();
+			const draftAtStart = selection ? options.getDraft() : "";
+			const selectedDraft = selection
+				? {
+						prefix: draftAtStart.slice(0, selection.start),
+						text: draftAtStart.slice(selection.start, selection.end),
+						suffix: draftAtStart.slice(selection.end),
+					}
+				: null;
+			const current = new Constructor();
+			recognition = current;
+			setFailed(false);
 			current.lang = language;
 			current.continuous = true;
 			current.interimResults = true;
 			current.onresult = (event) => {
-				if (recognition !== current || discarding) return;
+				if (recognition !== current) return;
+				if (take && !take.firstResult) {
+					take.firstResult = true;
+					trace("first-result");
+				}
+				if (discarding) return;
+				const speech = Array.from(event.results, (result) => result[0].transcript.trim())
+					.join(" ")
+					.trim();
+				if (selectedDraft) {
+					const { prefix, text, suffix } = selectedDraft;
+					renderedSpeech = speech
+						? `${prefix && !/\s$/.test(prefix) ? " " : ""}${speech}${suffix && !/^\s/.test(suffix) ? " " : ""}`
+						: "";
+					options.setDraft(prefix + (speech ? renderedSpeech : text) + suffix);
+					return;
+				}
 				const draft = options.getDraft();
 				// Replace the previous hypothesis only while it still owns the draft tail.
 				// Manual composer edits cancel recognition before changing the draft.
 				const base = renderedSpeech && draft.endsWith(renderedSpeech) ? draft.slice(0, -renderedSpeech.length) : draft;
-				const speech = Array.from(event.results, (result) => result[0].transcript.trim())
-					.join(" ")
-					.trim();
 				renderedSpeech = speech ? `${base && !/\s$/.test(base) ? " " : ""}${speech}` : "";
 				options.setDraft(base + renderedSpeech);
 			};
 			current.onerror = (event) => {
-				if (recognition !== current || discarding) return;
-				discarding = true;
+				if (recognition !== current) return;
+				traceError(event.error);
+				if (discarding) return;
+				// End a failed take through the same shutdown path as an edit/send.
+				// Discarding alone would also prevent edit/send from requesting shutdown.
 				fail(event.error);
+				cancel();
 			};
 			current.onend = () => {
 				if (recognition !== current) return;
+				trace("end");
 				release();
 			};
 			// Claim the microphone before start(), including the permission prompt.
 			markRecording(true);
+			trace("start");
 			current.start();
 		} catch (error) {
 			// A synchronous start failure has no running service to emit end.
-			release();
 			failWith(error);
+			release();
 		}
 	}
 
-	return { available: !!Constructor, recording, toggle, cancel };
+	return { available: !!Constructor, recording, failed, toggle, cancel };
 }

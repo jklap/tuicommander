@@ -8,8 +8,8 @@ import s from "./SettingsPrimitives.module.css";
 
 export function SettingPageHeader(props: {
 	title: string;
-	description: string;
-	scope: string;
+	description?: string;
+	scope?: string;
 	source?: JSX.Element;
 	actions?: JSX.Element;
 	icon?: JSX.Element;
@@ -26,15 +26,17 @@ export function SettingPageHeader(props: {
 						{props.icon}
 						{props.title}
 					</h2>
-					<p>{props.description}</p>
+					<Show when={props.description}>{(description) => <p>{description()}</p>}</Show>
 					<Show when={props.source}>
 						<p class={s.source}>{props.source}</p>
 					</Show>
 				</div>
-				<div class={s.actions}>
-					<StatusBadge label={props.scope} />
-					{props.actions}
-				</div>
+				<Show when={props.scope || props.actions}>
+					<div class={s.actions}>
+						<Show when={props.scope}>{(scope) => <StatusBadge label={scope()} title={scope()} />}</Show>
+						{props.actions}
+					</div>
+				</Show>
 			</header>
 		</div>
 	);
@@ -103,7 +105,7 @@ export function SettingRow(props: {
 export function StatusSummary(props: {
 	label: string;
 	tone?: "success" | "warning" | "error";
-	source: string;
+	source?: string;
 	freshness?: string;
 	details?: JSX.Element;
 	actions?: JSX.Element;
@@ -113,10 +115,13 @@ export function StatusSummary(props: {
 		<div class={s.status} role="status">
 			<div>
 				<StatusBadge label={props.label} variant={props.tone} />
-				<p class={s.source}>
-					{props.source}
-					<Show when={props.freshness}> · {props.freshness}</Show>
-				</p>
+				<Show when={props.source || props.freshness}>
+					<p class={s.source}>
+						{props.source}
+						<Show when={props.source && props.freshness}> · </Show>
+						{props.freshness}
+					</p>
+				</Show>
 				{props.details}
 			</div>
 			{props.children}

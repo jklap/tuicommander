@@ -293,16 +293,48 @@ pub(crate) mod commands {
         header: Option<crate::mcp_upstream_config::UpstreamHeader>,
         url: String,
         replace: Option<bool>,
+        state: tauri::State<'_, std::sync::Arc<crate::AppState>>,
     ) -> Result<(), String> {
-        if replace.unwrap_or(false) {
-            super::save_mcp_upstream_credential_with_replace(name, token, header, url, true)
-        } else {
-            super::save_mcp_upstream_credential(name, token, header, url)
-        }
+        super::save_with_refresh(&state, name, token, header, url, replace.unwrap_or(false))
+    }
+
+    #[tauri::command]
+    pub(crate) fn delete_mcp_upstream_credential(
+        name: String,
+        header: Option<crate::mcp_upstream_config::UpstreamHeader>,
+        state: tauri::State<'_, std::sync::Arc<crate::AppState>>,
+    ) -> Result<(), String> {
+        super::delete_with_refresh(&state, name, header)
     }
 }
 
-#[cfg_attr(feature = "desktop", tauri::command)]
+pub(crate) fn save_with_refresh(
+    state: &crate::AppState,
+    name: String,
+    token: String,
+    header: Option<crate::mcp_upstream_config::UpstreamHeader>,
+    url: String,
+    replace: bool,
+) -> Result<(), String> {
+    if replace {
+        save_mcp_upstream_credential_with_replace(name, token, header, url, true)
+    } else {
+        save_mcp_upstream_credential(name, token, header, url)
+    }?;
+    crate::settings::api::publish_change(state, "upstreams", true);
+    Ok(())
+}
+
+pub(crate) fn delete_with_refresh(
+    state: &crate::AppState,
+    name: String,
+    header: Option<crate::mcp_upstream_config::UpstreamHeader>,
+) -> Result<(), String> {
+    delete_mcp_upstream_credential(name, header)?;
+    crate::settings::api::publish_change(state, "upstreams", true);
+    Ok(())
+}
+
 pub(crate) fn delete_mcp_upstream_credential(
     name: String,
     header: Option<crate::mcp_upstream_config::UpstreamHeader>,
@@ -324,6 +356,55 @@ pub(crate) fn delete_mcp_upstream_credential(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // Catches: publishing before vault persistence, failing to publish clears, or IPC/HTTP owner drift.
+    #[tokio::test]
+    #[serial_test::serial]
+    async fn legacy_upstream_owner_rejection_and_clear_publish_only_durable_changes() {
+        let tmp = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+        let _guard = crate::config::set_config_dir_override(tmp.path().to_path_buf());
+        crate::credentials::reset_test_faults();
+        let state = std::sync::Arc::new(crate::state::tests_support::make_test_app_state());
+        let mut events = state.event_bus.subscribe();
+        let save = |name: &str| {
+            save_with_refresh(
+                &state,
+                name.into(),
+                "legacy-owner-canary".into(),
+                None,
+                "https://example.com/mcp".into(),
+                false,
+            )
+        };
+        assert!(save("../invalid").is_err());
+        assert!(events.try_recv().is_err());
+        crate::credentials::MOCK_FAIL_WRITES.store(true, std::sync::atomic::Ordering::SeqCst);
+        let rejected = save("legacy-owner-refresh");
+        crate::credentials::reset_test_faults();
+        assert!(rejected.is_err());
+        assert!(events.try_recv().is_err());
+        save("legacy-owner-refresh").unwrap();
+        let first = events.try_recv().unwrap();
+        delete_with_refresh(&state, "legacy-owner-refresh".into(), None).unwrap();
+        let second = events.try_recv().unwrap();
+        let (
+            crate::state::AppEvent::SettingsChanged(first),
+            crate::state::AppEvent::SettingsChanged(second),
+        ) = (first, second)
+        else {
+            panic!("expected settings changes")
+        };
+        assert_eq!(first.section, "upstreams");
+        assert_eq!(second.section, "upstreams");
+        assert!(first.persisted && first.applied && second.persisted && second.applied);
+        assert!(first.generation < second.generation);
+        assert!(events.try_recv().is_err());
+        assert!(
+            !serde_json::to_string(&(first, second))
+                .unwrap()
+                .contains("legacy-owner-canary")
+        );
+    }
 
     // Catches: a duplicate add replacing the existing upstream's vault entry
     // before config validation rejects the duplicate name.

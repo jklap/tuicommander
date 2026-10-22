@@ -821,7 +821,7 @@ describe("useGitOperations", () => {
 		it("rejected_confirmation_then_second_removal_proceeds", async () => {
 			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
 			repositoriesStore.setWorkspace("/repo", "feature", { worktreePath: "/repo/wt" });
-			const id = terminalsStore.add(makeTerminal({ name: "T1" }));
+			const id = terminalsStore.add(makeTerminal({ name: "T1", cwd: "/repo/wt" }));
 			repositoriesStore.addTerminalToWorkspace("/repo", "feature", id);
 			const dialogError = new Error("confirmation failed");
 			mockDialogs.confirmRemoveWorktree.mockRejectedValueOnce(dialogError);
@@ -846,7 +846,7 @@ describe("useGitOperations", () => {
 		it("throwing_confirmation_after_preflight_preserves_workspace_and_permits_retry", async () => {
 			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
 			repositoriesStore.setWorkspace("/repo", "feature", { worktreePath: "/repo/wt" });
-			const id = terminalsStore.add(makeTerminal({ name: "T1" }));
+			const id = terminalsStore.add(makeTerminal({ name: "T1", cwd: "/repo/wt" }));
 			repositoriesStore.addTerminalToWorkspace("/repo", "feature", id);
 			const dialogError = new Error("dialog threw");
 			mockDialogs.confirmRemoveWorktree.mockImplementationOnce(() => {
@@ -873,7 +873,7 @@ describe("useGitOperations", () => {
 		it("false_confirmation_preserves_workspace_and_terminals_and_permits_retry", async () => {
 			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
 			repositoriesStore.setWorkspace("/repo", "feature", { worktreePath: "/repo/wt" });
-			const id = terminalsStore.add(makeTerminal({ name: "T1" }));
+			const id = terminalsStore.add(makeTerminal({ name: "T1", cwd: "/repo/wt" }));
 			repositoriesStore.addTerminalToWorkspace("/repo", "feature", id);
 			mockDialogs.confirmRemoveWorktree.mockResolvedValueOnce(false);
 
@@ -2730,7 +2730,7 @@ describe("useGitOperations", () => {
 		it("closes branch terminals before removing", async () => {
 			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
 			repositoriesStore.setWorkspace("/repo", "feature", { worktreePath: "/repo/wt" });
-			const id = terminalsStore.add(makeTerminal({ name: "T1" }));
+			const id = terminalsStore.add(makeTerminal({ name: "T1", cwd: "/repo/wt" }));
 			repositoriesStore.addTerminalToWorkspace("/repo", "feature", id);
 
 			await gitOps.handleRemoveWorkspace("/repo", "feature");

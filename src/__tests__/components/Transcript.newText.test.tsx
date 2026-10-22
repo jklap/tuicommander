@@ -1,4 +1,6 @@
 // @vitest-environment jsdom
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { cleanup, fireEvent, render } from "@solidjs/testing-library";
 import { createSignal } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -51,6 +53,36 @@ afterEach(() => {
 });
 
 describe("Transcript new text", () => {
+	// Catches: unread output reserving a full-width layout row instead of floating above the composer.
+	it.each([false, true])(
+		"floats the new-text badge inside the transcript viewport without a layout row (mobile=%s)",
+		async (mobile) => {
+			const style = document.createElement("style");
+			style.textContent = readFileSync(
+				resolve(process.cwd(), "src/components/AIChatPanel/AIChatPanel.module.css"),
+				"utf8",
+			);
+			document.head.append(style);
+			try {
+				const view = await setup(mobile);
+				view.scroll(300);
+				append(" Unread output.");
+				await Promise.resolve();
+				const badge = view.getByRole("button", { name: "New text below" });
+				expect(getComputedStyle(badge).position).toBe("absolute");
+				expect(getComputedStyle(badge).right).toBe("12px");
+				expect(getComputedStyle(badge).bottom).toBe("8px");
+				const viewport = view.transcript.parentElement!;
+				expect(badge.parentElement).toBe(viewport);
+				expect(getComputedStyle(viewport).position).toBe("relative");
+				expect(view.transcript.contains(badge)).toBe(false);
+				expect(viewport.children).toHaveLength(2);
+				expect(badge.querySelector("svg")).not.toBeNull();
+			} finally {
+				style.remove();
+			}
+		},
+	);
 	// Catches: streaming into an existing message being missed, or clicking the pill leaving follow disabled.
 	it.each([false, true])(
 		"shows detached streaming text and resumes follow after clicking (mobile=%s)",

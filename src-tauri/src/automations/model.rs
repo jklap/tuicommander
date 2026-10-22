@@ -34,6 +34,9 @@ pub struct AutomationDefinition {
     /// One wall-clock occurrence in `timezone`; cron must be empty when present.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub once_local: Option<chrono::NaiveDateTime>,
+    /// Exact host-resolved relative occurrence, including the later side of a DST fold.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub once_at: Option<chrono::DateTime<chrono::Utc>>,
     #[serde(default)]
     pub timezone: String,
     pub enabled: bool,
@@ -126,6 +129,23 @@ impl AutomationDefinition {
 
     /// Resolve either cron or Once using the stored timezone.
     pub fn schedule(&self) -> Result<super::schedule::AutomationSchedule, String> {
+        if let Some(instant) = self.once_at {
+            if instant.timestamp_subsec_nanos() >= 1_000_000_000 {
+                return Err("Automation Once does not support leap seconds".into());
+            }
+            let zone: chrono_tz::Tz = self
+                .timezone
+                .parse()
+                .map_err(|_| "Invalid automation timezone")?;
+            if !self.cron.is_empty()
+                || self.once_local != Some(instant.with_timezone(&zone).naive_local())
+            {
+                return Err(
+                    "Automation once_at must match once_local and timezone, without cron".into(),
+                );
+            }
+            return Ok(super::schedule::AutomationSchedule::Once(instant));
+        }
         super::schedule::AutomationSchedule::parse(&self.cron, &self.timezone, self.once_local)
     }
 

@@ -80,3 +80,12 @@ describe("Activity Dashboard subagent marker", () => {
 		expect(screen.getAllByRole("img", { name: /Spawned by/ })).toHaveLength(1);
 	});
 });
+
+// Catches: the overlay footer reintroduces always-visible interaction instructions.
+it("renders the activity dashboard without invented guidance", () => {
+	activityDashboardStore.open();
+	const view = render(() => <ActivityDashboard terminals={() => []} />);
+	expect(view.container.textContent).toContain("0 terminal(s)");
+	expect(view.container.textContent).not.toContain("Click to switch • Esc to close");
+	activityDashboardStore.close();
+});

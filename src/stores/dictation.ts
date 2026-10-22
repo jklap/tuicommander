@@ -1,4 +1,4 @@
-import { createStore } from "solid-js/store";
+import { createStore, reconcile } from "solid-js/store";
 import { invoke, listen } from "../invoke";
 import { reportSettingsConflicts, settingsRefresh } from "../services/settingsRefresh";
 import { isTauri } from "../transport";
@@ -684,11 +684,20 @@ function createDictationStore() {
 
 	const actions = {
 		startRemoteSync(): () => void {
-			return settingsRefresh.register({
+			const stopVoice = settingsRefresh.register({
 				section: "voice",
 				read: () => invoke<DictationConfig>("get_dictation_config"),
 				apply: (config) => applyRemoteConfig(config, true),
 			});
+			const stopCorrections = settingsRefresh.register({
+				section: "corrections",
+				read: () => invoke<Record<string, string>>("get_correction_map"),
+				apply: (map) => setState("corrections", reconcile(map)),
+			});
+			return () => {
+				stopVoice();
+				stopCorrections();
+			};
 		},
 		/** Load config from Rust backend (file-based) */
 		async refreshConfig(): Promise<void> {
@@ -916,7 +925,7 @@ function createDictationStore() {
 		async refreshCorrections(): Promise<void> {
 			try {
 				const map = await invoke<Record<string, string>>("get_correction_map");
-				setState("corrections", map);
+				setState("corrections", reconcile(map));
 			} catch (err) {
 				appLogger.error("dictation", "Failed to get correction map", err);
 			}
@@ -926,7 +935,7 @@ function createDictationStore() {
 		async saveCorrections(map: Record<string, string>): Promise<void> {
 			try {
 				await invoke("set_correction_map", { map });
-				setState("corrections", map);
+				setState("corrections", reconcile(map));
 			} catch (err) {
 				appLogger.error("dictation", "Failed to save corrections", err);
 			}

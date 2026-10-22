@@ -1,11 +1,32 @@
 {
   "type": "choice-prompt",
-  "title": "Boss, scegli rosso o blu?",
+  "title": "Pick a color.",
   "options": [
-    { "key": "1", "label": "Rosso", "highlighted": true, "destructive": false },
-    { "key": "2", "label": "Blu", "highlighted": false, "destructive": false },
-    { "key": "3", "label": "Other", "highlighted": false, "destructive": false }
+    {
+      "key": "1",
+      "label": "Red",
+      "highlighted": true,
+      "destructive": false
+    },
+    {
+      "key": "2",
+      "label": "Green",
+      "highlighted": false,
+      "destructive": false
+    },
+    {
+      "key": "3",
+      "label": "Blue",
+      "highlighted": false,
+      "destructive": false
+    },
+    {
+      "key": "4",
+      "label": "Other",
+      "highlighted": false,
+      "destructive": false
+    }
   ],
   "dismiss_key": "ctrl+]",
-  "amend_key": "alt+down"
+  "amend_key": "shift+right"
 }

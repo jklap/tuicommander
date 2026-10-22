@@ -1187,22 +1187,6 @@ pub async fn get_recent_branches(
         .map_err(|e| format!("spawn_blocking join error: {e}"))?
 }
 
-/// Rich context for the Git Operations Panel (single IPC round-trip).
-#[derive(Debug, Clone, Serialize)]
-pub struct GitPanelContext {
-    pub branch: String,
-    pub is_detached: bool,
-    pub status: String, // "clean", "dirty", "conflict"
-    pub ahead: Option<u32>,
-    pub behind: Option<u32>,
-    pub staged_count: u32,
-    pub changed_count: u32,
-    pub stash_count: u32,
-    pub last_commit: Option<RecentCommit>,
-    pub in_rebase: bool,
-    pub in_cherry_pick: bool,
-}
-
 /// Core logic for fetching git panel context (no caching, no Tauri state).
 /// CLI status counts via `git status --porcelain=v2` (staged/changed/conflict).
 /// Untracked entries count toward `changed` (matches the panel's prior behavior).
@@ -1287,96 +1271,6 @@ pub fn ahead_behind_cli(repo: &Path, left: &str, right: &str) -> Result<(u32, u3
         return Ok((a, b));
     }
     Err(format!("unexpected rev-list output: {:?}", out.stdout))
-}
-
-pub fn get_git_panel_context_impl(path: &Path) -> GitPanelContext {
-    let git_dir = resolve_git_dir(path);
-
-    // Branch & detached state
-    let head_branch = read_branch_from_head(path);
-    let is_detached = head_branch.is_none();
-    let branch = head_branch.unwrap_or_else(|| {
-        // Detached HEAD: show short hash
-        git_cmd(path)
-            .args(["rev-parse", "--short", "HEAD"])
-            .run_silent()
-            .map(|o| o.stdout.trim().to_string())
-            .unwrap_or_default()
-    });
-
-    // Status (porcelain v2 for staged vs unstaged), routed through the port.
-    let counts = git_reads().status_counts(path);
-    let (status, staged_count, changed_count) = (counts.status, counts.staged, counts.changed);
-
-    // Ahead/behind (only when there's an upstream)
-    let (ahead, behind) = if !is_detached {
-        git_cmd(path)
-            .args([
-                "rev-list",
-                "--left-right",
-                "--count",
-                &format!("{branch}...{branch}@{{u}}"),
-            ])
-            .run_silent()
-            .and_then(|o| {
-                let parts: Vec<&str> = o.stdout.trim().split('\t').collect();
-                if parts.len() == 2 {
-                    Some((parts[0].parse::<u32>().ok(), parts[1].parse::<u32>().ok()))
-                } else {
-                    None
-                }
-            })
-            .unwrap_or((None, None))
-    } else {
-        (None, None)
-    };
-
-    // Stash count
-    let stash_count = git_cmd(path)
-        .args(["stash", "list"])
-        .run_silent()
-        .map(|o| o.stdout.lines().count() as u32)
-        .unwrap_or(0);
-
-    // Last commit
-    let last_commit = git_cmd(path)
-        .args(["log", "--format=%H%x00%h%x00%s", "-n", "1"])
-        .run_silent()
-        .and_then(|o| {
-            let parts: Vec<&str> = o.stdout.trim().splitn(3, '\0').collect();
-            if parts.len() == 3 {
-                Some(RecentCommit {
-                    hash: parts[0].to_string(),
-                    short_hash: parts[1].to_string(),
-                    subject: parts[2].to_string(),
-                })
-            } else {
-                None
-            }
-        });
-
-    // Rebase / cherry-pick detection via .git directory markers
-    let (in_rebase, in_cherry_pick) = match &git_dir {
-        Some(gd) => (
-            gd.join("rebase-merge").exists() || gd.join("rebase-apply").exists(),
-            gd.join("CHERRY_PICK_HEAD").exists(),
-        ),
-        None => (false, false),
-    };
-
-    GitPanelContext {
-        branch,
-        is_detached,
-        status,
-        ahead,
-        behind,
-        staged_count,
-        changed_count,
-        stash_count,
-        last_commit,
-        in_rebase,
-        in_cherry_pick,
-    }
 }
 
 // --- Working tree status (porcelain v2) ---
@@ -3961,18 +3855,6 @@ mod tests {
         let (_dir, repo) = history_fixture_repo(1);
         let result = get_last_commit_timestamps(&repo, &[]);
         assert!(result.is_empty());
-    }
-
-    // --- get_git_panel_context_impl tests ---
-
-    #[test]
-    fn git_panel_context_nonexistent_repo_returns_defaults() {
-        let ctx = get_git_panel_context_impl(Path::new("/nonexistent/repo"));
-        assert!(ctx.branch.is_empty(), "branch should be empty for non-repo");
-        assert_eq!(ctx.staged_count, 0);
-        assert_eq!(ctx.changed_count, 0);
-        assert_eq!(ctx.stash_count, 0);
-        assert!(ctx.last_commit.is_none());
     }
 
     // --- parse_commit_log_line tests ---

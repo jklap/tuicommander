@@ -301,3 +301,58 @@ fn add_replaces_orphan_vault_entry_for_unconfigured_name() {
     );
     delete_upstream_credential("orphan-add-lifecycle").unwrap();
 }
+
+// Catches: durable vault writes followed by failed config persistence losing their refresh hint.
+#[cfg(unix)]
+#[tokio::test]
+#[serial_test::serial]
+async fn legacy_upstream_partial_vault_persistence_publishes_unapplied_hint() {
+    use std::os::unix::fs::PermissionsExt;
+    let tmp = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+    let _guard = crate::config::set_config_dir_override(tmp.path().to_path_buf());
+    crate::credentials::reset_test_faults();
+    let state = std::sync::Arc::new(crate::state::tests_support::make_test_app_state());
+    let base = UpstreamMcpConfig::default();
+    ConfigFile::<UpstreamMcpConfig>::new(UPSTREAMS_FILE)
+        .save(&base)
+        .unwrap();
+    let desired = UpstreamMcpConfig {
+        servers: vec![server(
+            "partial-new",
+            "partial-legacy-publisher",
+            "https://example.com/mcp",
+        )],
+    };
+    let mut events = state.event_bus.subscribe();
+    let permissions = std::fs::metadata(tmp.path()).unwrap().permissions();
+    std::fs::set_permissions(tmp.path(), std::fs::Permissions::from_mode(0o500)).unwrap();
+    let result = save_mcp_upstreams_with_credentials_inner(
+        base.clone(),
+        desired,
+        vec![secret("partial-new", "partial-secret-canary")],
+        &state,
+    )
+    .await;
+    std::fs::set_permissions(tmp.path(), permissions).unwrap();
+    assert!(result.unwrap_err().contains("Failed to write temp file"));
+    assert_eq!(load_mcp_upstreams(), base);
+    assert!(
+        read_credential_for_url("partial-legacy-publisher", "https://example.com/mcp")
+            .unwrap()
+            .is_none()
+    );
+    let notice = std::iter::from_fn(|| events.try_recv().ok())
+        .find_map(|event| match event {
+            crate::state::AppEvent::SettingsChanged(notice) => Some(notice),
+            _ => None,
+        })
+        .expect("partial vault persistence must invalidate readers even after rollback");
+    assert_eq!(notice.section, "upstreams");
+    assert!(notice.persisted);
+    assert!(!notice.applied);
+    assert!(
+        !serde_json::to_string(&notice)
+            .unwrap()
+            .contains("partial-secret-canary")
+    );
+}

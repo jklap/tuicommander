@@ -105,3 +105,51 @@ it("falls back to the raw code for a code it does not know", () => {
 	dictate().onerror?.({ error: "bad-grammar" });
 	expect(vi.mocked(toastsStore.add).mock.calls[0][1]).toContain("bad-grammar");
 });
+
+// Catches: mobile lifecycle debug records never reach the owner, lose their order/identity,
+// or grow per hypothesis so the next stuck-take trace cannot be reconstructed.
+it("mirrors one bounded ordered lifecycle for an error then end, with session and take identity", async () => {
+	const debugOutput = vi.spyOn(console, "debug").mockImplementation(() => {});
+	try {
+		const current = dictate();
+		const result = current.onresult!;
+		const error = current.onerror!;
+		const end = current.onend!;
+		result({ results: [{ 0: { transcript: "private first hypothesis" }, isFinal: false }] });
+		result({ results: [{ 0: { transcript: "private later hypothesis" }, isFinal: false }] });
+		error({ error: "network" });
+		error({ error: "aborted" });
+		end();
+		end();
+		await flush();
+		const lifecycle = () => serverLines().filter((line) => line.level === "debug");
+		const first = lifecycle().map((line) => JSON.parse(line.dataJson ?? "{}"));
+		expect(first.map((entry) => entry.event)).toEqual([
+			"start",
+			"first-result",
+			"error",
+			"abort-requested",
+			"end",
+			"ownership-release",
+		]);
+		expect(first.map((entry) => entry.sequence)).toEqual([1, 2, 3, 4, 5, 6]);
+		const takeId = first[0].takeId;
+		expect(takeId).toEqual(expect.any(String));
+		expect(takeId.length).toBeGreaterThan(0);
+		for (const entry of first) expect(entry).toMatchObject({ sessionId: "errors", takeId });
+		expect(first[2].code).toBe("network");
+		expect(first[5].recording).toBe(false);
+		expect(JSON.stringify(first)).not.toContain("private");
+		// A new take must remain distinguishable even in one browser/session.
+		dictate().onend?.();
+		await flush();
+		const second = lifecycle()
+			.slice(6)
+			.map((line) => JSON.parse(line.dataJson ?? "{}"));
+		expect(second.map((entry) => entry.event)).toEqual(["start", "end", "ownership-release"]);
+		expect(second.map((entry) => entry.sequence)).toEqual([1, 2, 3]);
+		expect(second[0].takeId).not.toBe(takeId);
+	} finally {
+		debugOutput.mockRestore();
+	}
+});

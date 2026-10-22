@@ -66,14 +66,21 @@ pub(crate) fn publish(
     if transition(run).is_none() {
         return false;
     }
+    if run.status == RunStatus::Failed {
+        notify_owner(state, store, run);
+    }
     let allowed = enabled(config, run);
     let title = format!("{} · {}", run.definition.name, transition(run).unwrap());
     let body = format!(
-        "Run {}{}",
+        "Run {}{}{}",
         run.id,
         run.session_id
             .as_ref()
             .map(|id| format!(" · Session {id}"))
+            .unwrap_or_default(),
+        run.reason
+            .as_ref()
+            .map(|reason| format!(" · {reason}"))
             .unwrap_or_default()
     );
     #[cfg(feature = "desktop")]
@@ -133,6 +140,35 @@ pub(crate) fn publish(
         crate::telegram::automation_notice(store.clone(), run.clone(), format!("{title}\n{body}"));
     }
     bell
+}
+
+fn notify_owner(state: &Arc<AppState>, store: &RunStore, run: &AutomationRun) {
+    let Some(creator) = run.definition.created_by_session.as_deref() else {
+        return;
+    };
+    // Claim before offering mail: an ambiguous send must not create a retry storm.
+    if !claim(store, run, "owner").unwrap_or(false) {
+        return;
+    }
+    let queued = crate::mcp_http::mcp_transport::queue_peer_notice(
+        state,
+        creator,
+        crate::state::AgentMessage {
+            id: format!("automation-failed:{}", run.id),
+            from_tuic_session: "tuic".into(),
+            from_name: "automations".into(),
+            content: serde_json::json!({
+                "type":"automation_run_failed", "run_id":run.id,
+                "definition_id":run.definition.id, "name":run.definition.name,
+                "reason":run.reason,
+            })
+            .to_string(),
+            timestamp: chrono::Utc::now().timestamp_millis().max(0) as u64,
+            delivered_via_channel: false,
+        },
+    );
+    // Confirm inbox acceptance, not that an agent or a human consumed the message.
+    settle(store, run, "owner", queued);
 }
 
 #[cfg(test)]

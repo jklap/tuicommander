@@ -110,7 +110,7 @@ pub(crate) fn suspend_with_reason(
             .filter(|entry| entry.key() != session_id)
             .filter_map(|entry| entry.value()["agentSessionId"].as_str().map(str::to_string))
             .collect();
-        let found = crate::agent_session::discover_agent_session(
+        let found = crate::agent_session::discover_agent_session_blocking(
             agent.clone(),
             record.cwd.clone(),
             claimed,
