@@ -441,3 +441,116 @@ All temporary Rust and frontend observers were restored byte-for-byte. The final
 lifecycle reports zero measurement sessions, owned tab and named daemon closure,
 and exact isolated instance stop exit 0. No shared Chrome or daily app process
 was stopped. No source fix, suite, GREEN, mutation or cross-target claim is made.
+
+
+## Follow-up: TCP_NODELAY and standalone browser controls
+
+The coordinator requested the server socket policy plus a standalone WebSocket
+baseline in the same Chrome. The result distinguishes unsolicited push from the
+trusted-input/request/echo path; treating those as equivalent would give a false
+TUIC attribution.
+
+### TCP_NODELAY is not selected by this HTTP listener
+
+The actual run logs identify the HTTP-only listener. Its source constructs
+`axum_server::from_tcp(listener)` at `src-tauri/src/mcp_http/mod.rs:2990`, then
+calls `server.serve(svc)` at line 2997, without selecting an acceptor. The lockfile
+pins `axum-server` 0.8.0 (`src-tauri/Cargo.lock:560`). Its installed source is under
+`~/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/axum-server-0.8.0/`:
+
+- `src/server.rs:70`: `Server::from_listener(TcpListener::from_std(listener)?)`.
+- `src/server.rs:165–166`: `from_listener` chooses `DefaultAcceptor::new()`.
+- `src/accept.rs:42`: that acceptor returns `Ok((stream, service))`, unchanged.
+- `src/accept.rs:63`: the separate opt-in `NoDelayAcceptor` calls
+  `stream.set_nodelay(true)`; the measured HTTP branch did not select it.
+
+The temporary experiment selected
+`server.acceptor(axum_server::accept::NoDelayAcceptor::new())` on that HTTP-only
+branch and reran the same 20-key randomized, no-screencast arm. This change and all
+observers were restored after acquisition. The TLS branch was not measured and
+no TLS-wide claim is made.
+
+| Observation (median / p95 / maximum) | Original HTTP arm | Temporary NODELAY arm |
+| --- | ---: | ---: |
+| Server WS send completion → browser message | 7.796 / 15.253 / 16.734 ms | 9.817 / 16.098 / 16.262 ms |
+| Browser arrival phase after previous rAF | 1.000 / 2.100 / 2.500 ms | 0.900 / 2.100 / 2.200 ms |
+| Accepted frame → actual rAF entry | 15.650 / 16.300 / 17.100 ms | 15.600 / 16.200 / 16.300 ms |
+| Trusted event → matching fill | 25.800 / 34.700 / 37.700 ms | 29.100 / 34.200 / 34.300 ms |
+
+NODELAY did not remove the phase concentration or meet the fill-p95 target. These
+small sequential samples do not establish an overall performance regression or
+improvement. They do reject NODELAY as an explanation of the observed phase lock.
+No NODELAY production change was retained.
+
+### Standalone controls outside TUIC
+
+A dependency-free Node HTTP/WebSocket server and tiny page live only under
+`~/Gits/.tmp/2040-web/baseline/`. The server performs the WebSocket handshake,
+writes server frames, explicitly sets `socket.setNoDelay(true)`, and records send
+begin/completion. The page records message arrival and actual rAF callback entry.
+It loads no TUIC JavaScript. Each arm uses the same shared Chrome engine, its own
+wrapper-owned tab, visible document and 1400×900 CSS viewport. No screencast runs
+while these samples are collected. There are 20 messages in each arm.
+
+Three controls avoid a misleading text-only or inactive-input comparison:
+
+1. **Unsolicited text:** the minimal server sends JSON at seeded randomized
+   intervals, with no user input or application code.
+2. **Unsolicited binary under traffic:** ArrayBuffer messages, 1,510-byte key-like
+   payloads and 57,239-byte background frames every 100 ms. The page decodes JSON
+   and ignores background frames. This controls binary framing and approximate
+   grid wire traffic without TUIC rendering.
+3. **Trusted input → HTTP → binary echo:** the same tiny binary page adds a plain
+   input and a keydown handler that POSTs the key to `/input`; the Node server
+   immediately writes it to the WebSocket. CDP supplies 20 trusted keydown events
+   at the same randomized intervals. There is no terminal, Rust, Solid store,
+   grid decoder, frame gate or TUIC code. Background traffic is unchanged.
+
+| Standalone control | Arrival phase median / p95 / range | Message → next rAF median / p95 / range |
+| --- | ---: | ---: |
+| Unsolicited text | 8.050 / 15.700 / 1.500–15.800 ms | 8.650 / 14.600 / 0.800–15.200 ms |
+| Unsolicited binary + background | 9.850 / 16.100 / 0.600–16.300 ms | 6.850 / 15.400 / 0.300–16.200 ms |
+| Trusted-key HTTP/binary echo | 1.100 / 2.100 / 0.200–2.100 ms | 15.150 / 16.300 / 5.300–16.400 ms |
+
+The first two unsolicited controls are spread across the frame period. The third
+**reproduces the tight post-rAF arrival concentration without TUIC**. All 20
+input events in that control report `isTrusted=true`. Its server-send → browser
+arrival median/p95/max is 1.590/14.748/15.857 ms, versus 0.196/0.246/0.279 ms for
+unsolicited text and 0.418/0.767/0.823 ms for unsolicited binary. The input/echo
+control therefore reproduces both delayed delivery and the nearly-full-period
+next-rAF wait outside the application.
+
+This is decisive against attributing the alignment to TUIC merely because the
+unsolicited baseline is uniform. A key-driven round trip is not an unsolicited
+push. The observed residual is reproducible in the standalone Chrome input/HTTP/
+WebSocket path. The controls do not isolate Chromium's precise internal scheduling
+policy or separate the trusted-input effect from the input-triggered HTTP request;
+no undocumented browser mechanism is asserted as fact. They do show that TUIC
+business logic, its grid queue, its frame acknowledgements and its socket NODELAY
+policy are not required to produce this phase concentration.
+
+No repairable TUIC scheduling defect was isolated, so no production fix or RED was
+fabricated. Painting outside rAF would remain a product scheduling trade-off,
+not repair of a TUIC-specific extra queue proven by this evidence. The original
+one-frame/help/non-regression criteria remain unmet; no post-fix `seq` ratio is
+claimed. The coordinator owns the scope decision.
+
+### Evidence and cleanup
+
+`~/Gits/.tmp/2040-web/nodelay/` retains the exact observer patch, original source
+backups, native log, acquisition and analyzers; `no-capture/` holds all per-key
+frontend/server timelines and distributions. Its session was
+`535a280b-09b1-4883-858f-d0044e33705d`.
+
+`baseline/`, `baseline/binary/` and `baseline/echo/` each retain standalone server
+and runner source, raw `probe.json`, screenshot, owned browser identity, server
+PID/port record and `lifecycle.json`. `baseline/analysis.json` compares all three.
+The first baseline runner attempt blocked its own Node HTTP event loop while
+waiting synchronously for browser navigation. It timed out; its owned tab/daemon
+were closed. Moving the server to a recorded child process removed that harness
+deadlock. That attempt supplied no timing samples.
+
+All successful controls closed their owned tabs/daemons and stopped their recorded
+server child. The NODELAY lifecycle records zero remaining terminal sessions and
+exact isolated instance stop exit 0. All temporary production source was restored
+byte-for-byte, and no daily app/shared Chrome process was stopped or replaced.
