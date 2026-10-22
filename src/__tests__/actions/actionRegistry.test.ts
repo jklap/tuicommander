@@ -9,6 +9,7 @@ import { automationsUi } from "../../stores/automations";
 import { dictationStore } from "../../stores/dictation";
 import { progressStore } from "../../stores/progress";
 import { repositoriesStore } from "../../stores/repositories";
+import { storiesUi } from "../../stores/storiesUi";
 import { mockInvoke } from "../mocks/tauri";
 
 /** Turn dictation on the way the app does: by reading the backend config. */
@@ -284,4 +285,16 @@ it("does not strand scheduled runs without an Automations palette entry", () => 
 	entry?.execute();
 	expect(automationsUi.visible()).toBe(true);
 	automationsUi.close();
+});
+
+// Catches: Plans and Stories is reachable only from the toolbar button, so the palette cannot open it.
+it("opens Plans and Stories for the active repo from the palette", () => {
+	const entry = getActionEntries(createMockHandlers()).find((action) => action.id === "plans-stories");
+	expect(entry?.label).toBe("Plans and Stories");
+	repositoriesStore.add({ path: "/repo-stories", displayName: "Stories Repo" });
+	repositoriesStore.setActive("/repo-stories");
+	entry?.execute();
+	expect(storiesUi.visible()).toBe(true);
+	expect(storiesUi.project()).toBe("/repo-stories");
+	storiesUi.close();
 });
