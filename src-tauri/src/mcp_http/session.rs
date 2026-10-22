@@ -90,6 +90,31 @@ pub(crate) fn live_tuic_sessions_by_pty(
     by_pty
 }
 
+/// Publish PTY creation to the native frontend at the same boundary for
+/// generic HTTP sessions and HTTP/MCP agent spawns.
+#[cfg(feature = "desktop")]
+pub(super) fn emit_native_agent_session_created(
+    emit: impl FnOnce(&str, serde_json::Value),
+    state: &AppState,
+    session_id: &str,
+    cwd: Option<&str>,
+    agent_type: Option<&str>,
+    display_name: Option<&str>,
+    parent_session: Option<&str>,
+) {
+    emit(
+        "session-created",
+        serde_json::json!({
+            "session_id": session_id,
+            "tuic_session": live_tuic_sessions_by_pty(state).remove(session_id),
+            "cwd": cwd,
+            "agent_type": agent_type,
+            "display_name": display_name,
+            "parent_session": parent_session,
+        }),
+    );
+}
+
 /// Every PTY session this machine runs, as session-list rows.
 ///
 /// One builder for both transports: `GET /sessions` and the `list_active_sessions`
@@ -102,13 +127,21 @@ pub(crate) fn local_session_rows(state: &AppState) -> Vec<SessionInfo> {
         .session_maps
         .sessions
         .iter()
-        .map(|entry| {
-            let session_id = entry.key().clone();
+        .map(|entry| entry.key().clone())
+        .collect::<Vec<_>>()
+        .into_iter()
+        .filter_map(|session_id| {
+            let entry = state.session_maps.sessions.get(&session_id)?;
             let session = entry.value().lock();
             let declared = tuic_by_pty
                 .get(&session_id)
                 .and_then(|peer| super::session_placement::declared_worktree(&repositories, peer));
-            SessionInfo {
+            let mut row = SessionInfo {
+                child_pid: if state.session_maps.exit_codes.contains_key(&session_id) {
+                    None
+                } else {
+                    session._child.process_id()
+                },
                 cwd: session.cwd.clone(),
                 worktree_path: declared.as_ref().map(|(path, _)| path.clone()).or_else(|| {
                     session
@@ -140,10 +173,16 @@ pub(crate) fn local_session_rows(state: &AppState) -> Vec<SessionInfo> {
                     .get(&session_id)
                     .map(|value| value.value().clone())
                     .filter(|parent| !super::mcp_transport::is_pending_parent(parent)),
-                state: state.session_state_with_shell(&session_id),
+                state: None,
                 connection_id: None,
                 session_id,
-            }
+            };
+            // Native Codex validation probes the live PTY again. Release both
+            // the session mutex and map guard before taking that snapshot.
+            drop(session);
+            drop(entry);
+            row.state = state.session_state_with_shell(&row.session_id);
+            Some(row)
         })
         .collect()
 }
@@ -282,6 +321,7 @@ pub(crate) fn write_pty_input_parts(
     let transaction = state.input_transaction(session_id);
     let _input = transaction.lock();
     let byte_parts: Vec<&[u8]> = parts.iter().map(|part| part.as_bytes()).collect();
+    crate::pty::stamp_input_ms(state, session_id);
     state.write_pty_parts(session_id, &byte_parts)?;
 
     for part in parts {
@@ -320,6 +360,7 @@ pub(crate) fn write_pty_input_pair(
         .ok_or_else(|| "Session not found".to_string())?;
     let mut writer = writer.lock();
     state.retire_turn_interrupt(session_id);
+    crate::pty::stamp_input_ms(state, session_id);
     writer
         .write_all(text.as_bytes())
         .map_err(|error| format!("Write failed: {error}"))?;
@@ -327,6 +368,7 @@ pub(crate) fn write_pty_input_pair(
         .flush()
         .map_err(|error| format!("Flush failed: {error}"))?;
     crate::pty::sleep_agent_enter_gap(agent_type);
+    crate::pty::stamp_input_ms(state, session_id);
     writer
         .write_all(key.as_bytes())
         .map_err(|error| format!("Write failed: {error}"))?;
@@ -349,6 +391,7 @@ fn write_pty_input_bytes(
     crate::background_mode::hidden::record_remote_activity(state, session_id);
     let transaction = state.input_transaction(session_id);
     let _input = transaction.lock();
+    crate::pty::stamp_input_ms(state, session_id);
     state.write_pty_parts(session_id, &[data])?;
     crate::pty_capture::record_input(session_id, data);
     if let Ok(text) = std::str::from_utf8(data) {
@@ -364,7 +407,7 @@ fn write_pty_input_bytes(
 pub(crate) fn apply_input_bookkeeping(state: &Arc<AppState>, session_id: &str, data: &str) {
     // Stamp last-input time (same as desktop write_pty) so the grid ticker
     // throttles frames for remote/PWA typing under CPU saturation too.
-    crate::pty::stamp_input_ms(state, session_id);
+    crate::pty::record_input_ms(state, session_id);
     crate::state::resolve_choice_prompt_input(state, session_id, data);
 
     // Feed input through InputLineBuffer FSM to track slash_mode accurately.
@@ -524,15 +567,17 @@ pub(super) async fn get_output(
     // Both local MCP and the remote proxy use the same serializer, including
     // cursor windows, secret redaction and retained output after PTY exit.
     if matches!(format, "mcp" | "mcp_raw") {
-        let result = super::mcp_transport::session_output(
-            &state,
-            &serde_json::json!({
-                "action": "output", "session_id": session_id,
-                "format": if format == "mcp_raw" { "raw" } else { "text" },
-                "limit": query.limit, "from_line": query.from_line,
-                "since_cursor": query.since_cursor, "from_byte": query.from_byte,
-            }),
-        );
+        let mut args = serde_json::json!({
+            "action": "output", "session_id": session_id,
+            "format": if format == "mcp_raw" { "raw" } else { "text" },
+            "limit": query.limit, "from_line": query.from_line,
+            "since_cursor": query.since_cursor, "from_byte": query.from_byte,
+            "byte_budget": query.byte_budget, "continuation": query.continuation,
+        });
+        args.as_object_mut()
+            .expect("output arguments")
+            .retain(|_, value| !value.is_null());
+        let result = super::mcp_transport::session_output(&state, &args);
         return (
             if result.get("error").is_some() {
                 StatusCode::NOT_FOUND
@@ -630,37 +675,20 @@ pub(super) async fn close_session(
     State(state): State<Arc<AppState>>,
     Path(session_id): Path<String>,
 ) -> impl IntoResponse {
-    if state.session_maps.sessions.contains_key(&session_id) {
-        // Broadcast to SSE/WebSocket consumers BEFORE cleanup: cleanup_session reaps
-        // this session's per-session PTY channel, so the closed frame must be emitted
-        // while the channel still exists. broadcast keeps the buffered frame available
-        // to live subscribers even after the sender is dropped, so they drain the
-        // "closed" frame and THEN see the channel close (no lost close notification).
-        tracing::info!(source = "session", session_id = %session_id, "Session closed: explicit close");
-        state.emit_pty_event(crate::state::AppEvent::SessionClosed {
-            session_id: session_id.clone(),
-            reason: "explicit_close".to_string(),
-        });
-        #[cfg(feature = "desktop")]
-        if let Some(app) = state.app_handle.read().as_ref() {
-            let _ = app.emit(
-                "session-closed",
-                serde_json::json!({
-                    "session_id": session_id,
-                    "reason": "explicit_close",
-                }),
-            );
-        }
-
-        let cleanup_session_id = session_id.clone();
-        let cleanup_state = state.clone();
+    if state.session_maps.sessions.contains_key(&session_id)
+        || state.grid.vt_log_buffers.contains_key(&session_id)
+    {
+        let cleanup_state = Arc::clone(&state);
         if let Err(error) = tokio::task::spawn_blocking(move || {
-            crate::pty::close_pty_core(&cleanup_state, &cleanup_session_id, false);
-            crate::pty::cleanup_session(&cleanup_session_id, &cleanup_state);
+            super::mcp_transport_session_agent::handle_session(
+                &cleanup_state,
+                &serde_json::json!({"action":"close", "session_id":session_id}),
+                None,
+            )
         })
         .await
         {
-            tracing::warn!(session_id = %session_id, "session cleanup task failed: {error}");
+            tracing::warn!(%error, "session cleanup task failed");
         }
 
         (StatusCode::OK, Json(serde_json::json!({"ok": true})))
@@ -765,6 +793,16 @@ pub(crate) struct RequestedIdentity {
     pub agent_type: Option<String>,
 }
 
+struct PtyLaunch {
+    shell: String,
+    cwd: Option<String>,
+    rows: u16,
+    cols: u16,
+    worktree: Option<crate::state::WorktreeInfo>,
+    requested: RequestedIdentity,
+    direct: Option<portable_pty::CommandBuilder>,
+}
+
 pub(crate) fn spawn_pty_session(
     state: Arc<AppState>,
     shell: String,
@@ -774,6 +812,85 @@ pub(crate) fn spawn_pty_session(
     worktree: Option<crate::state::WorktreeInfo>,
     requested: RequestedIdentity,
 ) -> Result<String, (StatusCode, Json<serde_json::Value>)> {
+    spawn_pty_launch(
+        state,
+        PtyLaunch {
+            shell,
+            cwd,
+            rows,
+            cols,
+            worktree,
+            requested,
+            direct: None,
+        },
+    )
+}
+
+/// Configured owner processes use argv directly, never shell command text.
+pub(crate) fn spawn_pty_command(
+    state: Arc<AppState>,
+    program: &std::path::Path,
+    cwd: &std::path::Path,
+    args: &[String],
+) -> Result<String, (StatusCode, Json<serde_json::Value>)> {
+    if state.session_maps.sessions.len() >= MAX_CONCURRENT_SESSIONS {
+        return Err((
+            StatusCode::TOO_MANY_REQUESTS,
+            Json(serde_json::json!({"error":"Max concurrent sessions reached"})),
+        ));
+    }
+    let mut command = portable_pty::CommandBuilder::new(program.as_os_str());
+    crate::pty::sanitize_pty_parent_env(&mut command);
+    command.args(args);
+    command.cwd(cwd);
+    command.env("TERM", "xterm-256color");
+    command.env("COLORTERM", "truecolor");
+    spawn_pty_launch(
+        state,
+        PtyLaunch {
+            shell: program.to_string_lossy().into_owned(),
+            cwd: Some(cwd.to_string_lossy().into_owned()),
+            rows: 24,
+            cols: 80,
+            worktree: None,
+            requested: RequestedIdentity::default(),
+            direct: Some(command),
+        },
+    )
+}
+
+fn spawn_pty_launch(
+    state: Arc<AppState>,
+    launch: PtyLaunch,
+) -> Result<String, (StatusCode, Json<serde_json::Value>)> {
+    #[cfg(feature = "desktop")]
+    let app_handle = state.app_handle.read().clone();
+    spawn_pty_launch_with_emitter(
+        state,
+        launch,
+        #[cfg(feature = "desktop")]
+        |event, payload| {
+            if let Some(app) = app_handle {
+                let _ = app.emit(event, payload);
+            }
+        },
+    )
+}
+
+fn spawn_pty_launch_with_emitter(
+    state: Arc<AppState>,
+    launch: PtyLaunch,
+    #[cfg(feature = "desktop")] emit: impl FnOnce(&str, serde_json::Value),
+) -> Result<String, (StatusCode, Json<serde_json::Value>)> {
+    let PtyLaunch {
+        shell,
+        cwd,
+        rows,
+        cols,
+        worktree,
+        requested,
+        direct,
+    } = launch;
     // portable-pty can report a successful spawn even when the child fails to
     // enter its requested directory. Reject that request before registering a
     // session that would otherwise render as an empty terminal.
@@ -808,6 +925,11 @@ pub(crate) fn spawn_pty_session(
             pixel_height: 0,
         },
         || {
+            if let Some(mut command) = direct {
+                crate::pty::bind_pty_identity(&state, &mut command, &session_id, None);
+                crate::pty::apply_agent_screen_env(&mut command, &std::collections::HashMap::new());
+                return command;
+            }
             let mut cmd = build_shell_command(&shell);
             if let Some(ref dir) = cwd {
                 let dir = crate::cli::expand_tilde(dir);
@@ -917,17 +1039,15 @@ pub(crate) fn spawn_pty_session(
     spawn_reader_thread(reader, paused, session_id.clone(), state, None);
 
     #[cfg(feature = "desktop")]
-    if let Some(app) = state_ref.app_handle.read().as_ref() {
-        let _ = app.emit(
-            "session-created",
-            serde_json::json!({
-                "session_id": session_id,
-                "tuic_session": requested.tuic_session,
-                "cwd": cwd,
-                "display_name": null,
-            }),
-        );
-    }
+    emit_native_agent_session_created(
+        emit,
+        &state_ref,
+        &session_id,
+        cwd.as_deref(),
+        None,
+        None,
+        None,
+    );
 
     Ok(session_id)
 }
@@ -2504,22 +2624,6 @@ pub(super) async fn terminal_get_cursor_line(
     }
 }
 
-pub(super) async fn terminal_hyperlink_at(
-    State(state): State<Arc<AppState>>,
-    Path(session_id): Path<String>,
-    Query(query): Query<super::types::TerminalCellQuery>,
-) -> impl IntoResponse {
-    match crate::pty::vt_try_read(&state, session_id, move |vt| {
-        vt.grid_hyperlink_at(query.row, query.col)
-    })
-    .await
-    {
-        Ok(Some(url)) => Json(serde_json::json!({"url": url})).into_response(),
-        Ok(None) => not_found_response(),
-        Err(e) => read_failed_response(&e),
-    }
-}
-
 pub(super) async fn terminal_request_frame(
     State(state): State<Arc<AppState>>,
     Path(session_id): Path<String>,
@@ -2553,6 +2657,82 @@ pub(super) async fn get_session_shell_family(
 
 #[cfg(test)]
 mod tests {
+    // Catches: POST /sessions binds the PTY key but publishes null to native
+    // tabs, so later worktree declarations cannot find the caller.
+    #[cfg(feature = "desktop")]
+    #[tokio::test]
+    async fn generic_post_sessions_created_event_retains_bound_identity() {
+        let state = super::super::tests::test_state();
+        let mut emitted = None;
+        let result = super::spawn_pty_launch_with_emitter(
+            state.clone(),
+            super::PtyLaunch {
+                shell: crate::test_support::host_shell().0.into(),
+                cwd: None,
+                rows: 24,
+                cols: 80,
+                worktree: None,
+                // Same absent caller identity as create_session (POST /sessions).
+                requested: super::RequestedIdentity::default(),
+                direct: None,
+            },
+            |event, payload| {
+                assert_eq!(event, "session-created");
+                emitted = Some(payload);
+            },
+        );
+        let session_id = result.expect("generic POST /sessions PTY must spawn");
+        let bound = super::live_tuic_sessions_by_pty(&state)
+            .remove(&session_id)
+            .expect("generic session must bind its identity");
+        crate::pty::close_pty_core(&state, &session_id, false);
+        let payload = emitted.expect("generic native creation must publish");
+        assert_eq!(bound, session_id);
+        assert_eq!(payload["session_id"], session_id);
+        assert_eq!(payload["tuic_session"], bound);
+    }
+
+    // Catches: native MCP/HTTP creation omits the live identity, so a new tab
+    // cannot match its caller's worktree declaration until reconnect.
+    #[cfg(feature = "desktop")]
+    #[test]
+    fn native_agent_created_event_retains_bound_identity() {
+        let state = crate::state::tests_support::make_test_app_state();
+        let mut command = portable_pty::CommandBuilder::new("unused");
+        crate::pty::bind_pty_identity(&state, &mut command, "pty-child", Some("stable-child"));
+        for expected in [Some("stable-child"), Some("pty-child"), None] {
+            match expected {
+                Some("pty-child") => {
+                    state.session_maps.live_pty_by_tuic_session.clear();
+                    crate::pty::bind_pty_identity(&state, &mut command, "pty-child", None);
+                }
+                None => state.session_maps.live_pty_by_tuic_session.clear(),
+                _ => {}
+            }
+            let mut emitted = None;
+            super::emit_native_agent_session_created(
+                |event, payload| {
+                    assert_eq!(event, "session-created");
+                    emitted = Some(payload);
+                },
+                &state,
+                "pty-child",
+                Some("/repo"),
+                Some("ego"),
+                Some("child"),
+                Some("parent"),
+            );
+            let payload = emitted.expect("native event must be emitted");
+            assert!(payload.get("tuic_session").is_some());
+            assert_eq!(payload["tuic_session"], serde_json::json!(expected));
+            assert_eq!(payload["session_id"], "pty-child");
+            assert_eq!(payload["cwd"], "/repo");
+            assert_eq!(payload["agent_type"], "ego");
+            assert_eq!(payload["display_name"], "child");
+            assert_eq!(payload["parent_session"], "parent");
+        }
+    }
+
     use super::*;
 
     /// Catches: HTTP detects a hand-launched agent but leaves the backend as a
@@ -3647,6 +3827,69 @@ mod tests {
     fn trim_empty_input() {
         let result = trim_screen_chrome(&[]);
         assert_eq!(result.cutoff, 0);
+    }
+
+    // Catches: mobile log capture or chrome trimming drops a tool header while
+    // later output remains visible under an older header.
+    #[test]
+    fn captured_claude_consecutive_tools_keep_mobile_headers() {
+        for fixture in [
+            include_bytes!("../fixtures/agent_prompts/claude-mobile-consecutive-tools-2109.tcap")
+                .as_slice(),
+            include_bytes!("../fixtures/agent_prompts/claude-mobile-verbose-tools-2109.tcap")
+                .as_slice(),
+        ] {
+            let capture = crate::pty_capture::decode_capture(fixture)
+                .expect("recorded Claude consecutive tool calls");
+            let (rows, cols) = capture.geometry.expect("recorded geometry");
+            let mut grid = crate::state::VtLogBuffer::new(rows, cols, 10_000);
+            let mut utf8 = crate::state::Utf8ReadBuffer::new();
+            let mut escape = crate::state::EscapeAwareBuffer::new();
+            let mut checked = 0;
+            for (index, record) in capture.records.into_iter().enumerate() {
+                if record.direction != crate::pty_capture::CaptureDirection::Output {
+                    continue;
+                }
+                let data = utf8.push(&record.data);
+                let data = escape.push(&data);
+                let (clean, _) = crate::state::strip_kitty_sequences(&data);
+                grid.process(clean.as_bytes());
+                let (log, _) = grid.lines_since_owned(0, usize::MAX);
+                let mut mobile: Vec<_> = log.iter().map(|line| line.text()).collect();
+                let screen = grid.screen_log_lines();
+                mobile.extend(
+                    screen
+                        .into_iter()
+                        .take(screen_chrome_cutoff(&grid).cutoff)
+                        .map(|line| line.text()),
+                );
+                let mobile = mobile.join("\n");
+                for header in grid
+                    .grid_get_lines(0, grid.grid_total_lines())
+                    .into_iter()
+                    .filter(|row| row.starts_with("⏺ Bash(") || row.starts_with("⏺ Write("))
+                {
+                    checked += 1;
+                    assert!(
+                        mobile.contains(header.trim_end()),
+                        "record {index}: mobile dropped canonical header {header:?}\n{mobile}"
+                    );
+                }
+            }
+            assert!(
+                checked > 6,
+                "capture must exercise consecutive tool headers across frames"
+            );
+            let headers = grid
+                .grid_get_lines(0, grid.grid_total_lines())
+                .into_iter()
+                .filter(|row| row.starts_with("⏺ Bash(") || row.starts_with("⏺ Write("))
+                .count();
+            assert_eq!(
+                headers, 6,
+                "capture must finish all three Bash/Write rounds"
+            );
+        }
     }
 
     // Catches: the highlighted Claude option is mistaken for the composer prompt,
@@ -4938,6 +5181,26 @@ mod tests {
             .find(|row| row.session_id == session_id)
             .expect("the spawned session is listed");
         assert_eq!(row.alias.as_deref(), Some("tu-7"));
+        // Catches: the session list publishes an agent leaf PID instead of the PTY child.
+        let child_pid = state
+            .session_maps
+            .sessions
+            .get(&session_id)
+            .unwrap()
+            .lock()
+            ._child
+            .process_id();
+        assert_eq!(row.child_pid, child_pid);
+        assert!(row.child_pid.is_some());
+        state.session_maps.exit_codes.insert(session_id.clone(), 0);
+        let ended = super::local_session_rows(&state)
+            .into_iter()
+            .find(|row| row.session_id == session_id)
+            .unwrap();
+        assert_eq!(
+            ended.child_pid, None,
+            "an exited child must not remain copyable"
+        );
     }
 
     #[tokio::test]

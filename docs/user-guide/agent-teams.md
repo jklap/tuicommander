@@ -266,3 +266,23 @@ remote peer. Use this address for mail instead of assuming a terminal alias is
 globally unique. Mail reaches the owning daemon's native inbox and wake path;
 remote replies and remote-to-remote messages pass through the desktop hub.
 The mail link grants no remote spawn capability.
+
+## Independent result readers
+
+Use `agent action=subscribe subscription_id=pump filter=actionable` when a
+coordinator and a watcher must not consume each other's mail. Read with
+`agent action=inbox subscription_id=pump` or use the continuous HTTP SSE stream
+`/agent/subscriptions/pump/events` with the bound `Mcp-Session-Id` header.
+Routine lifecycle/idle messages do not wake this reader; peer RESULT/BLOCKED mail,
+exits and failures remain actionable. Each batch has a cursor and has_more.
+Process it, then call `agent action=ack subscription_id=pump cursor=<cursor>`.
+Unacknowledged batches can replay after interruption, so deduplicate effects by
+message ID. Acknowledged mail does not replay after reconnect with the same peer
+UUID and subscription ID. The newest 1000 messages per peer survive restart;
+missed_count reports matching unacknowledged retention losses. Use a different
+subscription ID for each consumer. Legacy inbox readers keep their old cursor.
+
+An ACP consumer can subscribe to `tuic://inbox/subscriptions/pump` for filtered
+resource updates and idle wakes without a model wait loop. See the complete
+[mail contract](../backend/mcp-http.md#durable-independent-mail-subscriptions)
+for acknowledgement, retention, reader limits and HTTP transport details.

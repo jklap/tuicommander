@@ -247,6 +247,8 @@ pub(super) async fn plugin_exec(
 
 #[derive(Deserialize)]
 pub(super) struct HttpFetchBody {
+    #[serde(rename = "requestId")]
+    pub request_id: Option<String>,
     pub url: String,
     pub method: Option<String>,
     pub headers: Option<HashMap<String, String>>,
@@ -260,7 +262,7 @@ pub(super) async fn plugin_http_fetch(
     Json(body): Json<HttpFetchBody>,
 ) -> Response {
     json_result(
-        crate::plugin_http::plugin_http_fetch_impl(
+        crate::plugin_http::plugin_http_fetch_cancellable_impl(
             &state,
             body.url,
             body.method,
@@ -268,9 +270,28 @@ pub(super) async fn plugin_http_fetch(
             body.body,
             body.account,
             plugin_id,
+            body.request_id,
         )
         .await,
     )
+}
+
+#[derive(Deserialize)]
+pub(super) struct HttpCancelBody {
+    #[serde(rename = "requestId")]
+    pub request_id: String,
+}
+
+pub(super) async fn plugin_http_cancel(
+    State(state): State<Arc<AppState>>,
+    AxumPath(plugin_id): AxumPath<String>,
+    Json(body): Json<HttpCancelBody>,
+) -> Response {
+    json_result(crate::plugin_http::plugin_http_cancel_impl(
+        &state,
+        plugin_id,
+        body.request_id,
+    ))
 }
 
 // ---------------------------------------------------------------------------

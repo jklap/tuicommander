@@ -2,6 +2,7 @@ use std::time::Duration;
 
 use crate::remote_connection::{
     DeployMode, RemoteConnection, RemoteConnectionStore, RemoteTransport,
+    ensure_pairing_token as pairing_token,
 };
 use crate::tunnels::exec::ssh_exec;
 use crate::tunnels::profile::{ProfileOptions, StrictHostKeyChecking, TunnelProfile};
@@ -268,17 +269,6 @@ fn load_connection(
         .ok_or_else(|| format!("Unknown remote connection {id}"))
 }
 
-fn pairing_token(id: &str) -> Result<String, String> {
-    match crate::remote_connection::pairing_token(id)? {
-        Some(token) => Ok(token),
-        None => {
-            let token = uuid::Uuid::new_v4().to_string();
-            crate::remote_connection::set_pairing_token(id, &token)?;
-            Ok(token)
-        }
-    }
-}
-
 async fn save_mode(
     state: &std::sync::Arc<crate::AppState>,
     id: &str,
@@ -292,7 +282,12 @@ async fn save_mode(
             .ok_or_else(|| format!("Unknown remote connection {id}"))?;
         let changed = connection.deploy != mode;
         connection.deploy = mode;
-        Ok(((), changed))
+        Ok((changed, changed))
+    })
+    .map(|changed| {
+        if changed {
+            crate::settings::api::publish_change(state, "connections", true);
+        }
     })
 }
 
@@ -301,7 +296,7 @@ pub(crate) async fn install_remote_daemon_shared(
     id: &str,
 ) -> Result<(), String> {
     let connection = load_connection(state, id)?;
-    let token = pairing_token(id)?;
+    let token = pairing_token(state, id)?;
     let (profile, port) = connection_profile(&connection)?;
     install(&profile, port, &token).await?;
     save_mode(state, id, DeployMode::Installed).await
@@ -338,6 +333,79 @@ pub async fn uninstall_remote_daemon(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // Catches: deployment metadata changes persisting without refreshing the Settings catalogue.
+    #[tokio::test]
+    async fn deployment_mode_settings_refresh_tracks_only_durable_changes() {
+        let state = std::sync::Arc::new(crate::state::tests_support::make_test_app_state());
+        let connection = RemoteConnection::new_ssh("fixture", "not-contacted.example", "fixture");
+        crate::remote_connection::save_connection_record(&state, None, connection.clone()).unwrap();
+        let mut events = state.event_bus.subscribe();
+        save_mode(&state, &connection.id, DeployMode::Installed)
+            .await
+            .unwrap();
+        assert_eq!(
+            load_connection(&state, &connection.id).unwrap().deploy,
+            DeployMode::Installed
+        );
+        let crate::state::AppEvent::SettingsChanged(notice) = events
+            .try_recv()
+            .expect("persisted deployment mode must refresh Settings readers")
+        else {
+            panic!("expected Settings change")
+        };
+        assert_eq!(notice.section, "connections");
+        assert!(notice.persisted && notice.applied);
+        save_mode(&state, &connection.id, DeployMode::Installed)
+            .await
+            .unwrap();
+        assert!(
+            save_mode(&state, "missing", DeployMode::Installed)
+                .await
+                .is_err()
+        );
+        assert!(
+            events.try_recv().is_err(),
+            "no-op and rejected updates must not publish"
+        );
+    }
+
+    // Catches: deployment pairing tokens changing Settings credential presence without invalidation.
+    #[test]
+    #[serial_test::serial]
+    fn deployment_pairing_settings_refresh_tracks_only_new_vault_writes() {
+        let tmp = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+        let _guard = crate::config::set_config_dir_override(tmp.path().to_path_buf());
+        crate::credentials::reset_test_faults();
+        let state = std::sync::Arc::new(crate::state::tests_support::make_test_app_state());
+        let mut events = state.event_bus.subscribe();
+        let id = "deployment-pairing-refresh";
+        let token = pairing_token(&state, id).unwrap();
+        assert_eq!(
+            crate::remote_connection::pairing_token(id)
+                .unwrap()
+                .as_deref(),
+            Some(token.as_str())
+        );
+        let crate::state::AppEvent::SettingsChanged(notice) = events
+            .try_recv()
+            .expect("persisted pairing token must refresh Settings credential presence")
+        else {
+            panic!("expected Settings change")
+        };
+        assert_eq!(notice.section, "connections");
+        assert!(notice.persisted && notice.applied);
+        assert!(!serde_json::to_string(&notice).unwrap().contains(&token));
+        assert_eq!(pairing_token(&state, id).unwrap(), token);
+        crate::credentials::MOCK_FAIL_WRITES.store(true, std::sync::atomic::Ordering::SeqCst);
+        let rejected = pairing_token(&state, "deployment-pairing-failure");
+        crate::credentials::reset_test_faults();
+        assert!(rejected.is_err());
+        assert!(
+            events.try_recv().is_err(),
+            "existing token or rejected write must not publish"
+        );
+    }
 
     #[test]
     fn systemd_files_pin_loopback_and_protect_the_token() {

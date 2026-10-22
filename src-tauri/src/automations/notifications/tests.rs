@@ -178,3 +178,92 @@ async fn routing_claims_push_only_for_live_allowed_transitions() {
         assert!(!publish(&state, owner.store(), &config, &run));
     }
 }
+
+// Catches: pre-spawn failures having only a run-history/bell entry, with no creator inbox notice.
+#[tokio::test]
+async fn failed_run_notifies_owner() {
+    let dir = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+    let state = Arc::new(crate::state::tests_support::make_test_app_state_in(
+        dir.path(),
+    ));
+    state.peer_agents.insert(
+        "creator".into(),
+        crate::state::PeerAgent {
+            tuic_session: "creator".into(),
+            mcp_session_id: "creator-mcp".into(),
+            name: "Creator".into(),
+            project: None,
+            registered_at: 0,
+        },
+    );
+    let owner = RunOwner::acquire_at(&dir.path().join("runs.sqlite3"), 0).unwrap();
+    let mut definition: AutomationDefinition = serde_json::from_value(serde_json::json!({
+        "id":"pre-spawn", "name":"Review", "prompt":"private prompt", "run_config":"claude",
+        "repository":"/repo", "workspace":{"mode":"existing"}, "cron":"0 9 * * *",
+        "timezone":"UTC", "enabled":true, "grace_secs":43200,
+        "overlap":"skip", "max_duration_secs":3600, "precheck":null
+    }))
+    .unwrap();
+    definition.created_by_session = Some("creator".into());
+    let reserved = owner
+        .store()
+        .reserve(&definition, RunTrigger::Manual, 1)
+        .unwrap()
+        .unwrap();
+    owner
+        .store()
+        .claim_dispatch(&reserved.id, 2)
+        .unwrap()
+        .unwrap();
+    let failed = owner
+        .store()
+        .transition(
+            &reserved.id,
+            RunStatus::Failed,
+            RunDetails {
+                reason: Some("Automation run configuration 'claude' not found".into()),
+                ..Default::default()
+            },
+            3,
+        )
+        .unwrap();
+    assert!(failed.session_id.is_none() && failed.task_id.is_none());
+    let config = crate::config::NotificationConfig {
+        enabled: false,
+        ..Default::default()
+    };
+    publish(&state, owner.store(), &config, &failed);
+    publish(&state, owner.store(), &config, &failed);
+    let inbox = state
+        .agent_inbox
+        .get("creator")
+        .expect("failed run never notified creator");
+    assert_eq!(
+        inbox.len(),
+        1,
+        "duplicate failed publication resent the owner notice"
+    );
+    let notice: serde_json::Value = serde_json::from_str(&inbox[0].content).unwrap();
+    assert_eq!(notice["type"], "automation_run_failed");
+    assert_eq!(notice["run_id"], failed.id);
+    assert_eq!(notice["definition_id"], "pre-spawn");
+    assert_eq!(
+        notice["reason"],
+        "Automation run configuration 'claude' not found"
+    );
+    assert!(!inbox[0].content.contains("private prompt"));
+    assert_eq!(owner.store().get(&failed.id).unwrap(), failed);
+    drop(inbox);
+    drop(owner);
+    let reopened = RunOwner::acquire_at(&dir.path().join("runs.sqlite3"), 4).unwrap();
+    publish(&state, reopened.store(), &config, &failed);
+    assert_eq!(state.agent_inbox.get("creator").unwrap().len(), 1);
+    assert_eq!(
+        reopened
+            .store()
+            .notification(&failed.id, "failed", "owner")
+            .unwrap()
+            .status,
+        DeliveryStatus::Confirmed
+    );
+}

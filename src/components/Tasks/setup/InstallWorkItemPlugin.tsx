@@ -27,10 +27,8 @@ export function InstallWorkItemPlugin(props: { setup: WorkItemPluginSetup; note?
 	}
 	return (
 		<div class={s.install}>
-			<Show when={!props.compact}>
-				<span>
-					{props.setup.name} shows {props.setup.purpose}.<Show when={props.note}> {props.note}</Show>
-				</span>
+			<Show when={!props.compact && props.note}>
+				<span>{props.note}</span>
 			</Show>
 			<button type="button" disabled={!entry() || installing()} onClick={() => void install()}>
 				{installing() ? "Installing…" : `Install ${props.setup.name}`}

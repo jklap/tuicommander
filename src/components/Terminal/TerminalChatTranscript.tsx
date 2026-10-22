@@ -13,7 +13,6 @@ export const TerminalChatTranscript: Component<{
 	sessionId: string;
 	terminalAgent?: AgentType;
 	mobile?: boolean;
-	hint: string;
 	subscribeWake?: ChatViewWake;
 	onUnavailable: (reason: string) => void;
 	onAtBottomChange?: (atBottom: boolean) => void;
@@ -73,7 +72,6 @@ export const TerminalChatTranscript: Component<{
 				muteIntermediate={settingsStore.state.chatMuteIntermediateText}
 				emptyMessage="No messages in this conversation yet."
 			/>
-			<div class={s.hint}>{props.hint}</div>
 		</div>
 	);
 };

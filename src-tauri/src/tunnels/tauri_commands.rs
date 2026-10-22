@@ -26,11 +26,8 @@ pub(crate) fn save_tunnel_profile(
     {
         profile["id"] = serde_json::Value::String(uuid::Uuid::new_v4().to_string());
     }
-    let mut profile: TunnelProfile = serde_json::from_value(profile).map_err(|e| e.to_string())?;
-    profile.validate()?;
-    let id = profile.id.clone();
-    ProfileStore::save(&state.data_dir, &profile).map_err(|e| e.to_string())?;
-    Ok(id)
+    let profile: TunnelProfile = serde_json::from_value(profile).map_err(|e| e.to_string())?;
+    super::commands::save_profile(&state, profile)
 }
 
 #[tauri::command]
@@ -38,8 +35,7 @@ pub(crate) fn delete_tunnel_profile(
     state: tauri::State<'_, Arc<AppState>>,
     id: String,
 ) -> Result<bool, String> {
-    state.tunnel_manager.stop_if_running(&id);
-    ProfileStore::delete(&state.data_dir, None, &id).map_err(|e| e.to_string())
+    super::commands::delete_profile(&state, &id)
 }
 
 #[tauri::command]

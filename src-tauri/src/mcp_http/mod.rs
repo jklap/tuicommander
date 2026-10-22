@@ -15,8 +15,11 @@ mod github_pr_action_routes;
 mod github_review_routes;
 mod github_routes;
 mod guards;
+pub(crate) mod launch_transaction;
 mod log_routes;
 pub(crate) mod managed_launch;
+pub(crate) mod mcp_call_audit;
+mod mcp_input_contract;
 pub(crate) mod mcp_transport;
 mod mcp_transport_ancillary;
 #[cfg(test)]
@@ -27,7 +30,9 @@ mod mcp_transport_catalogue;
 mod mcp_transport_peer;
 pub(crate) mod mcp_transport_session_agent;
 mod open_markdown_routes;
+pub(crate) mod response_pages;
 
+mod mail_routes;
 mod mcp_work_item;
 mod plugin_docs;
 mod plugin_routes;
@@ -362,7 +367,10 @@ async fn reconnect_mcp_upstream_http(
 }
 
 /// POST /mcp/upstreams/credential — save an upstream credential to OS keyring.
-async fn save_mcp_upstream_credential_http(Json(body): Json<serde_json::Value>) -> Response {
+async fn save_mcp_upstream_credential_http(
+    State(state): State<Arc<AppState>>,
+    Json(body): Json<serde_json::Value>,
+) -> Response {
     let name = match body.get("name").and_then(|v| v.as_str()) {
         Some(n) => n.to_string(),
         None => return (StatusCode::BAD_REQUEST, "missing 'name'").into_response(),
@@ -384,17 +392,16 @@ async fn save_mcp_upstream_credential_http(Json(body): Json<serde_json::Value>) 
         Some(url) => url.to_string(),
         None => return (StatusCode::BAD_REQUEST, "missing 'url'").into_response(),
     };
-    let result = if body
-        .get("replace")
-        .and_then(|v| v.as_bool())
-        .unwrap_or(false)
-    {
-        crate::mcp_upstream_credentials::save_mcp_upstream_credential_with_replace(
-            name, token, header, url, true,
-        )
-    } else {
-        crate::mcp_upstream_credentials::save_mcp_upstream_credential(name, token, header, url)
-    };
+    let result = crate::mcp_upstream_credentials::save_with_refresh(
+        &state,
+        name,
+        token,
+        header,
+        url,
+        body.get("replace")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false),
+    );
     match result {
         Ok(()) => Json(()).into_response(),
         Err(e) => err_500(&e),
@@ -402,7 +409,10 @@ async fn save_mcp_upstream_credential_http(Json(body): Json<serde_json::Value>) 
 }
 
 /// DELETE /mcp/upstreams/credential — delete an upstream credential from OS keyring.
-async fn delete_mcp_upstream_credential_http(Json(body): Json<serde_json::Value>) -> Response {
+async fn delete_mcp_upstream_credential_http(
+    State(state): State<Arc<AppState>>,
+    Json(body): Json<serde_json::Value>,
+) -> Response {
     let name = match body.get("name").and_then(|v| v.as_str()) {
         Some(n) => n.to_string(),
         None => return (StatusCode::BAD_REQUEST, "missing 'name'").into_response(),
@@ -416,7 +426,7 @@ async fn delete_mcp_upstream_credential_http(Json(body): Json<serde_json::Value>
         Ok(header) => header,
         Err(_) => return (StatusCode::BAD_REQUEST, "invalid header metadata").into_response(),
     };
-    match crate::mcp_upstream_credentials::delete_mcp_upstream_credential(name, header) {
+    match crate::mcp_upstream_credentials::delete_with_refresh(&state, name, header) {
         Ok(()) => Json(()).into_response(),
         Err(e) => err_500(&e),
     }
@@ -1011,6 +1021,13 @@ fn tunnel_routes() -> Router<Arc<AppState>> {
 fn shared_routes() -> Router<Arc<AppState>> {
     Router::new()
         .route("/mcp/peer", get(remote_peer::endpoint))
+        .route("/mcp/audit", get(mcp_call_audit::endpoint))
+        .route("/settings/action", post(settings_routes::settings_action))
+        // Browser Settings hydration and refresh read the same redacted owner snapshot.
+        .route(
+            "/config",
+            get(config_routes::get_config).put(config_routes::put_config),
+        )
         .route("/accounts/action", post(account_routes::action))
         .route("/accounts/secret-form", post(account_routes::secret_form))
         // Version (authenticated)
@@ -1033,6 +1050,12 @@ fn shared_routes() -> Router<Arc<AppState>> {
         .route(
             "/config/agents",
             get(config_routes::get_agents_config).put(config_routes::put_agents_config),
+        )
+        // Defaults and draft previews belong to the same machine as agents.json.
+        .route(
+            "/config/defaults",
+            get(config_routes::get_config_defaults_http)
+                .post(config_routes::preview_config_defaults_http),
         )
         // Progress. Shared, not desktop-only: the store is a SQLite file in the
         // app config directory and every handler calls `crate::progress::*`,
@@ -1187,10 +1210,6 @@ fn shared_routes() -> Router<Arc<AppState>> {
         .route(
             "/sessions/{id}/terminal/cursor-line",
             get(session::terminal_get_cursor_line),
-        )
-        .route(
-            "/sessions/{id}/terminal/hyperlink",
-            get(session::terminal_hyperlink_at),
         )
         .route(
             "/sessions/{id}/terminal/hyperlink-span",
@@ -1372,6 +1391,7 @@ fn shared_routes() -> Router<Arc<AppState>> {
             post(agent_routes::verify_agent_session_http),
         )
         .route("/agents", get(agent_routes::detect_agents))
+        .route("/agents/launch", post(launch_transaction::http))
         .route(
             "/agents/detect",
             get(agent_routes::detect_agent_binary_http),
@@ -1466,7 +1486,6 @@ fn shared_routes() -> Router<Arc<AppState>> {
             "/repo/recent-commits",
             get(git_routes::get_recent_commits_http),
         )
-        .route("/repo/panel-context", get(git_routes::git_panel_context))
         .route("/repo/run-git", post(git_routes::run_git_command_http))
         .route(
             "/repo/working-tree-status",
@@ -1837,10 +1856,6 @@ pub fn build_router(state: Arc<AppState>, remote_auth: bool, mcp_enabled: bool) 
         )
         // Config
         .route(
-            "/config",
-            get(config_routes::get_config).put(config_routes::put_config),
-        )
-        .route(
             "/config/hash-password",
             post(config_routes::hash_password_http),
         )
@@ -1859,10 +1874,6 @@ pub fn build_router(state: Arc<AppState>, remote_auth: bool, mcp_enabled: bool) 
         .route(
             "/config/ui-prefs",
             get(config_routes::get_ui_prefs).put(config_routes::put_ui_prefs),
-        )
-        .route(
-            "/config/defaults",
-            get(config_routes::get_config_defaults_http),
         )
         .route(
             "/config/repo-settings",
@@ -1889,7 +1900,6 @@ pub fn build_router(state: Arc<AppState>, remote_auth: bool, mcp_enabled: bool) 
             "/config/pane-layout",
             get(config_routes::get_pane_layout).put(config_routes::put_pane_layout),
         )
-        .route("/settings/action", post(settings_routes::settings_action))
         .route("/config/clear-caches", post(config_routes::clear_caches))
         .route(
             "/config/clear-repo-caches",
@@ -1930,6 +1940,8 @@ pub fn build_router(state: Arc<AppState>, remote_auth: bool, mcp_enabled: bool) 
             "/audio/output-devices",
             get(config_routes::list_audio_output_devices_http),
         )
+        .route("/agent/subscriptions/action", post(mail_routes::action))
+        .route("/agent/subscriptions/{id}/events", get(mail_routes::events))
         .route(
             "/agent/discover-session",
             post(config_routes::discover_agent_session_http),
@@ -2010,6 +2022,11 @@ pub fn build_router(state: Arc<AppState>, remote_auth: bool, mcp_enabled: bool) 
         // Debug: execute JS in the main WebView (loopback-only, enforced in handler).
         // Local router only — never the remote router (this is an RCE surface).
         .route("/debug/invoke_js", post(log_routes::invoke_js_http))
+        .route(
+            "/debug/frame-workload",
+            post(log_routes::save_frame_workload)
+                .layer(axum::extract::DefaultBodyLimit::max(8 * 1024 * 1024)),
+        )
         .route("/secrets/forms/{nonce}", get(crate::secrets::form_http))
         .route("/secrets/forms/submit", post(crate::secrets::submit_http))
         // Debug: reload the main WebView natively (loopback-only, enforced in
@@ -2137,6 +2154,10 @@ pub fn build_router(state: Arc<AppState>, remote_auth: bool, mcp_enabled: bool) 
         .route(
             "/api/plugins/{plugin_id}/http",
             post(plugin_routes::plugin_http_fetch),
+        )
+        .route(
+            "/api/plugins/{plugin_id}/http/cancel",
+            post(plugin_routes::plugin_http_cancel),
         )
         .route(
             "/api/plugins/{plugin_id}/pty/output",
@@ -2851,11 +2872,15 @@ pub async fn start_server(
     // --- TCP listener (only for remote access with auth) ---
     // Supports dual-protocol (HTTP+HTTPS on same port) when TLS cert is available.
     let tcp_handle = if remote_enabled {
-        let base_port = std::env::var("TUIC_PORT")
-            .ok()
-            .and_then(|value| value.parse::<u16>().ok())
-            .unwrap_or(config.services.server.port);
-        let host = if config.services.server.ipv6_enabled {
+        let base_port = crate::agent_test::port().unwrap_or_else(|| {
+            std::env::var("TUIC_PORT")
+                .ok()
+                .and_then(|value| value.parse::<u16>().ok())
+                .unwrap_or(config.services.server.port)
+        });
+        let host = if crate::agent_test::active() {
+            "127.0.0.1"
+        } else if config.services.server.ipv6_enabled {
             "[::]"
         } else {
             "0.0.0.0"
@@ -2874,7 +2899,11 @@ pub async fn start_server(
 
         let mut listener_result: Option<std::net::TcpListener> = None;
         // Port 0 = OS-assigned, no retry needed
-        let attempts = if base_port == 0 { 1 } else { MAX_PORT_ATTEMPTS };
+        let attempts = if base_port == 0 || crate::agent_test::active() {
+            1
+        } else {
+            MAX_PORT_ATTEMPTS
+        };
         'bind: for round in 0..BIND_RETRY_ROUNDS {
             for attempt in 0..attempts {
                 let port = base_port + attempt;
@@ -3231,7 +3260,7 @@ mod tests {
         // documents and avoids (#678-9a75).
         let state = Arc::new(crate::state::tests_support::make_test_app_state());
         // This fixture opts into every native tool, including the settings facade.
-        state.config.write().disabled_native_tools = Vec::new();
+        state.config.write().mcp_capabilities.denied = Vec::new();
         state.config.write().settings_mcp_enabled = true;
         mcp_transport::rebuild_tool_search_index(&state);
         state
@@ -3361,6 +3390,52 @@ mod tests {
         assert_eq!(json["build"]["version"], env!("CARGO_PKG_VERSION"));
         assert_eq!(json["build"]["target"], env!("TUIC_TARGET_TRIPLE"));
         assert_eq!(json["build"]["sha256"].as_str().unwrap().len(), 64);
+    }
+
+    #[tokio::test]
+    async fn remote_defaults_preview_is_available_with_authentication() {
+        // Catches: the machine preview route registered only on the desktop router.
+        let state = test_state();
+        *state.session_token.write() = "preview-secret".to_string();
+        state.config.write().services.auth.lan_auth_bypass = false;
+        let app = build_remote_router(state);
+        for (token, expected) in [
+            (None, StatusCode::UNAUTHORIZED),
+            (Some("preview-secret"), StatusCode::OK),
+        ] {
+            let uri = token.map_or_else(
+                || "/config/defaults".to_string(),
+                |token| format!("/config/defaults?token={token}"),
+            );
+            let builder = Request::post(uri)
+                .header(header::HOST, "127.0.0.1:9876")
+                .header(header::CONTENT_TYPE, "application/json");
+            let mut request = builder
+                .body(Body::from(
+                    r#"{"agents":{"agents":{},"launch_instructions":"REMOTE DRAFT"}}"#,
+                ))
+                .unwrap();
+            request
+                .extensions_mut()
+                .insert(ConnectInfo(std::net::SocketAddr::from((
+                    [203, 0, 113, 5],
+                    5555,
+                ))));
+            let response = app.clone().oneshot(request).await.unwrap();
+            assert_eq!(response.status(), expected);
+            if expected == StatusCode::OK {
+                let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+                    .await
+                    .unwrap();
+                let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+                assert!(
+                    json["launch_instructions"]["effective_text"]["claude"]
+                        .as_str()
+                        .unwrap()
+                        .ends_with("REMOTE DRAFT")
+                );
+            }
+        }
     }
 
     #[tokio::test]
@@ -4324,6 +4399,7 @@ mod tests {
         // handler's own 404 (e.g. get_output 404s for a missing session, which would
         // false-fail a GET probe). Path params are filled with a placeholder segment.
         let must_exist = [
+            "/config/defaults",
             "/api/version",
             // The remote client's only way onto a WebSocket: it trades Basic
             // Auth for the session token here, so the remote router must carry
@@ -4406,6 +4482,8 @@ mod tests {
             // absent here, tuic-remote answered 404 and remote repos ran with
             // no agent configs.
             "/config/agents",
+            // Headless Settings uses the same bootstrap snapshot as desktop.
+            "/config",
         ];
         // Desktop-only or router-specific — MUST NOT be in shared_routes():
         // /health (public_routes only), /fs/read-editor (router-specific
@@ -4418,7 +4496,6 @@ mod tests {
             "/repo/github",
             "/repo/prs",
             "/dictation/status",
-            "/config",
             "/config/themes",
             "/mcp/status",
             "/plugins/list",
@@ -4973,6 +5050,142 @@ mod tests {
         assert_eq!(crate::mcp_upstream_config::load_mcp_upstreams(), current);
     }
 
+    // Catches: legacy connection password writes bypassing refresh or advertising failed persistence.
+    #[tokio::test]
+    #[serial_test::serial]
+    async fn legacy_connection_password_settings_refresh_follows_vault_persistence() {
+        let tmp = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+        let _guard = crate::config::set_config_dir_override(tmp.path().to_path_buf());
+        crate::credentials::reset_test_faults();
+        let state = test_state();
+        let app = build_router(state.clone(), false, true);
+        let mut events = state.event_bus.subscribe();
+        let id = "legacy-connection-refresh";
+        let request = |password: &str| {
+            put_from(
+                &format!("/config/remote-connections/{id}/password"),
+                &serde_json::json!({"password": password}),
+                std::net::SocketAddr::from(([127, 0, 0, 1], 0)),
+            )
+        };
+        let response = app
+            .clone()
+            .oneshot(request("connection-secret-canary"))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            crate::credentials::get(crate::credentials::Credential::RemoteConnection(id))
+                .unwrap()
+                .as_deref(),
+            Some("connection-secret-canary")
+        );
+        let crate::state::AppEvent::SettingsChanged(first) = events
+            .try_recv()
+            .expect("durable connection password write must refresh another Settings reader")
+        else {
+            panic!("expected Settings change")
+        };
+        crate::credentials::MOCK_FAIL_WRITES.store(true, std::sync::atomic::Ordering::SeqCst);
+        let rejected = app
+            .clone()
+            .oneshot(request("rejected-secret-canary"))
+            .await
+            .unwrap();
+        crate::credentials::reset_test_faults();
+        assert_eq!(rejected.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        assert!(
+            events.try_recv().is_err(),
+            "failed vault write must not publish"
+        );
+        assert_eq!(
+            crate::credentials::get(crate::credentials::Credential::RemoteConnection(id))
+                .unwrap()
+                .as_deref(),
+            Some("connection-secret-canary")
+        );
+        let response = app.oneshot(request("")).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert!(!crate::remote_connection::connection_password_exists(id).unwrap());
+        let crate::state::AppEvent::SettingsChanged(second) = events
+            .try_recv()
+            .expect("durable connection password clear must refresh another Settings reader")
+        else {
+            panic!("expected Settings change")
+        };
+        assert_eq!(first.section, "connections");
+        assert_eq!(second.section, "connections");
+        assert!(first.persisted && first.applied && second.persisted && second.applied);
+        assert!(first.generation < second.generation);
+        assert!(
+            events.try_recv().is_err(),
+            "each write publishes exactly once"
+        );
+        let payload = serde_json::to_value((first, second)).unwrap();
+        for notice in payload.as_array().unwrap() {
+            assert_eq!(
+                notice.as_object().unwrap().len(),
+                4,
+                "hints contain only section, generation and persistence/apply flags"
+            );
+        }
+        assert!(!payload.to_string().contains("secret-canary"));
+    }
+
+    // Catches: a successful direct credential write leaving other Settings readers stale.
+    #[tokio::test]
+    #[serial_test::serial]
+    async fn legacy_upstream_credential_write_publishes_value_free_refresh() {
+        let tmp = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+        let _guard = crate::config::set_config_dir_override(tmp.path().to_path_buf());
+        let state = test_state();
+        let mut events = state.event_bus.subscribe();
+        let response = build_router(state.clone(), false, true)
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/mcp/upstreams/credential")
+                    .header("content-type", "application/json")
+                    .extension(axum::extract::ConnectInfo(std::net::SocketAddr::from((
+                        [127, 0, 0, 1],
+                        0,
+                    ))))
+                    .body(Body::from(
+                        serde_json::json!({"name":"legacy-publisher-fixture",
+                    "token":"legacy-secret-canary","url":"https://example.com/mcp"})
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            crate::mcp_upstream_credentials::read_credential_for_url(
+                "legacy-publisher-fixture",
+                "https://example.com/mcp"
+            )
+            .unwrap()
+            .as_deref(),
+            Some("legacy-secret-canary")
+        );
+        let notice = std::iter::from_fn(|| events.try_recv().ok())
+            .find_map(|event| match event {
+                crate::state::AppEvent::SettingsChanged(notice) => Some(notice),
+                _ => None,
+            })
+            .expect("durable legacy credential write did not refresh another Settings reader");
+        assert_eq!(notice.section, "upstreams");
+        assert!(notice.persisted);
+        assert!(
+            !serde_json::to_string(&notice)
+                .unwrap()
+                .contains("legacy-secret-canary")
+        );
+        crate::mcp_upstream_credentials::delete_upstream_credential("legacy-publisher-fixture")
+            .unwrap();
+    }
+
     // Catches: HTTP dropping compound credentials or treating omitted replace
     // as permission to overwrite an existing upstream credential.
     #[tokio::test]
@@ -5006,7 +5219,8 @@ mod tests {
         );
         let mut replacement =
             serde_json::json!({"name":name,"token":"replacement-http-secret","url":url});
-        let response = save_mcp_upstream_credential_http(Json(replacement.clone())).await;
+        let response =
+            save_mcp_upstream_credential_http(State(test_state()), Json(replacement.clone())).await;
         assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
         assert_eq!(
             crate::mcp_upstream_credentials::read_credential_for_url(name, url)
@@ -5015,7 +5229,8 @@ mod tests {
             Some("original-http-secret")
         );
         replacement["replace"] = serde_json::json!(true);
-        let response = save_mcp_upstream_credential_http(Json(replacement)).await;
+        let response =
+            save_mcp_upstream_credential_http(State(test_state()), Json(replacement)).await;
         assert_eq!(response.status(), StatusCode::OK);
         assert_eq!(
             crate::mcp_upstream_credentials::read_credential_for_url(name, url)
@@ -5030,7 +5245,7 @@ mod tests {
     async fn secret_header_http_credentials_preserve_metadata_and_return_json_unit() {
         let name = "secret-header-http";
         let header = serde_json::json!({"name":"x-api-key", "credential_ref":uuid::Uuid::new_v4().to_string()});
-        let response = save_mcp_upstream_credential_http(Json(
+        let response = save_mcp_upstream_credential_http(State(test_state()), Json(
             serde_json::json!({"name":name,"token":"DUMMY_HTTP_SENTINEL","header":header,"url":"https://example.com/mcp"}),
         ))
         .await;
@@ -5053,9 +5268,10 @@ mod tests {
             .as_deref(),
             Some("DUMMY_HTTP_SENTINEL")
         );
-        let response = delete_mcp_upstream_credential_http(Json(
-            serde_json::json!({"name":name,"header":header}),
-        ))
+        let response = delete_mcp_upstream_credential_http(
+            State(test_state()),
+            Json(serde_json::json!({"name":name,"header":header})),
+        )
         .await;
         assert_eq!(response.status(), StatusCode::OK);
         assert_eq!(
@@ -6283,18 +6499,48 @@ mod tests {
         );
     }
 
+    // Exact discovery contract for an unbound caller with no optional owner
+    // configuration, all ordinary tools enabled, and expanded discovery.
+    const UNCONFIGURED_NATIVE_TOOL_NAMES: &[&str] = &[
+        "automations",
+        "secret",
+        "session",
+        "agent",
+        "repo",
+        "workflow",
+        "progress",
+        "ui",
+        "plugin_dev_guide",
+        "settings",
+        "debug",
+    ];
+
     /// Catches: Settings inventories only enabled tools, loses newly registered
     /// tools, or offers switches which MCP discovery ignores.
     #[tokio::test]
     async fn native_settings_catalog_keeps_disabled_tools_and_disables_every_registry_tool() {
+        let dir = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+        let _guard = crate::config::set_config_dir_override(dir.path().to_path_buf());
+        // Empty owner configuration and no live remote/upstream connections.
         let state = test_state();
+        {
+            let mut config = state.config.write();
+            config.mcp_capabilities.denied.clear();
+            config.settings_mcp_enabled = true;
+            config.progress_tracking = true;
+            config.collapse_tools = false;
+        }
         let definitions = mcp_transport::test_mcp_tool_definitions();
+        // Agent-only compaction must not rewrite Settings tooltip copy.
+        let recorded: serde_json::Value =
+            serde_json::from_str(include_str!("fixtures/native-guidance-2069.json")).unwrap();
         let app = build_router(state.clone(), false, true);
         for tool in definitions.as_array().unwrap() {
             let name = tool["name"].as_str().unwrap();
             {
                 let mut cfg = state.config.write();
-                cfg.disabled_native_tools = vec![name.to_owned()];
+                cfg.mcp_capabilities =
+                    crate::mcp_capabilities::McpCapabilities::from_legacy(&[name.to_owned()]);
                 cfg.collapse_tools = true;
                 cfg.progress_tracking = false;
             }
@@ -6312,7 +6558,13 @@ mod tests {
             assert_eq!(catalog.len(), definitions.as_array().unwrap().len());
             for (entry, definition) in catalog.iter().zip(definitions.as_array().unwrap()) {
                 assert_eq!(entry["name"], definition["name"]);
-                assert_eq!(entry["description"], definition["description"]);
+                assert_eq!(
+                    &entry["description"],
+                    recorded
+                        .get(definition["name"].as_str().unwrap())
+                        .filter(|_| definition["name"] != "workflow")
+                        .unwrap_or(&definition["description"])
+                );
                 // Catches: HTTP status retaining description prefixes while Settings
                 // switches to dedicated, concise native registry summaries.
                 let summary = entry["summary"].as_str().unwrap();
@@ -6349,10 +6601,10 @@ mod tests {
                 .unwrap();
             let listing: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
             let listed = listing["result"]["tools"].as_array().unwrap();
-            let expected: Vec<_> = catalog
+            let expected: Vec<_> = UNCONFIGURED_NATIVE_TOOL_NAMES
                 .iter()
-                .filter(|entry| entry["name"] != name && entry["name"] != "design_mode")
-                .map(|entry| entry["name"].as_str().unwrap())
+                .copied()
+                .filter(|available| *available != name)
                 .collect();
             let actual: Vec<_> = listed
                 .iter()
@@ -6360,7 +6612,7 @@ mod tests {
                 .collect();
             assert_eq!(
                 actual, expected,
-                "disabled {name}; unbound Design Mode stays hidden"
+                "disabled {name}; unconfigured owners and unbound Design Mode stay hidden"
             );
             assert!(
                 listed.iter().all(|entry| entry["name"] != name),
@@ -6374,7 +6626,7 @@ mod tests {
     #[tokio::test]
     async fn disabled_critical_native_tools_cannot_bypass_settings_through_dispatch() {
         let state = test_state();
-        state.config.write().disabled_native_tools =
+        state.config.write().mcp_capabilities.denied =
             vec!["session".into(), "agent".into(), "progress".into()];
         let app = build_router(state.clone(), false, true);
         for collapse in [false, true] {
@@ -6426,8 +6678,18 @@ mod tests {
 
     #[tokio::test]
     async fn test_mcp_tools_list_respects_disabled_native_tools() {
+        let dir = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+        let _guard = crate::config::set_config_dir_override(dir.path().to_path_buf());
+        // Empty owner configuration and no live remote/upstream connections.
         let state = test_state();
-        state.config.write().disabled_native_tools = vec!["debug".to_string()];
+        {
+            let mut config = state.config.write();
+            config.mcp_capabilities.denied.clear();
+            config.settings_mcp_enabled = true;
+            config.progress_tracking = true;
+            config.collapse_tools = false;
+        }
+        state.config.write().mcp_capabilities.denied = vec!["diagnostics".to_string()];
         let app = build_router(state, false, true);
         let body = serde_json::json!({
             "jsonrpc": "2.0",
@@ -6442,18 +6704,16 @@ mod tests {
             .unwrap();
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
         let tools = json["result"]["tools"].as_array().unwrap();
-        let total = mcp_transport::test_mcp_tool_definitions()
-            .as_array()
-            .unwrap()
-            .len();
-        // One disabled tool and owner-scoped Design Mode are absent for this caller.
-        assert_eq!(tools.len(), total - 2);
         let names: Vec<&str> = tools.iter().map(|t| t["name"].as_str().unwrap()).collect();
-        assert!(
-            !names.contains(&"debug"),
-            "disabled tool must not appear in tools/list"
+        let expected: Vec<_> = UNCONFIGURED_NATIVE_TOOL_NAMES
+            .iter()
+            .copied()
+            .filter(|name| *name != "debug")
+            .collect();
+        assert_eq!(
+            names, expected,
+            "disabled debug must not appear in discovery"
         );
-        assert!(names.contains(&"session"));
     }
 
     /// The count this used to assert (`>= 13`) was sized when a second tool
@@ -6472,7 +6732,6 @@ mod tests {
         for core in [
             "session",
             "agent",
-            "task",
             "repo",
             "progress",
             "ui",
@@ -6652,11 +6911,9 @@ mod tests {
     async fn test_session_input_missing_session_id() {
         let state = test_state();
         let result = call_mcp_tool(&state, "session", serde_json::json!({"action": "input"})).await;
-        assert!(
-            result["error"]
-                .as_str()
-                .unwrap()
-                .contains("requires 'session_id'")
+        assert_eq!(
+            crate::test_support::mcp_argument_constraint(&result, "", "required"),
+            &serde_json::json!(["session_id"])
         );
     }
 
@@ -6688,7 +6945,10 @@ mod tests {
             }),
         )
         .await;
-        assert!(result["error"].as_str().unwrap().contains("'input'"));
+        assert_eq!(
+            crate::test_support::mcp_argument_constraint(&result, "", "anyOf"),
+            &serde_json::json!([{"required":["input"]},{"required":["special_key"]},{"required":["pty_description"]}])
+        );
     }
 
     #[tokio::test]
@@ -6717,11 +6977,9 @@ mod tests {
         let state = test_state();
         let result =
             call_mcp_tool(&state, "session", serde_json::json!({"action": "output"})).await;
-        assert!(
-            result["error"]
-                .as_str()
-                .unwrap()
-                .contains("requires 'session_id'")
+        assert_eq!(
+            crate::test_support::mcp_argument_constraint(&result, "", "required"),
+            &serde_json::json!(["session_id"])
         );
     }
 
@@ -6745,11 +7003,9 @@ mod tests {
         let state = test_state();
         let result =
             call_mcp_tool(&state, "session", serde_json::json!({"action": "resize"})).await;
-        assert!(
-            result["error"]
-                .as_str()
-                .unwrap()
-                .contains("requires 'session_id'")
+        assert_eq!(
+            crate::test_support::mcp_argument_constraint(&result, "", "required"),
+            &serde_json::json!(["session_id"])
         );
     }
 
@@ -6774,11 +7030,9 @@ mod tests {
     async fn test_session_close_missing_session_id() {
         let state = test_state();
         let result = call_mcp_tool(&state, "session", serde_json::json!({"action": "close"})).await;
-        assert!(
-            result["error"]
-                .as_str()
-                .unwrap()
-                .contains("requires 'session_id'")
+        assert_eq!(
+            crate::test_support::mcp_argument_constraint(&result, "", "required"),
+            &serde_json::json!(["session_id"])
         );
     }
 
@@ -6802,11 +7056,9 @@ mod tests {
     async fn test_session_pause_missing_session_id() {
         let state = test_state();
         let result = call_mcp_tool(&state, "session", serde_json::json!({"action": "pause"})).await;
-        assert!(
-            result["error"]
-                .as_str()
-                .unwrap()
-                .contains("requires 'session_id'")
+        assert_eq!(
+            crate::test_support::mcp_argument_constraint(&result, "", "required"),
+            &serde_json::json!(["session_id"])
         );
     }
 
@@ -6830,11 +7082,9 @@ mod tests {
         let state = test_state();
         let result =
             call_mcp_tool(&state, "session", serde_json::json!({"action": "resume"})).await;
-        assert!(
-            result["error"]
-                .as_str()
-                .unwrap()
-                .contains("requires 'session_id'")
+        assert_eq!(
+            crate::test_support::mcp_argument_constraint(&result, "", "required"),
+            &serde_json::json!(["session_id"])
         );
     }
 
@@ -6950,7 +7200,25 @@ mod tests {
             }),
         )
         .await;
-        assert_eq!(result["error"]["code"], "invalid_type", "{result}");
+        let variants = crate::test_support::mcp_argument_constraint(&result, "", "anyOf");
+        let patch = variants
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|variant| variant["oneOf"].as_array())
+            .flatten()
+            .find(|variant| variant["properties"]["action"]["const"] == "patch")
+            .expect("patch repair schema");
+        assert_eq!(
+            patch["required"],
+            serde_json::json!([
+                "action",
+                "target",
+                "store",
+                "expectedRevision",
+                "operations"
+            ])
+        );
         let retired = call_mcp_tool(&state, "config", serde_json::json!({"action":"save"})).await;
         assert!(
             retired["error"].as_str().unwrap().contains("Unknown tool"),
@@ -6993,11 +7261,9 @@ mod tests {
             serde_json::json!({"action": "worktree_list"}),
         )
         .await;
-        assert!(
-            result["error"]
-                .as_str()
-                .unwrap()
-                .contains("requires 'path'")
+        assert_eq!(
+            crate::test_support::mcp_argument_constraint(&result, "", "required"),
+            &serde_json::json!(["path"])
         );
     }
 
@@ -7014,11 +7280,9 @@ mod tests {
             }),
         )
         .await;
-        assert!(
-            result["error"]
-                .as_str()
-                .unwrap()
-                .contains("requires 'branch'")
+        assert_eq!(
+            crate::test_support::mcp_argument_constraint(&result, "", "anyOf"),
+            &serde_json::json!([{"required":["branch"]},{"required":["worktree_path"]}])
         );
     }
 
@@ -7125,11 +7389,10 @@ mod tests {
             }),
         )
         .await;
-        assert!(
-            result["error"]
-                .as_str()
-                .unwrap()
-                .contains("workspace_id was renamed to branch")
+        // Catches: a removed alias starts removal without a supported target.
+        assert_eq!(
+            crate::test_support::mcp_argument_constraint(&result, "", "anyOf"),
+            &serde_json::json!([{"required": ["branch"]}, {"required": ["worktree_path"]}])
         );
     }
 
@@ -7139,37 +7402,30 @@ mod tests {
     async fn test_session_missing_action() {
         let state = test_state();
         let result = call_mcp_tool(&state, "session", serde_json::json!({})).await;
-        assert!(
-            result["error"]
-                .as_str()
-                .unwrap()
-                .contains("Missing 'action'")
+        assert_eq!(
+            crate::test_support::mcp_argument_constraint(&result, "", "required"),
+            &serde_json::json!(["action"])
         );
-        assert!(result["error"].as_str().unwrap().contains("list, create"));
     }
 
     #[tokio::test]
     async fn test_session_unknown_action() {
         let state = test_state();
         let result = call_mcp_tool(&state, "session", serde_json::json!({"action": "bogus"})).await;
-        assert!(
-            result["error"]
-                .as_str()
-                .unwrap()
-                .contains("Unknown action 'bogus'")
-        );
-        assert!(result["error"].as_str().unwrap().contains("session"));
+        let allowed = crate::test_support::mcp_argument_constraint(&result, "/action", "enum");
+        let allowed = allowed.as_array().unwrap();
+        assert!(allowed.contains(&serde_json::json!("list")));
+        assert!(allowed.contains(&serde_json::json!("create")));
+        assert!(!allowed.contains(&serde_json::json!("bogus")));
     }
 
     #[tokio::test]
     async fn test_repo_missing_action() {
         let state = test_state();
         let result = call_mcp_tool(&state, "repo", serde_json::json!({})).await;
-        assert!(
-            result["error"]
-                .as_str()
-                .unwrap()
-                .contains("Missing 'action'")
+        assert_eq!(
+            crate::test_support::mcp_argument_constraint(&result, "", "required"),
+            &serde_json::json!(["action"])
         );
     }
 
@@ -7177,12 +7433,11 @@ mod tests {
     async fn test_repo_unknown_action() {
         let state = test_state();
         let result = call_mcp_tool(&state, "repo", serde_json::json!({"action": "commit"})).await;
-        assert!(
-            result["error"]
-                .as_str()
-                .unwrap()
-                .contains("Unknown action 'commit'")
-        );
+        let allowed = crate::test_support::mcp_argument_constraint(&result, "/action", "enum");
+        let allowed = allowed.as_array().unwrap();
+        assert!(allowed.contains(&serde_json::json!("list")));
+        assert!(allowed.contains(&serde_json::json!("worktree_list")));
+        assert!(!allowed.contains(&serde_json::json!("commit")));
     }
 
     /// Helper: create a temporary git repo with an initial commit for worktree tests.
@@ -7941,18 +8196,15 @@ mod tests {
             .output();
     }
 
+    // Catches: unknown-tool errors lose the rejected name or advertise a stale tool inventory.
     #[tokio::test]
     async fn test_unknown_tool() {
         let state = test_state();
         let result = call_mcp_tool(&state, "nonexistent_tool", serde_json::json!({})).await;
-        assert!(result["error"].as_str().unwrap().contains("Unknown tool"));
-        assert!(
-            result["error"]
-                .as_str()
-                .unwrap()
-                .contains("story, progress, ui")
+        assert_eq!(
+            result,
+            serde_json::json!({"error": "Unknown tool 'nonexistent_tool'"})
         );
-        assert!(result["error"].as_str().unwrap().contains("search_tools"));
     }
 
     // --- isError flag tests ---
@@ -8887,7 +9139,17 @@ mod tests {
     /// tools/list returns only native tools when no upstream is connected.
     #[tokio::test]
     async fn test_tools_list_no_upstream_returns_native_only() {
+        let dir = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+        let _guard = crate::config::set_config_dir_override(dir.path().to_path_buf());
+        // Empty owner configuration and no live remote/upstream connections.
         let state = test_state();
+        {
+            let mut config = state.config.write();
+            config.mcp_capabilities.denied.clear();
+            config.settings_mcp_enabled = true;
+            config.progress_tracking = true;
+            config.collapse_tools = false;
+        }
         let app = build_router(state, false, true);
         let body = serde_json::json!({
             "jsonrpc": "2.0", "id": 1,
@@ -8900,22 +9162,8 @@ mod tests {
             .unwrap();
         let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
         let tools = json["result"]["tools"].as_array().unwrap();
-        // No upstream → native tools visible to an unbound caller only
-        let expected = mcp_transport::test_mcp_tool_definitions()
-            .as_array()
-            .unwrap()
-            .len();
-        assert_eq!(tools.len(), expected - 1);
         let names: Vec<&str> = tools.iter().map(|t| t["name"].as_str().unwrap()).collect();
-        assert!(!names.contains(&"design_mode"));
-        assert!(names.contains(&"session"));
-        assert!(names.contains(&"agent"));
-        assert!(names.contains(&"repo"));
-        assert!(names.contains(&"ui"));
-        assert!(names.contains(&"plugin_dev_guide"));
-        assert!(names.contains(&"settings"));
-        assert!(!names.contains(&"config"));
-        assert!(names.contains(&"debug"));
+        assert_eq!(names, UNCONFIGURED_NATIVE_TOOL_NAMES);
     }
 
     /// tools/call with upstream-prefixed name returns error (no upstream registered).
@@ -9012,7 +9260,7 @@ mod tests {
         // Save config with a disabled tool
         let base = state.config.read().clone();
         let mut config = base.clone();
-        config.disabled_native_tools = vec!["session".to_string()];
+        config.mcp_capabilities.denied = vec!["session".to_string()];
         let app = build_router(state.clone(), false, true);
         let addr = std::net::SocketAddr::from(([127, 0, 0, 1], 0));
         let resp = app
@@ -10206,6 +10454,38 @@ mod tests {
     /// ::disable()` added anywhere outside this layer, or an axum release that
     /// drifts its default upward, fails here instead of silently uncapping the
     /// server.
+    /// Catches: the default 2 MiB cap preventing a bounded capture dump, or the
+    /// capture-specific override removing bounds from neighboring routes.
+    #[tokio::test]
+    async fn frame_workload_route_has_its_own_bounded_body_limit() {
+        async fn post_capture(path: &str, bytes: usize) -> StatusCode {
+            let payload = serde_json::json!({"recording": " ".repeat(bytes)}).to_string();
+            build_router(test_state(), false, true)
+                .oneshot(
+                    Request::post(path)
+                        .header(CONTENT_TYPE, "application/json")
+                        .body(Body::from(payload))
+                        .unwrap(),
+                )
+                .await
+                .unwrap()
+                .status()
+        }
+        // Invalid recording reaches the handler without writing application data.
+        assert_eq!(
+            post_capture("/debug/frame-workload", 3 * 1024 * 1024).await,
+            StatusCode::BAD_REQUEST
+        );
+        assert_eq!(
+            post_capture("/debug/frame-workload", 8 * 1024 * 1024).await,
+            StatusCode::PAYLOAD_TOO_LARGE
+        );
+        assert_eq!(
+            post_capture("/logs", 3 * 1024 * 1024).await,
+            StatusCode::PAYLOAD_TOO_LARGE
+        );
+    }
+
     #[tokio::test]
     async fn server_limits_reject_a_body_over_the_cap() {
         async fn post_bytes(n: usize) -> StatusCode {
@@ -10800,3 +11080,6 @@ mod workflow_authority_critic_tests {
         }
     }
 }
+
+#[cfg(test)]
+mod remote_settings_tests;

@@ -279,7 +279,7 @@ async fn open_form_blocks_native_and_proxied_inspection_tools() {
     use axum::{body::Body, extract::ConnectInfo, http::Request};
     use tower::ServiceExt;
     let state = std::sync::Arc::new(crate::state::tests_support::make_test_app_state());
-    state.config.write().disabled_native_tools.clear();
+    state.config.write().mcp_capabilities.denied.clear();
     state
         .secrets
         .open(

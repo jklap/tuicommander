@@ -20,6 +20,10 @@ Aider is no longer an agent harness. An `aider` command runs as a plain terminal
 | pi | `pi` | `pi --continue` | — |
 | ego (terminal CLI) | `ego` | `ego resume` | `ego resume <discovered id>` |
 
+Ego session discovery uses its per-PID index and validates the active writer
+lease. Older ego versions without this index retain lease-based discovery.
+Invalid index entries never select another conversation.
+
 ### Claude MCP profiles
 
 At startup, the primary TUICommander instance repairs its MCP bridge in the
@@ -101,7 +105,7 @@ For unrecognized agents, silence-based detection kicks in — if the terminal st
 
 ## Launch Instructions (TUIC Output Markers)
 
-TUICommander passes its output-marker rules (`intent:`, `suggest:`, `💬 `) to an agent at launch, through the agent's own instruction channel. The MCP `instructions` field still carries the same rules as a fallback, but Claude reads it only once per session and Codex never shows it.
+TUICommander generates a launch playbook through the agent's native instruction channel: Markers, Working with the user, Waiting and long work, Git and worktrees, Process safety, and Children. The Children module is included only for spawned children; children do not receive follow-up suggestions. MCP initialize instructions retain live discovery, but do not repeat playbook obligations for launch-capable agents. Other clients retain the MCP marker fallback.
 
 | Agent | Channel |
 |---|---|
@@ -115,11 +119,17 @@ TUICommander passes its output-marker rules (`intent:`, `suggest:`, `💬 `) to 
 
 Resume launches get the flag too. Headless one-shot forms (`claude -p`, `codex exec`, `grok -p`, `goose run`, `opencode run`, `pi -p`, `ego run`) and non-session subcommands do not. When you pass the same flag yourself, TUIC does not add a second one.
 
-Edit the text in **Settings → Agents → Launch instructions**. Each supported agent also has its own override in its row. **Reset to default** removes an override. An empty text turns the instructions off. `{VER}` becomes the TUIC version. The editor warns when a marker that TUIC parses is missing from the text, because the tab title, the suggest buttons and the answers view depend on it. The default text leaves out a marker when you turn that marker off for the agent.
+Open **Settings → Agents → Launch instructions** to select generated modules. Each supported agent has its own switches. A global off switch is a ceiling: an agent cannot re-enable that module. **Turn all launch instructions off** suppresses modules and user additions; an empty additions field adds nothing.
+
+Select **Add instructions**, or **Add instructions for <agent>**, to edit user additions. These fields never contain a copied default. TUIC appends the global additions after enabled modules, then appends the agent additions. Changes save on blur. **Clear global additions** and **Clear agent additions** remove only that layer. `{VER}` becomes the running TUIC version. Generated updates continue to reach agents with custom additions.
+
+The effective preview uses the selected machine, module switches, additions and marker flags. It stays unavailable while that machine loads or fails; another machine's preview is never reused. Root previews omit Children. Managed child launches use separate `instructions-<agent>-child` files so concurrent root launches do not overwrite their instructions.
+
+On the first load after upgrading, TUIC removes exact saved copies of the old marker default (including rendered versions), retains real custom text as additions, and converts legacy empty replacements to explicit off. The migration runs once.
 
 TUIC writes the effective text to `<config-dir>/agent-hooks/instructions-<agent>.md` (`.toml` for Codex) at startup, on every agent launch and when you save the agent settings.
 
-**Scope:** agents that TUIC starts (Run, MCP/HTTP spawns, worktree launches) get the flag. In a TUIC shell on macOS and Linux, TUIC puts a shim directory first on `PATH` (`shell-integration/bin`). The shim adds the same flag and runs the next real binary on `PATH`, so a typed agent, an alias, and a wrapper script that runs the agent by name all get the instructions. The prompt hook of zsh, bash and fish moves the shim directory back to the front of `PATH` if your shell startup files prepend another directory. OpenCode gets `OPENCODE_CONFIG_CONTENT` instead, which also reaches an absolute-path launch. These agents have no env var or config file that appends instructions without side effects, so they use the shim: claude, codex, grok, goose, pi and ego. A shim-served agent launched by absolute path, and every typed launch on Windows or WSL, gets only the MCP fallback. The shim never adds a flag that you already pass.
+**Scope:** agents that TUIC starts (Run, MCP/HTTP spawns, worktree launches) get the flag. In a TUIC shell on macOS and Linux, TUIC puts a shim directory first on `PATH` (`shell-integration/bin`). The shim adds the same flag and runs the next real binary on `PATH`, so a typed agent, an alias, and a wrapper script that runs the agent by name all get the instructions. The prompt hook of zsh, bash and fish moves the shim directory back to the front of `PATH` if your shell startup files prepend another directory. OpenCode gets `OPENCODE_CONFIG_CONTENT` instead, which also reaches an absolute-path launch. These agents have no env var or config file that appends instructions without side effects, so they use the shim: claude, codex, grok, goose, pi and ego. A shim-served agent launched by absolute path, and every typed launch on Windows or WSL, bypasses launch injection. MCP does not restore the playbook for a recognized launch-capable agent. The shim never adds a flag that you already pass.
 
 ## Native Hook Instrumentation
 
@@ -151,6 +161,25 @@ For Claude, `awaiting` also covers **MCP elicitation** — the dialog an MCP ser
 | Others (Amp, Cursor, Goose, Droid, pi) | — | No TUIC-managed hook system — stays heuristic |
 
 > **Platform note:** Hook instrumentation is **macOS/Linux only** — it resolves the controlling tty via `ps`/`/dev/tty`, which has no Windows equivalent. On Windows the toggle is hidden and agents keep heuristic detection (no regression).
+
+### ego terminal questions
+
+Question titles exclude preceding diagnostics and working rows. Native single-choice and checkbox questions keep their existing selection behavior. A CLI-enforced command approval exposes the native approval keys; choosing **no** opens the explanation prompt, where Enter alone refuses the command.
+
+### Grok native questions
+
+Grok Ask selectors expose numbered answers and the `z` free-text action to desktop and mobile. Numbered replies submit immediately. The CLI-enforced command approval also exposes its native numeric options; refusing a command clears the controls. These tool approvals are distinct from a model asking whether it may run a command.
+
+### Codex native questions
+
+Codex 0.162.1 queues native questions before showing their options. Use **Open Codex question** on mobile, or Shift+Left in the terminal. A numbered key answers once; Ctrl+] skips, and Shift+Right returns to the main prompt. Open questions supply the same title and options to desktop and mobile.
+
+Codex `/plan` questions also export named choices in narrow panes. The native
+footer can span three rows, and wrapped descriptions stay separate from answer
+labels. An unanswered question keeps Input state through a delayed idle hook;
+answering it clears the controls. Only visible native options are exported.
+
+CLI-enforced command approvals are separate from native questions. Their title and numeric controls are available to desktop and mobile; a numeric refusal submits immediately, and Escape cancels.
 
 ### Codex terminal Chat
 
@@ -364,4 +393,4 @@ ego output is not hidden by an earlier submitted prompt during composer repaint.
 
 ## Settings startup and Ego transport
 
-Assisted configuration uses the published Settings owner contract, not agent-session keystrokes or direct credential-file edits. Ego AI Chat uses ACP; a missing settings owner or ACP capability does not select a PTY fallback. Interactive provider login remains a separate human AI Chat Settings workflow, and an exited login command is not proof of authentication. See [Settings startup workflows](../backend/settings-startup.md#ego).
+Assisted configuration uses the published Settings owner contract, not agent-session keystrokes or direct credential-file edits. Ego AI Chat uses ACP; a missing settings owner or ACP capability does not select a PTY fallback. Typed Settings `begin_login` opens a human-operated terminal using the configured Ego executable/workspace. `login_status` reads credential presence after termination; an exited command is not proof of authentication. See [Settings startup workflows](../backend/settings-startup.md#ego).

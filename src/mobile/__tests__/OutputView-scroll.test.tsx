@@ -249,3 +249,28 @@ it("returns the mounted output to bottom after hidden Chat output", async () => 
 	expect(viewport.scrollTop).toBe(1600);
 	expect(viewport.textContent).toContain("output during Chat");
 });
+
+// Catches: changing font metrics while reading history loses the visible row.
+it("keeps the detached reading row anchored when the font size changes", async () => {
+	const { mobileFontSizes } = await import("../mobileFontSize");
+	while (mobileFontSizes.terminal() > 14) mobileFontSizes.step("terminal", -1);
+	const { viewport } = await mountOutput();
+	dragUp(viewport, 600);
+	const row = viewport.querySelector("pre > div") as HTMLElement;
+	const text = viewport.querySelector("pre") as HTMLPreElement;
+	Object.defineProperty(viewport, "getBoundingClientRect", { value: () => ({ top: 0 }) });
+	// Model a row whose layout moves 100px as the font grows; the scroll owner
+	// must compensate that delta rather than keep the stale pixel scrollTop.
+	row.getBoundingClientRect = () =>
+		({
+			top: 1200 + (Number.parseInt(text.style.fontSize, 10) - 14) * 100 - viewport.scrollTop,
+			bottom: 1250 + (Number.parseInt(text.style.fontSize, 10) - 14) * 100 - viewport.scrollTop,
+		}) as DOMRect;
+	const before = row.getBoundingClientRect().top;
+	mobileFontSizes.step("terminal", 1);
+	paint();
+	expect(text.style.fontSize).toBe("15px");
+	expect(row.getBoundingClientRect().top).toBe(before);
+	mobileFontSizes.step("terminal", -1);
+	paint();
+});

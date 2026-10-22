@@ -1178,6 +1178,18 @@ function createRepositoriesStore() {
 			setState("repositories", repoPath, "activeWorkspaceId", workspaceId);
 		},
 
+		/** Adopt a caller-bound backend declaration before its repository refresh arrives. */
+		setDeclaredWorktree(
+			repoPath: string,
+			peer: string,
+			placement: { workspaceId: string; branch: string; worktreePath: string },
+		): void {
+			const repo = state.repositories[repoPath];
+			if (!repo) return;
+			setState("repositories", repoPath, "declaredWorktrees", { ...repo.declaredWorktrees, [peer]: placement });
+			save();
+		},
+
 		/** Add terminal to branch */
 		addTerminalToWorkspace(repoPath: string, workspaceId: string, terminalId: string): void {
 			const branch = state.repositories[repoPath]?.workspaces[workspaceId];

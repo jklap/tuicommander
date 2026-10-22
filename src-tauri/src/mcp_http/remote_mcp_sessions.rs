@@ -73,7 +73,26 @@ pub(super) fn resolve(state: &AppState, args: &Value) -> Option<Result<(String, 
         .and_then(|row| row.connection_id.map(|host| Ok((host, row.session_id))))
 }
 
+#[cfg(test)]
 pub(super) async fn call(state: &Arc<AppState>, host: &str, id: &str, args: &Value) -> Value {
+    call_with_caller(state, host, id, args, None).await
+}
+
+pub(super) async fn call_with_caller(
+    state: &Arc<AppState>,
+    host: &str,
+    id: &str,
+    args: &Value,
+    own_pty: Option<&str>,
+) -> Value {
+    let requested_budget = if args["action"] == "output" {
+        match super::response_pages::budget(args) {
+            Ok(budget) => budget,
+            Err(error) => return error,
+        }
+    } else {
+        None
+    };
     if id.trim().is_empty() {
         return failure(host, "session_id must not be empty");
     }
@@ -121,7 +140,13 @@ pub(super) async fn call(state: &Arc<AppState>, host: &str, id: &str, args: &Val
         _ => return failure(host, format!("session '{id}' is ambiguous")),
     };
     let action = args["action"].as_str().unwrap_or("");
-    if !matches!(action, "output" | "submit") {
+    if action == "close" && own_pty == Some(canonical) {
+        return failure(
+            host,
+            "Cannot close own session. Use exit to terminate yourself.",
+        );
+    }
+    if !matches!(action, "output" | "submit" | "close") {
         return failure(
             host,
             format!("MCP session action '{action}' is not supported remotely"),
@@ -130,12 +155,17 @@ pub(super) async fn call(state: &Arc<AppState>, host: &str, id: &str, args: &Val
     url.set_path("/sessions");
     match url.path_segments_mut() {
         Ok(mut path) => {
-            path.push(canonical).push(action);
+            path.push(canonical);
+            if action != "close" {
+                path.push(action);
+            }
         }
         Err(_) => return failure(host, "invalid session URL"),
     }
     credential(state, host, &mut url);
-    let request_builder = if action == "submit" {
+    let request_builder = if action == "close" {
+        state.remote.http_client().delete(url)
+    } else if action == "submit" {
         state
             .remote
             .http_client()
@@ -152,21 +182,51 @@ pub(super) async fn call(state: &Arc<AppState>, host: &str, id: &str, args: &Val
                     "mcp"
                 },
             );
-            for key in ["limit", "from_line", "from_byte", "since_cursor"] {
+            for key in [
+                "limit",
+                "from_line",
+                "from_byte",
+                "since_cursor",
+                "byte_budget",
+            ] {
                 if let Some(value) = args[key].as_u64() {
                     query.append_pair(key, &value.to_string());
                 }
+            }
+            if let Some(token) = args["continuation"].as_str() {
+                query.append_pair("continuation", token);
             }
         }
         state.remote.http_client().get(url)
     };
     match request(host, request_builder).await {
         Ok(mut value) => {
-            if action == "output" && value.get("exited").is_none() {
+            if let Some(budget) = requested_budget {
+                if value["encoding"] != "json-text" {
+                    return failure(
+                        host,
+                        "daemon does not support byte-budget output; update the daemon",
+                    );
+                }
+                if serde_json::to_vec(&value)
+                    .expect("JSON response serializes")
+                    .len()
+                    > budget
+                {
+                    return failure(host, "daemon response exceeds requested byte_budget");
+                }
+            }
+            if action == "output"
+                && value.get("exited").is_none()
+                && value["encoding"] != "json-text"
+            {
                 return failure(
                     host,
                     "daemon does not support MCP output parity; update the daemon",
                 );
+            }
+            if value["encoding"] == "json-text" {
+                return value;
             }
             value["connection_id"] = json!(host);
             if let Some(note) = value["continuation"].as_str() {
@@ -176,7 +236,18 @@ pub(super) async fn call(state: &Arc<AppState>, host: &str, id: &str, args: &Val
             }
             value
         }
-        Err(value) => value,
+        Err(value) => {
+            if requested_budget.is_some_and(|budget| {
+                serde_json::to_vec(&value)
+                    .expect("JSON error serializes")
+                    .len()
+                    > budget
+            }) {
+                failure(host, "daemon error exceeds requested byte_budget")
+            } else {
+                value
+            }
+        }
     }
 }
 
@@ -230,6 +301,75 @@ async fn request(host: &str, builder: reqwest::RequestBuilder) -> Result<Value, 
 mod tests {
     use super::super::tests::test_state;
     use super::*;
+
+    // Catches: close rejected remotely, alias targeting the wrong daemon, loss
+    // of tombstone output, or an explicit connection bypassing self-close.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn remote_mcp_close_uses_owner_tombstone_and_preserves_self_guard() {
+        let hub = test_state();
+        let remote = test_state();
+        let id = uuid::Uuid::new_v4().to_string();
+        crate::state::tests_support::insert_dummy_session(&remote, &id);
+        remote
+            .session_maps
+            .term_aliases
+            .insert(id.clone(), "remote-1".into());
+        let mut log = crate::state::VtLogBuffer::new(24, 80, 100);
+        log.process(b"final remote output\r\n");
+        remote
+            .grid
+            .vt_log_buffers
+            .insert(id.clone(), parking_lot::Mutex::new(log));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        let token = remote.session_token.read().clone();
+        hub.remote
+            .force_connected_for_test("mint", &url, Some(&token));
+        let owner = Arc::clone(&remote);
+        let server = tokio::spawn(async move {
+            axum::serve(
+                listener,
+                super::super::build_remote_router(owner)
+                    .into_make_service_with_connect_info::<std::net::SocketAddr>(),
+            )
+            .await
+            .unwrap();
+        });
+        let own = call_with_caller(
+            &hub,
+            "mint",
+            "remote-1",
+            &json!({"action":"close"}),
+            Some(&id),
+        )
+        .await;
+        let preserved = remote.session_maps.sessions.contains_key(&id);
+        let reply = call(&hub, "mint", "remote-1", &json!({"action":"close"})).await;
+        let closed = !remote.session_maps.sessions.contains_key(&id);
+        let tail = call(&hub, "mint", &id, &json!({"action":"output"})).await;
+        let again = call(&hub, "mint", &id, &json!({"action":"close"})).await;
+        crate::pty::close_pty_core(&remote, &id, false);
+        server.abort();
+        assert!(
+            own["error"]
+                .as_str()
+                .is_some_and(|s| s.contains("Cannot close own session")),
+            "{own}"
+        );
+        assert!(preserved);
+        assert_eq!(reply, json!({"ok":true,"connection_id":"mint"}));
+        assert!(closed, "owning daemon must close the live PTY");
+        assert_eq!(tail["exited"], true, "{tail}");
+        assert!(
+            tail["data"]
+                .as_str()
+                .unwrap()
+                .contains("final remote output"),
+            "{tail}"
+        );
+        assert_eq!(again["ok"], true, "{again}");
+    }
 
     // Catches: remote output silently becomes raw HTTP output, loses tombstone
     // state/cursors, or bypasses the native absolute-window rules.
@@ -392,5 +532,46 @@ mod tests {
         .unwrap()
         .unwrap_err();
         assert!(ambiguity["error"].as_str().unwrap().contains("conflicts"));
+    }
+    // Catches: an older daemon ignores byte_budget and its full exited-bearing body bypasses the proxy bound.
+    #[tokio::test]
+    async fn remote_output_rejects_daemon_ignoring_requested_byte_budget() {
+        let hub = test_state();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        hub.remote
+            .force_connected_for_test("old-daemon", &url, None);
+        let server = tokio::spawn(async move {
+            // Recorded actual daemon response from the audit, not a fabricated external payload.
+            let app = axum::Router::new().route(
+                "/sessions/{id}/output",
+                axum::routing::get(|| async {
+                    axum::Json(
+                        serde_json::from_str::<Value>(include_str!(
+                            "../fixtures/mcp-output-2005.txt"
+                        ))
+                        .unwrap(),
+                    )
+                }),
+            );
+            axum::serve(listener, app).await.unwrap();
+        });
+        let id = uuid::Uuid::new_v4().to_string();
+        let result = call(
+            &hub,
+            "old-daemon",
+            &id,
+            &json!({"action":"output","byte_budget":1024}),
+        )
+        .await;
+        server.abort();
+        assert!(
+            serde_json::to_vec(&result).unwrap().len() <= 1024,
+            "legacy daemon bypassed byte budget"
+        );
+        assert!(
+            result.get("error").is_some(),
+            "capability mismatch must fail explicitly: {result}"
+        );
     }
 }

@@ -1,6 +1,7 @@
 import commander from '../../src-tauri/src/themes/commander.json';
 import paper from '../../src-tauri/src/themes/vscode-light.json';
 import perimeter from '../../src/__tests__/fixtures/ego-perimeter/effective-default.json';
+import {settingsCatalogue} from '../../src/generated/settingsCatalogue';
 export const isTauri=()=>new URLSearchParams(location.search).get('browser')!=='1';
 export const owningConnectionFor=()=>undefined;
 export const buildHttpUrl=(p:string)=>'http://127.0.0.1:15391/blocked'+p;
@@ -16,6 +17,17 @@ const config={shell:null,font_family:'monospace',font_size:13,theme:'commander',
 export async function invoke(cmd:string,args?:any):Promise<any>{calls.push(cmd);switch(cmd){
 case 'list_themes': return [themeEntry('commander', commander), themeEntry('vscode-light', paper)];
 case 'plugin_settings_action': return pluginAction(args);
+case 'settings_action': {
+ // Read-only synthetic UI state, derived from shipped descriptors; never service evidence.
+ const request=args.request;
+ if(request.action!=='get')return {error:{code:'unavailable',nextAction:'get',persisted:false}};
+ const values=Object.fromEntries((request.paths??[]).map((path:string)=>{
+  const field=Object.values(settingsCatalogue.fields).find(field=>field.store===request.store&&field.path===path);
+  const value=field&&'default' in field?field.default:null;
+  return [path,{stored:value,effective:value,source:'visual fixture'}];
+ }));
+ return {revision:'visual-fixture-only',values};
+}
 case 'list_discovered_ssh_hosts': return {hosts:[],hashed_count:0};
 case 'list_ssh_agent_keys': return {keys:[],agent_type:'fixture'};
 case 'list_remote_connections': case 'remote_connection_statuses': return [];

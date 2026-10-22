@@ -479,3 +479,27 @@ it("unload during a pending get removes the editor — catches a late value revi
 	expect(view.getByRole("heading", { name: "Settings" })).toBeVisible();
 	expect(view.container.textContent).not.toContain("Fixture integration");
 });
+
+it("no-op blur releases the draft — catches a phantom dirty edit overwriting a peer MCP value", async () => {
+	const { settingsRefresh } = await import("../../../services/settingsRefresh");
+	const { toastsStore } = await import("../../../stores/toasts");
+	vi.spyOn(toastsStore, "add").mockReturnValue(0);
+	let refresh: ((snapshot: unknown) => void) | undefined;
+	vi.spyOn(settingsRefresh, "register").mockImplementation((reader) => {
+		if (reader.section === "plugins.fixture") refresh = reader.apply;
+		return () => {};
+	});
+	try {
+		const view = render(() => <SettingsPanel visible onClose={() => {}} initialTab="plugin:fixture" />);
+		const input = await view.findByDisplayValue("https://example.test");
+		fireEvent.input(input, { target: { value: "https://draft.test" } });
+		fireEvent.input(input, { target: { value: "https://example.test" } });
+		fireEvent.blur(input);
+		refresh!({ revision: "peer", values: { "/endpoint": { effective: "https://peer.test" } } });
+		await waitFor(() => expect((input as HTMLInputElement).value).toBe("https://peer.test"));
+		fireEvent.blur(input);
+		expect(mockInvoke.mock.calls.some(([, args]) => args?.action?.action === "set")).toBe(false);
+	} finally {
+		vi.restoreAllMocks();
+	}
+});
