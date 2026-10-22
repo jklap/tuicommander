@@ -1920,6 +1920,7 @@ export const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 
 	// --- MCP status ---
 	get_mcp_status: { map: () => ({ method: "GET", path: "/mcp/status" }) },
+	get_mcp_audit: { map: () => ({ method: "GET", path: "/mcp/audit" }) },
 
 	// --- Network ---
 	get_local_ip: { map: () => ({ method: "GET", path: "/system/local-ip" }) },

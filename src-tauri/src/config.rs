@@ -898,6 +898,10 @@ pub(crate) struct AppConfig {
     #[serde(default)]
     #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Allows MCP agents to write work items.","operations":["get","set"],"confirmationClass":"execution_authority"}))]
     pub(crate) mcp_work_item_writes: bool,
+    /// Record and show body-free outcomes of MCP tools/call requests. Default on in debug builds only.
+    #[serde(default = "default_mcp_call_audit_enabled")]
+    #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Starts or stops recording MCP call outcomes and showing them in Settings.","operations":["get","set"],"confirmationClass":"ordinary"}))]
+    pub(crate) mcp_call_audit_enabled: bool,
     /// Fixed port for MCP server (0 = OS-assigned)
     #[serde(default = "default_mcp_port")]
     #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates mcp port for the current owner.","operations":["get","set"],"confirmationClass":"execution_authority"}))]
@@ -1277,6 +1281,11 @@ fn default_terminal_renderer() -> String {
     "webgl".to_string()
 }
 
+/// The audit records every MCP call: off in release builds, on while developing.
+fn default_mcp_call_audit_enabled() -> bool {
+    cfg!(debug_assertions)
+}
+
 fn default_mcp_port() -> u16 {
     3845
 }
@@ -1316,6 +1325,7 @@ impl Default for AppConfig {
             theme: "commander".to_string(),
             mcp_server_enabled: true,
             mcp_work_item_writes: false,
+            mcp_call_audit_enabled: default_mcp_call_audit_enabled(),
             mcp_port: default_mcp_port(),
             mcp_config_installed: false,
             ide: String::new(),
@@ -5500,6 +5510,7 @@ mod tests {
             theme: "dark".to_string(),
             mcp_server_enabled: true,
             mcp_work_item_writes: false,
+            mcp_call_audit_enabled: false,
             mcp_port: 4000,
             mcp_config_installed: false,
             ide: "cursor".to_string(),
@@ -10048,6 +10059,24 @@ mod tests {
                 "beta_channel_migrated",
             ],
         );
+    }
+
+    // Catches: the debug default not applied (empty view for developers) or release defaulting on.
+    #[test]
+    fn mcp_call_audit_defaults_on_only_in_debug_builds() {
+        assert_eq!(
+            AppConfig::default().mcp_call_audit_enabled,
+            cfg!(debug_assertions)
+        );
+        let mut file = serde_json::to_value(AppConfig::default()).unwrap();
+        file.as_object_mut()
+            .unwrap()
+            .remove("mcp_call_audit_enabled");
+        let legacy: AppConfig = serde_json::from_value(file.clone()).unwrap();
+        assert_eq!(legacy.mcp_call_audit_enabled, cfg!(debug_assertions));
+        file["mcp_call_audit_enabled"] = serde_json::json!(false);
+        let off: AppConfig = serde_json::from_value(file).unwrap();
+        assert!(!off.mcp_call_audit_enabled);
     }
 
     #[test]

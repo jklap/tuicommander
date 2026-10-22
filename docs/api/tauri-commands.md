@@ -683,6 +683,7 @@ empty result.
 | `list_markdown_files` | `path` | `Vec<MarkdownFileEntry>` | List .md files in dir |
 | `read_file` | `path, file` | `String` | Read file contents |
 | `get_mcp_status` | -- | `JSON` | MCP server status plus unfiltered `native_tools: [{name, summary, description}]` Settings inventory (no token — use `get_connect_url` for QR) |
+| `get_mcp_audit` | -- | `JSON` | Body-free MCP tools/call outcome audit (same body as `GET /mcp/audit`); `{enabled:false,records:[]}` while `mcp_call_audit_enabled` is off |
 | `suspended_session_action` | `request` | JSON | Rust-owned durable suspend/resume, metadata sync, list, forget and verified resume resolution. HTTP: `POST /sessions/suspended`; actions and shapes documented in HTTP API |
 | `mcp_confirm_response` | `request_id, confirmed` | `()` | Answer a pending `ui(action=confirm)`. HTTP: `POST /mcp/confirm-response`. Every client is shown the same request and the first answer wins, so an unknown or already-answered id is a no-op, not an error |
 | `get_connect_url` | `ip` | `String` | Build QR connect URL server-side (token stays in backend) |
