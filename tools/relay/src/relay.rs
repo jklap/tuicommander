@@ -495,8 +495,9 @@ async fn forward_to_others(
     };
     let mut overflowed = false;
     for tx in targets {
-        if let Err(mpsc::error::SendTimeoutError::Timeout(_)) =
-            tx.send_timeout(msg.clone(), state.timing.peer_send_timeout).await
+        if let Err(mpsc::error::SendTimeoutError::Timeout(_)) = tx
+            .send_timeout(msg.clone(), state.timing.peer_send_timeout)
+            .await
         {
             overflowed = true;
         }
