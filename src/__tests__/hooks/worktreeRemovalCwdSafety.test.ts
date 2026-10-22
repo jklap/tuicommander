@@ -87,6 +87,44 @@ describe("worktree removal cwd authority", () => {
 		}
 	});
 
+	// Catches: force removal reports "force" even when the user explicitly keeps the branch.
+	it("force removing a dirty worktree while keeping its branch preserves the label", async () => {
+		await repoSettingsStore.hydrate();
+		repoSettingsStore.getOrCreate(REPO, "repo");
+		repoSettingsStore.update(REPO, {
+			deleteBranchOnRemove: true,
+			branchLabels: { feature: "Keep dirty branch label" },
+		});
+		const [removingBranches, setRemovingBranches] = createSignal(new Set<string>());
+		const coordinator = createWorktreeRemovalCoordinator({
+			repo: {
+				removeWorktree: async () => ({
+					branch: "feature",
+					removal_rule: "force",
+					branch_delete_warning: null,
+				}),
+				getWorkspaceLifecycle: async () => ({
+					dirtyFiles: 1,
+					commitStatus: "unmerged",
+					removalSafety: "requires_force",
+					dirtyFingerprint: "confirmed-dirty-checkout",
+				}),
+			},
+			dialogs: { confirmRemoveWorktree: async () => true },
+			closeTerminal: async () => {},
+			setStatusInfo: vi.fn(),
+			removingBranches,
+			setRemovingBranches,
+		});
+		try {
+			await coordinator.handleRemoveWorkspace(REPO, "feature", true);
+			expect(repositoriesStore.get(REPO)?.workspaces.feature).toBeUndefined();
+			expect(repoSettingsStore.get(REPO)?.branchLabels.feature).toBe("Keep dirty branch label");
+		} finally {
+			repoSettingsStore.remove(REPO);
+		}
+	});
+
 	// Catches: explicit removal closes sidebar members before the safe backend event can preserve them.
 	it("explicit removal preserves misfiled outside-cwd tabs and closes only checkout residents", async () => {
 		const root = add(REPO);
