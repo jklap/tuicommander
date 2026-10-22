@@ -344,3 +344,100 @@ fill assertions. `lifecycle.json` records zero remaining PTY sessions, owned tab
 and named daemon closed, exact instance stop exit 0, and expected supervisor
 termination. No daily instance, shared Chrome process or installed binary was
 stopped or replaced.
+
+
+## Follow-up: server send, browser ACK and randomized input phases
+
+The coordinator asked whether an rAF-timed client acknowledgement holds the next
+echo frame, and requested randomized phases if no such coupling exists. The new
+trace includes native frame cut, watch submission, WebSocket send begin and send
+completion, browser WebSocket sends, HTTP request paths, decoded acceptance and
+actual rAF entry. It runs 20 trusted keys per arm with seeded pseudo-random delays
+of 103–265 ms between input pairs, rather than a fixed 150 ms. A second arm uses
+the same randomized schedule with compositor screencast disabled, to test whether
+continuous PNG capture alone creates the phase alignment. The controlled PTY
+output remains unchanged. No production fix was present.
+
+### Source and observed client traffic exclude an ACK gate
+
+- Browser `WsTransport.ackFrame` is a no-op by design
+  (`canvasTerminalTransport.ts:466`). It does not send credit from paint or rAF.
+- Desktop `TauriTransport.ackFrame` invokes `ack_terminal_frame`, but it is not
+  the browser transport used here. The desktop gate cannot stop the ticker when
+  browser watch subscribers exist (`pty.rs`, ticker gate/watcher branches), and
+  `send_grid_frame` publishes to the watch before consulting the desktop channel
+  gate.
+- The grid WebSocket sender waits on `frame_rx.changed()` and sends the latest
+  frame. It repairs skipped sequence numbers with a full frame. Its receive loop
+  ignores text control messages and does not require an ACK (`mcp_http/session.rs`,
+  grid stream sender/receiver). These are bounded newest-frame semantics, not a
+  client-paint credit protocol.
+- The observer recorded **zero browser WebSocket sends in both 20-key arms**.
+  HTTP paths during measurement contain input writes, occasional full-frame
+  reconciliation requests, foreground observation and unrelated config reads;
+  there is no ACK, visibility or resize request per echo. All request paths and
+  times are retained in `server-analysis.json`.
+
+### The server sends promptly; randomized phases do not remove alignment
+
+Each table cell is median / p95 / maximum milliseconds, with 20 keys per arm.
+
+| Boundary | Randomized + PNG capture | Randomized, no screencast |
+| --- | ---: | ---: |
+| Event → frame watch submission | 1.590 / 2.487 / 4.439 | 2.611 / 6.636 / 7.673 |
+| Frame cut → watch submission | 0.011 / 0.066 / 0.067 | 0.015 / 0.056 / 0.064 |
+| Watch submission → WS send begin | 0.020 / 0.080 / 0.129 | 0.017 / 0.065 / 0.066 |
+| WS send begin → send completion | 0.031 / 0.084 / 0.093 | 0.024 / 0.076 / 0.089 |
+| WS send completion → browser message | 6.434 / 16.535 / 16.752 | 7.796 / 15.253 / 16.734 |
+| Accepted frame → actual rAF entry | 15.850 / 16.400 / 16.400 | 15.650 / 16.300 / 17.100 |
+| Event → matching fill | 24.350 / 34.500 / 34.800 | 25.800 / 34.700 / 37.700 |
+
+Send completion is completion of the awaited WebSocket send operation, not a
+packet-capture timestamp. Its interval to JS message handling still includes
+socket/network delivery, browser ingress and browser task dispatch. Native and
+browser timestamps are epoch-aligned; do not read submillisecond cross-clock
+values as precise hardware timings.
+
+The actual key event phases varied across the frame period: phase since previous
+sentinel callback ranged 1.700–15.700 ms with capture and 1.700–16.500 ms without
+capture (19 keys each; the first precedes the sentinel's first callback). Native
+send completion phases also span the period: 0.083–16.369 ms and 0.150–16.613 ms,
+respectively. The server is not waiting to send just after client rAF.
+
+But browser message phases remain tightly after the previous callback:
+median/p95/range 0.650/1.500/0.300–1.600 ms with capture and
+1.000/2.100/0.300–2.500 ms without capture. Consequently, the accepted-to-rAF wait
+**does not become uniform with an approximately 8 ms median**. Randomizing input
+and removing screencast did not eliminate it. All 40 keys still paint in the first
+subsequent sentinel-observed rAF opportunity, in that callback.
+
+This rules out the proposed application ACK/credit coupling and also contradicts
+the alternative claim that fixed test cadence alone explains the alignment. The
+remaining observed phase concentration arises after server send completion and
+before JS message delivery, followed by the legitimate next rAF. This trace does
+not distinguish socket delivery from Chromium ingress/task scheduling, and does
+not prove a repairable TUIC code defect inside that interval. It would be wrong
+to force the evidence into either of the proposed explanations or claim the
+random-phase control passed a uniformity result that it did not produce.
+
+No speculative ACK bypass, paint bypass or RED was added. There is no post-fix
+`seq` comparison because there is no fix. The unresolved transport/browser
+interval and unmet timing bounds remain explicit for the coordinator's next
+scope decision. The earlier three successful shell pairs remain the available
+shell comparison, not a new result.
+
+### Evidence and cleanup
+
+Evidence is under `~/Gits/.tmp/2040-web/phase/`: `native.log`, `observer.patch`,
+`measure-fine.mjs`, `run.py`, `analyze-fine.py`, `analyze-server.py` and
+`lifecycle.json`. Each of `capture/` and `no-capture/` holds `probe.json`,
+`summary.json`, `timeline.json`, `analysis.json`, `server-timeline.json` and
+`server-analysis.json`. The capture arm also retains actual compositor PNGs;
+the no-capture arm deliberately has no presentation samples. Session IDs are
+`104aea93-3631-473c-ac78-78babd4c4554` and
+`778ce40a-529e-4fa5-8be0-0ea79fac2abf`, respectively.
+
+All temporary Rust and frontend observers were restored byte-for-byte. The final
+lifecycle reports zero measurement sessions, owned tab and named daemon closure,
+and exact isolated instance stop exit 0. No shared Chrome or daily app process
+was stopped. No source fix, suite, GREEN, mutation or cross-target claim is made.
