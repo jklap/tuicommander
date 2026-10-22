@@ -2,7 +2,11 @@
 
 ## Outcome
 
-**The proposed cause is not reproduced. No production fix is justified yet.**
+**Recommend closing the native-outage claim as not a defect.** The supplied
+October 22 deltas remove upstream tools only. Both historical October 19/20
+core-native removal deltas match application startup with a changed bridge
+binary and bridge initialization. No unexplained core-native removal was found
+in the requested record. No production fix or failing regression test is justified.
 
 On unchanged source `2c90bcf60a53b17eb6094e56c80094292b54d43e`, a real
 `tuic-bridge` connected to an isolated desktop instance retained native tools
@@ -200,16 +204,59 @@ The supplied claim that these samples removed native tools is contradicted by
 their own source. This is consistent with normal upstream filtering and the
 bridge's list_changed notifications, not evidence of a TUIC disconnect.
 
-The longer transcript does contain older native-removal deltas, including
-October 19 at 06:51:58.737Z and October 20 at 18:34:48.905Z. Their causes have
-not been established here. Do not generalize the October 22 finding to every
-historical disconnect or dismiss a future trace that names native tools.
+## Historical native-removal classification
 
-## Remaining decision
+The full transcript scan found four deltas with unnamespaced native names.
+Only two contain the core names in the revised October 19/20 criterion.
+`historical-native-deltas.json` retains the exact removal arrays, transcript
+line numbers, selected daily-log lines and limits. The active transcript had
+108 TUIC removal deltas at extraction; that total can grow.
 
-Do not change registry filtering or suppress list_changed to fix the supplied
-October 22 samples: their upstream-only removal is correct. The coordinator
-must reconcile the story's original defect claim and RED criterion with the
-structured client evidence. A genuine native-loss report still needs a delta
-that names native tools, bridge stderr or a failing tools/list response. No
-corresponding RED test has been reproduced, and no production fix is claimed.
+| Client attachment UTC | Native removal | Classification and daily-log evidence |
+| --- | --- | --- |
+| October 19, 06:51:58.737 | 17 native names, including agent/ui/session/repo | App restart with changed bridge binary and bridge initialization. October 19 lines 6811–6825 rewrite bridge digest 9ce288… to f40761… at 06:51:27Z; lines 6837/6840 start the HTTP lifecycle (`first_start=true`) and socket at 06:51:28Z; lines 7051/7052 initialize the bridge and Claude at 06:51:57Z. |
+| October 19, 15:47:16.513 | remote only | Explained runtime availability gate, outside the core-name criterion. Lines 26215–26361 show remote connection failures at 15:46–15:47Z, including DNS/HTTP 403 and SSH authentication failures. The native gate hides remote when no server is connected. |
+| October 20, 18:34:48.905 | 18 native names, including agent/ui/session/repo | App restart with changed bridge binary and bridge initialization. October 20 lines 18604–18618 rewrite bridge digest 909db1… to efb199… at 18:34:21Z; lines 18624/18627 start the HTTP lifecycle (`first_start=true`) and socket; line 18853 initializes a fresh bridge at 18:34:46Z for the coordinator TUIC session. |
+| October 21, 18:03:10.713 | remote only | Outside the requested October 19/20 dates and core-name set; not attributed by this investigation. |
+
+The native `remote` gate is explicit in
+`src-tauri/src/mcp_http/mcp_transport_catalogue.rs:915`. Git blame dates its
+introduction to commit `c7cbdad3e3`, October 19 at 12:45:52Z, before the
+remote-only removal. That event is not an agent/ui/session/repo disconnect.
+
+For both core-native removals, startup and changed bridge digests establish
+restart/binary replacement, not the reason the preceding process exited.
+Manual restart versus crash remains unknown. The record does not prove the
+exact instant of tool loss or the intermediate tools/list response. It does
+place both client deltas in an app/bridge restart window, rather than an
+otherwise running server's isolated upstream circuit transition.
+
+No unexplained core-native removal remains in the requested October 19/20
+record. Close the original native-outage claim as not a defect; do not create
+a RED test for a failure that the evidence does not show. Do not generalize
+this conclusion to every historical disconnect or a future native-loss trace.
+
+## Upstream discovery policy recommendation
+
+Recommend retaining last-known upstream schemas during a **temporary circuit
+opening**, with a clear unavailable/retrying error on calls. This would make
+discovery more stable for clients and avoid catalogue churn during short
+outages. It is a separate product behavior change, not a fix for native loss.
+The current behavior correctly follows its ready-only discovery contract.
+
+Implement retention only after approval. Its contract must distinguish a
+transient circuit from explicit disable/delete, missing authentication and
+permanent configuration failure; define cache lifetime and schema replacement
+on recovery; and test discovery/search/dispatch together. Do not suppress
+list_changed globally or retain deleted/disabled tools to mask Claude's
+misleading wildcard notice. No policy change is implemented here.
+
+## Verification limits
+
+The two live bridge probes are the targeted behavioral checks, both exit zero;
+no Rust unit suite, rb run, mutation run or production-code change is claimed.
+Live calls cover agent/session/repo, not ui/progress. Code inspection of the
+shared discovery/dispatch gate at catalogue lines 902–920 shows no upstream
+health dependency for ui/progress; it does not substitute for a claim that
+their UI side effects were live exercised. Collapsed discovery and simultaneous
+multi-upstream outages remain untested. All owned probe processes were stopped.
