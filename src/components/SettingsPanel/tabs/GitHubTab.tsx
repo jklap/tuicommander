@@ -128,6 +128,14 @@ export const GitHubTab: Component = () => {
 	const [copied, setCopied] = createSignal(false);
 	const [avatarBroken, setAvatarBroken] = createSignal(false);
 	const [diagnostics, setDiagnostics] = createSignal<GitHubDiagnostics | null>(null);
+	// compute_diagnostics reports a cooled-down NOT_FOUND repo in both lists; the access error already names it.
+	const unexplainedNotFound = () => {
+		const d = diagnostics();
+		const explained = new Set(
+			(d?.repo_access_errors ?? []).flatMap((group) => group.repos.map((repo) => `${group.owner}/${repo.repo}`)),
+		);
+		return (d?.repos_not_found ?? []).filter((key) => !explained.has(key));
+	};
 	// DEFERRED (2026-10-17) — CircleCI settings catalogue owner is tracked in 1991-bd88.
 	const [circleCiStatus, setCircleCiStatus] = createSignal<CircleCiTokenStatus | null>(null);
 	const [circleCiToken, setCircleCiToken] = createSignal("");
@@ -670,12 +678,12 @@ export const GitHubTab: Component = () => {
 						</button>
 
 						{/* Not-found repos in cooldown carry no access error (compute_diagnostics skips them) */}
-						<Show when={(diagnostics()?.repos_not_found?.length ?? 0) > 0}>
+						<Show when={unexplainedNotFound().length > 0}>
 							<div class={g.diagWarning}>
 								<div>
-									<strong>Cannot access {diagnostics()?.repos_not_found.length} repo(s) with this token</strong>
+									<strong>Cannot access {unexplainedNotFound().length} repo(s) with this token</strong>
 									<ul class={g.diagRepoList}>
-										<For each={diagnostics()?.repos_not_found}>{(repo) => <li>{repo}</li>}</For>
+										<For each={unexplainedNotFound()}>{(repo) => <li>{repo}</li>}</For>
 									</ul>
 								</div>
 							</div>

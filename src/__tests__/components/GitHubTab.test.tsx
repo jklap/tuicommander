@@ -479,6 +479,27 @@ describe("GitHubTab — access diagnostics", () => {
 		expect(await findByText(/o\/r/)).toBeTruthy();
 	});
 
+	// Catches: a repo reported in both repos_not_found and repo_access_errors rendered twice (live shape from compute_diagnostics).
+	it("does not list a not-found repo again when an access error already explains it", async () => {
+		const GitHubTab = await loadTab();
+		mockDiagnostics({
+			repos_monitored: 0,
+			repos_not_found: ["o/r"],
+			repo_access_errors: [
+				{
+					owner: "o",
+					host: "github.com",
+					account_id: "github.com",
+					repos: [{ repo: "r", reason: "not_found", message: "Could not resolve o/r" }],
+					oauth_app_url: null,
+				},
+			],
+		});
+		const { findByText, queryByText } = render(() => <GitHubTab />);
+		expect(await findByText(/Could not resolve/)).toBeTruthy();
+		expect(queryByText(/Cannot access/)).toBeNull();
+	});
+
 	// Catches: Status section empty instead of saying no repository is monitored.
 	it("says explicitly that no repository is monitored when diagnostics are otherwise benign", async () => {
 		const GitHubTab = await loadTab();
