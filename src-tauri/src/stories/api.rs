@@ -505,7 +505,7 @@ mod tests {
     }
 
     /// Catches: counting stories of finished plans, counting won't-fix stories in the total, and
-    /// leaking another project's plans into the summary.
+    /// counting stories abandoned behind a cancelled dependency, and leaking another project's plans into the summary.
     #[test]
     fn summary_counts_only_active_plans_of_the_project() {
         let config = tempfile::tempdir().expect("config");
@@ -554,8 +554,21 @@ mod tests {
             )
         };
         transition(project, &first, StoryCommand::StartManual);
+        // `third` depends on `second`, which is then cancelled: `third` is abandoned.
+        let third = story_of(
+            story_action(
+                project,
+                StoryAction::AddDependency {
+                    story_id: third.id.clone(),
+                    dependency_id: second.id.clone(),
+                    expected_revision: third.revision,
+                },
+                None,
+            )
+            .unwrap(),
+        );
+        assert_eq!(third.status, StoryStatus::Backlog);
         transition(project, &second, StoryCommand::WontFix);
-        assert_eq!(third.status, StoryStatus::Ready);
 
         // Finished plan: its done story must not count.
         let StoryReply::Plan(done_plan) = story_action(
@@ -596,7 +609,7 @@ mod tests {
         };
         assert_eq!(
             summary,
-            StorySummary { active_plans: 1, in_progress: 1, done: 0, total: 2 }
+            StorySummary { active_plans: 1, in_progress: 1, done: 0, total: 1 }
         );
         let StoryReply::Summary(empty) = story_action(
             tempfile::tempdir().unwrap().path().to_str().unwrap(),
