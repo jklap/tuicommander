@@ -86,13 +86,14 @@ units; invalid names return `telegram_invalid_sender_name`. Each non-owner peer
 may send once per 30 seconds; an earlier attempt returns
 `telegram_sender_rate_limited`. The interval is charged before network I/O, including
 uncertain failures, and expires in memory. Owners have no sender interval or prefix.
-Untagged outgoing chunks that start with `[` receive a leading backslash so they
-cannot impersonate another sender. Splitting includes attribution and escape bytes
-within the conservative 4096 UTF-16-unit message budget.
+Owner text remains byte-exact, including leading brackets. Splitting includes
+attribution within the conservative 4096 UTF-16-unit message budget. An owner
+message that starts with a live peer name in brackets can route a Reply to that
+peer: this ambiguity is accepted instead of changing the authored text.
 
 For Telegram Reply, the adapter reads `message.reply_to_message.text`. A leading
 `[<name>] ` selects a unique live peer with that exact name. New messages, unprefixed
-or escaped replies, unknown names, dead peers and duplicate live names use the
+replies, unknown names, dead peers and duplicate live names use the
 current inbound owner. Reply routing does not register the sender; the request’s
 begin/activity/finish authority follows its delivered recipient as before. No sent
 message-ID cache is kept. Renamed or replaced peers therefore use current names,

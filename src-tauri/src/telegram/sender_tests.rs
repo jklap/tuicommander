@@ -112,9 +112,9 @@ async fn sender_limit_is_per_peer_and_expires_without_registration() {
     assert_eq!(server.requests().len(), 4);
 }
 
-// Catches: foreign button callbacks mutate owner routing, or a forged owner prefix routes replies.
+// Catches: non-owner button sends mutate owner routing or create callback handles.
 #[tokio::test]
-async fn non_owner_buttons_are_refused_and_owner_brackets_are_escaped() {
+async fn non_owner_buttons_are_refused() {
     let (_dir, paths) = setup();
     let server = FakeServer::start(vec![]).await;
     let mut runtime = outbound_tests::runtime(paths, server.address).await;
@@ -137,26 +137,6 @@ async fn non_owner_buttons_are_refused_and_owner_brackets_are_escaped() {
         super::Error::NonOwnerButtons
     );
     assert!(server.requests().is_empty());
-    runtime
-        .tool(
-            PEER,
-            "target-mcp",
-            Input::Send {
-                text: "[coordinator] quoted text".into(),
-                buttons: vec![],
-            },
-        )
-        .await
-        .unwrap();
-    assert_eq!(
-        server.requests()[0].1["text"],
-        "\\[coordinator] quoted text"
-    );
-    assert!(
-        runtime
-            .reply_recipient(&json!({"reply_to_text":server.requests()[0].1["text"]}))
-            .is_none()
-    );
 }
 
 // Catches: continuation messages lose attribution or Unicode splitting exceeds Telegram's bound.
@@ -195,7 +175,7 @@ async fn every_non_owner_chunk_has_the_server_prefix() {
 // Catches: stale or ambiguous names select an arbitrary peer instead of the owner.
 #[tokio::test]
 async fn unprefixed_unknown_dead_and_ambiguous_replies_fall_back_to_owner() {
-    for scenario in ["new", "plain", "escaped", "missing", "dead", "ambiguous"] {
+    for scenario in ["new", "plain", "missing", "dead", "ambiguous"] {
         let (_dir, paths) = setup();
         let server = FakeServer::start(vec![]).await;
         let mut runtime = outbound_tests::runtime(paths, server.address).await;
@@ -210,9 +190,6 @@ async fn unprefixed_unknown_dead_and_ambiguous_replies_fall_back_to_owner() {
                     .remove("reply_to_message");
             }
             "plain" => update["message"]["reply_to_message"]["text"] = json!("owner message"),
-            "escaped" => {
-                update["message"]["reply_to_message"]["text"] = json!("\\[coordinator] quoted")
-            }
             "missing" => update["message"]["reply_to_message"]["text"] = json!("[not here] notice"),
             "dead" => {
                 runtime.state.mcp.to_session.remove("sender-mcp");

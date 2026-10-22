@@ -288,19 +288,13 @@ impl Outbound {
         keyboard: Option<Value>,
         prefix: &str,
     ) -> Result<Vec<i64>, Error> {
-        // One extra unit reserves the owner escape on any chunk starting with '['.
         let budget = 4096usize
-            .checked_sub(prefix.encode_utf16().count() + 1)
+            .checked_sub(prefix.encode_utf16().count())
             .ok_or(Error::Config)?;
         let parts = chunks_with_budget(text, budget)?;
         let mut ids = Vec::new();
         for (index, part) in parts.iter().enumerate() {
-            let escaped = if prefix.is_empty() && part.starts_with('[') {
-                "\\"
-            } else {
-                ""
-            };
-            let mut body = json!({"chat_id":chat,"text":format!("{prefix}{escaped}{part}")});
+            let mut body = json!({"chat_id":chat,"text":format!("{prefix}{part}")});
             if index + 1 == parts.len()
                 && let Some(keyboard) = &keyboard
             {
