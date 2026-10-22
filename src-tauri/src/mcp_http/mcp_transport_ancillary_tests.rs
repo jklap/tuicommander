@@ -2608,3 +2608,26 @@ async fn repo_status_without_path_returns_every_repo() {
 
     assert_eq!(result.as_array().unwrap().len(), 2, "{result}");
 }
+
+// Catches: exact string comparison rejects a registered repo given with a trailing slash or via a symlink.
+#[cfg(unix)]
+#[tokio::test]
+async fn repo_status_matches_registered_path_through_slash_and_symlink() {
+    let root = tempfile::tempdir().unwrap();
+    let _config = crate::config::set_config_dir_override(root.path().join("config"));
+    let first = register_git_repo(root.path(), "first");
+    register_git_repo(root.path(), "second");
+    let link = root.path().join("link");
+    std::os::unix::fs::symlink(&first, &link).unwrap();
+
+    for spelling in [format!("{first}/"), link.to_string_lossy().into_owned()] {
+        let result = handle_github(
+            &test_state(),
+            &serde_json::json!({"action": "status", "path": spelling}),
+        )
+        .await;
+        let rows = result.as_array().unwrap_or_else(|| panic!("{spelling}: {result}"));
+        assert_eq!(rows.len(), 1, "{spelling}: {result}");
+        assert_eq!(rows[0]["path"], first, "{spelling}");
+    }
+}
