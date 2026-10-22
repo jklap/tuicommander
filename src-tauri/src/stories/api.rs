@@ -1,5 +1,5 @@
 use super::{
-    NewPlan, NewStory, Plan, PlanSource, PlanState, PlanView, Story, StoryCommand, StoryStatus,
+    CRITERIA_INCOMPLETE, NewPlan, NewStory, Plan, PLAN_DOCUMENT_NOT_FOUND, PlanSource, PlanState, PlanView, Story, StoryCommand, StoryStatus,
     StoryStore, StorySummary, StoryTransition,
 };
 use schemars::JsonSchema;
@@ -88,6 +88,13 @@ pub enum StoryReply {
     Story(Story),
     Stories(Vec<Story>),
     Transitions(Vec<StoryTransition>),
+}
+
+/// True for an error the user can fix (a missing plan file, unchecked criteria).
+pub fn is_user_error(message: &str) -> bool {
+    [PLAN_DOCUMENT_NOT_FOUND, CRITERIA_INCOMPLETE]
+        .iter()
+        .any(|prefix| message.starts_with(prefix))
 }
 
 /// All transports use this boundary, so an identifier alone never grants cross-project access.

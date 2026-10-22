@@ -1,5 +1,5 @@
 use super::model::{
-    NewPlan, NewStory, Plan, PlanState, PlanView, Story, StoryCommand, StoryOrigin, StoryRead,
+    CRITERIA_INCOMPLETE, NewPlan, NewStory, Plan, PlanState, PlanView, Story, StoryCommand, StoryOrigin, StoryRead,
     StoryStatus, StoryTransition, StoryTransitionActor,
 };
 use rusqlite::{Connection, OpenFlags, OptionalExtension, params};
