@@ -1038,6 +1038,57 @@ mod tests {
             stats.last_commit_ts.keys().collect::<Vec<_>>()
         );
     }
+    /// One branch whose reflog is gone used to fail the whole snapshot with
+    /// "branch creation is absent from reflog", so the frontend never got the
+    /// worktree list and stopped reconciling its sidebar rows with git.
+    #[tokio::test]
+    async fn repo_structure_survives_a_branch_with_no_reflog() {
+        let (_dir, path) = setup_test_repo_with_commit();
+        let git = |args: &[&str]| {
+            let out = std::process::Command::new("git")
+                .arg("-C")
+                .arg(&path)
+                .args(args)
+                .output()
+                .expect("run git");
+            assert!(out.status.success(), "git {args:?}: {out:?}");
+        };
+        let base = String::from_utf8(
+            std::process::Command::new("git")
+                .arg("-C")
+                .arg(&path)
+                .args(["branch", "--show-current"])
+                .output()
+                .expect("current branch")
+                .stdout,
+        )
+        .expect("utf8")
+        .trim()
+        .to_string();
+        git(&["switch", "-q", "-c", "no-reflog"]);
+        git(&[
+            "-c",
+            "user.name=t",
+            "-c",
+            "user.email=t@t",
+            "commit",
+            "-q",
+            "--allow-empty",
+            "-m",
+            "own commit",
+        ]);
+        git(&["switch", "-q", &base]);
+        std::fs::remove_file(path.join(".git/logs/refs/heads/no-reflog")).expect("remove reflog");
+
+        let state = crate::state::tests_support::make_test_app_state();
+        let structure = get_repo_structure_impl(&state, path.to_string_lossy().to_string())
+            .await
+            .expect("an unclassifiable branch must not fail the structure snapshot");
+
+        assert!(!structure.worktree_paths.is_empty());
+        assert!(!structure.merged_branches.contains(&"no-reflog".to_string()));
+    }
+
     /// `update_from_base` with the merge strategy must merge a diverged base even
     /// when `merge.ff=only` and the checked-out branch's `mergeOptions` say
     /// `--ff-only`: the explicit `--ff` it forwards is the last word.

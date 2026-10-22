@@ -901,15 +901,22 @@ pub fn get_merged_branches_impl(repo_path: &Path) -> Result<Vec<String>, String>
         {
             continue;
         }
-        let (status, _) = crate::worktree::monitoring_branch_merge(
-            repo_path,
-            &branch,
-            &crate::worktree::monitoring_ref_key(repo_path, &branch)?,
-            false,
-            |_, _, _| false,
-        )?;
-        if status == crate::worktree::WorkspaceCommitStatus::Merged {
-            merged.push(branch);
+        // One branch that cannot be classified (e.g. its reflog is empty or was
+        // expired, so its creation cannot be proven) must not fail the whole
+        // snapshot: this feeds `get_repo_structure`, and a failure there stops the
+        // sidebar from reconciling its workspaces with git at all. Such a branch is
+        // simply not reported as merged.
+        let classified = crate::worktree::monitoring_ref_key(repo_path, &branch).and_then(|key| {
+            crate::worktree::monitoring_branch_merge(repo_path, &branch, &key, false, |_, _, _| {
+                false
+            })
+        });
+        match classified {
+            Ok((crate::worktree::WorkspaceCommitStatus::Merged, _)) => merged.push(branch),
+            Ok(_) => {}
+            Err(error) => {
+                tracing::debug!("merged-branch check skipped for '{branch}': {error}");
+            }
         }
     }
     Ok(merged)
@@ -3060,6 +3067,46 @@ mod tests {
             !merged.iter().any(|b| is_main_branch(b)),
             "main branch should not be in merged list, got: {merged:?}"
         );
+    }
+
+    #[test]
+    fn test_get_merged_branches_skips_a_branch_it_cannot_classify() {
+        let (_dir, repo_root) = history_fixture_repo(3);
+        git_in(&repo_root, &["branch", "merged-feature", "main~1"]);
+        git_in(&repo_root, &["branch", "no-reflog", "main~2"]);
+        // A branch whose reflog is gone cannot have its creation proven, which
+        // makes the classifier error. One such branch must not fail the whole call.
+        let reflog = repo_root.join(".git/logs/refs/heads/no-reflog");
+        std::fs::remove_file(&reflog).expect("remove the branch's reflog");
+
+        let merged = get_merged_branches_impl(&repo_root)
+            .expect("an unclassifiable branch must not fail the snapshot");
+
+        assert!(
+            merged.contains(&"merged-feature".to_string()),
+            "other branches are still classified, got: {merged:?}"
+        );
+        assert!(
+            !merged.contains(&"no-reflog".to_string()),
+            "the unclassifiable branch is not reported merged, got: {merged:?}"
+        );
+    }
+
+    #[test]
+    fn merged_branch_set_still_reports_merged_branches_when_one_branch_is_unclassifiable() {
+        // `merged_branch_set` feeds the sidebar's `is_merged`; before the fix one
+        // reflog-less branch made it fall back to an EMPTY set, so every merged
+        // branch silently stopped showing as merged.
+        let (_dir, repo_root) = history_fixture_repo(3);
+        git_in(&repo_root, &["branch", "merged-feature", "main~1"]);
+        git_in(&repo_root, &["branch", "no-reflog", "main~2"]);
+        std::fs::remove_file(repo_root.join(".git/logs/refs/heads/no-reflog"))
+            .expect("remove the branch's reflog");
+
+        let set = merged_branch_set(&repo_root);
+
+        assert!(set.contains("merged-feature"), "got: {set:?}");
+        assert!(!set.contains("no-reflog"), "got: {set:?}");
     }
 
     #[test]
