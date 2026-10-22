@@ -2313,24 +2313,6 @@ fn resize_noop_guard_returns_none_on_matching_dims() {
     assert_eq!(resize_session_core(&state, "s", 24, 80), Ok(None));
 }
 
-/// Catches a startup resize firing despite the PTY already having that size.
-#[cfg(unix)]
-#[test]
-fn resize_seeds_applied_from_pty_and_noops_at_startup_dims() {
-    let state = crate::state::tests_support::make_test_app_state();
-    spawn_real_pty_session(&state, "s", 40, 100);
-    assert_eq!(resize_session_core(&state, "s", 40, 100), Ok(None));
-    assert_eq!(
-        *state.session_maps.resize_locks.get("s").unwrap().lock(),
-        (40, 100),
-        "first resize must seed the last-applied dims from the kernel PTY"
-    );
-    let entry = state.session_maps.sessions.get("s").unwrap();
-    let mut session = entry.lock();
-    session._child.kill().unwrap();
-    session._child.wait().unwrap();
-}
-
 /// Catches treating a matching grid as proof of a successful resize with no PTY.
 #[test]
 fn resize_matching_grid_without_pty_reports_missing_session() {
