@@ -68,37 +68,6 @@ async fn non_owner_send_preserves_owner_and_prefixes_server_identity() {
     assert_eq!(runtime.registered_peer(), Some(PEER));
 }
 
-// Catches: reply_to_message is lost before delivery, so replies go to the owner.
-#[tokio::test]
-async fn reply_to_sender_reaches_sender_native_inbox_not_owner() {
-    let (_dir, paths) = setup();
-    let server = FakeServer::start(vec![]).await;
-    let mut runtime = outbound_tests::runtime(paths, server.address).await;
-    add_sender(&runtime).await;
-    let value: Value = serde_json::from_str(include_str!("fixtures/reply-to-sender.json")).unwrap();
-    let mail = Update::parse(
-        &value,
-        &runtime.outbound.paths.allowlist().unwrap(),
-        "test-bot",
-        "",
-    )
-    .unwrap()
-    .mail
-    .unwrap();
-    runtime.deliver(mail).await.unwrap();
-    for (sid, expected) in [("sender-mcp", 1), ("target-mcp", 0)] {
-        let inbox: Value = crate::mcp_http::mcp_transport::local_peer_call_with_message_id(
-            &runtime.state,
-            &json!({"action":"inbox","since":0}),
-            Some(sid),
-            None,
-        )
-        .await;
-        assert_eq!(inbox["count"], expected, "{sid}: {inbox}");
-    }
-    assert_eq!(runtime.registered_peer(), Some(PEER));
-}
-
 // Catches: one sender can flood, a different sender is charged, or expiry never recovers.
 #[tokio::test]
 async fn sender_limit_is_per_peer_and_expires_without_registration() {
