@@ -199,5 +199,7 @@ async fn ws_upgrade(
         return StatusCode::BAD_REQUEST.into_response();
     }
 
-    ws.on_upgrade(move |socket| relay::handle_ws(state, session_id, socket))
+    ws.max_message_size(relay::MAX_WS_MESSAGE_BYTES)
+        .max_frame_size(relay::MAX_WS_MESSAGE_BYTES)
+        .on_upgrade(move |socket| relay::handle_ws(state, session_id, socket))
 }

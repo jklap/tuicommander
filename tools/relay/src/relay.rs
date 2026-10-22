@@ -151,6 +151,10 @@ async fn resolve_token(state: &AppState, token: &str) -> Option<String> {
 /// Maximum peers allowed per session (desktop + mobile).
 const MAX_PEERS_PER_SESSION: usize = 2;
 
+/// Largest WebSocket message the relay accepts. A tunnel record is 16 KiB plus
+/// framing and tag; existing mobile event envelopes fit well under this.
+pub const MAX_WS_MESSAGE_BYTES: usize = 1024 * 1024;
+
 /// Bounded channel capacity per peer — backpressure on slow clients.
 const PEER_CHANNEL_CAPACITY: usize = 32;
 
@@ -421,6 +425,10 @@ async fn process_message(
 }
 
 /// Forward a message to all peers in the session except the sender.
+///
+/// A full peer queue ends the whole room. The frames carry an ordered encrypted
+/// stream, so dropping one would corrupt it while both sides still looked
+/// connected; closing both ends is the only outcome the endpoints can detect.
 async fn forward_to_others(
     state: &AppState,
     session_id: &str,
@@ -428,16 +436,47 @@ async fn forward_to_others(
     peer: &mpsc::WeakSender<Message>,
     msg: Message,
 ) {
-    if let Some(slot) = state.sessions.get(session_id) {
+    let overflowed = {
+        let Some(slot) = state.sessions.get(session_id) else {
+            return;
+        };
         if !slot.contains_peer(sender_id, peer) {
             return;
         }
+        let mut overflowed = false;
         for (id, peer_tx) in slot.peers.iter() {
-            if *id != sender_id {
-                // Drop message if peer is slow (bounded channel)
-                let _ = peer_tx.try_send(msg.clone());
+            if *id != sender_id
+                && matches!(
+                    peer_tx.try_send(msg.clone()),
+                    Err(mpsc::error::TrySendError::Full(_))
+                )
+            {
+                overflowed = true;
             }
         }
+        overflowed
+    };
+    if overflowed {
+        evict_room(state, session_id, sender_id, peer);
+    }
+}
+
+/// Drop the room's senders so each writer drains its queue, sends a close
+/// frame and ends its handler. Only the room that overflowed is touched.
+fn evict_room(
+    state: &AppState,
+    session_id: &str,
+    sender_id: u64,
+    peer: &mpsc::WeakSender<Message>,
+) {
+    let _guard = state.admission.lock().expect("admission lock poisoned");
+    let still_ours = state
+        .sessions
+        .get(session_id)
+        .is_some_and(|slot| slot.contains_peer(sender_id, peer));
+    if still_ours {
+        warn!(session_id, "peer queue full, closing room");
+        state.sessions.remove(session_id);
     }
 }
 
@@ -499,9 +538,17 @@ async fn remove_peer(
 async fn write_loop(mut sender: SplitSink<WebSocket, Message>, mut rx: mpsc::Receiver<Message>) {
     while let Some(msg) = rx.recv().await {
         if sender.send(msg).await.is_err() {
-            break;
+            return;
         }
     }
+    // The room dropped this peer's channel (overflow or idle reap): say so
+    // explicitly rather than leaving the socket to look like a network fault.
+    let _ = sender
+        .send(Message::Close(Some(axum::extract::ws::CloseFrame {
+            code: 4004,
+            reason: "room closed".into(),
+        })))
+        .await;
 }
 
 /// Spawn a background task that reaps idle sessions.
