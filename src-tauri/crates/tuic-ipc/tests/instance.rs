@@ -65,10 +65,16 @@ fn unix_socket_path_check_is_exact_at_the_boundary_and_names_the_way_out() {
         "103-byte",
         "TMPDIR",
         "at most 67 bytes",
-        "TUIC_SOCKET",
+        "start the app with a TMPDIR",
     ] {
         assert!(message.contains(needle), "{needle} missing: {message}");
     }
+    // TUIC_SOCKET is read only by clients (bridge/CLI); the listener ignores it,
+    // so it must never be offered as the fix for a listener that cannot bind.
+    assert!(
+        !message.contains("set TUIC_SOCKET"),
+        "advises a client-only env var as the listener fix: {message}"
+    );
     // The 72-byte sandbox TMPDIR holds the primary with no headroom, never
     // the alternate.
     let sandbox = format!("/{}", "s".repeat(71));
