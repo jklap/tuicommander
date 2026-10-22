@@ -1855,12 +1855,14 @@ describe("AIChatPanel: without a configured binary", () => {
 	// An empty `ego_executable` is refused in Rust at connect. Saying so is the
 	// difference between a panel that explains itself and one that silently
 	// never starts.
-	it("explains that ACP is not configured and launches nothing", async () => {
+	it("rejects setup narration while retaining the configuration recovery action", async () => {
 		settings.egoExecutable = "";
-		const { container } = renderIdlePanel();
+		const { container, getByRole } = renderIdlePanel();
 		await settle();
 
 		expect(container.textContent).toContain("AI Chat is inactive because the ego executable is not configured");
+		expect(container.textContent).not.toContain("Select it in Settings");
+		expect(getByRole("button", { name: "Configure ego" })).not.toBeNull();
 		expect(client.connect).not.toHaveBeenCalled();
 		expect(container.querySelector("textarea")).toBeNull();
 	});

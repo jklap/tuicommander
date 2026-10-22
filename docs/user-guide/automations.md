@@ -14,6 +14,14 @@ Select **New automation**, enter a name, repository path, configured run config
 identifier and literal prompt. Choose an existing checkout or a new worktree
 per run with a base branch. The agent uses its run config's permissions.
 
+Saved run configurations are validated against the same named-profile lookup used
+by the runner. Names are case-insensitive; a bare agent type such as `claude`
+is not a saved profile unless a profile has that name. Create, definition
+updates and re-enabling reject an unresolved name with a repair hint listing
+valid saved profiles. Existing list rows retain invalid definitions, but expose
+`run_config_error` and return `next_run_ms: null` until repaired. A profile can
+be removed after saving; launch checks it again and records a failed run.
+
 Choose Hourly, Daily, Weekdays or Weekly, set the time controls and select
 **Apply cadence**. The backend converts the cadence to cron. You can also edit a
 five-field cron expression directly. For a one-time run, choose **Once** and
@@ -59,6 +67,15 @@ Errors stay visible and failed saves retain the draft. **Refresh** retries a
 failed list load. Escape closes the dialog and Tab stays inside it.
 
 ## Needs-you and failure notices
+
+A failed agent-created run also sends one `automation_run_failed` inbox message
+to its recorded creator, including the run id, definition id and failure reason.
+This includes failures before a session or task exists and does not depend on
+sound preferences. Mail uses the normal payload-free peer wake route. The
+recipient must still be registered; acceptance means queued, not read. The
+durable owner-channel claim prevents duplicate or restart replay. Definitions
+created by HTTP/IPC without a creator still use the bell and configured alerts.
+
 
 A live transition to `needs_you` or `failed` adds a Messages bell item. Select
 it to open the canonical saved run, including its status, output and owning
@@ -119,3 +136,19 @@ Search for **Automations**, **scheduler** or **schedule** in the command palette
 Definition cards show a short repository name; hover it for the full path. Daily, weekly, hourly and every-N-minute schedules have plain-language labels. Other expressions retain their cron text. Next-run times come from the backend and use the definition's timezone.
 
 Use Left/Right or Home/End on the Definitions and Runs tabs. New automation, Refresh and search share a toolbar. **Select first automation on open** is enabled by default; clear it to select definitions manually. This preference is saved for the current browser/WebView. Refresh does not replace unsaved edits.
+
+### Ask an agent to schedule a one-time check
+
+A bound agent can call `automations` once with
+`{"action":"create","definition":{"name":"Recheck","prompt":"Check again","in_secs":3600,"run_config":"Your saved profile"}}`.
+The host uses its own clock and this caller's repository. Specify the actual
+saved agent profile in `run_config`; the host does not infer an account/model
+profile from agent type. It returns the saved schedule and next-run timestamp;
+no clock or list lookup is needed. Retrying the identical request from the same
+caller returns the original reminder without resetting its delay. Supply a new
+explicit id to schedule a separate identical reminder. Elapsed delays remain
+exact across daylight-saving changes.
+
+### Guided GitHub event configuration
+
+For step-by-step policy setup, use the three [event configuration Smart Prompts](event-driven-templates.md), not the scheduled draft templates above. The guides verify the owning daemon, agent/reviewer profiles, GitHub auth, skills and supported intake/publication APIs. Missing capabilities stop the interview; no event subscription is created by applying a scheduled template.

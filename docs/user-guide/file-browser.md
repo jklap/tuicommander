@@ -147,3 +147,10 @@ Links in rendered Markdown stay inside TUICommander: file links open a Markdown 
 See [ai-agents.md](ai-agents.md) for how AI-generated plan files are detected and surfaced as a one-click shortcut to open in the viewer.
 
 Browser HTML and Markdown previews load local images only from open repositories and their linked worktrees, through the authenticated repository image route. Images outside those roots show “Image unavailable: outside open repositories.” Desktop asset loading is unchanged.
+
+Filename searches share a path-only inventory per repository. Repeated queries
+filter it in memory; result sizes and timestamps are read from disk for matches.
+Repository events invalidate the inventory, and a 60-second reconciliation
+bound covers roots without a repository watcher. Cold queries share one build
+per repository. Up to eight repository inventories are retained, with ten-minute
+idle eviction.

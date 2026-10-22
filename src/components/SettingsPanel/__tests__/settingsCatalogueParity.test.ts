@@ -49,6 +49,19 @@ describe("settings catalogue/control identity boundary", () => {
 		expect(missingControlIdentities(result).map((control) => control.tag)).toEqual(["input", "button"]);
 	});
 
+	// Catches: owner-dependent controls losing either of their finite catalogue identities.
+	it("resolves_both_literal_owner_identities", () => {
+		const result = extractSettingControls(
+			"fixture.tsx",
+			`<input data-setting-id={props.agentType ? "agents.agents.{key}.launch_modules.{key}" : "agents.launch_modules.{key}"} />`,
+		);
+		expect(result.map((control) => control.settingId)).toEqual([
+			"agents.agents.{key}.launch_modules.{key}",
+			"agents.launch_modules.{key}",
+		]);
+		expect(missingControlIdentities(result)).toEqual([]);
+	});
+
 	// Catches: an extractor skipping JSX in callbacks or stopping at an arrow's >.
 	it("finds_raw_controls_inside_dynamic_rows_and_platform_fallbacks", () => {
 		const source = `<Show when={isTauri()} fallback={<input data-non-setting="navigation" />}><For each={rows()}>{row => <Input onInput={e => edit(row.id, e.currentTarget.value)} />}</For></Show>`;

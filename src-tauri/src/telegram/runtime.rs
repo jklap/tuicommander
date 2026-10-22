@@ -38,6 +38,7 @@ pub(super) enum Command {
 pub(super) struct Runtime {
     pub state: Arc<AppState>,
     pub config: Config,
+    config_watch: super::config::WatchedConfig,
     pub outbound: Outbound,
     pub pending: VecDeque<(String, i64)>,
     pub(super) requests: VecDeque<super::streaming::Request>,
@@ -52,11 +53,13 @@ impl Runtime {
         paths: Paths,
         adapter_sid: String,
     ) -> Result<Self, Error> {
+        let config_watch = super::config::WatchedConfig::new(paths.clone())?;
         let mut outbound = Outbound::new(paths.clone(), BotApi::new(paths)?);
         outbound.recent = state.telegram_recent.clone();
         Ok(Self {
             state,
             config,
+            config_watch,
             outbound,
             pending: VecDeque::new(),
             requests: VecDeque::new(),
@@ -352,10 +355,7 @@ impl Runtime {
         Ok(json!({"accepted":true}))
     }
     pub(super) fn enabled(&self) -> bool {
-        Config::load(&self.outbound.paths)
-            .ok()
-            .flatten()
-            .is_some_and(|c| c.bot_alias == self.config.bot_alias)
+        self.config_watch.enabled(&self.config.bot_alias)
     }
     pub async fn event(&mut self, event: AppEvent) {
         self.retire_registration();

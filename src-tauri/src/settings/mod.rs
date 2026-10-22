@@ -4,6 +4,7 @@ pub mod agents;
 pub mod catalogue;
 pub mod changes;
 pub mod circleci;
+pub mod corrections;
 pub mod ego;
 mod ego_schema;
 pub mod model;
@@ -135,3 +136,6 @@ mod startup_flow_tests;
 mod circleci_tests;
 #[cfg(feature = "desktop")]
 pub(crate) mod legacy;
+
+#[cfg(test)]
+pub(crate) mod refresh_test_support;

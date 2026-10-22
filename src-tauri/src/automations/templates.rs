@@ -60,6 +60,7 @@ pub(crate) fn draft(
         workspace: Workspace::Existing,
         cron: template.cron.into(),
         once_local: None,
+        once_at: None,
         enabled: false,
         grace_secs: 43200,
         overlap: Overlap::Skip,

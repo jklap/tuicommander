@@ -11,7 +11,7 @@ auditConfig:
 # live here. These pin transitive deps for security and to dedupe versions.
 overrides:
   # Pin the runtime sanitizer, including Mermaid's transitive copy.
-  dompurify: "3.4.16"
+  dompurify: "3.4.17"
   # Development-only dependency via Stryker.
   qs: "6.16.0"
   # Patched serialization and source-map lines (frontend advisory audit).

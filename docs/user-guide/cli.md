@@ -137,6 +137,17 @@ arguments exit 2 before connecting. Managed callers send `$TUIC_SESSION` for
 peer binding; callers outside TUICommander register an external identity for
 that invocation.
 
+### Workflow actions
+
+`tuic workflow [<json>|-]` calls the grouped `workflow` MCP tool. Use a typed action envelope:
+
+```bash
+tuic workflow '{"action":"story","input":{"action":"list_plans"}}'
+tuic workflow '{"action":"run","input":{"action":"get","run_id":"run-id"}}'
+```
+
+The other actions are `proposal_create`, `report` and `launch`, each with its typed payload under `input`. Proposal creation requires the run's active bound coordinator and a stable `proposalKey`; retries return the same story. Ordinary story creation is not a substitute. Managed callers retain their caller binding. `tuic story` still calls the shared story service with `--project` support; `tuic automations` still calls the separate scheduler and works when `workflow` is disabled. The old workflow MCP names are removed without aliases. Reconnect after installing the updated backend to discover the new tool.
+
 Register an existing local directory directly through MCP:
 
 ```bash
@@ -177,6 +188,14 @@ on macOS, Linux, and Windows.
 tuic bg "$HOME/Gits/.tmp/build.log" -- make check
 ```
 
+The detached command does not inherit `TUIC_SESSION` or `TUIC_PARENT`. It is
+not the foreground peer: `TUIC_BG_COMMAND=1` marks the command tree as an
+ancestry boundary, including when an agent scrubs its bridge environment. Its progress reports and agent hooks must not change
+the foreground composer state. The runner retains the original caller identity
+for completion queueing and mail. Socket, app-instance and other environment
+settings remain inherited. A command that needs a peer identity must establish
+its own binding instead of using the foreground caller.
+
 On Windows, the detached runner does not inherit the launcher's input or output pipes. Capturing the launcher output therefore returns before the background command completes.
 
 Each background runner generates one completion key and reuses it on queue
@@ -186,6 +205,17 @@ A recognized acceptance remains `queued` in the wake file even after the queue
 has drained. If every queue receipt is lost and mail also fails, the wake file
 reports `uncertain`, not a proven delivery failure; inspect backend state before
 retrying manually. `uncertain` also prevents automatic child closure.
+
+If a BG DONE entry remains in the backend queue for 60 seconds, the backend
+records one warning under source `bg-wake`. Read `/logs?source=bg-wake` on the
+owning instance. Its JSON data reports the composer, question, uncertainty and
+foreground gates, process-probe generations, and a fresh process tree for the
+foreground group and matching detached runner. It records at most 128 process
+rows, marks truncation, and distinguishes an unavailable inventory from an empty
+tree. It excludes argv, prompt text and environment values. This warning uses
+the normal bounded log ring, not durable delivery storage; collect it before
+ring overflow or restart. It does not retry a possibly submitted message or
+clear `background_work`.
 
 `TUIC_SESSION` is required; without it, `tuic bg` exits 2 before starting a
 command. The launcher prints the wake-status path and removes stale `.exit`
@@ -391,3 +421,7 @@ Automation templates (#1622-be11): the shared automation action accepts
 repository, run_config and optional timezone (host local by default).
 Drafts have fresh ids and start disabled; no definition or run is created until
 an explicit create action. These actions match across HTTP, IPC, MCP and CLI.
+
+### Design Mode through MCP UI actions
+
+Use `tuic mcp ui '{"action":"design_start","session_id":"<terminal>","url":"http://localhost:3000"}'` to start Design Mode. Browser commands use `design_stop`, `design_reload`, `design_navigate`, `design_screenshot`, `design_errors` or `design_eval` with `repo_path` from the lifecycle result; `design_navigate` also needs `url`, and `design_eval` needs `script`. `design_status` lists bindings for an armed caller. Caller ownership and extension host grants still apply. The old `tuic mcp design_mode` entry is removed with no alias. Also replace literal task calls with `tuic mcp agent` task_get/task_cancel, and story/workflow_* calls with `tuic workflow` and its typed actions. Reconnect cached MCP clients and review external allow rules for the grouped domains.

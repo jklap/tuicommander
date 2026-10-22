@@ -164,3 +164,10 @@
 .linkButton:hover svg {
   opacity: 1;
 }
+
+.footer {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  text-align: center;
+}
