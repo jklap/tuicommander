@@ -479,3 +479,23 @@ fn readiness_names_each_problem_once_for_a_definition_with_agents() {
     assert_eq!(problems.len(), 1, "{problems:?}");
     assert!(problems[0].contains("Settings > Agents"));
 }
+
+#[test]
+fn a_default_profile_that_bypasses_the_sandbox_is_refused_for_workflows() {
+    // catches: workflow agents inheriting a permission-skipping flag from the interactive default.
+    let config = agents(serde_json::json!({"agents": {"codex": {"run_configs": [
+        {"name": "Codex Default", "command": "codex",
+         "args": ["--dangerously-bypass-approvals-and-sandbox"], "is_default": true}
+    ]}}}));
+    use super::super::runtime::effects::resolve_run_profile as resolve;
+    let error = resolve(&config, &AgentRole::Implementer).unwrap_err();
+    assert!(
+        error.contains("Codex Default") && error.contains("--dangerously-bypass"),
+        "{error}"
+    );
+    // The user choosing that profile for workflows by name is allowed.
+    let chosen = agents(serde_json::json!({"agents": {"codex": {"run_configs": [
+        {"name": "sol", "command": "codex", "args": ["--dangerously-bypass-approvals-and-sandbox"]}
+    ]}}}));
+    assert_eq!(resolve(&chosen, &AgentRole::Implementer).unwrap(), "sol");
+}

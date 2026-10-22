@@ -284,6 +284,15 @@ pub(in crate::workflows::run) async fn drive_effect(
 }
 
 fn fail_effect(store: &RunStore, run_id: &str, effect_id: &str) -> Result<(), String> {
+    // The launch path may already have closed this intent; marking twice would hide the real error.
+    if store
+        .snapshot(run_id)?
+        .effects
+        .iter()
+        .any(|e| e.id == effect_id && e.state != EffectState::Intended)
+    {
+        return Ok(());
+    }
     store
         .command(
             run_id,
@@ -309,10 +318,21 @@ pub(in crate::workflows) fn resolve_run_profile(
     if let Some((_, profile)) = config.named_run_config(preferred) {
         return Ok(profile.name.clone());
     }
-    config
-        .default_run_config_name()
-        .map(str::to_owned)
-        .map_err(|why| format!("workflow has no run profile for the {role:?} role: {why}"))
+    let profile = config
+        .default_run_config()
+        .map_err(|why| format!("workflow has no run profile for the {role:?} role: {why}"))?;
+    // A default is chosen for interactive use; a sandbox bypass must be chosen for workflows by name.
+    if let Some(flag) = profile
+        .args
+        .iter()
+        .find(|arg| arg.starts_with("--dangerously-") || arg.as_str() == "--yolo")
+    {
+        return Err(format!(
+            "workflow will not use the default run profile '{}': it passes {flag}. Save a run profile named '{preferred}' to choose it for workflows, or use another default",
+            profile.name
+        ));
+    }
+    Ok(profile.name.clone())
 }
 
 /// What stops a published workflow from reaching its Agent steps, checked before a run starts.
