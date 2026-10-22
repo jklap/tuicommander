@@ -136,7 +136,7 @@ async fn non_owner_buttons_are_refused() {
             .unwrap_err(),
         super::Error::NonOwnerButtons
     );
-    assert!(server.requests().is_empty());
+    assert_eq!(server.requests(), [] as [(String, serde_json::Value); 0]);
 }
 
 // Catches: continuation messages lose attribution or Unicode splitting exceeds Telegram's bound.
@@ -396,7 +396,7 @@ async fn invalid_sender_names_are_refused_before_outbound_delivery() {
             super::Error::InvalidSenderName
         );
     }
-    assert!(server.requests().is_empty());
+    assert_eq!(server.requests(), [] as [(String, serde_json::Value); 0]);
     add_sender(&runtime).await;
     runtime
         .tool(
