@@ -25,7 +25,7 @@ Every `dtolnay/rust-toolchain` step takes its version from a workflow-level
 
 ```yaml
 env:
-  RUST_VERSION: "1.98.0"
+  RUST_VERSION: "1.99.1"
 
 # ...
 

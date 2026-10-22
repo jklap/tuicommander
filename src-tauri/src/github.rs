@@ -5978,7 +5978,7 @@ mod tests {
         assert_eq!(issue.number, 1);
         assert_eq!(issue.milestone, None);
         assert!(issue.labels.is_empty());
-        assert!(issue.assignees.is_empty());
+        assert_eq!(issue.assignees, [] as [std::string::String; 0]);
     }
 
     #[test]

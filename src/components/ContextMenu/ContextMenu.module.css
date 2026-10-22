@@ -1,6 +1,6 @@
 .menu {
   position: fixed;
-  min-width: 180px;
+  min-width: min(180px, calc(100vw - 16px));
   background: var(--bg-secondary);
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
@@ -76,7 +76,7 @@
 .submenu {
   position: fixed;
   width: max-content;
-  min-width: 160px;
+  min-width: min(160px, calc(100vw - 16px));
   max-height: 400px;
   overflow-y: auto;
   background: var(--bg-secondary);

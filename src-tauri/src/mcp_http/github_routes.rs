@@ -631,7 +631,7 @@ mod pr_action_route_tests {
         )
         .await;
         assert_eq!(response.status(), StatusCode::BAD_GATEWAY);
-        assert!(!error_body(response).await.is_empty());
+        assert_ne!(error_body(response).await, "");
     }
 
     /// Catches (merge_pr_via_github_http -> Default): a refused merge answering 200 with no

@@ -2505,7 +2505,7 @@ partial work, and their child processes may continue.
 - Reports CPU% and resident memory (RSS) for TUIC and every child process tree, each row attributed to the session that owns it
 - Agent lifecycle also classifies the owning process tree: meaningful background descendants keep `agent_state=working` while an input-ready terminal may remain `shell_state=idle`; persistent `mdkb`, `tuic-bridge`, and `node_repl` helper subtrees plus Claude's standalone timed `caffeinate -i -t <seconds>` assertion are excluded by executable name or authoritative argv path. A `caffeinate` invocation that wraps a command remains meaningful. A descendant that started within 60s of the agent itself is also excluded whatever its name, which covers the daemons no list can anticipate — `codex-code-mode-host`, or an MCP server launched through `npm exec`; platforms that report no process age fall back to the name rule alone A ready observation waits for a newer shared process snapshot, and polling stops once no probe or background work remains
 - Unix: a single batched `ps -o pid,rss,%cpu` query across all PIDs (not one stat per process); Windows: per-process working-set size via the platform API
-- Process statistics use HTTP `GET /process/stats` (JSON `{ session_id, name, pid, rss_kb, cpu_pct }`), while `GET /process/monitor` serves a self-contained HTML dashboard with no build step or external assets. The removed MCP `session action=process_stats` returns an error naming the HTTP replacement.
+- Process statistics use HTTP `GET /process/stats` (JSON `{ session_id, name, pid, rss_kb, cpu_pct }`), while `GET /process/monitor` serves a self-contained HTML dashboard with no build step or external assets. The removed MCP `session action=process_stats` is not supported; clients must call the HTTP route directly.
 - Frontend `ProcessManagerModal` opens the dashboard in-app
 - Use to diagnose which agent/terminal is driving high CPU or memory
 
@@ -3262,7 +3262,7 @@ removing a stored token leaves environment and CircleCI CLI fallbacks unchanged.
 
 ### Generated launch playbook
 
-Settings > Agents selects generated Markers, Working with the user, Waiting, Git/worktrees, Process safety and child-only Children modules. Global and per-agent additions append after the modules; an explicit all-off switch suppresses the entire prompt. Effective previews use the selected machine. Exact old default copies migrate away without duplication.
+Settings > Agents selects generated Markers, Working with the user, Waiting, Git/worktrees, Process safety and child-only Children modules. Global and per-agent additions append after the modules; an explicit all-off switch suppresses the entire prompt. Effective previews use the selected machine. Exact old default copies migrate away without duplication. When mdkb is installed, the launch text also carries the fixed MDKB code-search rule.
 
 ### Durable managed-child launch
 
