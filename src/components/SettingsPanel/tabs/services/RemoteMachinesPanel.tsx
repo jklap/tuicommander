@@ -541,6 +541,7 @@ export const RemoteMachinesPanel: Component = () => {
 						<SettingRow label="Pairing bundle">
 							{(id, descriptionId) => (
 								<textarea
+									data-non-setting="Transient pairing-bundle import draft; Save sends it to the credential vault, not connection configuration"
 									id={id}
 									aria-describedby={descriptionId()}
 									class={s.input}
