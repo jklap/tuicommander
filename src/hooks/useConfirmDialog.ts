@@ -146,9 +146,10 @@ export function useConfirmDialog() {
 			status.dirtyFiles === 0 &&
 			!(status.submoduleUnpushedCommits ?? []).some((entry) => entry.count > 0) &&
 			(status.commitStatus === "merged" || status.commitStatus === "in_sync");
-		const branchAction = deleteBranch && !recycled
-			? "Git will safely delete the local branch; if it is unmerged, the branch is kept."
-			: "The local branch will be kept.";
+		const branchAction =
+			deleteBranch && !recycled
+				? "Git will safely delete the local branch; if it is unmerged, the branch is kept."
+				: "The local branch will be kept.";
 		const destructive = status.removalSafety === "requires_force";
 		const submoduleCommits = (status.submoduleUnpushedCommits ?? [])
 			.filter((entry) => entry.count > 0)
