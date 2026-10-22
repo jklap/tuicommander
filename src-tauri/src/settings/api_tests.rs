@@ -404,9 +404,9 @@ async fn vault_only_writes_advance_settings_generation_without_metadata_changes(
 #[cfg(not(feature = "desktop"))]
 #[tokio::test]
 async fn persisted_apply_failure_publishes_unapplied_generation() {
-    let (_dir, _guard, state) = super::accounts_tests::isolated();
+    let (dir, _guard, state) = super::accounts_tests::isolated();
     let get = json!({"action":"get","target":{"kind":"machine"},"store":"app","paths":["/services/server/port"]});
-    let initial = api::execute(&state, get, Caller::native()).await;
+    let initial = api::execute(&state, get.clone(), Caller::native()).await;
     let mut edit = json!({"action":"set","target":{"kind":"machine"},"store":"app","path":"/services/server/port",
         "value":9981,"expectedRevision":initial["revision"]});
     let mut events = state.event_bus.subscribe();
@@ -437,6 +437,19 @@ async fn persisted_apply_failure_publishes_unapplied_generation() {
     );
     assert_eq!(event["payload"]["applied"], false);
     assert_eq!(event["payload"]["persisted"], true);
+    assert_eq!(failed["error"]["nextAction"], "get");
+    assert_eq!(failed["error"]["retryable"], false);
+    // The durable write already happened: recover with get, not a second set.
+    let readback = api::execute(&state, get, Caller::native()).await;
+    assert_eq!(readback["values"]["/services/server/port"]["stored"], 9981);
+    assert_ne!(readback["revision"], initial["revision"]);
+    let disk: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(dir.path().join("config.json")).unwrap()).unwrap();
+    assert_eq!(disk["services"]["server"]["port"], 9981);
+    assert!(
+        events.try_recv().is_err(),
+        "readback must not replay the mutation"
+    );
 }
 
 // Catches: refused or unchanged requests waking readers as if they durably changed settings.

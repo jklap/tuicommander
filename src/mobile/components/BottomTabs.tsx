@@ -1,9 +1,11 @@
+import { For } from "solid-js";
 import styles from "./BottomTabs.module.css";
 
 export type TabId = "chat" | "sessions" | "files" | "progress" | "activity" | "settings";
 
 interface BottomTabsProps {
 	active: TabId;
+	aiChatAvailable: boolean;
 	onSelect: (tab: TabId) => void;
 }
 
@@ -40,18 +42,20 @@ const tabs: Array<{ id: TabId; label: string; icon: string }> = [
 export function BottomTabs(props: BottomTabsProps) {
 	return (
 		<nav class={styles.tabs}>
-			{tabs.map((tab) => (
-				<button
-					class={styles.tab}
-					classList={{ [styles.active]: props.active === tab.id }}
-					onClick={() => props.onSelect(tab.id)}
-					aria-label={tab.label}
-					aria-current={props.active === tab.id ? "page" : undefined}
-				>
-					<span class={styles.icon} innerHTML={tab.icon} />
-					<span class={styles.label}>{tab.label}</span>
-				</button>
-			))}
+			<For each={tabs.filter((tab) => tab.id !== "chat" || props.aiChatAvailable)}>
+				{(tab) => (
+					<button
+						class={styles.tab}
+						classList={{ [styles.active]: props.active === tab.id }}
+						onClick={() => props.onSelect(tab.id)}
+						aria-label={tab.label}
+						aria-current={props.active === tab.id ? "page" : undefined}
+					>
+						<span class={styles.icon} innerHTML={tab.icon} />
+						<span class={styles.label}>{tab.label}</span>
+					</button>
+				)}
+			</For>
 		</nav>
 	);
 }

@@ -58,8 +58,42 @@ it.each(Object.values(settingsCatalogue.fields).filter(hasCatalogueEditor))(
 		);
 		const controls = [...container.querySelectorAll("[data-setting-id]")];
 		expect(controls.every((control) => control.getAttribute("data-setting-id") === field.id)).toBe(true);
+		// Catches: the inspector dropping an owner's numeric limits while retaining its identity.
+		if (!schema.enum && (types.includes("integer") || types.includes("number"))) {
+			const numeric = container.querySelector<HTMLInputElement>("input[type=number]")!;
+			expect(numeric.min).toBe(schema.minimum === undefined ? "" : String(schema.minimum));
+			expect(numeric.max).toBe(schema.maximum === undefined ? "" : String(schema.maximum));
+			if (types.includes("integer")) expect(numeric.step).toBe("1");
+		}
 	},
 );
+
+// Catches: catalogue actions rendering as adjacent buttons without a shared wrapping row.
+it("groups catalogue owner actions separately from the field control", async () => {
+	const field = settingsCatalogue.fields["app.shell"];
+	invoke.mockResolvedValue(snapshot(field.path, null));
+	const view = render(() => <CatalogueFieldEditor field={field} path={field.path} />);
+	await view.findByText("Save setting");
+	const actions = view.getByRole("group", { name: "Setting actions" });
+	expect([...actions.querySelectorAll("button")].map((button) => button.textContent)).toEqual([
+		"Use null / inherit",
+		"Save setting",
+		"Reset to owner default",
+		"Reload owner",
+	]);
+	expect(actions.querySelector("input,select")).toBeNull();
+});
+
+// Catches: owner provenance repeating the effect already shown beneath the field label.
+it("shows the setting effect once and keeps provenance source-only", async () => {
+	const field = settingsCatalogue.fields["app.shell"];
+	invoke.mockResolvedValue(snapshot(field.path, null));
+	const view = render(() => <CatalogueFieldEditor field={field} path={field.path} />);
+	await view.findByText("Save setting");
+	expect(view.getByRole("status").textContent).toBe("Source: stored.");
+	expect(view.getByText(`${field.effect} Apply: ${field.apply}.`)).toBeTruthy();
+	expect(view.container.textContent?.split(field.effect)).toHaveLength(2);
+});
 
 describe("catalogue owner writes", () => {
 	// Catches: a dynamic stable record row reading one path but saving a sibling.

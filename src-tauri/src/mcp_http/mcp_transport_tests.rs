@@ -9,6 +9,9 @@ use portable_pty::PtySize;
 #[cfg(unix)]
 use std::sync::atomic::AtomicBool;
 include!("mcp_transport_transport_tests.rs");
+#[cfg(unix)]
+#[path = "mcp_transport_reconnect_fixture_tests.rs"]
+mod reconnect_fixture_tests;
 include!("mcp_transport_catalogue_tests.rs");
 include!("mcp_transport_peer_tests.rs");
 #[cfg(unix)]
@@ -20,3 +23,6 @@ include!("mcp_transport_ancillary_tests.rs");
 #[cfg(unix)]
 include!("mcp_transport_workflow_launch_tests.rs");
 include!("mcp_transport_registration_tests.rs");
+#[cfg(feature = "settings-ipc-test")]
+#[path = "settings_mock_ipc_tests.rs"]
+mod settings_mock_ipc_tests;

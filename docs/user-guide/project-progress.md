@@ -153,3 +153,8 @@ repository and its worktrees shows one history rather than several.
 An agent running in a directory that belongs to no registered repository writes
 nothing. There is no project to file the entry under, and the repository you
 happen to be looking at is not the answer.
+
+Flow refreshes cache subagent metadata by modification time and file size.
+Unchanged metadata is not reopened; transcript byte cursors continue to read
+appended complete rows. Metadata and transcript caches expire after ten minutes
+without use.

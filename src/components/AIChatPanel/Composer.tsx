@@ -40,6 +40,7 @@ export const Composer: Component<{
 	let textarea: HTMLTextAreaElement | undefined;
 	let inputArea: HTMLDivElement | undefined;
 	const browserDictation = useBrowserDictation({
+		sessionId: () => props.chat.sessionId() || null,
 		enabled: !!props.mobileAttachments,
 		blocked: () => !props.mobileAttachments || uploading(),
 		getDraft: () => aiChatDraft.text(),

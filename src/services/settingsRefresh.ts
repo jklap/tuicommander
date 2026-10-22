@@ -32,6 +32,8 @@ export function createSettingsRefreshCoordinator(subscribe?: typeof subscribeEve
 	let unlisten: (() => void) | undefined;
 	let starting: Promise<void> | undefined;
 	let lifetime = 0;
+	let subscriptionRetry: ReturnType<typeof setTimeout> | undefined;
+	let subscriptionDelay = 1000;
 
 	function resync(owner?: string) {
 		for (const key of generations.keys()) if (key.startsWith(`${owner ?? ""}\0`)) generations.delete(key);
@@ -39,7 +41,7 @@ export function createSettingsRefreshCoordinator(subscribe?: typeof subscribeEve
 	}
 
 	function start() {
-		if (unlisten || starting) return;
+		if (unlisten || starting || subscriptionRetry) return;
 		const current = lifetime;
 		const subscribeNow: typeof subscribeEvents = (...args) =>
 			subscribe ? subscribe(...args) : import("../transport").then((transport) => transport.subscribeEvents(...args));
@@ -84,10 +86,21 @@ export function createSettingsRefreshCoordinator(subscribe?: typeof subscribeEve
 				if (current !== lifetime || readers.size === 0) stop();
 				else {
 					unlisten = stop;
+					subscriptionDelay = 1000;
 					for (const reader of readers) reader.invalidate();
 				}
 			})
-			.catch((error) => appLogger.warn("config", "Settings subscription failed", error))
+			.catch((error) => {
+				if (current !== lifetime || !readers.size) return;
+				appLogger.warn("config", "Settings subscription failed", error);
+				// A failed event subscription must not prevent the initial owner read.
+				for (const reader of readers) reader.invalidate();
+				subscriptionRetry = setTimeout(() => {
+					subscriptionRetry = undefined;
+					start();
+				}, subscriptionDelay);
+				subscriptionDelay = Math.min(subscriptionDelay * 2, 30000);
+			})
 			.finally(() => {
 				starting = undefined;
 				if (readers.size && current !== lifetime) start();
@@ -101,10 +114,17 @@ export function createSettingsRefreshCoordinator(subscribe?: typeof subscribeEve
 			let queued = false;
 			let reading = false;
 			let pending = false;
+			let retry: ReturnType<typeof setTimeout> | undefined;
+			let retryDelay = 1000;
+			const clearRetry = () => {
+				clearTimeout(retry);
+				retry = undefined;
+			};
 			const entry = {
 				owner: reader.connectionId,
 				section: reader.section,
 				invalidate() {
+					clearRetry();
 					sequence++;
 					pending = true;
 					if (queued || reading || disposed) return;
@@ -118,10 +138,19 @@ export function createSettingsRefreshCoordinator(subscribe?: typeof subscribeEve
 						void reader
 							.read()
 							.then((snapshot) => {
-								if (!disposed && current === sequence) reader.apply(snapshot);
+								if (!disposed && current === sequence) {
+									retryDelay = 1000;
+									reader.apply(snapshot);
+								}
 							})
 							.catch((error) => {
-								if (!disposed) appLogger.warn("config", "Settings reload failed", error);
+								if (disposed || current !== sequence) return;
+								appLogger.warn("config", "Settings reload failed", error);
+								retry = setTimeout(() => {
+									retry = undefined;
+									entry.invalidate();
+								}, retryDelay);
+								retryDelay = Math.min(retryDelay * 2, 30000);
 							})
 							.finally(() => {
 								reading = false;
@@ -130,21 +159,26 @@ export function createSettingsRefreshCoordinator(subscribe?: typeof subscribeEve
 					});
 				},
 				cancel() {
+					clearRetry();
 					sequence++;
 				},
 				dispose() {
+					clearRetry();
 					disposed = true;
 					sequence++;
 				},
 			};
 			readers.add(entry);
 			start();
-			if (unlisten) entry.invalidate();
+			if (unlisten || subscriptionRetry) entry.invalidate();
 			return () => {
 				entry.dispose();
 				readers.delete(entry);
 				if (readers.size === 0) {
 					lifetime++;
+					clearTimeout(subscriptionRetry);
+					subscriptionRetry = undefined;
+					subscriptionDelay = 1000;
 					unlisten?.();
 					unlisten = undefined;
 					generations.clear();

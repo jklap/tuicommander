@@ -47,6 +47,7 @@ export const CONVENTION_HEADER =
 	"     Read each comment, apply the feedback to the selected text or block,\n" +
 	"     then remove the tweak markers. -->\n\n";
 
+// TODO (Boss approved 2026-10-21): Drop the legacy header and its recognition once no digest uses it.
 const LEGACY_CONVENTION_HEADER =
 	"<!-- tweak-comments v1: inline review comments.\n" +
 	"     Format: [tweak:begin:ID]highlighted text[tweak:end:ID @ISO-TIMESTAMP\n" +

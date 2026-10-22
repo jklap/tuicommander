@@ -34,6 +34,7 @@
 /agents/detect
 /agents/detect-all
 /agents/ides
+/agents/launch
 /agents/launch-args
 /agents/open-in-app
 /agents/verify-session
@@ -53,6 +54,7 @@
 /api/plugins/x/fs/write-base64
 /api/plugins/x/github
 /api/plugins/x/http
+/api/plugins/x/http/cancel
 /api/plugins/x/pty/output
 /api/plugins/x/readme
 /api/plugins/x/register
@@ -104,6 +106,7 @@
 /config/telegram
 /config/themes
 /config/ui-prefs
+/debug/frame-workload
 /design-mode
 /design-mode/command
 /design-mode/navigate
@@ -268,7 +271,6 @@
 /repo/orphan-cleanup/clear
 /repo/orphan-cleanup/pending
 /repo/orphan-worktrees
-/repo/panel-context
 /repo/post-pr-review
 /repo/pr-action-state
 /repo/pr-auto-merge
@@ -333,7 +335,6 @@
 /sessions/x/shell-state
 /sessions/x/submit
 /sessions/x/terminal/cursor-line
-/sessions/x/terminal/hyperlink
 /sessions/x/terminal/hyperlink-span
 /sessions/x/terminal/lines
 /sessions/x/terminal/logical-line
