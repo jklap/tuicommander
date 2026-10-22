@@ -811,15 +811,63 @@ pub fn merge_ff_override(cwd: &Path, branch: Option<&str>) -> Option<&'static st
     let from_options = branch
         .and_then(|b| read(&format!("branch.{b}.mergeOptions")))
         .and_then(|opts| {
-            opts.split_whitespace().rev().find_map(|tok| match tok {
-                "--ff-only" => Some(true),
-                "--ff" | "--no-ff" => Some(false),
-                _ => None,
-            })
+            split_cmdline(&opts)?
+                .iter()
+                .rev()
+                .find_map(|tok| match tok.as_str() {
+                    "--ff-only" => Some(true),
+                    "--ff" | "--no-ff" => Some(false),
+                    _ => None,
+                })
         });
     let ff_only = from_options
         .unwrap_or_else(|| read("merge.ff").is_some_and(|v| v.eq_ignore_ascii_case("only")));
     ff_only.then_some("--ff")
+}
+
+/// Split a config value into words the way git's `split_cmdline` does (the
+/// parser behind `branch.<name>.mergeOptions` and aliases): whitespace
+/// separates words, `'` and `"` group (and are dropped), and a backslash
+/// takes the next character literally. Returns `None` for an unterminated
+/// quote or a trailing backslash, which git rejects as well.
+fn split_cmdline(s: &str) -> Option<Vec<String>> {
+    let mut words = Vec::new();
+    let mut cur = String::new();
+    let mut in_word = false;
+    let mut quote: Option<char> = None;
+    let mut chars = s.chars();
+    while let Some(c) = chars.next() {
+        match quote {
+            Some(q) if c == q => quote = None,
+            Some(_) if c == '\\' => cur.push(chars.next()?),
+            Some(_) => cur.push(c),
+            None if c == '\'' || c == '"' => {
+                quote = Some(c);
+                in_word = true;
+            }
+            None if c == '\\' => {
+                cur.push(chars.next()?);
+                in_word = true;
+            }
+            None if c.is_whitespace() => {
+                if in_word {
+                    words.push(std::mem::take(&mut cur));
+                    in_word = false;
+                }
+            }
+            None => {
+                cur.push(c);
+                in_word = true;
+            }
+        }
+    }
+    if quote.is_some() {
+        return None;
+    }
+    if in_word {
+        words.push(cur);
+    }
+    Some(words)
 }
 
 /// Create a git command builder rooted at the given directory.
@@ -943,11 +991,13 @@ mod tests {
     fn setup_test_repo() -> (tempfile::TempDir, PathBuf) {
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().to_path_buf();
-        Command::new("git")
+        let init = Command::new("git")
             .current_dir(&path)
             .args(["init"])
             .output()
             .expect("git init");
+        assert!(init.status.success(), "git init failed: {init:?}");
+        assert_repo_root(&path);
         Command::new("git")
             .current_dir(&path)
             .args(["config", "user.email", "test@test.com"])
@@ -959,6 +1009,63 @@ mod tests {
             .output()
             .expect("git config name");
         (dir, path)
+    }
+
+    /// Panic unless `path` is itself a git work-tree root. A failed `git init`
+    /// under a parent repo would otherwise let later `git config` writes land
+    /// in that parent's `.git/config`.
+    fn assert_repo_root(path: &Path) {
+        let out = Command::new("git")
+            .current_dir(path)
+            .args(["rev-parse", "--show-toplevel"])
+            .output()
+            .expect("git rev-parse");
+        let top = String::from_utf8_lossy(&out.stdout).trim().to_string();
+        let want = std::fs::canonicalize(path).expect("canonicalize");
+        assert!(
+            out.status.success() && std::fs::canonicalize(&top).is_ok_and(|t| t == want),
+            "{} is not its own repo root (toplevel: {top:?})",
+            path.display()
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "is not its own repo root")]
+    fn assert_repo_root_fires_for_non_repo_dir_under_a_repo() {
+        // The crate's own checkout is a repo; a not-yet-initialised subdir of
+        // a temp dir inside it resolves to the parent, which must be rejected.
+        let parent = tempfile::tempdir_in(env!("CARGO_MANIFEST_DIR")).expect("tempdir");
+        assert_repo_root(parent.path());
+    }
+
+    #[test]
+    fn split_cmdline_matches_git() {
+        let w = |s: &str| split_cmdline(s);
+        let v = |a: &[&str]| Some(a.iter().map(|s| s.to_string()).collect::<Vec<_>>());
+        assert_eq!(w("--ff-only"), v(&["--ff-only"]));
+        assert_eq!(w("  --no-ff   -s  ours "), v(&["--no-ff", "-s", "ours"]));
+        assert_eq!(w("\"--ff-only\""), v(&["--ff-only"]));
+        assert_eq!(w("'--ff-only'"), v(&["--ff-only"]));
+        assert_eq!(w("-m 'a b' \"c d\""), v(&["-m", "a b", "c d"]));
+        assert_eq!(w("a\\ b"), v(&["a b"]));
+        assert_eq!(w("''"), v(&[""]));
+        assert_eq!(w("\"unterminated"), None);
+        assert_eq!(w("trailing\\"), None);
+        assert_eq!(w(""), v(&[]));
+    }
+
+    #[test]
+    fn merge_ff_override_sees_quoted_merge_options() {
+        let (_dir, path) = setup_test_repo();
+        git_in(&path, &["config", "merge.ff", "true"]);
+        for quoted in ["\"--ff-only\"", "'--ff-only'", "--no-ff \"--ff-only\""] {
+            git_in(&path, &["config", "branch.dev.mergeOptions", quoted]);
+            assert_eq!(
+                merge_ff_override(&path, Some("dev")),
+                Some("--ff"),
+                "{quoted}"
+            );
+        }
     }
 
     fn git_in(path: &Path, args: &[&str]) {
