@@ -1,3 +1,7 @@
+## A hook's OSC 7770 no longer corrupts the row it lands in (osc_interleave) — Rust restart required
+
+- [ ] After a manual `make dev` restart (or `make build`), start Claude Code in a fresh tab several times and confirm the bottom separator/prompt rows stay clean: no `──Try "edit …"` fragment, no stray `──` row, no orphan 1-3 character rows in scrollback. Check `GET /sessions/{id}/terminal/lines` for any `\u{FFFD}` in a separator row. The corruption only appears when the kernel happens to cut Claude's write inside a `─`, so it is intermittent: unit tests replay the exact captured split (and every 2- and 3-way read split), but only live runs show whether another interleaving source exists. Rust does not hot-reload.
+
 ## tmux `respawn-pane -k` no longer interrupts a shell's own startup (direnv) — Rust restart required
 
 - [ ] After a manual `make dev` restart (or `make build`) and a rebuilt `tuic`/`tmux` shim, start a Claude Code Agent Teams swarm in a repo whose `.envrc` is slow (commerce-journal) and confirm each teammate pane prints `direnv: loading` / `direnv: export …` with no `^C` and no `direnv: error signal: killed`, and that `echo "${DIRENV_DIR:+set} ${ATLASSIAN_API_TOKEN:+set}"` inside a teammate prints `set set`. Unit tests cover the CLI decision and the topology flag (including a real running job); the live race needs a real slow `.envrc`. Rust does not hot-reload, and `tuic-cli` is a sidecar, so both must be rebuilt.

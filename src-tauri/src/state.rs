@@ -1434,18 +1434,24 @@ pub(crate) fn build_http_client() -> reqwest::Client {
 pub(crate) struct Utf8ReadBuffer {
     /// Incomplete bytes from the previous read (at most 3 bytes for a 4-byte sequence)
     pub(crate) remainder: Vec<u8>,
+    /// Moves a hook's OSC 7770 out of a character it landed inside, before the
+    /// lossy conversion below turns one split `─` into three U+FFFD cells.
+    interleave: crate::osc_interleave::OscInterleaveGuard,
 }
 
 impl Utf8ReadBuffer {
     pub(crate) fn new() -> Self {
         Self {
             remainder: Vec::with_capacity(4),
+            interleave: crate::osc_interleave::OscInterleaveGuard::default(),
         }
     }
 
     /// Process raw bytes from a read, returning valid UTF-8 text.
     /// Incomplete multi-byte sequences at the end are saved for the next call.
     pub(crate) fn push(&mut self, new_bytes: &[u8]) -> String {
+        let new_bytes = self.interleave.filter(new_bytes);
+        let new_bytes: &[u8] = &new_bytes;
         let mut combined = Vec::with_capacity(self.remainder.len() + new_bytes.len());
         combined.extend_from_slice(&self.remainder);
         combined.extend_from_slice(new_bytes);
@@ -1488,10 +1494,14 @@ impl Utf8ReadBuffer {
 
     /// Flush any remaining bytes (at EOF). Incomplete sequences are dropped.
     pub(crate) fn flush(&mut self) -> String {
-        if self.remainder.is_empty() {
+        // A hook sequence still held for a character that never finished goes out
+        // after that character's partial bytes, which is the order it arrived in.
+        let held = self.interleave.take_held();
+        if self.remainder.is_empty() && held.is_empty() {
             return String::new();
         }
-        let remaining = std::mem::take(&mut self.remainder);
+        let mut remaining = std::mem::take(&mut self.remainder);
+        remaining.extend_from_slice(&held);
         String::from_utf8_lossy(&remaining).to_string()
     }
 }
