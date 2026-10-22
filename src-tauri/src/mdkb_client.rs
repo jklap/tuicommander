@@ -757,7 +757,13 @@ pub(crate) mod tests {
         // Will fail unless mdkb daemon is actually running — that's expected in test env
         // The important thing is it doesn't panic
         if let Err(err) = result {
-            assert!(err.to_string().contains("mdkb: connect"));
+            // With no home directory there is no socket path to dial at all.
+            let want = if MdkbClient::socket_path().is_some() {
+                "mdkb: connect"
+            } else {
+                "no home directory"
+            };
+            assert!(err.to_string().contains(want), "{err}");
         }
     }
 
