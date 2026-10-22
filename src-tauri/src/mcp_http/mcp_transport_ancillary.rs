@@ -227,23 +227,31 @@ async fn handle_worktree_with_caller(
             if let Err(e) = validate_mcp_repo_path(&path) {
                 return e;
             }
-            let mut wts = match crate::worktree::get_worktree_paths(path.clone()) {
-                Ok(wts) => wts,
-                Err(e) => return serde_json::json!({"error": e}),
+            let inventory_path = path.clone();
+            let mut wts = match tokio::task::spawn_blocking(move || {
+                crate::worktree::get_worktree_paths(inventory_path)
+            })
+            .await
+            {
+                Ok(Ok(wts)) => wts,
+                Ok(Err(error)) => return serde_json::json!({"error": error}),
+                Err(error) => {
+                    return serde_json::json!({"error": format!("worktree inventory task failed: {error}")});
+                }
             };
-            // Same source as the sidebar's lifecycleStatus (get_repo_summary /
-            // get_repo_diff_stats): inspect_workspace_lifecycle, fanned out per
-            // worktree on the blocking pool so the async worker isn't parked on
-            // the git subprocesses each inspection runs.
+            // Keep full, fresh checkout safety fields, but share the sidebar's
+            // ref-keyed merge proofs instead of rerunning every integration read.
+            // GitHub evidence is cache-only here; monitoring fills it separately.
             let mut lifecycle_handles = Vec::with_capacity(wts.len());
-            for workspace_id in wts.keys().cloned().collect::<Vec<_>>() {
+            for (workspace_id, workspace) in &wts {
+                let workspace_id = workspace_id.clone();
+                let workspace = workspace.clone();
                 let base_repo = path.clone();
-                let proof_state = Arc::clone(state);
                 lifecycle_handles.push(tokio::task::spawn_blocking(move || {
-                    let lifecycle = crate::worktree::inspect_workspace_lifecycle(
-                        &proof_state,
+                    let lifecycle = tuic_git::worktree::inspect_workspace_listing_with_pr(
                         std::path::Path::new(&base_repo),
-                        &workspace_id,
+                        &workspace,
+                        crate::worktree::merged_github_pr_proves_tip_cached,
                     );
                     (workspace_id, lifecycle)
                 }));
@@ -942,6 +950,71 @@ pub(super) fn handle_voice(
     })
 }
 
+/// The grouped wire contract reuses the service inputs and their owners.
+#[derive(serde::Deserialize, schemars::JsonSchema)]
+#[serde(tag = "action", rename_all = "snake_case", deny_unknown_fields)]
+enum WorkflowAction {
+    Story {
+        input: crate::stories::StoryAction,
+    },
+    Run {
+        input: Box<crate::workflows::RunAction>,
+    },
+    ProposalCreate {
+        input: WorkflowStoryCreateInput,
+    },
+    Report {
+        input: crate::workflows::AttemptReport,
+    },
+    Launch {
+        input: WorkflowLaunchInput,
+    },
+}
+
+pub(super) fn workflow_action_schema() -> serde_json::Value {
+    let generator = schemars::generate::SchemaSettings::draft2020_12()
+        .with(|settings| settings.inline_subschemas = true)
+        .into_generator();
+    let mut schema = serde_json::to_value(generator.into_root_schema_for::<WorkflowAction>())
+        .expect("workflow input schema");
+    schema.as_object_mut().unwrap().remove("$schema");
+    schema
+}
+
+pub(super) fn handle_workflow(
+    state: &Arc<AppState>,
+    addr: SocketAddr,
+    args: &serde_json::Value,
+    mcp_session_id: Option<&str>,
+) -> serde_json::Value {
+    let action: WorkflowAction = match serde_json::from_value(args.clone()) {
+        Ok(action) => action,
+        Err(error) => {
+            return serde_json::json!({"error": format!("invalid workflow action: {error}")});
+        }
+    };
+    match action {
+        WorkflowAction::Story { input } => {
+            handle_story(state, &serde_json::json!({"input":input}), mcp_session_id)
+        }
+        WorkflowAction::Run { input } => {
+            handle_workflow_run(state, &serde_json::json!({"input":input}), mcp_session_id)
+        }
+        WorkflowAction::ProposalCreate { input } => {
+            handle_workflow_story_create(state, &serde_json::json!({"input":input}), mcp_session_id)
+        }
+        WorkflowAction::Report { input } => {
+            handle_workflow_report(state, &serde_json::json!({"input":input}), mcp_session_id)
+        }
+        WorkflowAction::Launch { input } => handle_workflow_launch(
+            state,
+            addr,
+            &serde_json::json!({"input":input}),
+            mcp_session_id,
+        ),
+    }
+}
+
 pub(super) fn handle_story(
     state: &Arc<AppState>,
     args: &serde_json::Value,
@@ -987,7 +1060,7 @@ pub(super) fn handle_workflow_run(
     ))
 }
 
-#[derive(serde::Deserialize)]
+#[derive(serde::Deserialize, serde::Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct WorkflowStoryCreateInput {
     pub(super) run_id: String,
@@ -1138,6 +1211,15 @@ pub(super) fn queue_workflow_coordinator_wake(
         timestamp: now_ms,
         delivered_via_channel: false,
     };
+    queue_peer_notice(state, recipient, message)
+}
+
+/// Host-originated mail shares peer identity locking and payload-free wake routing.
+pub(crate) fn queue_peer_notice(
+    state: &AppState,
+    recipient: &str,
+    message: crate::state::AgentMessage,
+) -> bool {
     let message_id = message.id.clone();
     let timestamp = {
         let _guard = PEER_IDENTITY_BIND_LOCK.lock();
@@ -1165,7 +1247,7 @@ pub(super) fn queue_workflow_coordinator_wake(
     true
 }
 
-#[derive(serde::Deserialize)]
+#[derive(serde::Deserialize, serde::Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct WorkflowLaunchInput {
     pub(super) run_id: String,
@@ -1389,10 +1471,15 @@ fn launch_workflow_effect(
         state,
         addr,
         mcp_session_id,
-        &input.agent_type,
-        &format!("Workflow {:?}", package.role),
-        &package.prompt,
-        &worktree,
+        super::managed_launch::Launch {
+            profile: &input.agent_type,
+            name: &format!("Workflow {:?}", package.role),
+            prompt: &package.prompt,
+            workspace: &worktree,
+            owner_scope: &format!("workflow:{}", run.id),
+            idempotency_key: &attempt.id,
+            keep_open: true,
+        },
     );
     if let Some(error) = spawned.get("error").and_then(serde_json::Value::as_str) {
         if let Ok(failed) = store.command(
@@ -1961,12 +2048,11 @@ pub(super) async fn handle_confirm(
         let Some(connection) = mcp_session_id else {
             return serde_json::json!({"error": "settings confirmation requires a server-issued connection"});
         };
-        let enabled = !state
+        let enabled = state
             .config
             .read()
-            .disabled_native_tools
-            .iter()
-            .any(|tool| tool == "settings")
+            .mcp_capabilities
+            .allows("settings", None)
             && state.config.read().settings_mcp_enabled;
         let caller = crate::settings::policy::Caller::mcp(addr, connection.to_owned(), enabled);
         return super::confirm_settings(state, &caller, id, mcp_session_id).await;
@@ -2346,6 +2432,15 @@ pub(super) fn handle_debug_unified(
         Err(e) => return e,
     };
     match action {
+        "frame_workload_dump" => {
+            if !addr.ip().is_loopback() {
+                return serde_json::json!({"error": "frame_workload_dump is restricted to localhost connections"});
+            }
+            super::log_routes::eval_debug_script(
+                state,
+                "return window.__TUIC__.frameWorkload.dump('mcp-manual')",
+            )
+        }
         "invoke_js" => {
             if !addr.ip().is_loopback() {
                 return serde_json::json!({"error": "invoke_js is restricted to localhost connections"});
@@ -2364,6 +2459,7 @@ pub(super) fn handle_debug_unified(
                 "agent_detection": "Agent detection pipeline diagnostics. Optional session_id (omit for all sessions).",
                 "logs": "App log entries (info/warn/error mirrored from JS). Params: level, source, limit (default 50).",
                 "sessions": "All PTY sessions with pid, cwd, foreground process info.",
+                "frame_workload_dump": "Persist enabled frame recorder; async result in eval_js logs. Requires responsive desktop JS.",
                 "invoke_js": "Execute JS in the main WebView (localhost only). Use `return expr` for output. Result + captured console output logged as source='eval_js'. Read via logs(source='eval_js', limit=1)."
             },
             "invoke_js_guide": {

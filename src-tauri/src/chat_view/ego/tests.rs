@@ -196,5 +196,67 @@ async fn ego_export_failure_is_an_unreadable_reason_not_an_empty_snapshot() {
         .await
         .unwrap()
         .unwrap_err();
+    assert!(
+        error.to_string().contains("configured executable"),
+        "{error}"
+    );
+}
+
+// Catches: confusing a successful empty export with an executable refusal.
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn ego_successful_empty_export_still_reports_missing_header() {
+    let source = ExportSource {
+        program: "/usr/bin/true".into(),
+        home: crate::test_support::test_temp_root(),
+        session: "01a152f2-3bd3-7175-90dd-13580205b9c9".into(),
+    };
+    let error = tokio::task::spawn_blocking(move || source.read(0, |_| Ok(())))
+        .await
+        .unwrap()
+        .unwrap_err();
     assert!(error.to_string().contains("header missing"), "{error}");
+}
+
+// Catches: rejecting the installed public-event-v15 export or dropping its
+// completed answer while reading the subprocess stream.
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn ego_installed_recorded_export_reads_completed_answer() {
+    let fixture = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("src/fixtures/chat_view/ego/installed-2026-10-19.jsonl");
+    let source = ExportSource {
+        program: crate::test_support::fake_ssh_script(
+            "ego-installed-transcript-2032",
+            &tuic_test_support::print_file_script(fixture.to_str().unwrap()),
+            "",
+        ),
+        home: crate::test_support::test_temp_root(),
+        session: "01a152f2-3bd3-7175-90dd-13580205b9c9".into(),
+    };
+    let updates = tokio::task::spawn_blocking(move || {
+        let mut adapter = EgoAdapter::default();
+        let mut updates = Vec::new();
+        source
+            .read(0, |line| {
+                updates.extend(adapter.absorb(line));
+                Ok(())
+            })
+            .unwrap();
+        updates
+    })
+    .await
+    .unwrap();
+    let answers: Vec<_> = updates
+        .iter()
+        .filter(|row| row["sessionUpdate"] == "agent_message_chunk")
+        .filter_map(|row| row["content"]["text"].as_str())
+        .collect();
+    assert_eq!(
+        answers,
+        [
+            "TUICommander v2.0.0 is connected.\nintent: Returning the smoke test reply (Chat probe)\n",
+            "💬 LIVE_A_CHAT_OK"
+        ]
+    );
 }

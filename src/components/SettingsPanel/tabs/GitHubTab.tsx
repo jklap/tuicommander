@@ -475,12 +475,7 @@ export const GitHubTab: Component = () => {
 
 	return (
 		<div class={`${s.section} ${w.page}`}>
-			<SettingPageHeader
-				title="Git & GitHub"
-				description="Manage accounts, monitoring, and defaults for your repositories."
-				scope="Application defaults"
-				breadcrumb="Workspace / Git & GitHub"
-			/>
+			<SettingPageHeader title="Git & GitHub" scope="Application defaults" breadcrumb="Workspace / Git & GitHub" />
 			<SectionCard title="GitHub Authentication">
 				{/* Error display */}
 				<Show when={error()}>
@@ -693,7 +688,7 @@ export const GitHubTab: Component = () => {
 
 					<SettingToggle
 						row
-						data-setting-exclusion="transient.app.pr_hide_drafts"
+						settingId="app.pr_hide_drafts"
 						checked={settingsStore.state.prHideDrafts}
 						onChange={(v) => {
 							settingsStore.setPrHideDrafts(v);
@@ -705,7 +700,7 @@ export const GitHubTab: Component = () => {
 
 					<SettingToggle
 						row
-						data-setting-exclusion="transient.app.pr_hide_conflicting"
+						settingId="app.pr_hide_conflicting"
 						checked={settingsStore.state.prHideConflicting}
 						onChange={(v) => settingsStore.setPrHideConflicting(v)}
 						label="Hide Conflicting PRs"
@@ -714,7 +709,7 @@ export const GitHubTab: Component = () => {
 
 					<SettingToggle
 						row
-						data-setting-exclusion="transient.app.pr_hide_ci_failing"
+						settingId="app.pr_hide_ci_failing"
 						checked={settingsStore.state.prHideCiFailing}
 						onChange={(v) => settingsStore.setPrHideCiFailing(v)}
 						label="Hide CI Failing PRs"

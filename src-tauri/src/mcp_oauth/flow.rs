@@ -103,6 +103,7 @@ pub(crate) struct OAuthFlowManager {
     http_client: reqwest::Client,
     /// Timeout after which a flow is considered abandoned.
     timeout: Duration,
+    pub(crate) settings_publisher: parking_lot::RwLock<crate::settings::changes::Publisher>,
 }
 
 impl OAuthFlowManager {
@@ -115,6 +116,7 @@ impl OAuthFlowManager {
             pending: Arc::new(DashMap::new()),
             http_client: reqwest::Client::new(),
             timeout,
+            settings_publisher: Default::default(),
         }
     }
 
@@ -259,7 +261,8 @@ impl OAuthFlowManager {
             flow.client_secret.clone(),
             flow.token_endpoint.clone(),
             flow.resource.clone(),
-        );
+        )
+        .with_settings_publisher(self.settings_publisher.read().clone());
         let tokens = token_mgr
             .exchange_code(code, &flow.pkce_verifier, &flow.redirect_uri)
             .await?;

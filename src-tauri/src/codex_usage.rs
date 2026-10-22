@@ -6,9 +6,11 @@
 
 use std::collections::HashMap;
 use std::path::Path;
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
+
+use crate::cli_usage_rpc::{UsageCache, looks_like_auth_failure, looks_like_contract_failure};
 
 // ---------------------------------------------------------------------------
 // Stable TUIC transport types (mapped from the App Server response)
@@ -186,49 +188,14 @@ pub struct CodexStatsResponse {
 // Cache + fetch
 // ---------------------------------------------------------------------------
 
-/// TTL cache shared by both endpoints — one generic so the usage ticker and the
-/// dashboard cannot drift into two different staleness policies.
-struct TtlCache<T>(parking_lot::Mutex<Option<(T, Instant)>>);
-
-impl<T: Clone> TtlCache<T> {
-    const fn new() -> Self {
-        Self(parking_lot::Mutex::new(None))
-    }
-
-    fn fresh(&self) -> Option<T> {
-        let guard = self.0.lock();
-        let (value, at) = guard.as_ref()?;
-        (at.elapsed() < API_CACHE_TTL).then(|| value.clone())
-    }
-
-    /// The last good reading, but only while it is still worth showing. Without
-    /// the age bound a reading stood in for a live one forever, so a persistent
-    /// failure froze the ticker on an hours-old percentage that looked current.
-    fn stale(&self) -> Option<T> {
-        let guard = self.0.lock();
-        let (value, at) = guard.as_ref()?;
-        (at.elapsed() < STALE_FALLBACK_MAX_AGE).then(|| value.clone())
-    }
-
-    fn put(&self, value: &T) {
-        *self.0.lock() = Some((value.clone(), Instant::now()));
-    }
-}
-
 #[derive(Clone)]
 struct CodexSnapshot {
     usage: CodexUsageApiResponse,
     stats: CodexStatsResponse,
 }
 
-static SNAPSHOT_CACHE: TtlCache<CodexSnapshot> = TtlCache::new();
+static SNAPSHOT_CACHE: UsageCache<CodexSnapshot> = UsageCache::new();
 static FETCH_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
-
-/// Cache TTL — matches the Claude path so both tickers poll at the same cadence.
-const API_CACHE_TTL: Duration = Duration::from_secs(300);
-/// How old a cached reading may be before it stops standing in for a live one.
-/// Past this age the error is more honest than an apparently current figure.
-const STALE_FALLBACK_MAX_AGE: Duration = Duration::from_secs(1800);
 
 fn reset_after(resets_at: Option<i64>, now: i64) -> Option<i64> {
     resets_at.map(|value| value.saturating_sub(now).max(0))
@@ -324,25 +291,6 @@ fn map_app_server_snapshot(
             },
         },
     }
-}
-
-fn looks_like_auth_failure(message: &str) -> bool {
-    let lower = message.to_ascii_lowercase();
-    lower.contains("not logged in")
-        || lower.contains("authentication")
-        || lower.contains("unauthorized")
-        || lower.contains("401")
-        || lower.contains("403")
-}
-
-fn looks_like_contract_failure(message: &str) -> bool {
-    let lower = message.to_ascii_lowercase();
-    message.contains("Failed to parse")
-        || message.contains("returned no result")
-        || message.contains("returned no response")
-        || lower.contains("method not found")
-        || lower.contains("unknown method")
-        || lower.contains("unsupported method")
 }
 
 async fn fetch_snapshot() -> Result<CodexSnapshot, String> {

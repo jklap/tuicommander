@@ -73,6 +73,7 @@ async fn workflow_launch_accepts_registered_branch_worktree() {
     crate::config::save_agents_config(crate::config::AgentsConfig::default(), config).unwrap();
     let state = test_state();
     let mcp_sid = "workflow-launch-mcp";
+    register_peer(&state, TEST_UUID_A, "workflow-parent", mcp_sid);
     state
         .mcp
         .to_session
@@ -80,19 +81,22 @@ async fn workflow_launch_accepts_registered_branch_worktree() {
     insert_managed_test_session(&state, "workflow-caller", worktree.to_str().unwrap());
     state.bind_live_pty(TEST_UUID_A, "workflow-caller");
     crate::repo_watcher::start_watching(project, &state).unwrap();
-    let args = serde_json::json!({"input": {
+    let args = serde_json::json!({"action":"launch", "input": {
         "runId": run.id, "attemptId": attempt_id,
         "worktreePath": worktree, "agentType": "Workflow shell"
     }});
     // Catches: launch loosens the main-checkout and in-progress-operation guards.
     let mut main_args = args.clone();
     main_args["input"]["worktreePath"] = serde_json::json!(repo);
-    let rejected = handle_workflow_launch(
+    let rejected = handle_mcp_tool_call_with_context(
         &state,
         "127.0.0.1:1".parse().unwrap(),
+        "workflow",
         &main_args,
         Some(mcp_sid),
-    );
+        None,
+    )
+    .await;
     assert!(rejected.get("error").is_some(), "{rejected}");
     let merge_head = crate::git_cli::git_cmd(&worktree)
         .args(["rev-parse", "--git-path", "MERGE_HEAD"])
@@ -102,16 +106,32 @@ async fn workflow_launch_accepts_registered_branch_worktree() {
         .trim()
         .to_owned();
     std::fs::write(&merge_head, "unfinished merge\n").unwrap();
-    let rejected =
-        handle_workflow_launch(&state, "127.0.0.1:1".parse().unwrap(), &args, Some(mcp_sid));
+    let rejected = handle_mcp_tool_call_with_context(
+        &state,
+        "127.0.0.1:1".parse().unwrap(),
+        "workflow",
+        &args,
+        Some(mcp_sid),
+        None,
+    )
+    .await;
     std::fs::remove_file(&merge_head).unwrap();
     assert!(
         rejected["error"].as_str().unwrap().contains("operation"),
         "{rejected}"
     );
     assert!(store.snapshot(&run.id).unwrap().effects.is_empty());
-    let launched =
-        handle_workflow_launch(&state, "127.0.0.1:1".parse().unwrap(), &args, Some(mcp_sid));
+    // Exercise the real async transport boundary, which owns the blocking
+    // workflow worker; the transaction awaits must not run on the test executor.
+    let launched = handle_mcp_tool_call_with_context(
+        &state,
+        "127.0.0.1:1".parse().unwrap(),
+        "workflow",
+        &args,
+        Some(mcp_sid),
+        None,
+    )
+    .await;
     assert!(launched.get("error").is_none(), "{launched}");
     let session_id = launched["session_id"].as_str().unwrap();
     let launched_cwd = state

@@ -1,6 +1,7 @@
 import { createEffect, createMemo, onCleanup, untrack } from "solid-js";
 import { AGENT_TYPES, AGENTS, type AgentType } from "../agents";
 import { invoke } from "../invoke";
+import type { ChoicePrompt } from "../mobile/useSessions";
 import { pluginRegistry } from "../plugins/pluginRegistry";
 import { appLogger } from "../stores/appLogger";
 import { type AgentLifecycleState, type ProviderRecovery, type ShellState, terminalsStore } from "../stores/terminals";
@@ -16,10 +17,13 @@ type BackendSessionState = {
 	agent_type?: string | null;
 	shell_state?: string;
 	agent_state?: string;
+	abandoned_since_ms?: number;
 	agent_intent?: string | null;
 	last_prompt?: string | null;
 	awaiting_input?: boolean;
 	question_confident?: boolean;
+	question_text?: string;
+	choice_prompt?: ChoicePrompt;
 	background_work?: boolean;
 	queued_commands?: number;
 	last_activity_ms?: number;
@@ -87,7 +91,10 @@ function applySessionState(termId: string, sessionId: string, state: BackendSess
 		lastPrompt: state?.last_prompt ?? null,
 		awaitingInput: isAwaiting ? "question" : null,
 		awaitingInputConfident: state?.question_confident === true,
+		questionText: isAwaiting ? (state?.question_text ?? null) : null,
+		choicePrompt: isAwaiting ? (state?.choice_prompt ?? null) : null,
 		backgroundWork: state?.background_work === true,
+		abandonedSinceMs: state?.abandoned_since_ms ?? null,
 		// Omitted by the backend when zero (serde skips it), so absence is an
 		// empty queue — not "unknown".
 		queuedCommands: state?.queued_commands ?? 0,

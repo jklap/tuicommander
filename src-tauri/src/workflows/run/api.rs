@@ -65,19 +65,6 @@ pub enum RunAction {
     },
 }
 
-/// Inline schema is embedded under MCP `input`, like the native story schema.
-pub fn run_action_schema() -> serde_json::Value {
-    let generator = schemars::generate::SchemaSettings::draft2020_12()
-        .with(|settings| settings.inline_subschemas = true)
-        .into_generator();
-    let mut schema =
-        serde_json::to_value(generator.into_root_schema_for::<RunAction>()).unwrap_or_default();
-    if let Some(object) = schema.as_object_mut() {
-        object.remove("$schema");
-    }
-    schema
-}
-
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(tag = "type", content = "value", rename_all = "snake_case")]
 pub enum RunReply {

@@ -10,6 +10,30 @@ const mod = isMacOS() ? "Cmd" : "Ctrl";
 
 export const TIPS: Tip[] = [
 	{
+		feature: "Abandoned shells",
+		description:
+			"Plain shells with no running processes are marked abandoned after one idle hour. Settings → Agents → Idle agent hibernation has an expert setting to close them after a chosen number of hours; automatic closure is off by default.",
+		shortcut: null,
+	},
+	{
+		feature: "Session identifiers",
+		description:
+			"Right-click a sidebar session row to copy its PTY session ID, live child process ID, or MCP alias. Hover an entry to see its value.",
+		shortcut: null,
+	},
+	{
+		feature: "Mobile font sizes",
+		description:
+			"Use the Terminal and Chat controls in mobile Settings → Appearance to set each reading size independently. The choices stay on this device; composers and UI controls do not change.",
+		shortcut: null,
+	},
+	{
+		feature: "Launch playbook modules",
+		description:
+			"In Settings > Agents, select launch modules and add global or per-agent instructions without copying generated rules. Changes apply to new launches.",
+		shortcut: null,
+	},
+	{
 		feature: "All settings inspector",
 		description:
 			"Open Settings → All settings (Expert) for typed catalogue fields without a dedicated page. Select the owner and existing record key, then read before saving. Credentials stay in their domain workflows.",
@@ -375,7 +399,7 @@ export const TIPS: Tip[] = [
 	{
 		feature: "Prompts",
 		description:
-			"Press Cmd+Shift+K to open the Prompts dropdown — 24 built-in context-aware prompts for git, review, PR, and more.",
+			"Open the Prompts dropdown and search Configure for guided issue-to-draft-PR, incoming PR review and authorized bounded-fix setup. The guides verify prerequisites before configuration.",
 		shortcut: `${mod}+Shift+K`,
 	},
 	{

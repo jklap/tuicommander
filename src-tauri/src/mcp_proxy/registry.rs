@@ -224,6 +224,7 @@ impl UpstreamEntry {
 pub(crate) struct UpstreamRegistry {
     /// `upstream_name` → entry
     entries: DashMap<String, Arc<UpstreamEntry>>,
+    pub(crate) settings_publisher: parking_lot::RwLock<crate::settings::changes::Publisher>,
     /// Broadcast bus for emitting upstream status change events (optional).
     event_bus: parking_lot::RwLock<Option<tokio::sync::broadcast::Sender<crate::state::AppEvent>>>,
     /// MCP tools_changed signal — fired when upstream tool availability changes.
@@ -245,6 +246,7 @@ impl UpstreamRegistry {
     pub(crate) fn new() -> Self {
         Self {
             entries: DashMap::new(),
+            settings_publisher: Default::default(),
             event_bus: parking_lot::RwLock::new(None),
             mcp_tools_tx: parking_lot::RwLock::new(None),
             oauth_flow: parking_lot::RwLock::new(None),
@@ -734,7 +736,7 @@ impl UpstreamRegistry {
             ));
         }
 
-        let client = build_client(&name, &config)?;
+        let client = build_client(&name, &config, self.settings_publisher.read().clone())?;
         let entry = Arc::new(UpstreamEntry::new(config.clone(), client));
         self.entries.insert(name.clone(), Arc::clone(&entry));
 
@@ -989,7 +991,11 @@ fn server_config_changed(old: &UpstreamMcpServer, new: &UpstreamMcpServer) -> bo
 }
 
 /// Build the appropriate client variant from the upstream config.
-fn build_client(name: &str, config: &UpstreamMcpServer) -> Result<UpstreamClient, String> {
+fn build_client(
+    name: &str,
+    config: &UpstreamMcpServer,
+    publisher: crate::settings::changes::Publisher,
+) -> Result<UpstreamClient, String> {
     match &config.transport {
         UpstreamTransport::Http { .. } => {
             let client = HttpMcpClient::from_config(
@@ -999,7 +1005,8 @@ fn build_client(name: &str, config: &UpstreamMcpServer) -> Result<UpstreamClient
                 config.auth.is_some(),
             )
             .ok_or_else(|| format!("Failed to build HTTP client for '{name}'"))?
-            .with_headers(config.headers.clone());
+            .with_headers(config.headers.clone())
+            .with_settings_publisher(publisher);
             Ok(UpstreamClient::Http(Box::new(tokio::sync::RwLock::new(
                 client,
             ))))
@@ -1205,6 +1212,8 @@ async fn initialize_entry_with_oauth(
             // help either, since the stale token would just be reused).
             if let Err(e) = crate::mcp_upstream_credentials::delete_upstream_credential(name) {
                 tracing::warn!(source = "mcp_registry", %name, "Failed to clear rejected OAuth token: {e}");
+            } else if let Some(manager) = &flow_mgr {
+                manager.settings_publisher.read().publish("upstreams", true);
             }
             tracing::info!(
                 source = "mcp_registry",

@@ -51,6 +51,38 @@ Before story 607-f483 the two had drifted in both directions: `search_files`
 offloaded over HTTP but not over IPC, while `search_content_all` offloaded over
 IPC but not over HTTP.
 
+## Agent session discovery (2026-10-19)
+
+`discover_agent_session` is async and moves all filesystem and process reads to
+`spawn_blocking`. Its HTTP route awaits the same command. The synchronous
+`discover_agent_session_blocking` service remains available to the subagent-map
+and suspended-session paths, which already run on blocking owners.
+
+Ego discovery caches the binding by sessions root and pid. A cache hit reads only
+the bound lease and checks its pid and writer lock. Ego leaves its lease file
+behind after exit, and its heartbeat is written at acquisition rather than
+renewed, so matching pid text alone cannot validate a cache hit after pid reuse.
+An unlocked, missing, corrupt or changed-pid lease invalidates the cache. A miss
+scans the store and chooses the matching pid with the latest heartbeat, as before.
+Only a binding with a held writer lock is cached. No filesystem work runs while
+the cache mutex is held.
+
+### Transport regression (2040-16b2)
+
+The retained 2026-10-19 09:00 macOS sample shows the native main thread inside
+`discover_agent_session` → `ego_session_for_pid` → filesystem reads. A synchronous
+scan blocks shared IPC dispatch, including input and frame receipts from other
+sessions. This is evidence of a shared-thread delay, not proof that every
+historical frame-gate warning came from discovery.
+
+The Unix regression uses an 800 ms FIFO-backed lease read, continuous terminal
+output, real kernel PTY echo and a second session's production frame ticker.
+Echo and the second frame consumer must progress within 200 ms of the read
+starting. The test exercises the HTTP route on a single-thread async runtime;
+it protects the shared async discovery boundary, not native WebKit
+keyboard-to-paint timing. The same regression fails before 2057 moved discovery
+to the blocking pool.
+
 ## Audit (2026-08-18)
 
 ### Application launchers (2026-10-11)
@@ -77,7 +109,7 @@ and restart verification await without blocking the IPC main thread.
 
 ### Native stories (2026-09-25)
 
-`story_action_command` is `async fn` and offloads SQLite and ownership resolution with `spawn_blocking`. The headless-compatible `/stories/action` route offloads the same shared Rust service independently; the MCP `story` tool runs it through the existing blocking handler. This keeps disk I/O off the macOS IPC thread and Tokio workers.
+`story_action_command` is `async fn` and offloads SQLite and ownership resolution with `spawn_blocking`. The headless-compatible `/stories/action` route offloads the same shared Rust service independently; the MCP `workflow action=story` entry runs it through the existing blocking handler. This keeps disk I/O off the macOS IPC thread and Tokio workers.
 
 `workflow_definition_action` and its HTTP twin use `spawn_blocking` around graph validation and SQLite publication for the same reason.
 `workflow_run_action` and its HTTP twin also use `spawn_blocking` for SQLite run transitions and event paging.
@@ -104,14 +136,10 @@ table rather than six match arms precisely so a test can assert the routing.
 `git status --porcelain` as a subprocess for the requested subdir.
 
 `pty.rs`, the terminal grid reads: `terminal_styled_rows`,
-`terminal_get_block_rows`, `terminal_scroll_info`, `terminal_search`,
+`terminal_scroll_info`, `terminal_search`,
 `terminal_search_buffer`, `terminal_get_row_text`, `terminal_get_logical_line`,
 `terminal_get_selection_text`, `terminal_get_lines`, `terminal_get_cursor_line`,
-`terminal_hyperlink_at`, `terminal_hyperlink_span` and `read_vt_log` — all
-through `pty::vt_try_read`, and their HTTP twins in `mcp_http/session.rs` with
-them. `read_vt_log` is the one worth naming: it has no frontend caller yet, so
-it survived the first pass of the audit purely by being unused, and being
-registered in the handler is all it takes to be reachable.
+`terminal_hyperlink_span` — all through `pty::vt_try_read`, and their HTTP twins in `mcp_http/session.rs` with them. The unused `read_vt_log`, `terminal_get_block_rows` and `terminal_hyperlink_at` commands were removed in #2115-1333.
 
 Every one of them moved, including the single-row reads. The cost that matters
 is not the work the closure does, it is the wait for the vt mutex, which the PTY
@@ -324,5 +352,9 @@ The async `suspended_session_action` command and its HTTP route both call `suspe
 
 `plugin_github_action` is async: it validates plugin/account identity, loads credentials off the main thread, then calls the existing async B6/B7 services. HTTP uses the same adapter.
 
+`plugin_http_cancel` is an async IPC command (not macOS-main-thread work). It updates the plugin-scoped request registry; fetch observes cancellation while awaiting its full request future.
+
 `force_retry_provider_recovery_command` is async and runs the shared input-lock
 transaction and agent command writer in `spawn_blocking`, not on the main thread.
+
+`save_frame_workload` is async. Recording validation, filesystem writes, sync and rotation run inside `spawn_blocking`, never on the desktop IPC thread. HTTP uses the same function and writer admission bound.
