@@ -999,7 +999,10 @@ describe("transport", () => {
 			});
 
 			it("maps set_remote_connection_relay_pairing to PUT with the bundle in the body", () => {
-				const result = mapCommandToHttp("set_remote_connection_relay_pairing", { id: "c1", bundle: "tuic-pair-v1:abc" });
+				const result = mapCommandToHttp("set_remote_connection_relay_pairing", {
+					id: "c1",
+					bundle: "tuic-pair-v1:abc",
+				});
 				expect(result.method).toBe("PUT");
 				expect(result.path).toBe("/config/remote-connections/c1/relay-pairing");
 				expect(result.body).toEqual({ bundle: "tuic-pair-v1:abc" });

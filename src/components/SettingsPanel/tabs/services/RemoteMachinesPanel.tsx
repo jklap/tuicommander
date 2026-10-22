@@ -400,11 +400,18 @@ export const RemoteMachinesPanel: Component = () => {
 								class={s.input}
 								value={props.formData.transportType}
 								onChange={(e) =>
-									props.setFormData((f) => ({ ...f, transportType: e.currentTarget.value as "Ssh" | "Direct" | "Relay" }))
+									props.setFormData((f) => ({
+										...f,
+										transportType: e.currentTarget.value as "Ssh" | "Direct" | "Relay",
+									}))
 								}
 							>
 								<For
-									each={settingOptions("connections.connections.{id}.transport.type", { Ssh: "SSH", Direct: "Direct", Relay: "Relay" })}
+									each={settingOptions("connections.connections.{id}.transport.type", {
+										Ssh: "SSH",
+										Direct: "Direct",
+										Relay: "Relay",
+									})}
 								>
 									{(option) => <option value={option.value}>{option.label}</option>}
 								</For>
@@ -552,104 +559,106 @@ export const RemoteMachinesPanel: Component = () => {
 						</p>
 					</Show>
 				</SectionCard>
-				<SectionCard title="Deployment and lifetime" help={<ContextualHelp label="Deployment and lifetime" />}>
-					<Show when={props.formData.transportType === "Ssh"}>
-						<SettingRow label="Deployment">
-							{(id, descriptionId) => (
-								<>
-									<Select
-										data-setting-id="connections.connections.{id}.deploy"
-										class={s.input}
-										id={id}
-										aria-describedby={descriptionId()}
-										value={props.formData.deploy}
-										onChange={(e) => props.setFormData((f) => ({ ...f, deploy: e.currentTarget.value as DeployMode }))}
-									>
-										<For
-											each={settingOptions("connections.connections.{id}.deploy", {
-												never: "Never deploy",
-												on_connect: "Deploy on connect",
-												installed: "Installed service",
-											})}
+				<Show when={props.formData.transportType !== "Relay"}>
+					<SectionCard title="Deployment and lifetime" help={<ContextualHelp label="Deployment and lifetime" />}>
+						<Show when={props.formData.transportType === "Ssh"}>
+							<SettingRow label="Deployment">
+								{(id, descriptionId) => (
+									<>
+										<Select
+											data-setting-id="connections.connections.{id}.deploy"
+											class={s.input}
+											id={id}
+											aria-describedby={descriptionId()}
+											value={props.formData.deploy}
+											onChange={(e) =>
+												props.setFormData((f) => ({ ...f, deploy: e.currentTarget.value as DeployMode }))
+											}
 										>
-											{(option) => <option value={option.value}>{option.label}</option>}
-										</For>
-									</Select>
-								</>
-							)}
-						</SettingRow>
-						<SettingRow label="Keep ephemeral daemon alive (minutes)">
+											<For
+												each={settingOptions("connections.connections.{id}.deploy", {
+													never: "Never deploy",
+													on_connect: "Deploy on connect",
+													installed: "Installed service",
+												})}
+											>
+												{(option) => <option value={option.value}>{option.label}</option>}
+											</For>
+										</Select>
+									</>
+								)}
+							</SettingRow>
+							<SettingRow label="Keep ephemeral daemon alive (minutes)">
+								{(id, descriptionId) => (
+									<>
+										<Input
+											data-setting-id="connections.connections.{id}.survive_secs"
+											type="number"
+											class={s.input}
+											min={1}
+											id={id}
+											aria-describedby={descriptionId()}
+											value={props.formData.surviveMinutes}
+											onInput={(e) =>
+												props.setFormData((f) => ({
+													...f,
+													surviveMinutes: Math.max(1, parseInt(e.currentTarget.value, 10) || 1),
+												}))
+											}
+										/>
+									</>
+								)}
+							</SettingRow>
+						</Show>
+						<SettingRow label="Auto-update remote daemons">
 							{(id, descriptionId) => (
-								<>
-									<Input
-										data-setting-id="connections.connections.{id}.survive_secs"
-										type="number"
-										class={s.input}
-										min={1}
-										id={id}
-										aria-describedby={descriptionId()}
-										value={props.formData.surviveMinutes}
-										onInput={(e) =>
-											props.setFormData((f) => ({
-												...f,
-												surviveMinutes: Math.max(1, parseInt(e.currentTarget.value, 10) || 1),
-											}))
-										}
-									/>
-								</>
+								<input
+									data-setting-id="connections.connections.{id}.auto_update"
+									id={id}
+									aria-describedby={descriptionId()}
+									class={s.rowSwitch}
+									type="checkbox"
+									checked={props.formData.autoUpdate}
+									onChange={(e) => props.setFormData((f) => ({ ...f, autoUpdate: e.currentTarget.checked }))}
+								/>
 							)}
 						</SettingRow>
-					</Show>
-					<SettingRow label="Auto-update remote daemons">
-						{(id, descriptionId) => (
-							<input
-								data-setting-id="connections.connections.{id}.auto_update"
-								id={id}
-								aria-describedby={descriptionId()}
-								class={s.rowSwitch}
-								type="checkbox"
-								checked={props.formData.autoUpdate}
-								onChange={(e) => props.setFormData((f) => ({ ...f, autoUpdate: e.currentTarget.checked }))}
-							/>
-						)}
-					</SettingRow>
-					<Show when={props.formData.transportType !== "Relay"}>
-					<SettingRow label="Auth username">
-						{(id, descriptionId) => (
-							<Input
-								data-setting-id="connections.connections.{id}.auth_username"
-								id={id}
-								aria-describedby={descriptionId()}
-								type="text"
-								class={s.input}
-								placeholder="Auth username (for TUIC API authentication)"
-								value={props.formData.authUsername}
-								onInput={(e) => props.setFormData((f) => ({ ...f, authUsername: e.currentTarget.value }))}
-							/>
-						)}
-					</SettingRow>
-					<SettingRow label="Auth password">
-						{(id, descriptionId) => (
-							<Input
-								data-setting-id="connections.{id}.credential"
-								id={id}
-								aria-describedby={descriptionId()}
-								type="password"
-								class={s.input}
-								autocomplete="off"
-								placeholder={props.passwordStored ? "Password (stored — leave blank to keep it)" : "Auth password"}
-								value={props.formData.authPassword}
-								onInput={(e) => props.setFormData((f) => ({ ...f, authPassword: e.currentTarget.value }))}
-							/>
-						)}
-					</SettingRow>
-					<p class={s.hint} style={{ margin: 0 }}>
-						The password is kept in the OS credential vault, never in connections.json. It is traded for the daemon's
-						session token on every connect — <code>tuic-remote</code> authenticates every request, so a connection
-						without one reaches only <code>/health</code>.
-					</p>
-					</Show>
-				</SectionCard>
+						<SettingRow label="Auth username">
+							{(id, descriptionId) => (
+								<Input
+									data-setting-id="connections.connections.{id}.auth_username"
+									id={id}
+									aria-describedby={descriptionId()}
+									type="text"
+									class={s.input}
+									placeholder="Auth username (for TUIC API authentication)"
+									value={props.formData.authUsername}
+									onInput={(e) => props.setFormData((f) => ({ ...f, authUsername: e.currentTarget.value }))}
+								/>
+							)}
+						</SettingRow>
+						<SettingRow label="Auth password">
+							{(id, descriptionId) => (
+								<Input
+									data-setting-id="connections.{id}.credential"
+									id={id}
+									aria-describedby={descriptionId()}
+									type="password"
+									class={s.input}
+									autocomplete="off"
+									placeholder={props.passwordStored ? "Password (stored — leave blank to keep it)" : "Auth password"}
+									value={props.formData.authPassword}
+									onInput={(e) => props.setFormData((f) => ({ ...f, authPassword: e.currentTarget.value }))}
+								/>
+							)}
+						</SettingRow>
+						<p class={s.hint} style={{ margin: 0 }}>
+							The password is kept in the OS credential vault, never in connections.json. It is traded for the daemon's
+							session token on every connect — <code>tuic-remote</code> authenticates every request, so a connection
+							without one reaches only <code>/health</code>.
+						</p>
+					</SectionCard>
+				</Show>
 			</>
 		);
 	}
