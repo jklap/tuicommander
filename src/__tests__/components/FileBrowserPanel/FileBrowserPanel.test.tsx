@@ -582,7 +582,9 @@ describe("FileBrowserPanel create file", () => {
 		const confirm = Array.from(document.querySelectorAll("button")).find((b) => b.textContent?.trim() === "Create");
 		fireEvent.click(confirm as HTMLButtonElement);
 
-		await waitFor(() => expect(mockInvoke).toHaveBeenCalledWith("create_directory", { repoPath: "/repo", dir: "docs" }));
+		await waitFor(() =>
+			expect(mockInvoke).toHaveBeenCalledWith("create_directory", { repoPath: "/repo", dir: "docs" }),
+		);
 	});
 
 	it("creates a dotfile typed into the New File dialog", async () => {
