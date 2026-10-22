@@ -59,6 +59,8 @@ resize — the width applies for the session and is not persisted.
 The conversation view loads when you first open it; terminal input is available
 while it loads.
 
+Mobile offers the **Chat** tab only when the host has a configured ego executable, using the same availability predicate as desktop. Host settings changes update the tab without reloading. Removing ego configuration returns an open Chat view to **Sessions**; unavailable saved Chat links also stay on **Sessions**.
+
 On the mobile PWA, **Chat** is the second tab, after the default **Sessions**
 tab, and opens without choosing a repository. It uses the same workspace root
 and saved sessions as desktop. The composer shares the session input styling,
@@ -257,11 +259,7 @@ the panel's composer and open it. They write the question; you send it.
 
 ## The session knowledge store
 
-Command outcomes are still recorded per terminal — exit codes from OSC 133 where
-the shell supports it, an `Inferred` outcome from the PTY silence timer where it
-does not — and persist to `<config_dir>/ai-sessions/<session_id>.json`. Nothing
-reads them today. They are kept because the recording has nothing to do with a
-model and re-deriving the history later is impossible.
+The write-only command knowledge store was removed in #2115-1333. TUICommander no longer records or periodically saves command outcomes for AI context. Existing `<config_dir>/ai-sessions/<session_id>.json` files remain untouched. Shell activity and command blocks still use OSC 133 markers.
 
 ## Not here
 
@@ -298,7 +296,7 @@ Use **New conversation with options** beside the `+` button to override the ego 
 
 A custom conversation runs its own ego ACP process. Its mail identity is separate from daily chats, even when both use the same workspace.
 
-When you scroll up and more conversation content arrives, **New text below** appears above the composer. Select it to return to the bottom and resume following. Reaching the bottom by hand clears it too. Search jumps do not show the pill until later content arrives. Disable **New text indicator** in **Settings → Appearance → Chat**, or mobile Settings. This preference is saved on the current client and applies to terminal Chat too.
+When you scroll up and more conversation content arrives, **New text below** appears as a compact badge floating at the bottom-right of the transcript, above the composer, without reserving a row. Select it to return to the bottom and resume following. Reaching the bottom by hand clears it too. Search jumps do not show the badge until later content arrives. Disable **New text indicator** in **Settings → Appearance → Chat**, or mobile Settings. This preference is saved on the current client and applies to terminal Chat too.
 
 AI Chat replies use plain chat prose without the terminal answer rail. Literal Markdown blockquotes keep their normal quote style.
 
@@ -335,4 +333,4 @@ captured turn; a queued Stop does not interrupt unrelated work.
 
 ## Settings MCP startup boundary
 
-The Settings owner can read and edit the configured Ego model/perimeter and base provider-auth configuration, with owner revisions and next-session effects. Human interactive provider login remains the existing AI Chat Settings workflow; no published Settings action starts or proves completion of that login. Refresh provider state after the human login. Missing binary/capability is not permission to use a different executable or PTY fallback for ACP. See [startup workflows](../backend/settings-startup.md#ego).
+The Settings owner can read and edit the configured Ego model/perimeter and base provider-auth configuration, with owner revisions and next-session effects. The AI Chat Settings button still opens the human login workflow. A schema-only assistant can also request typed `begin_login` and `login_status` from the configured Ego owner; you complete the exchange in its terminal. Terminal exit is not success: the owner reads credential presence, then the assistant refreshes provider state. Missing binary/capability is not permission to use a different executable or PTY fallback for ACP. See [startup workflows](../backend/settings-startup.md#ego).

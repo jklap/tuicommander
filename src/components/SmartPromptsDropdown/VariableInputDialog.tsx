@@ -51,7 +51,6 @@ export const VariableInputDialog: Component<VariableInputDialogProps> = (props) 
 			<form class={s.dialog} onClick={(e) => e.stopPropagation()} onSubmit={handleSubmit}>
 				<div class={s.header}>
 					<span class={s.title}>{props.promptName}</span>
-					<span class={s.subtitle}>Fill in the required values</span>
 				</div>
 
 				<div class={s.fields}>
@@ -61,7 +60,6 @@ export const VariableInputDialog: Component<VariableInputDialogProps> = (props) 
 							return (
 								<label class={s.field}>
 									<span class={s.fieldName}>{`{${varName}}`}</span>
-									<span class={s.fieldDesc}>{desc}</span>
 									<input
 										ref={i() === 0 ? (el) => (firstInputRef = el) : undefined}
 										class={s.fieldInput}

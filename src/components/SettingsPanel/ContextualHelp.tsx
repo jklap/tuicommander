@@ -4,7 +4,7 @@ import { InfoBadge } from "./InfoBadge";
 
 const aliases: Record<string, Record<string, string>> = {
 	"ai-chat": {
-		"workspace · set in tuicommander": "AI Chat workspace",
+		workspace: "AI Chat workspace",
 		"workspace access": "Extra folder access",
 		network: "Network for new ego runs",
 		"root access": "Folder draft",

@@ -1,8 +1,10 @@
 # Smart Prompts Library
 
-The Smart Prompts Library stores and manages all your prompt templates — both the 24 built-in AI automation prompts and your custom templates. Prompts are injected directly into the active agent terminal or run headless for quick one-shot operations.
+The Smart Prompts Library stores and manages all your prompt templates — both built-in AI automation prompts and your custom templates. Prompts are injected directly into the active agent terminal or run headless for quick one-shot operations.
 
 > **Looking for one-click AI automation?** See [Smart Prompts](smart-prompts.md) for the full guide on built-in automation prompts, context variables, and headless execution.
+
+Search for **Configure** to find the three [guided event configuration prompts](event-driven-templates.md): issue to draft PR, incoming PR review and authorized bounded fix. They start in the composer for review; they are not scheduled Automation templates or event subscriptions.
 
 ## Opening the Drawer
 

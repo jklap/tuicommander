@@ -1,5 +1,27 @@
 # TUICommander Specification
 
+Agent desktop verification (#2086-269b): `make agent-test` uses a dedicated macOS debug binary, named config namespace and explicit loopback port. Global input, dictation, Telegram, updater, deep links, global MCP writes, global CLI installation/update/removal, shared agent hook changes and sleep inhibition are disabled. Dry-run and supervised instance-only stop are available; simultaneous desktop/TCC proof remains an operator validation step.
+
+MCP capability cutover (#2068-63b9): persist `mcp_capabilities`, migrate saved tool denials once with visible unknown-name diagnostics, enforce parent/member restrictions on discovery and dispatch, and remove retired names without aliases. Clients must reconnect and review external allow rules.
+
+Native MCP guidance (#2069-7347): session, agent, repo, ui, voice, telegram and automations expose compact agent-facing action contracts. Their action=help returns every displaced rule from the full native guide. Existing action validation, conditional availability, disabled-tool gates and Settings copy remain unchanged.
+UI Design Mode actions (#2067-e708): `ui design_start/stop/status/reload/navigate/screenshot/errors/eval` reuse the Design Mode owner, armed caller/repository checks and extension host grants. Saved `design_mode` denials apply to the grouped actions. The old tool is removed by the 2068 capability cutover; use `ui design_*`.
+
+
+Conditional MCP tools (#2066-516c, conditional portion of #2067-e708): remote requires a live authenticated connected server; voice requires persisted dictation enabled and spoken replies enabled; Telegram requires enabled setup, a bot alias and its private token file. Shared predicates gate listing, search, schema lookup and calls. Owner changes invalidate the catalogue. Configuration does not replace conversation binding, Telegram registration or deployment consent. Design Mode uses grouped `ui design_*` actions after the catalogue cutover.
+- [x] Mobile CLI answer bars occupy a separate gutter outside the text box, including column-zero ego rows, without adding Claude text indentation (#2110-734c).
+- [x] Mobile CLI answers reuse the desktop answer planner and green gutter style instead of displaying protocol speech bubbles; prompts and fenced examples stay literal (#2070-773d).
+
+- [x] Native MCP Settings rows use domain sections without changing tool names, saved disabled values or effective denials (#2063-baa9).
+
+- [x] Mobile Markdown review sends persisted edits and tweak comments through the shared desktop prompt and backend idle queue, with repository agent selection and delivery feedback (#2042-a71b).
+
+- [x] Durable independent peer-mail subscriptions: shared insertion journal, filtered bounded replay, explicit acknowledgement, retention-loss counters, HTTP SSE and ACP resource notifications (#2004-4760).
+
+- [x] Generated launch playbook modules with global/per-agent switches, append-only user additions, explicit all off, legacy default-copy migration and machine-owned effective previews (#2000-b50f).
+
+- [x] Mobile open Markdown tabs: one shared list in a top-bar dropdown at >=768 px, otherwise in the session menu; unchanged-cwd polls do not reset entries (#2024-9a86, #2025-82cb).
+
 - [x] AI Chat smart tables (layout A): protected short columns, sticky first column, conditional scroll hints, exact-source Markdown toggle/copy and read-only document action (#1923-c6fb).
 
 - [x] AI Chat Tidy layout: single header, conditional tab strip, labelled overflow actions, compact process rows, latest-answer suggestions and untimed history (#1958-b67e).
@@ -13,9 +35,9 @@ Desktop close policy (B1, #1802-e6b8): Rust owns `app.close_behavior` (`ask` def
 Agent capture tooling: `scripts/agent_capture/run.py` records real installed CLIs through isolated headless sessions, promotes reviewed captures with ordered expected states, and integrates with the 1342 replay oracle. Missing or unauthenticated CLIs remain unverified.
 
 
-Published story workflows can start in Plans and Stories through the owning daemon. Run history renders graph positions, decisions, evidence and paged event payloads, with explicit graph recovery and cancellation. IPC/HTTP and the generated `workflow_run` MCP schema share the native run service. Plan start remains visibly unavailable pending plan dispatch.
+Published story workflows can start in Plans and Stories through the owning daemon. Run history renders graph positions, decisions, evidence and paged event payloads, with explicit graph recovery and cancellation. IPC/HTTP and the generated `workflow action=run` MCP schema share the native run service. Plan start remains visibly unavailable pending plan dispatch. The grouped `workflow` MCP tool exposes typed story, run, proposal_create, report and launch actions through existing service owners. Proposal retries preserve coordinator ownership and proposal-key idempotency. Legacy workflow tool names are removed without aliases; scheduled automations stay separate. `tuic workflow` forwards the same envelope.
 
-**Version:** 1.8.0
+**Version:** 2.0.0-beta.1
 **Last Updated:** 2026-09-16
 
 ## Shared form controls — Implemented (#1815-01c9)
@@ -102,6 +124,16 @@ viewport; partial frames from a different viewport cannot be merged into its
 row cache. These guarantees apply both during a drag and after mouse release.
 Intentional ANSI edits, history eviction and resize/reflow remain distinct from
 renderer data loss.
+
+### Bounded input frame scheduling
+
+Desktop and HTTP/PWA interactive input arm a 100ms priority window before the
+PTY write. Only subsequent reader-applied output can wake the existing frame
+ticker early. Priority uses a rolling budget of two bypass cuts per 100ms and
+8ms coalescing from the previous ticker cut; repeated input does not reset the
+budget. The normal animation/load floors, desktop receipt gate, DEC-2026
+buffering, ordering and shared-damage repair remain on that same serializer.
+This is a scheduling policy, not a trusted keyboard-to-presentation guarantee.
 
 ### Backend Execution Model
 
@@ -428,8 +460,9 @@ MCP callers can declare an existing linked worktree through
 `session action=declare_worktree worktree_path=/absolute/path`. Ownership comes
 from the immutable PTY launch directory and registered Git worktrees. The
 caller-only association persists under stable `TUIC_SESSION`, survives restart
-and does not change shell cwd or acquire cleanup ownership. Tab placement follows
-cwd, not this association, during creation, OSC 7, reconnect and restore. Removing
+and does not change shell cwd or acquire cleanup ownership. Explicit declarations
+own tab placement during OSC 7, reconnect and restore while the matching checkout
+exists. Creation without declaration remains cwd-based. Removing
 or recycling a worktree closes only terminals whose current cwd lies inside that
 checkout. A stale sidebar membership never authorizes closing an unrelated tab.
 
@@ -651,12 +684,13 @@ Some frontend-only stores persist to localStorage:
 - [x] SolidJS migration
 
 ### Completed (P2)
-- [x] Terminal HTTP(S) link menu starts Design Mode with the owning agent and exact URL; HTTP/IPC optional `url` and MCP `design_mode` start/stop/status share the lifecycle. Agents use URL-aware start as the default path for layout work.
-- [x] Design Mode extension heartbeat: every 5 seconds, expiry after 60 seconds without a beat (600 seconds before the first beat), and MCP `design_mode action=reload` delivered on the next heartbeat.
+- [x] Terminal HTTP(S) link menu starts Design Mode with the owning agent and exact URL; HTTP/IPC optional `url` and MCP `ui design_start/design_stop/design_status` share the lifecycle. Agents use URL-aware start as the default path for layout work.
+- [x] Design Mode extension heartbeat: every 5 seconds, expiry after 60 seconds without a beat (600 seconds before the first beat), and MCP `ui action=design_reload` delivered on the next heartbeat.
 - [x] Design Mode v2 pilot: dedicated browser profile with automatic extension loading on cold Edge starts (running profiles must close first; branded Chrome reports an unsupported-autoload error), extension sidebar, explicit picking, per-pick comments, launching-agent default, same-repository recipient selection, native messaging, idle-gated Send and live dev-server discovery; native Edge validation remains tracked in to-test.md
 - [x] Split pane layout
 - [x] Touch branch action trays: left swipe reveals existing actions; vertical scrolling and desktop hover controls remain unchanged
 - [x] Multi-repository sidebar
+- [x] Sidebar session context menu copies the PTY session ID, live child PID, and owning session-list alias through the shared clipboard path; unknown PID and absent alias entries are hidden.
 - [x] Rich parent-agent links reveal and select live children in other repositories without moving sessions
 - [x] Git diff panel
 - [x] Interactive agent prompts UI
@@ -665,6 +699,7 @@ Some frontend-only stores persist to localStorage:
 - [x] Sidebar PR badges retain `#number` while showing lifecycle, conflict, CI, and review state
 - [x] Parallel agent orchestration
 - [x] Orchestrated PTY task descriptions with prompt-derived fallback metadata
+- [x] Agent task_get/task_cancel share the existing task service, spawning-owner checks and immutable outcomes; task cancellation leaves the PTY alive. The current task tool stays until catalogue cutover (#2064-6385).
 - [x] Page retained MCP terminal output through text/byte offsets, with continuation instructions and eviction-gap reporting
 - [x] One-call MCP managed-agent submission with bounded terminal-movement receipt
 - [x] Expandable terminal Context bar for agent intent, orchestrator assignment, and last user prompt
@@ -676,7 +711,7 @@ Some frontend-only stores persist to localStorage:
 - [x] Answer surfaces use a green left rule without a background tint; Paper uses its darker success green for the rule; paragraph spacing and user-question styling stay unchanged (#1896-f355).
 - [x] Terminal Chat groups answer blocks into one reading-width card per turn, copies the whole card, compresses terminal pastes and system notices, and keeps the collapsed tool row with Claude Bash descriptions. Turn separators are omitted until transcript timestamps reach the frontend (#1832-b19a).
 - [x] Terminal Compose accepts ordered image drops and an image-only multi-file picker through the existing paste save path. Drop inserts at the pointer; unsupported images and failed saves show an error.
-- [x] Terminal Chat uses focused, docked Compose input with existing send/queue semantics; CLI open/pin preferences and shared unsent drafts survive view switches. Permission prompts remain in CLI.
+- [x] Terminal Chat uses focused, docked Compose input with existing send/queue semantics; CLI open/pin preferences and shared unsent drafts survive view switches. Active exported native questions and permission choices render above Compose and use the same PTY key semantics as mobile, without submitting drafts; unexported/free-form prompts retain CLI fallback.
 - [x] Terminal selection copy unwraps soft-wrapped rows, removes coherent Claude visual gutters and composer margins, and preserves literal block characters, pasted prompt glyphs, and short typed line breaks
 - [x] Status bar with branch and PR info
 - [x] Rate limit detection
@@ -715,6 +750,7 @@ Some frontend-only stores persist to localStorage:
 - [x] Connected daemon MCP toasts reach the desktop Messages bell with host attribution, original level/sound and safe remote-terminal navigation; no disconnected replay
 - [x] Remote access / HTTP server
 - [x] SSH-managed remote daemon deployment, idle lifetime, pairing-token vaulting, and systemd/launchd installation
+- [x] Mobile Ideas uses shared browser dictation at the caret/selection, without saving an idea or sending to a session (#2022-1b80).
 - [x] Mobile terminal prompt keyboard correction defaults on, with a device-local Settings toggle for autocorrect, spellcheck and sentence capitalization (#1878-3a3c).
 - [x] Mobile CLI and Chat jump-to-bottom arrow floats over output at least 8px above the key bar, outside the composer, only while scrolled back and resumes output follow without terminal input (#1975-4a38).
 - [x] Mobile terminal Ctrl menu (Ctrl+C, Ctrl+B, Ctrl+D, agent-aware Ctrl+Enter)
@@ -722,7 +758,9 @@ Some frontend-only stores persist to localStorage:
 - [x] Session uploads live under TUIC data, with launch grants and session-end cleanup; startup reclaims only provably dead owners, preserving concurrent instances; ego invocation-scoped binary-file read roots remain unsupported (#1833-aa60).
 - [x] Shared mobile composer + menu: attach file, camera capture, supported queue/commands and Chat draft parking; browser mic inside the text box (#1880-d7ff).
 - [x] Mobile Companion PWA (searchable sessions, live output, question reply including Codex interactive choices, activity feed)
+- [x] Mobile blocked reports keep their Input state while current suggested actions replace generic Yes/No controls; native dialog choices retain priority (#2082-f782).
 - [x] Automatic mobile resume evidence: bounded per-tab lifecycle/viewport/root/stream trail, acknowledged backend-log upload after an abnormal prior document; original iPhone grey-screen cause remains unproven (#1900-5ff6)
+- [x] Mobile shell re-measures viewport height and top on pageshow, foreground visibility and document resume, using the existing coalesced animation-frame update; conditional stale-geometry regression does not prove the physical iPhone cause (#1900-5ff6)
   - [x] Compact bare attachment icon left of the session composer; smaller mic and Send sit inside its right border (#1719-ff5d)
   - [x] Files tree search, hidden-folder ordering, long-path preview, and full-height wrapped editing
   - [x] Repository-relative Markdown images through an authenticated, repository-confined image route
@@ -739,6 +777,7 @@ Some frontend-only stores persist to localStorage:
 - [x] Notes/Ideas: mark as used, badge count in status bar
 - [x] Notes/Ideas: image paste support (Ctrl+V), thumbnails, send absolute paths to terminal
 - [x] Inter-Agent Messaging (`messaging` MCP tool: register, list_peers, send, inbox with channel push + polling fallback)
+- [x] Opt-in interrupting mail (`agent send urgency=interrupt`): safe Esc, ten-second confirmed-idle wait, full input submission and explicit urgent fallback; interrupted tools may leave partial work.
 - [x] Smart Prompts (29 built-in AI prompts with context variable resolution, shell/inject/headless-CLI execution, toolbar dropdown, SmartButtonStrip, Command Palette integration). The `api` execution mode runs one unattended ego turn over ACP (#787-ee50): a session with no MCP server, every question refused, the final text routed to the prompt's output target. Its old executor — a direct provider call from TUICommander — went with the embedded engine (#784-0aec) and did not come back
 - [x] AI Chat panel (`Cmd+Alt+A`) — ego over ACP (#785-58ca), bound to a repository and ACP session rather than a terminal. TUICommander renders the journal, permissions, elicitation forms, plans and session controls while carrying no LLM client or provider API key of its own. The selected session is saved per root and restored after restart; the picker lists ego's durable sessions by title and activity time (#1071-46c9)
 - [x] AI Chat conversation deletion — capability-gated row controls confirm the conversation name, call ACP session/delete, remove successful deletions from tabs and the list, and retain refused conversations with the agent error (#1917).
@@ -757,7 +796,7 @@ Some frontend-only stores persist to localStorage:
 - [x] AI Chat composer polish — text grows to a bounded height and pastes over 200 words stay compact until the full text is sent
 - [x] AI Chat prompt parking — Ctrl+S or the composer control parks text and images per chat tab, swaps or restores them, and returns the parked draft after the next Send
 - [~] AI Agent loop (ReAct) — shipped, then deleted in #784-0aec with no TUICommander-side successor. ego runs its own tool loop and reaches terminals from outside, through the `session` MCP tool family, exactly as Claude Code does
-- [x] Session knowledge store — per-session command outcomes, error→fix pairs, CWD history, TUI apps seen; fed by OSC 133 with silence-timer fallback; persisted with 2s debounce
+- [~] Session knowledge store — removed in #2115-1333 after its last reader was removed; no command-outcome recording or periodic flush remains. Existing history files stay untouched.
 - [x] TUI app detection — alternate-screen tracking classifies terminal as Shell or FullscreenTui with app hint (vim/htop/lazygit/…)
 - [~] Private secret forms (#1435-6e1d) — in-memory zeroizing store, separate field-schema form, exact argv consent, pipe output masking, HTTP nonce entry and inspection gating; security review pending. Headless initiation is not part of this slice. Browser entry uses the existing app origin/auth/transport; origin isolation, enforced TLS and in-flight inspection withholding are accepted omissions.
 - [~] `ai_terminal_*` MCP tools — shipped, then deleted in #f6ed. Two overlapping tool families cost tokens on every turn and made the model guess; external clients now drive terminals through the `session` tool. Secret redaction moved to `session action=output`; the mandatory native confirmation was dropped on purpose (a remote client cannot answer it — `ui action=confirm` can)
@@ -909,6 +948,14 @@ completion/maximum-duration handling remain pending; idle is not success.
 
 ### Automation HTTP and IPC parity
 
+Saved run configurations use one case-insensitive named-profile lookup across
+create, update, re-enable, list diagnostics and managed launch. Unresolved
+profiles are rejected with valid-profile repair choices; persisted invalid
+list rows expose `run_config_error` and no next occurrence. Failed agent-created
+runs offer one creator inbox notice through a durable owner-channel claim,
+including failures before session/task binding. Mail acceptance is not proof
+of consumption.
+
 Desktop IPC `automation_action` and desktop/headless HTTP `/automations/action`
 share one Rust action API for list/get/create/update/delete, atomic pause/resume,
 Run Now, paginated retained run history, previews/presets and `24h`/`7d` aggregates.
@@ -992,6 +1039,11 @@ host to open. A rejection keeps the draft. Tasks shell mounting is separate.
 
 
 Automation worktree cleanup (#1623-8b2a): Automation runs retain automation/run IDs and the exact created workspace path and ID in their saved snapshot, including after definition deletion. Worktree cleanup is explicit and limited to final runs. The backend resolves the saved identity and rechecks shared Git integration/archive proof, dirt, submodule commits and live sessions; it never forces removal or closes sessions. Shared `automation_action` actions `worktree_preview` and `cleanup_worktree` accept a saved run `id` on IPC, HTTP, MCP and CLI.
+
+### Guided event configuration (#2012-72ff)
+
+Three built-in Smart Prompts guide issue-to-draft-PR, incoming PR review and authorized bounded-fix configuration. They open in the composer for review and ask for owner/profile/GitHub/skill prerequisites, confirmed policy limits and supported host capabilities. They do not add a GitHub event runtime or grant publication authority; unavailable intake/publication stops with a draft policy. The after-beta live pilot is not yet verified. See [Guided event configuration](docs/user-guide/event-driven-templates.md).
+
 ### Built-in automation templates
 
 New automation drafts offer weekday repository audit, release readiness, daily
@@ -1116,18 +1168,17 @@ Chat is unavailable. Desktop and mobile reuse `TerminalChatTranscript`; no ACP
 connection or second event subscription is created. Compose, dictation targeting
 and answer marker rendering remain on the existing terminal paths.
 
-## Mobile Claude and ego terminal Chat view
+## Mobile terminal Chat view
 
-Phone sessions offer a direct **Read file edits in Chat** action while CLI is
-active. The terminal stays mounted. Chat edit tool disclosures render bounded
+The terminal stays mounted. Chat edit tool disclosures render bounded
 old/new blocks, preserve tabs with four-space tab stops and scroll long lines
 horizontally. Claude Edit projection retains diff content through tool completion;
 failed calls remain labelled failed, not represented as applied edits.
 
-Claude and ego PTY sessions offer CLI / Chat in the existing mobile header. The shared
+Claude, Grok, Codex and ego PTY sessions offer CLI / Chat in the existing mobile header. The shared
 `TerminalChatTranscript` owns rendering, visibility-paused keepalive and backend
 unavailability. Mobile injects wakes from `useSessions`; it opens no additional
-EventSource. Both hosts defer Claude binding to the backend. Mobile retains the
+EventSource. Both hosts defer Claude binding to the backend. Mobile also defers Codex exact-hook and Grok registry binding to `chat_view_snapshot`; an unbound response returns to CLI with its reason. Desktop and mobile share the supported-adapter predicate. Mobile retains the
 existing composer and mounted hidden output, returning CLI to the bottom.
 Transcript follow pauses during touch and detaches on upward movement.
 
@@ -1165,6 +1216,8 @@ that directory, without changing global settings or bypassing workspace trust.
 Ego PTY launches use `--read-only-dir` for the same canonical directory. Shell
 shims apply the grants to typed launches; resumed ego sessions receive fresh
 read roots because discovery does not persist ego argv. ACP uploads still require an existing profile read root.
+
+Plugin HTTP cancellation: a host-local AbortSignal maps to a generated request UUID scoped to the plugin. Shared IPC/HTTP helpers cancel the full Rust request future, including headers and body. Jira URL resolver cancellation reaches all detail requests.
 
 ### Voice owner discovery (#1909-0d24)
 
@@ -1213,7 +1266,7 @@ Frontend plugin shortcut IDs publish runtime metadata through the shared action 
 
 ## Settings startup contract status (#1790-1011)
 
-Published workflows and recovery are documented in `docs/backend/settings-startup.md`. Step 10 is not complete: native catalogue coverage does not prove account enumeration, schema-only Ego interactive login, live authentication or refused/expired/conflicting/partial-apply integration. Ego login remains a separate owner follow-up after feature freeze, not an implicit terminal fallback.
+Published workflows and recovery are documented in `docs/backend/settings-startup.md`. Typed account enumeration and configured Ego interactive login start/status are published. The login gives the person a tracked PTY; closed is not authentication success, and credential readback comes from the configured owner. Step 10 remains incomplete until schema-only startup and refusal/expiry/conflict/apply-failure integration are verified; native inventory and compile checks alone are insufficient.
 
 ### CircleCI Settings owner (#1991-bd88)
 
@@ -1222,3 +1275,61 @@ Typed `set_token` and `clear_token` actions share the existing token owner acros
 MCP, IPC and HTTP. Readback reports stored presence only (`set`, `unset`,
 `unavailable`), never a secret. Git & GitHub keeps its effective-source status;
 removing a stored token leaves environment and CircleCI CLI fallbacks unchanged.
+
+### Automation lean creation (#2001-5c1f)
+
+Bound agents can create with name, prompt, in_secs and an explicit run_config.
+The shared API resolves elapsed delay using the host clock and uses only
+caller-specific repository defaults. Actual saved profile identity is not retained
+in current caller metadata, so missing run_config fails instead of substituting
+an agent-type default. Generated IDs hash caller identity and the original request;
+identical retries atomically reuse the original occurrence. A separate identical
+reminder needs a new explicit id. Schedule choices are exclusive. Create returns the saved definition and next_run_ms; once_local and
+once_at preserve both the selected zone's local display and the exact UTC instant.
+Unbound HTTP/IPC callers still supply explicit definition fields.
+
+## Durable managed launch (2006-f5a1)
+
+Managed workers can launch through one keyed transaction across MCP, HTTP and IPC. The journal reserves the child identity before workspace or PTY side effects, retains key tombstones, and refuses conflicting reuse. A retry returns the same identity; ambiguous interrupted creation blocks without a replacement or fallback checkout. Existing/new workspaces, a stable name, a registered parent and explicit keep-open policy are supported. Receipts separate prompt transport delivery from model acceptance, require native Ready-screen evidence for ready, and expose warm-artifact state independently. Model/account/brief policy stays outside TUIC.
+
+Native automation and workflow run bindings also use this transaction through `managed_launch`: automation run IDs and workflow attempt IDs provide stable keys, with an in-process run-owner scope when no peer parent exists. No synthetic peer is registered. Run-owned children use the same pinned-name and explicit keep-open path as MCP children; the existing run controller still owns cancellation and completion. The unkeyed public `spawn` compatibility action continues to use the same low-level PTY spawn implementation.
+## Frame workload evidence (#1638-c94c)
+
+Implemented: opt-in, perfDebug-gated global bounded frame bytes and paint snapshots, rotated instance-local captures, manual debug dump and production grid-paint replay timing. The synthetic smoke fixture checks harness wiring only. Original captured-stall heartbeat/input/backend RED and same-workload GREEN remain open. See docs/backend/stall-journal.md for bounds and privacy.
+
+Dictation corrections use the machine-owned `corrections` Settings collection,
+keyed by heard text. The existing TextCorrector map remains the stored format;
+Settings and legacy transports share locked atomic persistence, runtime adoption
+and value-free refresh hints. Non-dictation builds report unavailable descriptors
+(#1992-d4fa).
+
+MCP lazy discovery returns an optional complete top_schema, bounded by schema_byte_budget (default 16384, maximum 65536 UTF-8 JSON bytes), and catalogue_generation. Clients invalidate admitted schemas on tools/list_changed or changed generation (#2013-73f9).
+
+## Bounded MCP runtime outcomes (#2010-30a7)
+
+HTTP and ACP tools/call share a body-free 1024-record instance-local audit ring;
+`GET /mcp/audit` projects the newest 100 rows. Explicit call/parent UUIDs, recognized
+operations, target digests and UTF-8 text-byte costs support runtime correlation.
+Application error, transport observation and effect certainty stay separate;
+reply construction is not delivery proof and cancellation does not imply rollback.
+Real ego/Codex correlation and captured lost-reply traces remain unverified.
+
+## Managed MCP stateless identity (#2008-5317)
+
+Modern tools/call uses an internal routing context for an exact live PTY/ACP peer
+asserted by the host header, without adding legacy session state to the wire.
+Unknown peers remain unbound. Missing-context diagnostics prohibit unchanged
+retries and require host reconnect or explicit external initialize/register.
+Consumer retry enforcement remains a separate live ego verification requirement.
+
+## Mobile device-local font sizes
+
+Implemented (#2023-54c4): mobile Settings has separate Terminal and Chat controls with smaller/larger buttons and current values, without explanatory text. Each preference has its own localStorage key and 10–24 px range with 1 px steps. The existing defaults stay 14 px for CLI output and Chat body text. Chat changes apply only within Session Chat and AI Chat transcripts. Composers, UI chrome, desktop fonts and other devices are unchanged. CLI rows rewrap locally without resizing the shared PTY and keep the visible row when scrolled back.
+
+Mobile offers the **Chat** tab only when the host has a configured ego executable, using the same availability predicate as desktop. Host settings changes update the tab without reloading. Removing ego configuration returns an open Chat view to **Sessions**; unavailable saved Chat links also stay on **Sessions**.
+
+### Abandoned shells
+
+Desktop sidebar session rows and mobile session cards mark a parentless plain shell as **Abandoned** after one idle hour and show its idle age. The five-second backend sweep requires a fresh OS process inventory: the PTY child must be an interactive shell with no child processes. An unknown inventory, script, foreground command, background child, detached TUIC job, managed identity, live child session, pending input or keep-open hold prevents closure. Unsupported or incomplete OS process observations fail closed.
+
+Settings → Agents → Idle agent hibernation (Expert Mode) includes **Close abandoned shells after (hours)** (`agents.abandoned_shell_hours`). The machine-owned value defaults to **0 (off)**; whole hours from 1 to 65535 enable closure. Idle age is measured from the most recent input, output or semantic activity, including elapsed time while the machine sleeps. Closure rechecks the process inventory and activity at the destructive boundary, and uses the normal session close/tombstone path. The sweep can lag the threshold by one five-second tick. A remote daemon applies its own setting, not the desktop host's value.

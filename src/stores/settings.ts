@@ -6,6 +6,7 @@ import { invoke } from "../invoke";
 import { settingNumberDefault } from "../services/settingsCatalogue";
 import { settingsRefresh } from "../services/settingsRefresh";
 import type { IssueFilterMode } from "../types";
+import { isAcpConfigured } from "../utils/acpAvailability";
 import { runSerializedConfigWrite, updateAppConfig } from "../utils/updateAppConfig";
 import { appLogger } from "./appLogger";
 import { toastsStore } from "./toasts";
@@ -1020,7 +1021,7 @@ function createSettingsStore() {
 		/** Whether an ego binary is named at all. Rust refuses every connect while
 		 *  it is not, so the panel says so instead of launching nothing. */
 		isAcpConfigured(): boolean {
-			return state.egoExecutable.trim().length > 0;
+			return isAcpConfigured(state.egoExecutable);
 		},
 	};
 

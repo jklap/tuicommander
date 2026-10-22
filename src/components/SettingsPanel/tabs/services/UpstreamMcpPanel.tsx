@@ -262,6 +262,7 @@ export const UpstreamMcpPanel: Component = () => {
 	const [error, setError] = createSignal("");
 	const [editingId, setEditingId] = createSignal<string | null>(null);
 	const [editForm, setEditForm] = createSignal(emptyForm());
+	let pendingEdit: UpstreamMcpServer | undefined;
 	const confirmAuthorization = (origin: string, name: string, crossDomain: boolean) =>
 		oauthDialog.confirm({
 			title: "Authorize MCP server",
@@ -294,7 +295,14 @@ export const UpstreamMcpPanel: Component = () => {
 					read: () => rpc<UpstreamMcpConfig>("load_mcp_upstreams", {}, machine()),
 					apply: (config) => {
 						const edited = config.servers?.find((server) => server.id === editingId());
-						if (edited) {
+						if (
+							edited &&
+							pendingEdit &&
+							JSON.stringify(serverForm(edited)) === JSON.stringify(serverForm(pendingEdit))
+						) {
+							// This is our redacted save acknowledgement, not a competing draft.
+							editBase = serverForm(edited);
+						} else if (edited) {
 							const incoming = serverForm(edited);
 							const merged = mergeSettingsSnapshot(editBase, editForm(), incoming);
 							editBase = incoming;
@@ -487,6 +495,7 @@ export const UpstreamMcpPanel: Component = () => {
 
 	let editBase = emptyForm();
 	function startEdit(server: UpstreamMcpServer) {
+		pendingEdit = undefined;
 		setEditingId(server.id);
 		editBase = serverForm(server);
 		setEditForm(editBase);
@@ -542,8 +551,12 @@ export const UpstreamMcpPanel: Component = () => {
 			setError("Failed to update upstream credentials");
 			return;
 		}
+		pendingEdit = updated;
 		const ok = await saveUpstreams(upstreams().map((s) => (s.id === server.id ? updated : s)));
-		if (!ok) return;
+		if (!ok) {
+			pendingEdit = undefined;
+			return;
+		}
 		try {
 			// Replacing the shared auth slot is destructive too: persist the config first.
 			if (replaceBearer)
@@ -559,11 +572,13 @@ export const UpstreamMcpPanel: Component = () => {
 			);
 			await rpc("reconnect_mcp_upstream", { name: server.name }, machine());
 		} catch {
+			pendingEdit = undefined;
 			setError("Settings saved, but credential cleanup or reconnect failed");
 			return;
 		}
 		setEditForm(emptyForm());
 		setEditingId(null);
+		pendingEdit = undefined;
 	}
 
 	async function toggleUpstream(id: string, enabled: boolean) {
@@ -621,12 +636,6 @@ export const UpstreamMcpPanel: Component = () => {
 					</button>
 				}
 			>
-				<div class={s.group}>
-					<p class={s.hint}>
-						Proxy external MCP servers through TUIC. Their tools appear prefixed as <code>{"{name}__{tool}"}</code>.
-					</p>
-				</div>
-
 				<MachineSelector value={machine()} label="Upstreams on" onChange={setMachine} />
 
 				{/* Add upstream form */}
@@ -705,7 +714,7 @@ export const UpstreamMcpPanel: Component = () => {
 										data-setting-id="upstreams.servers.{id}.auth.token"
 										type="password"
 										class={s.input}
-										placeholder="API key for remote MCP servers (optional, stored in OS keychain)"
+										placeholder="API key (optional)"
 										value={form().credential}
 										onInput={(e) => setForm((f) => ({ ...f, credential: e.currentTarget.value }))}
 									/>
@@ -821,7 +830,7 @@ export const UpstreamMcpPanel: Component = () => {
 				{/* Upstream list */}
 				<Show when={upstreams().length === 0 && !showAdd()}>
 					<p class={s.hint} style={{ color: "var(--text-dimmed)" }}>
-						No upstream servers configured. Click <strong>+</strong> to add one.
+						No upstream servers configured.
 					</p>
 				</Show>
 
@@ -1066,7 +1075,7 @@ export const UpstreamMcpPanel: Component = () => {
 															onInput={(e) => setEditForm((f) => ({ ...f, credential: e.currentTarget.value }))}
 														/>
 														<p class={s.hint} style={{ margin: "2px 0 0" }}>
-															Stored in OS keychain. Leave blank to keep current token.
+															Leave blank to keep current token.
 														</p>
 														<button
 															data-non-setting="Typed upstream credential or OAuth workflow"

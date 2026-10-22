@@ -1208,7 +1208,12 @@ fn task_call(
     args: serde_json::Value,
     mcp_sid: Option<&str>,
 ) -> serde_json::Value {
-    handle_task(state, addr.parse().unwrap(), &args, mcp_sid)
+    super::super::mcp_transport_session_agent::handle_task(
+        state,
+        addr.parse().unwrap(),
+        &args,
+        mcp_sid,
+    )
 }
 
 // ── blocking wait tests (Step 3) ────────────────────────────────
@@ -1725,6 +1730,51 @@ fn session_output_redacts_a_secret_on_the_terminal() {
         assert!(
             data.contains("[REDACTED]"),
             "{format} output must say it redacted something: {data}"
+        );
+    }
+}
+
+/// Catches: an inverted ring-cache generation check reuses the pre-write
+/// secret list, leaking a newly appended token through a fragment-only tail.
+#[test]
+fn session_output_raw_redacts_new_secret_fragment_after_cache_warmup() {
+    use crate::OutputRingBuffer;
+
+    let state = test_state();
+    let sid = "raw-secret-cache-session";
+    let mut ring = OutputRingBuffer::new(4096);
+    ring.write(b"ready\n");
+    state
+        .session_maps
+        .output_buffers
+        .insert(sid.to_string(), parking_lot::Mutex::new(ring));
+    let args = serde_json::json!({
+        "action": "output", "session_id": sid, "format": "raw", "limit": 13
+    });
+
+    // Warm the cache through the consumer path, including an unchanged poll.
+    for _ in 0..2 {
+        let response = handle_session(&state, &args, None);
+        assert_eq!(response["data"], "ready\n");
+    }
+
+    // Match the PTY writer: append to the existing ring, with no VT grid to
+    // independently supply the secret and conceal a stale ring cache.
+    state
+        .session_maps
+        .output_buffers
+        .get(sid)
+        .unwrap()
+        .lock()
+        .write(b"ghp_0123456789abcdefghijklmnopqrstuvwxyzAB\n");
+
+    // Only the suffix qrstuvwxyzAB is in the requested window. It cannot be
+    // recognized as a token without the updated whole-ring secret context.
+    for _ in 0..2 {
+        let response = handle_session(&state, &args, None);
+        assert_eq!(
+            response["data"], "[REDACTED]\n",
+            "a new secret's tail must stay redacted on every poll: {response}"
         );
     }
 }
@@ -3311,6 +3361,8 @@ async fn parent_registration_after_spawn_links_existing_child() {
             "action": "spawn",
             "prompt": "hello",
             "binary_path": LONG_LIVED_TEST_BINARY,
+            // cat must read stdin before interpreting the delivered task as a filename.
+            "args": ["-"],
             "cwd": TEST_SPAWN_CWD,
         }),
         Some(parent_mcp),
@@ -3440,6 +3492,8 @@ async fn parent_registration_after_spawn_links_existing_child() {
             "action": "spawn",
             "prompt": "report with agent send",
             "binary_path": LONG_LIVED_TEST_BINARY,
+            // cat must read stdin before interpreting the delivered task as a filename.
+            "args": ["-"],
             "cwd": TEST_SPAWN_CWD,
         }),
         Some(parent_mcp),
@@ -3954,6 +4008,22 @@ async fn managed_codex_wrapper_opt_out_leaves_trust_prompt() {
 }
 
 #[cfg(unix)]
+fn recorded_claude_trust_output(path: &std::path::Path) -> (u16, u16) {
+    let capture = crate::pty_capture::decode_capture(include_bytes!(
+        "../fixtures/agent_prompts/claude-mobile-startup-1987.tcap"
+    ))
+    .unwrap();
+    let output: Vec<u8> = capture
+        .records
+        .into_iter()
+        .take_while(|record| record.direction != crate::pty_capture::CaptureDirection::Input)
+        .flat_map(|record| record.data)
+        .collect();
+    std::fs::write(path, output).unwrap();
+    capture.geometry.unwrap()
+}
+
+#[cfg(unix)]
 #[tokio::test]
 async fn managed_claude_spawn_accepts_only_its_startup_trust_dialog() {
     use std::os::unix::fs::PermissionsExt;
@@ -3963,10 +4033,12 @@ async fn managed_claude_spawn_accepts_only_its_startup_trust_dialog() {
         .unwrap();
     let cwd = root.path().join("never-trusted");
     std::fs::create_dir(&cwd).unwrap();
+    let dialog = root.path().join("dialog.bin");
+    let (rows, cols) = recorded_claude_trust_output(&dialog);
     let script = root.path().join("claude");
     let accepted = root.path().join("accepted");
     let observed_keys = root.path().join("keys");
-    std::fs::write(&script, format!("#!/bin/sh\nif [ \"$1\" = --version ]; then exit 0; fi\nwhile [ \"$#\" -gt 0 ]; do\n  case \"$1\" in\n    --add-dir=*|--settings=*) shift;;\n    --add-dir|--settings|--append-system-prompt-file|--model) shift 2;;\n    --) shift; break;;\n    -*) shift;;\n    *) break;;\n  esac\ndone\nstty -echo -icanon -icrnl min 1 time 0\nprintf 'Quick safety check: Is this a project you created or one you trust?\\n  Yes, I trust this folder\\n❯ No, exit\\n'\nkeys=$(dd bs=1 count=4 2>/dev/null | od -An -tx1 | tr -d ' \\n')\nprintf '%s' \"$keys\" > '{}'\nif [ \"$keys\" = 1b5b410d ]; then printf '%s' \"$1\" > '{}'; fi\nexec cat >/dev/null\n", observed_keys.display(), accepted.display())).unwrap();
+    std::fs::write(&script, format!("#!/bin/sh\nif [ \"$1\" = --version ]; then exit 0; fi\nwhile [ \"$#\" -gt 0 ]; do\n  case \"$1\" in\n    --add-dir=*|--settings=*) shift;;\n    --add-dir|--settings|--append-system-prompt-file|--model) shift 2;;\n    --) shift; break;;\n    -*) shift;;\n    *) break;;\n  esac\ndone\nstty -echo -icanon -icrnl min 1 time 0\ncat '{}'\nkeys=$(dd bs=1 count=4 2>/dev/null | od -An -tx1 | tr -d ' \\n')\nprintf '%s' \"$keys\" > '{}'\nif [ \"$keys\" = 1b5b420d ]; then printf '%s' \"$1\" > '{}'; fi\nexec cat >/dev/null\n", dialog.display(), observed_keys.display(), accepted.display())).unwrap();
     std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o700)).unwrap();
     assert!(
         std::process::Command::new(&script)
@@ -3982,7 +4054,7 @@ async fn managed_claude_spawn_accepts_only_its_startup_trust_dialog() {
         "127.0.0.1:1".parse().unwrap(),
         &serde_json::json!({
             "action": "spawn", "agent_type": "claude", "binary_path": script,
-            "cwd": cwd, "prompt": "say READY", "cols": 120,
+            "cwd": cwd, "prompt": "say READY", "cols": cols, "rows": rows,
         }),
         None,
     );
@@ -4021,6 +4093,8 @@ async fn managed_claude_trust_opt_out_leaves_dialog_waiting() {
         .unwrap();
     let cwd = root.path().join("never-trusted");
     std::fs::create_dir(&cwd).unwrap();
+    let dialog = root.path().join("dialog.bin");
+    let (rows, cols) = recorded_claude_trust_output(&dialog);
     let script = root.path().join("claude");
     let observed_keys = root.path().join("keys");
     let help = root.path().join("claude-help.txt");
@@ -4029,7 +4103,7 @@ async fn managed_claude_trust_opt_out_leaves_dialog_waiting() {
         include_str!("../../tests/fixtures/agent-help/claude-2026-10-04.txt"),
     )
     .unwrap();
-    std::fs::write(&script, format!("#!/bin/sh\nif [ \"$1\" = --version ]; then exit 0; fi\nif [ \"$1\" = --help ]; then cat '{}'; exit 0; fi\nstty -echo -icanon -icrnl min 0 time 10\nprintf 'Quick safety check: Is this a project you created or one you trust?\\n  Yes, I trust this folder\\n❯ No, exit\\n'\nkeys=$(dd bs=1 count=1 2>/dev/null | od -An -tx1 | tr -d ' \\n')\nprintf '%s' \"$keys\" > '{}'\nexec cat >/dev/null\n", help.display(), observed_keys.display())).unwrap();
+    std::fs::write(&script, format!("#!/bin/sh\nif [ \"$1\" = --version ]; then exit 0; fi\nif [ \"$1\" = --help ]; then cat '{}'; exit 0; fi\nstty -echo -icanon -icrnl min 0 time 10\ncat '{}'\nkeys=$(dd bs=1 count=1 2>/dev/null | od -An -tx1 | tr -d ' \\n')\nprintf '%s' \"$keys\" > '{}'\nexec cat >/dev/null\n", help.display(), dialog.display(), observed_keys.display())).unwrap();
     std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o700)).unwrap();
     assert!(
         std::process::Command::new(&script)
@@ -4052,7 +4126,7 @@ async fn managed_claude_trust_opt_out_leaves_dialog_waiting() {
     let spawned = handle_agent(
         &state,
         "127.0.0.1:1".parse().unwrap(),
-        &serde_json::json!({"action":"spawn", "agent_type":"claude", "binary_path":script, "cwd":cwd, "prompt":"say READY", "cols":120}),
+        &serde_json::json!({"action":"spawn", "agent_type":"claude", "binary_path":script, "cwd":cwd, "prompt":"say READY", "cols":cols, "rows":rows}),
         None,
     );
     assert!(spawned.get("error").is_none(), "spawn failed: {spawned}");
@@ -4169,7 +4243,7 @@ async fn literal_codex_default_does_not_ignore_settings_or_restore_removed_bypas
         let binary = root.path().join("codex");
         std::fs::write(
             &binary,
-            "#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$ARGV_OUTPUT\"\n",
+            "#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$ARGV_OUTPUT\"\nread -r hold\n",
         )
         .unwrap();
         std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o700)).unwrap();
@@ -4210,6 +4284,7 @@ async fn literal_codex_default_does_not_ignore_settings_or_restore_removed_bypas
             "perform the task"
         );
         let actual = wait_for_file_content_async(&output, std::time::Duration::from_secs(60)).await;
+        kill_test_session(&state, session);
         let mut expected = vec!["-c", "check_for_update_on_startup=false"];
         expected.extend(args);
         assert_eq!(actual, expected.join("\n") + "\n");
@@ -4872,5 +4947,224 @@ fn softwrap_1977_session_output_preserves_recorded_spaces() {
         );
         let data = response["data"].as_str().expect("MCP text output");
         assert!(data.starts_with(&expected), "scroll={scroll}: {data:?}");
+    }
+}
+
+// Catches: a lost launch reply creates a second PTY when the same key is retried.
+#[cfg(unix)]
+#[tokio::test]
+async fn lost_launch_reply_reuses_the_same_child() {
+    let state = test_state();
+    let parent = "550e8400-e29b-41d4-a716-446655440b01";
+    register_peer(&state, parent, "orchestrator", "mcp-orch");
+    let workspace = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap();
+    let request = serde_json::json!({
+        "action": "launch", "idempotency_key": "lost-reply", "parent_session_id": parent,
+        "name": "stable-child", "keep_open": true,
+        "workspace": {"existing_path": workspace},
+        "spawn": {"prompt": "hello", "binary_path": "/bin/sh",
+                  "args": ["-c", "exec cat", "{prompt}"]}
+    });
+    let first = crate::mcp_http::mcp_transport::handle_mcp_tool_call_with_context(
+        &state,
+        "127.0.0.1:0".parse().unwrap(),
+        "agent",
+        &request,
+        Some("mcp-orch"),
+        None,
+    )
+    .await;
+    assert!(first.get("error").is_none(), "launch failed: {first}");
+    let second = crate::mcp_http::mcp_transport::handle_mcp_tool_call_with_context(
+        &state,
+        "127.0.0.1:0".parse().unwrap(),
+        "agent",
+        &request,
+        Some("mcp-orch"),
+        None,
+    )
+    .await;
+    assert_eq!(first["launch_id"], second["launch_id"]);
+    assert_eq!(first["session_id"], second["session_id"]);
+    assert_eq!(
+        state.session_maps.sessions.len(),
+        1,
+        "retry must not create a second PTY"
+    );
+    let child = first["session_id"].as_str().unwrap();
+    assert_eq!(
+        state
+            .session_maps
+            .session_parent
+            .get(child)
+            .unwrap()
+            .value(),
+        parent
+    );
+    assert!(state.keep_open_sessions.contains(child));
+    assert_eq!(
+        state
+            .session_maps
+            .sessions
+            .get(child)
+            .unwrap()
+            .lock()
+            .display_name
+            .as_deref(),
+        Some("stable-child")
+    );
+    handle_session(
+        &state,
+        &serde_json::json!({"action":"kill", "session_id":child}),
+        None,
+    );
+}
+
+// Catches: output chunks recapture a moving ring instead of completing the retained snapshot.
+#[test]
+fn budgeted_terminal_output_snapshot_survives_concurrent_output() {
+    let state = test_state();
+    let sid = "budget-output";
+    let source = "界\"\n".repeat(9000);
+    let mut ring = crate::OutputRingBuffer::new(100000);
+    ring.write(source.as_bytes());
+    state
+        .session_maps
+        .output_buffers
+        .insert(sid.into(), parking_lot::Mutex::new(ring));
+    let original = session_output(
+        &state,
+        &serde_json::json!({"action":"output","session_id":sid,"format":"raw","from_byte":0,"limit":100000}),
+    );
+    let mut args = serde_json::json!({"action":"output","session_id":sid,"format":"raw","from_byte":0,"limit":100000,"byte_budget":4096});
+    let mut text = String::new();
+    loop {
+        let page = session_output(&state, &args);
+        assert!(serde_json::to_vec(&page).unwrap().len() <= 4096);
+        text.push_str(page["chunk"].as_str().unwrap());
+        if page["continuation"].is_null() {
+            break;
+        }
+        state
+            .session_maps
+            .output_buffers
+            .get(sid)
+            .unwrap()
+            .lock()
+            .write(b"new output");
+        args["continuation"] = page["continuation"].clone();
+    }
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&text).unwrap(),
+        original
+    );
+    let missing = handle_session(
+        &state,
+        &serde_json::json!({"action":"list","session_id":"absent","compact":true}),
+        None,
+    );
+    assert!(missing.get("error").is_some());
+}
+
+// Catches: live inventory drops the backend activity timestamp and leaves compact activity unknown.
+#[tokio::test]
+async fn session_inventory_exposes_activity_timestamp_and_compact_age() {
+    let state = test_state();
+    let created = handle_session(&state, &serde_json::json!({"action":"create"}), None);
+    if created.get("error").is_some() {
+        return;
+    }
+    let id = created["session_id"].as_str().unwrap();
+    state.session_maps.session_states.insert(
+        id.into(),
+        crate::state::SessionState {
+            last_activity_ms: 1,
+            ..Default::default()
+        },
+    );
+    let full = handle_session(
+        &state,
+        &serde_json::json!({"action":"list","session_id":id}),
+        None,
+    );
+    let compact = handle_session(
+        &state,
+        &serde_json::json!({"action":"list","session_id":id,"compact":true}),
+        None,
+    );
+    handle_session(
+        &state,
+        &serde_json::json!({"action":"kill","session_id":id}),
+        None,
+    );
+    assert_eq!(full[0]["last_activity_ms"], 1);
+    assert!(
+        compact[0]["activity_age_ms"]
+            .as_u64()
+            .is_some_and(|age| age > 0),
+        "{compact}"
+    );
+}
+
+// Catches: pre-dispatch validation rejects description-only updates or writes a dummy Enter.
+#[cfg(unix)]
+#[tokio::test]
+async fn action_validation_description_only_updates_without_pty_input() {
+    let state = test_state();
+    let sid = "description-only";
+    let bytes = install_atomic_submit_test_session(&state, sid);
+    for description in [
+        serde_json::json!("Reviewing results"),
+        serde_json::Value::Null,
+        serde_json::json!("Another task"),
+        serde_json::json!(""),
+    ] {
+        let response = post_test_tool_call(
+            state.clone(),
+            "description-contract",
+            "session",
+            serde_json::json!({"action":"input","session_id":sid,"pty_description":description}),
+        )
+        .await;
+        assert_eq!(response["result"]["isError"], false, "{response}");
+        let listing = handle_mcp_tool_call(
+            &state,
+            loopback_addr(),
+            "session",
+            &serde_json::json!({"action":"list"}),
+            None,
+        )
+        .await;
+        let row = listing
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|row| row["session_id"] == sid)
+            .unwrap();
+        let expected = if description.as_str() == Some("") {
+            serde_json::Value::Null
+        } else {
+            description
+        };
+        assert_eq!(row["pty_description"], expected, "{listing}");
+        assert!(
+            bytes.lock().unwrap().is_empty(),
+            "description updates must not write PTY input"
+        );
+    }
+    for extra in [
+        serde_json::json!({}),
+        serde_json::json!({"pty_description":7}),
+    ] {
+        let mut args = serde_json::json!({"action":"input","session_id":sid});
+        args.as_object_mut()
+            .unwrap()
+            .extend(extra.as_object().unwrap().clone());
+        let response =
+            post_test_tool_call(state.clone(), "description-contract", "session", args).await;
+        assert_eq!(response["result"]["isError"], true, "{response}");
+        assert!(bytes.lock().unwrap().is_empty());
     }
 }

@@ -21,6 +21,16 @@ not live UI convergence or complete authentication onboarding.
    `expectedRevision`. Never combine different stores in one patch. Stable
    collection keys are not array indexes or arbitrary file paths.
 
+The opt-in `settings-ipc-test` Cargo feature tests the generated
+`settings_action` command with Tauri's mock runtime and real `InvokeRequest`
+argument extraction. Run the targeted
+`settings_generated_mock_ipc_agrees_with_mcp_and_http` test through the repository
+test wrapper. It compares durable notification edits across MCP, HTTP and mock
+IPC, rejects a missing `{request: ...}` wrapper without writing, and preserves
+native access when MCP is disabled. It does not start the desktop setup closure,
+open an OS WebView, or prove the installed app's registration and ACL state.
+Live desktop parity remains a separate check after a Boss-controlled restart.
+
 Tauri `settings_action`, HTTP `POST /settings/action`, and MCP `settings` use the
 same request DTOs and owner services. MCP mutation is loopback-only. HTTP keeps
 its local-or-authenticated caller policy; native IPC keeps host-issued trust.
@@ -53,10 +63,11 @@ The read-only `github_accounts.auth.source` descriptor publishes the existing
 `auth.secret` stays unpublished: provenance is not permission to reveal a token,
 credential reference or the full owner authentication object.
 
-**Current publication gap:** the general account collection has no published
-list workflow; keyed leaf reads require an already known account ID. Do not
-claim that an unaided schema-only client can enumerate every existing account.
-Owner completion remains an acceptance gate.
+Use the typed `list_accounts` operation to discover stable account IDs, labels,
+canonical sites and credential presence before keyed reads or edits. It returns
+`accounts`, the owner `revision`, and `persisted:false`. It does not return the
+full authentication object, secret values or credential references. An empty list
+is a valid result; a failed owner read is not an empty list.
 
 ## Ego
 
@@ -80,14 +91,38 @@ replacement value. Read back after an edit, and report next-session effects.
 Existing ACP conversations retain their launch/options; no PTY fallback replaces
 an unavailable ACP or settings owner.
 
-**Current publication gap:** interactive `ego auth login PROVIDER` is a human
-workflow opened by `services/egoLogin.ts` in the AI Chat Settings UI. The
-published `OwnerAction::Ego` accepts only `EgoAuthAction` configuration edits.
-There is no typed Settings login-start/completion action. Ending the terminal
-command does not prove authentication; the person refreshes provider state.
-A schema-only Ego login remains blocked. Do not invent a login action, claim
-completion, scrape credential files or launch an alternate executable. A typed
-interactive-login contract needs a separate owner follow-up after feature freeze.
+### Interactive login
+
+The same `store:"ego"` perform envelope also publishes `begin_login` and
+`login_status`. Both require the envelope's `expectedRevision`; obtain it from a
+machine-targeted Ego read (not a profile read). Only `begin_login` compares that
+revision because it starts a process; status never retries or changes configuration.
+
+- `operation:{action:"begin_login",provider:"openai-codex"}` starts the configured
+  executable with argument vector `auth login -- PROVIDER` in the configured AI
+  Chat workspace, without a shell or profile override. It returns `flowId`,
+  `sessionId`, `status:"interactive"`, `expiresIn:900`, `persisted:false` and
+  `nextAction:"login_status"`. The person completes the browser/device/API-key
+  exchange in that terminal. No Settings action accepts a login code or token.
+- `operation:{action:"login_status",flow_id:FLOW}` reports `interactive` while the
+  process lives. After it exits or the person closes the terminal, status is
+  `closed`, with the provider's fresh `credential` projection from Ego doctor:
+  `stored`, `expired`, `missing` or `unknown`. `closed` is not authentication success.
+  An unavailable readback is an error, never a fabricated missing credential.
+  Follow `nextAction:"refresh"` to refresh models/provider state before selecting
+  a default model. No existing ACP conversation is relaunched.
+- The host retains at most 32 handles for 15 minutes. An expired handle returns
+  `status:"expired"`, its `sessionId` and `nextAction:"begin_login"`; unknown or
+  pruned handles return `not_found`. Handle expiry does not imply that the
+  provider credential expired and does not kill a person's terminal. Close it
+  through the existing session control before starting another attempt.
+- If the configured executable or workspace changes, status returns `conflict`
+  instead of reading a different owner. A stale begin revision also returns
+  `conflict` before spawning. Missing executable/capability returns unavailable.
+
+The existing AI Chat Settings button remains a separate human UI entry point.
+The typed owner action is not an ACP-to-PTY fallback and never accepts another
+executable from its caller.
 
 ## Refusal and recovery
 
@@ -112,8 +147,70 @@ revision. Reconnect requires fresh reads; dirty UI drafts remain local.
 The source tests, replay fixtures and generated catalogue do not authenticate a
 real account or prove live desktop/browser convergence. The Ego replay uses
 captured owner responses; real interactive authentication remains the person's
-responsibility. Step 10 must remain incomplete while the publication gaps above
-or its refusal/expiry/conflict/apply-failure integration criteria are unverified.
+responsibility. Step 10 must remain incomplete while its schema-only startup and
+refusal/expiry/conflict/apply-failure integration criteria are unverified.
 See [Settings](../user-guide/settings.md), [HTTP API](../api/http-api.md), and
 [configuration ownership](config.md) for the corresponding user and transport
 surfaces.
+
+### Focused recovery contracts
+
+The startup regression tests resolve operation constants from the described
+owner schema before calling GitHub metadata workflows and the configured Ego
+login workflow. GitHub account IDs come from `list_accounts`; Ego model reads
+use the published field descriptor. The Ego replay refuses authentication and
+therefore proves configured launch and recovery, not a successful provider login.
+
+`provider_authorization_deadline_cannot_authenticate_or_persist` covers the
+GitHub device authorization deadline in TUIC-owned flow state, including status
+before completion and repeated completion. It verifies unchanged account and
+runtime credential state and disposal of the private device code. This is not
+an expired provider HTTP response fixture, a real authentication attempt, or an
+Ego host-handle expiry test.
+
+`persisted_apply_failure_publishes_unapplied_generation` covers the facade's
+persisted-but-unapplied result. Recovery reads the durable value and new owner
+revision, checks the persisted file, and emits no second mutation event. These
+contracts passed coordinator-owned targeted Linux validation at `b4ace7721`:
+33 tests covered startup workflows, the device deadline, provenance and account/
+Ego consumers; a separate `--no-default-features` run passed both
+`startup_uses_only_published_schema` and the persisted-apply-failure test.
+
+These results validate the isolated contracts, not complete live onboarding.
+Step 10 remains open for human-assisted GitHub/Ego authentication and recorded
+provider-expiry evidence. No successful authentication, external expired-token
+response, or native desktop validation is inferred from these runs.
+
+### Boss-controlled acceptance procedure
+
+Prerequisites: a Boss-controlled backend rebuild/restart, a disposable isolated
+instance and registered test repository, a test GitHub account, and a configured
+Ego executable/workspace with a provider that supports interactive login. Do not
+launch a second desktop app or use production credentials for this check.
+
+1. Enable Settings MCP from trusted UI. Discover the current schema and account
+   operations. Run `begin_cloud_login`, complete the returned GitHub verification
+   in the browser, and poll `complete_cloud_login` only at the returned interval.
+   Verify success through `list_accounts` and presence-only owner readback. Use
+   the described preference and binding operations with each owner's revision;
+   read back the preference and repository binding rather than inspecting files.
+2. Discover Ego providers and the published model field. Read the machine owner
+   revision, call `begin_login` for the selected supported provider, and complete
+   authentication in the returned terminal. Call `login_status` after exit;
+   require fresh credential presence, not merely `closed`. Refresh provider
+   state, select the model through the published field and read it back. Confirm
+   the next-session effect; do not relaunch an existing ACP conversation.
+3. In separate test flows, decline GitHub authorization and abandon an unapproved
+   flow until it expires. Preserve a real provider-issued `expired_token` response
+   only if the provider returns one before TUIC's local deadline takes effect.
+   A local `expired` result does not establish that external response. If TUIC's
+   deadline wins, record that limitation; do not invent a response or weaken the
+   deadline. Ego host-handle expiry is a different condition.
+4. Retain only redacted action names, outcome/status, provider error code and
+   readback evidence. Never retain device codes, user codes, tokens, cookies,
+   authorization headers, terminal authentication text or credential-store data.
+
+The source-level refusal/confirmation-expiry, stale-revision, owner deadline and
+persisted-apply-failure tests cover automatable recovery independently. They do
+not require a live provider, and passing them must not be reported as completion
+of the human authentication or external-response steps above.
